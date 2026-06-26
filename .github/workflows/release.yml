@@ -1,0 +1,175 @@
+# Builds installers for all platforms on tag push (e.g. v1.0.0) and uploads
+# them as a GitHub Release. The download page reads from the latest release.
+#
+# Required GitHub secrets (set in repo → Settings → Secrets and variables → Actions):
+#   APPLE_CERTIFICATE_BASE64        — .p12 of Developer ID Application cert
+#   APPLE_CERTIFICATE_PASSWORD      — password for the .p12
+#   APPLE_SIGNING_IDENTITY          — "Developer ID Application: D Company (TEAMID)"
+#   APPLE_ID                        — Apple ID email for notarization
+#   APPLE_APP_SPECIFIC_PASSWORD     — app-specific password
+#   APPLE_TEAM_ID                   — 10-char team ID
+#   WINDOWS_CERT_BASE64             — .pfx of Authenticode cert (or use Azure Trusted Signing)
+#   WINDOWS_CERT_PASSWORD           — password for the .pfx
+#   ANDROID_KEYSTORE_BASE64         — release.keystore
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+#   ANDROID_KEY_PASSWORD
+#   API_URL                         — e.g. https://api.dcompany.cloud/api/v1
+#
+# If a secret is missing, the corresponding job still builds, but the artifact
+# is unsigned (will trigger OS warnings on first launch).
+
+name: Release installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # ----------------------------------------------------------- Mac (.dmg)
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: 'aarch64-apple-darwin,x86_64-apple-darwin' }
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with: { workspaces: frontend/src-tauri -> target }
+      - name: Install JS deps
+        run: cd frontend && npm install --no-audit --no-fund
+      - name: Build .dmg (universal)
+        env:
+          VITE_API_URL: ${{ secrets.API_URL }}
+          VITE_APP_VERSION: ${{ github.ref_name }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: cd frontend && npm run tauri:build:mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  # --------------------------------------------------------- Windows (.exe / .msi)
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: 'x86_64-pc-windows-msvc' }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: frontend/src-tauri -> target }
+      - name: Install JS deps
+        run: cd frontend && npm install --no-audit --no-fund
+      - name: Build installers
+        env:
+          VITE_API_URL: ${{ secrets.API_URL }}
+          VITE_APP_VERSION: ${{ github.ref_name }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: cd frontend && npm run tauri:build:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+
+  # ----------------------------------------------------------- Android (.apk / .aab)
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - name: Install JS deps
+        run: cd frontend && npm install --no-audit --no-fund
+      - name: Build web bundle
+        env:
+          VITE_API_URL: ${{ secrets.API_URL }}
+          VITE_APP_VERSION: ${{ github.ref_name }}
+        run: cd frontend && npm run build
+      - name: Sync Capacitor
+        run: cd frontend && npx cap sync android
+      - name: Decode keystore
+        if: env.HAS_ANDROID_KEYSTORE == 'true'
+        env:
+          HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && 'true' || 'false' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > frontend/android/app/release.keystore
+          cat > frontend/android/keystore.properties <<EOF
+          storeFile=release.keystore
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+      - name: Build .apk and .aab
+        run: cd frontend/android && ./gradlew assembleRelease bundleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            frontend/android/app/build/outputs/apk/release/*.apk
+            frontend/android/app/build/outputs/bundle/release/*.aab
+
+  # ----------------------------------------------------------- iOS (.ipa, archive only)
+  # NOTE: App Store submission still requires a manual Xcode → Distribute App
+  # step the first time. CI produces the archive; you upload via Transporter.app.
+  build-ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - name: Install JS deps
+        run: cd frontend && npm install --no-audit --no-fund
+      - name: Build web bundle
+        env:
+          VITE_API_URL: ${{ secrets.API_URL }}
+          VITE_APP_VERSION: ${{ github.ref_name }}
+        run: cd frontend && npm run build
+      - name: Sync Capacitor
+        run: cd frontend && npx cap sync ios
+      - name: Archive (unsigned — sign locally for App Store)
+        run: |
+          cd frontend/ios/App
+          xcodebuild -project App.xcodeproj -scheme App \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-archive
+          path: frontend/ios/App/build/App.xcarchive
+
+  # -------------------------------------------------------- Release page
+  release:
+    needs: [build-macos, build-windows, build-android, build-ios]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 'D Company ERP ${{ github.ref_name }}'
+          generate_release_notes: true
+          files: |
+            artifacts/macos-dmg/*.dmg
+            artifacts/windows-installer/nsis/*.exe
+            artifacts/windows-installer/msi/*.msi
+            artifacts/android-apk/apk/release/*.apk
+            artifacts/android-apk/bundle/release/*.aab

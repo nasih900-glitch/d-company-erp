@@ -1,0 +1,29 @@
+[package]
+name = "d-company-erp"
+version = "1.0.0"
+description = "D Company café + gaming-lounge ERP — desktop shell"
+authors = ["D Company"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "d_company_erp_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+panic = "abort"     # smaller binaries, no unwinding cost
+codegen-units = 1   # better optimization
+lto = true          # link-time optimization
+opt-level = "s"     # optimize for size
+strip = true        # strip symbols

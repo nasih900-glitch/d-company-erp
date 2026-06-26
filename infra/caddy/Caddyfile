@@ -1,0 +1,72 @@
+# D Company ERP — production reverse proxy with auto-HTTPS.
+#
+# Caddy automatically obtains and renews Let's Encrypt certificates
+# for the configured domain. Just set the DOMAIN env var in .env and
+# point your domain's A record at the server's public IP.
+#
+# Routes:
+#   /api/*  → FastAPI backend (port 8000 inside the Docker network)
+#   /*      → React frontend (port 80 inside the Docker network, served by nginx)
+
+{
+    # Use Let's Encrypt's staging for dev/testing if you set CADDY_STAGING=1.
+    email {$ACME_EMAIL:admin@dcompany.local}
+
+    # Reasonable logging volume.
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}
+
+# Match the bare domain by default. If you have BOTH the bare domain AND
+# a `www` subdomain pointing here (typical for paid .in/.com domains, NOT
+# for DuckDNS), change the line below to:
+#     {$DOMAIN}, www.{$DOMAIN} {
+{$DOMAIN} {
+    # Security headers — modern defaults.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "SAMEORIGIN"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        Permissions-Policy        "geolocation=(), microphone=(), camera=()"
+        -Server
+    }
+
+    # Gzip / Brotli compression for the SPA bundle.
+    encode zstd gzip
+
+    # Backend API.
+    handle /api/* {
+        reverse_proxy backend:8000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            transport http {
+                read_timeout  60s
+                write_timeout 60s
+            }
+        }
+    }
+
+    # Health + readiness — useful for uptime monitors.
+    handle /healthz {
+        reverse_proxy backend:8000
+    }
+    handle /readyz {
+        reverse_proxy backend:8000
+    }
+
+    # Everything else goes to the frontend (nginx serving the React SPA).
+    handle {
+        reverse_proxy frontend:80
+    }
+
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}

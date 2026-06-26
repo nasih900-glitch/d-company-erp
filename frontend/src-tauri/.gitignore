@@ -1,0 +1,10 @@
+# Tauri build artifacts
+target/
+gen/
+
+# IDE
+.idea/
+.vscode/
+
+# Generated bundles
+bundle/

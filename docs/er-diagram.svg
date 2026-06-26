@@ -1,0 +1,584 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1400" font-family="ui-sans-serif, system-ui, -apple-system, Inter, sans-serif">
+  <defs>
+    <style>
+      .bg { fill: #0b1020; }
+      .title { fill: #e8ecff; font-size: 28px; font-weight: 700; }
+      .subtitle { fill: #8aa0d6; font-size: 14px; }
+      .module { font-size: 12px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; }
+      .entity-name { fill: #ffffff; font-size: 14px; font-weight: 700; }
+      .col { fill: #cdd6f4; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .pk { fill: #f9e2af; font-weight: 700; }
+      .fk { fill: #94e2d5; }
+      .header { fill: #1e2a4d; }
+      .body { fill: #141a33; stroke: #2a345a; stroke-width: 1; }
+      .legend { fill: #8aa0d6; font-size: 12px; }
+      .relation { stroke: #6c7bd9; stroke-width: 1.4; fill: none; }
+      .relation-strong { stroke: #f38ba8; stroke-width: 1.6; fill: none; }
+      .card { fill: #8aa0d6; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .group-pos { stroke: #89b4fa; }
+      .group-table { stroke: #94e2d5; }
+      .group-menu { stroke: #f9e2af; }
+      .group-inv { stroke: #fab387; }
+      .group-game { stroke: #cba6f7; }
+      .group-fin { stroke: #f38ba8; }
+      .group-ocr { stroke: #74c7ec; }
+      .group-staff { stroke: #a6e3a1; }
+      .group-tenant { stroke: #b4befe; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6c7bd9"/>
+    </marker>
+    <marker id="arrow-strong" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f38ba8"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1800" height="1400"/>
+
+  <text x="40" y="50" class="title">D Company ERP — Entity Relationship Diagram</text>
+  <text x="40" y="74" class="subtitle">Version 1 • PostgreSQL • UUID primary keys • soft-delete on most tables • audit_log captures every mutation</text>
+
+  <!-- ============ TENANT (top center) ============ -->
+  <g>
+    <text x="780" y="110" class="module" fill="#b4befe">TENANT</text>
+    <rect x="780" y="120" width="240" height="92" rx="8" class="body group-tenant"/>
+    <rect x="780" y="120" width="240" height="26" rx="8" class="header"/>
+    <text x="792" y="138" class="entity-name">companies</text>
+    <text x="792" y="162" class="col pk">id (uuid) PK</text>
+    <text x="792" y="178" class="col">name, legal_name</text>
+    <text x="792" y="194" class="col">currency, timezone, country</text>
+    <text x="792" y="210" class="col">created_at, updated_at, deleted_at</text>
+
+    <rect x="780" y="232" width="240" height="92" rx="8" class="body group-tenant"/>
+    <rect x="780" y="232" width="240" height="26" rx="8" class="header"/>
+    <text x="792" y="250" class="entity-name">branches</text>
+    <text x="792" y="274" class="col pk">id (uuid) PK</text>
+    <text x="792" y="290" class="col fk">company_id FK</text>
+    <text x="792" y="306" class="col">name, address, tz, opens_at, closes_at</text>
+    <text x="792" y="322" class="col">created_at, updated_at, deleted_at</text>
+
+    <rect x="780" y="344" width="240" height="92" rx="8" class="body group-tenant"/>
+    <rect x="780" y="344" width="240" height="26" rx="8" class="header"/>
+    <text x="792" y="362" class="entity-name">terminals</text>
+    <text x="792" y="386" class="col pk">id (uuid) PK</text>
+    <text x="792" y="402" class="col fk">branch_id FK</text>
+    <text x="792" y="418" class="col">name, device_id, last_seen_at</text>
+    <text x="792" y="434" class="col">offline_seq_high_water</text>
+  </g>
+
+  <!-- 1:N tenant cascade -->
+  <path class="relation-strong" d="M 900 212 L 900 232" marker-end="url(#arrow-strong)"/>
+  <text x="906" y="226" class="card">1..N</text>
+  <path class="relation-strong" d="M 900 324 L 900 344" marker-end="url(#arrow-strong)"/>
+  <text x="906" y="338" class="card">1..N</text>
+
+  <!-- ============ STAFF (top left) ============ -->
+  <g>
+    <text x="40" y="110" class="module" fill="#a6e3a1">STAFF • AUTH</text>
+    <rect x="40" y="120" width="260" height="124" rx="8" class="body group-staff"/>
+    <rect x="40" y="120" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="138" class="entity-name">users</text>
+    <text x="52" y="162" class="col pk">id (uuid) PK</text>
+    <text x="52" y="178" class="col fk">company_id FK</text>
+    <text x="52" y="194" class="col">email (unique), password_hash</text>
+    <text x="52" y="210" class="col">name, phone, status, mfa_secret</text>
+    <text x="52" y="226" class="col">last_login_at, failed_login_count</text>
+    <text x="52" y="242" class="col">created_at, updated_at, deleted_at</text>
+
+    <rect x="40" y="264" width="260" height="92" rx="8" class="body group-staff"/>
+    <rect x="40" y="264" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="282" class="entity-name">roles</text>
+    <text x="52" y="306" class="col pk">id (uuid) PK</text>
+    <text x="52" y="322" class="col">code (owner|partner|manager|cashier|...)</text>
+    <text x="52" y="338" class="col">name, description</text>
+    <text x="52" y="354" class="col">permissions (jsonb of (mod,action))</text>
+
+    <rect x="40" y="376" width="260" height="76" rx="8" class="body group-staff"/>
+    <rect x="40" y="376" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="394" class="entity-name">user_roles</text>
+    <text x="52" y="418" class="col pk">id (uuid) PK</text>
+    <text x="52" y="434" class="col fk">user_id FK • role_id FK • branch_id FK?</text>
+    <text x="52" y="450" class="col">granted_by, granted_at</text>
+
+    <rect x="40" y="472" width="260" height="92" rx="8" class="body group-staff"/>
+    <rect x="40" y="472" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="490" class="entity-name">attendance</text>
+    <text x="52" y="514" class="col pk">id (uuid) PK</text>
+    <text x="52" y="530" class="col fk">user_id FK • branch_id FK</text>
+    <text x="52" y="546" class="col">clock_in_at, clock_out_at, source</text>
+    <text x="52" y="562" class="col">break_minutes, notes</text>
+
+    <rect x="40" y="584" width="260" height="92" rx="8" class="body group-staff"/>
+    <rect x="40" y="584" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="602" class="entity-name">payroll_entries</text>
+    <text x="52" y="626" class="col pk">id (uuid) PK</text>
+    <text x="52" y="642" class="col fk">user_id FK • period_start, period_end</text>
+    <text x="52" y="658" class="col">base_minor, tips_minor, bonus_minor</text>
+    <text x="52" y="674" class="col">deductions_minor, paid_at</text>
+  </g>
+
+  <!-- users -> user_roles -> roles -->
+  <path class="relation" d="M 170 244 L 170 376" marker-end="url(#arrow)"/>
+  <text x="176" y="310" class="card">1..N</text>
+  <path class="relation" d="M 300 326 C 340 326, 340 414, 300 414" marker-end="url(#arrow)"/>
+
+  <!-- ============ POS (left mid) ============ -->
+  <g>
+    <text x="40" y="730" class="module" fill="#89b4fa">POS</text>
+    <rect x="40" y="740" width="280" height="156" rx="8" class="body group-pos"/>
+    <rect x="40" y="740" width="280" height="26" rx="8" class="header"/>
+    <text x="52" y="758" class="entity-name">orders</text>
+    <text x="52" y="782" class="col pk">id (uuid) PK</text>
+    <text x="52" y="798" class="col fk">company_id FK • branch_id FK</text>
+    <text x="52" y="814" class="col fk">terminal_id FK • shift_id FK</text>
+    <text x="52" y="830" class="col fk">table_id FK? • opened_by FK→users</text>
+    <text x="52" y="846" class="col">type (dine_in|takeaway|delivery)</text>
+    <text x="52" y="862" class="col">status (open|paid|void|refunded)</text>
+    <text x="52" y="878" class="col">subtotal_minor, tax_minor, total_minor</text>
+    <text x="52" y="894" class="col">opened_at, closed_at, idempotency_key</text>
+
+    <rect x="40" y="916" width="280" height="124" rx="8" class="body group-pos"/>
+    <rect x="40" y="916" width="280" height="26" rx="8" class="header"/>
+    <text x="52" y="934" class="entity-name">order_lines</text>
+    <text x="52" y="958" class="col pk">id (uuid) PK</text>
+    <text x="52" y="974" class="col fk">order_id FK • menu_item_id FK</text>
+    <text x="52" y="990" class="col fk">variant_id FK? • modifiers (jsonb)</text>
+    <text x="52" y="1006" class="col">qty, unit_price_minor, line_total_minor</text>
+    <text x="52" y="1022" class="col">discount_minor, note, kitchen_status</text>
+    <text x="52" y="1038" class="col">voided_at, voided_by</text>
+
+    <rect x="40" y="1060" width="280" height="108" rx="8" class="body group-pos"/>
+    <rect x="40" y="1060" width="280" height="26" rx="8" class="header"/>
+    <text x="52" y="1078" class="entity-name">payments</text>
+    <text x="52" y="1102" class="col pk">id (uuid) PK</text>
+    <text x="52" y="1118" class="col fk">order_id FK • shift_id FK</text>
+    <text x="52" y="1134" class="col">method (cash|card|upi|qr|wallet)</text>
+    <text x="52" y="1150" class="col">amount_minor, tendered_minor, change_minor</text>
+    <text x="52" y="1166" class="col">ref_external, paid_at</text>
+
+    <rect x="40" y="1188" width="280" height="92" rx="8" class="body group-pos"/>
+    <rect x="40" y="1188" width="280" height="26" rx="8" class="header"/>
+    <text x="52" y="1206" class="entity-name">refunds</text>
+    <text x="52" y="1230" class="col pk">id (uuid) PK</text>
+    <text x="52" y="1246" class="col fk">order_id FK • approved_by FK→users</text>
+    <text x="52" y="1262" class="col">reason_code, amount_minor, mode</text>
+    <text x="52" y="1278" class="col">created_at, manager_override_user_id</text>
+
+    <rect x="340" y="740" width="260" height="124" rx="8" class="body group-pos"/>
+    <rect x="340" y="740" width="260" height="26" rx="8" class="header"/>
+    <text x="352" y="758" class="entity-name">shifts</text>
+    <text x="352" y="782" class="col pk">id (uuid) PK</text>
+    <text x="352" y="798" class="col fk">terminal_id FK • opened_by FK→users</text>
+    <text x="352" y="814" class="col">opened_at, closed_at</text>
+    <text x="352" y="830" class="col">opening_float_minor</text>
+    <text x="352" y="846" class="col">expected_minor, counted_minor, variance_minor</text>
+    <text x="352" y="862" class="col">status (open|closed|reconciled)</text>
+  </g>
+
+  <!-- POS relations -->
+  <path class="relation-strong" d="M 180 896 L 180 916" marker-end="url(#arrow-strong)"/>
+  <text x="186" y="910" class="card">1..N</text>
+  <path class="relation-strong" d="M 180 1040 L 180 1060" marker-end="url(#arrow-strong)"/>
+  <text x="186" y="1054" class="card">1..N</text>
+  <path class="relation" d="M 180 1168 L 180 1188" marker-end="url(#arrow)"/>
+  <text x="186" y="1182" class="card">1..N</text>
+  <path class="relation" d="M 320 820 L 340 820" marker-end="url(#arrow)"/>
+  <text x="322" y="814" class="card">N..1</text>
+
+  <!-- ============ TABLES (mid left-center) ============ -->
+  <g>
+    <text x="640" y="730" class="module" fill="#94e2d5">TABLES</text>
+    <rect x="640" y="740" width="220" height="92" rx="8" class="body group-table"/>
+    <rect x="640" y="740" width="220" height="26" rx="8" class="header"/>
+    <text x="652" y="758" class="entity-name">floors</text>
+    <text x="652" y="782" class="col pk">id (uuid) PK</text>
+    <text x="652" y="798" class="col fk">branch_id FK</text>
+    <text x="652" y="814" class="col">name, layout (jsonb)</text>
+
+    <rect x="640" y="852" width="220" height="124" rx="8" class="body group-table"/>
+    <rect x="640" y="852" width="220" height="26" rx="8" class="header"/>
+    <text x="652" y="870" class="entity-name">tables</text>
+    <text x="652" y="894" class="col pk">id (uuid) PK</text>
+    <text x="652" y="910" class="col fk">floor_id FK</text>
+    <text x="652" y="926" class="col">code, seats, x, y, shape</text>
+    <text x="652" y="942" class="col">status (avail|occupied|reserved|clean|merged)</text>
+    <text x="652" y="958" class="col fk">merged_into FK→tables?</text>
+    <text x="652" y="974" class="col">updated_at</text>
+
+    <rect x="640" y="996" width="220" height="108" rx="8" class="body group-table"/>
+    <rect x="640" y="996" width="220" height="26" rx="8" class="header"/>
+    <text x="652" y="1014" class="entity-name">reservations</text>
+    <text x="652" y="1038" class="col pk">id (uuid) PK</text>
+    <text x="652" y="1054" class="col fk">table_id FK • created_by FK→users</text>
+    <text x="652" y="1070" class="col">guest_name, party_size, contact</text>
+    <text x="652" y="1086" class="col">starts_at, ends_at, notes</text>
+    <text x="652" y="1102" class="col">status (held|seated|no_show|cancelled)</text>
+  </g>
+
+  <path class="relation" d="M 750 832 L 750 852" marker-end="url(#arrow)"/>
+  <text x="756" y="846" class="card">1..N</text>
+  <path class="relation" d="M 750 976 L 750 996" marker-end="url(#arrow)"/>
+  <text x="756" y="990" class="card">1..N</text>
+  <!-- order -> table -->
+  <path class="relation" d="M 320 830 C 500 830, 500 894, 640 894" marker-end="url(#arrow)"/>
+  <text x="475" y="826" class="card">N..1</text>
+
+  <!-- ============ MENU & INVENTORY (mid right) ============ -->
+  <g>
+    <text x="900" y="510" class="module" fill="#f9e2af">MENU</text>
+    <rect x="900" y="520" width="260" height="140" rx="8" class="body group-menu"/>
+    <rect x="900" y="520" width="260" height="26" rx="8" class="header"/>
+    <text x="912" y="538" class="entity-name">menu_items</text>
+    <text x="912" y="562" class="col pk">id (uuid) PK</text>
+    <text x="912" y="578" class="col fk">company_id FK • category_id FK</text>
+    <text x="912" y="594" class="col">sku, name, description, image_url</text>
+    <text x="912" y="610" class="col">type (food|drink|dessert|gaming|event)</text>
+    <text x="912" y="626" class="col">base_price_minor, tax_rate</text>
+    <text x="912" y="642" class="col">is_available, availability_window (jsonb)</text>
+    <text x="912" y="658" class="col">created_at, updated_at, deleted_at</text>
+
+    <rect x="900" y="680" width="260" height="92" rx="8" class="body group-menu"/>
+    <rect x="900" y="680" width="260" height="26" rx="8" class="header"/>
+    <text x="912" y="698" class="entity-name">menu_categories</text>
+    <text x="912" y="722" class="col pk">id (uuid) PK</text>
+    <text x="912" y="738" class="col fk">company_id FK</text>
+    <text x="912" y="754" class="col">name, sort_order, icon</text>
+
+    <rect x="1180" y="520" width="240" height="92" rx="8" class="body group-menu"/>
+    <rect x="1180" y="520" width="240" height="26" rx="8" class="header"/>
+    <text x="1192" y="538" class="entity-name">menu_variants</text>
+    <text x="1192" y="562" class="col pk">id (uuid) PK</text>
+    <text x="1192" y="578" class="col fk">menu_item_id FK</text>
+    <text x="1192" y="594" class="col">name (S/M/L), price_delta_minor</text>
+    <text x="1192" y="610" class="col">sort_order</text>
+
+    <rect x="1180" y="632" width="240" height="92" rx="8" class="body group-menu"/>
+    <rect x="1180" y="632" width="240" height="26" rx="8" class="header"/>
+    <text x="1192" y="650" class="entity-name">menu_modifiers</text>
+    <text x="1192" y="674" class="col pk">id (uuid) PK</text>
+    <text x="1192" y="690" class="col fk">menu_item_id FK</text>
+    <text x="1192" y="706" class="col">name, price_delta_minor, group, max</text>
+    <text x="1192" y="722" class="col">required</text>
+  </g>
+
+  <path class="relation" d="M 1160 590 L 1180 590" marker-end="url(#arrow)"/>
+  <text x="1162" y="584" class="card">1..N</text>
+  <path class="relation" d="M 1160 620 C 1170 700, 1170 700, 1180 700" marker-end="url(#arrow)"/>
+  <text x="1162" y="700" class="card">1..N</text>
+  <path class="relation" d="M 1030 680 L 1030 660" marker-end="url(#arrow)"/>
+  <text x="1036" y="678" class="card">N..1</text>
+
+  <g>
+    <text x="900" y="800" class="module" fill="#fab387">INVENTORY</text>
+    <rect x="900" y="810" width="260" height="124" rx="8" class="body group-inv"/>
+    <rect x="900" y="810" width="260" height="26" rx="8" class="header"/>
+    <text x="912" y="828" class="entity-name">ingredients</text>
+    <text x="912" y="852" class="col pk">id (uuid) PK</text>
+    <text x="912" y="868" class="col fk">company_id FK</text>
+    <text x="912" y="884" class="col">sku, name, base_unit (ml|g|unit)</text>
+    <text x="912" y="900" class="col">reorder_threshold, reorder_qty</text>
+    <text x="912" y="916" class="col">avg_cost_minor, current_qty</text>
+    <text x="912" y="932" class="col">created_at, updated_at, deleted_at</text>
+
+    <rect x="900" y="954" width="260" height="124" rx="8" class="body group-inv"/>
+    <rect x="900" y="954" width="260" height="26" rx="8" class="header"/>
+    <text x="912" y="972" class="entity-name">recipes</text>
+    <text x="912" y="996" class="col pk">id (uuid) PK</text>
+    <text x="912" y="1012" class="col fk">menu_item_id FK</text>
+    <text x="912" y="1028" class="col">name, yield_qty</text>
+    <text x="912" y="1044" class="col">version, is_active</text>
+    <text x="912" y="1060" class="col">cost_minor (computed)</text>
+
+    <rect x="900" y="1098" width="260" height="92" rx="8" class="body group-inv"/>
+    <rect x="900" y="1098" width="260" height="26" rx="8" class="header"/>
+    <text x="912" y="1116" class="entity-name">recipe_lines</text>
+    <text x="912" y="1140" class="col pk">id (uuid) PK</text>
+    <text x="912" y="1156" class="col fk">recipe_id FK • ingredient_id FK</text>
+    <text x="912" y="1172" class="col">qty (base unit), wastage_pct</text>
+
+    <rect x="1180" y="810" width="240" height="124" rx="8" class="body group-inv"/>
+    <rect x="1180" y="810" width="240" height="26" rx="8" class="header"/>
+    <text x="1192" y="828" class="entity-name">batches</text>
+    <text x="1192" y="852" class="col pk">id (uuid) PK</text>
+    <text x="1192" y="868" class="col fk">ingredient_id FK • branch_id FK</text>
+    <text x="1192" y="884" class="col fk">supplier_id FK • grn_id FK</text>
+    <text x="1192" y="900" class="col">received_at, expires_at</text>
+    <text x="1192" y="916" class="col">qty_initial, qty_on_hand, cost_per_unit_minor</text>
+    <text x="1192" y="932" class="col">lot_code</text>
+
+    <rect x="1180" y="954" width="240" height="124" rx="8" class="body group-inv"/>
+    <rect x="1180" y="954" width="240" height="26" rx="8" class="header"/>
+    <text x="1192" y="972" class="entity-name">stock_movements</text>
+    <text x="1192" y="996" class="col pk">id (uuid) PK</text>
+    <text x="1192" y="1012" class="col fk">batch_id FK • branch_id FK</text>
+    <text x="1192" y="1028" class="col">type (sale|waste|damage|transfer|adj|grn)</text>
+    <text x="1192" y="1044" class="col fk">ref_type, ref_id (poly)</text>
+    <text x="1192" y="1060" class="col">qty_delta, cost_per_unit_minor</text>
+    <text x="1192" y="1076" class="col">created_by, created_at, note</text>
+
+    <rect x="1180" y="1098" width="240" height="92" rx="8" class="body group-inv"/>
+    <rect x="1180" y="1098" width="240" height="26" rx="8" class="header"/>
+    <text x="1192" y="1116" class="entity-name">suppliers</text>
+    <text x="1192" y="1140" class="col pk">id (uuid) PK</text>
+    <text x="1192" y="1156" class="col fk">company_id FK</text>
+    <text x="1192" y="1172" class="col">name, contact, gstin, payment_terms</text>
+
+    <rect x="1440" y="810" width="240" height="124" rx="8" class="body group-inv"/>
+    <rect x="1440" y="810" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="828" class="entity-name">purchase_orders</text>
+    <text x="1452" y="852" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="868" class="col fk">supplier_id FK • branch_id FK</text>
+    <text x="1452" y="884" class="col">po_number, status (draft|sent|partial|closed)</text>
+    <text x="1452" y="900" class="col">expected_at, total_minor</text>
+    <text x="1452" y="916" class="col">created_by, created_at</text>
+
+    <rect x="1440" y="954" width="240" height="124" rx="8" class="body group-inv"/>
+    <rect x="1440" y="954" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="972" class="entity-name">grns</text>
+    <text x="1452" y="996" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="1012" class="col fk">purchase_order_id FK</text>
+    <text x="1452" y="1028" class="col">received_at, received_by</text>
+    <text x="1452" y="1044" class="col">supplier_invoice_no, supplier_invoice_amt</text>
+    <text x="1452" y="1060" class="col">notes</text>
+
+    <rect x="1440" y="1098" width="240" height="92" rx="8" class="body group-inv"/>
+    <rect x="1440" y="1098" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="1116" class="entity-name">grn_lines</text>
+    <text x="1452" y="1140" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="1156" class="col fk">grn_id FK • ingredient_id FK • batch_id FK</text>
+    <text x="1452" y="1172" class="col">qty_received, cost_per_unit_minor</text>
+  </g>
+
+  <!-- recipes -> menu_items -->
+  <path class="relation-strong" d="M 1030 660 C 1030 700, 1030 700, 1030 954" marker-end="url(#arrow-strong)"/>
+  <text x="1036" y="800" class="card">1..1</text>
+  <!-- recipes -> recipe_lines -->
+  <path class="relation-strong" d="M 1030 1078 L 1030 1098" marker-end="url(#arrow-strong)"/>
+  <text x="1036" y="1092" class="card">1..N</text>
+  <!-- recipe_lines -> ingredients -->
+  <path class="relation" d="M 1030 1098 C 1010 1000, 1010 1000, 1030 934" marker-end="url(#arrow)"/>
+  <text x="990" y="1000" class="card">N..1</text>
+  <!-- ingredients -> batches -->
+  <path class="relation-strong" d="M 1160 870 L 1180 870" marker-end="url(#arrow-strong)"/>
+  <text x="1162" y="864" class="card">1..N</text>
+  <!-- batches -> movements -->
+  <path class="relation-strong" d="M 1300 934 L 1300 954" marker-end="url(#arrow-strong)"/>
+  <text x="1306" y="948" class="card">1..N</text>
+  <!-- suppliers -> POs -->
+  <path class="relation" d="M 1420 1140 C 1430 1000, 1430 1000, 1440 870" marker-end="url(#arrow)"/>
+  <text x="1428" y="990" class="card">1..N</text>
+  <!-- POs -> GRNs -->
+  <path class="relation" d="M 1560 934 L 1560 954" marker-end="url(#arrow)"/>
+  <text x="1566" y="948" class="card">1..N</text>
+  <!-- GRNs -> grn_lines -->
+  <path class="relation-strong" d="M 1560 1078 L 1560 1098" marker-end="url(#arrow-strong)"/>
+  <text x="1566" y="1092" class="card">1..N</text>
+
+  <!-- order_lines -> menu_items -->
+  <path class="relation" d="M 320 970 C 700 970, 700 590, 900 590" marker-end="url(#arrow)"/>
+  <text x="640" y="620" class="card">N..1</text>
+
+  <!-- ============ GAMING (right top) ============ -->
+  <g>
+    <text x="1440" y="110" class="module" fill="#cba6f7">GAMING</text>
+    <rect x="1440" y="120" width="240" height="124" rx="8" class="body group-game"/>
+    <rect x="1440" y="120" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="138" class="entity-name">stations</text>
+    <text x="1452" y="162" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="178" class="col fk">branch_id FK</text>
+    <text x="1452" y="194" class="col">code, name</text>
+    <text x="1452" y="210" class="col">type (ps5|vr|simulator|projector)</text>
+    <text x="1452" y="226" class="col">rate_per_hour_minor, is_active</text>
+    <text x="1452" y="242" class="col">notes</text>
+
+    <rect x="1440" y="264" width="240" height="156" rx="8" class="body group-game"/>
+    <rect x="1440" y="264" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="282" class="entity-name">gaming_sessions</text>
+    <text x="1452" y="306" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="322" class="col fk">station_id FK • order_id FK?</text>
+    <text x="1452" y="338" class="col fk">opened_by FK→users • shift_id FK</text>
+    <text x="1452" y="354" class="col">start_at, end_at, paused_minutes</text>
+    <text x="1452" y="370" class="col">rate_per_hour_minor, package_id?</text>
+    <text x="1452" y="386" class="col">billable_minutes, amount_minor</text>
+    <text x="1452" y="402" class="col">status (active|paused|ended|cancelled)</text>
+    <text x="1452" y="418" class="col">customer_name, customer_phone</text>
+
+    <rect x="1440" y="440" width="240" height="124" rx="8" class="body group-game"/>
+    <rect x="1440" y="440" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="458" class="entity-name">gaming_bookings</text>
+    <text x="1452" y="482" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="498" class="col fk">station_id FK</text>
+    <text x="1452" y="514" class="col">starts_at, ends_at (tstzrange EXCLUDE)</text>
+    <text x="1452" y="530" class="col">guest_name, contact, party_size</text>
+    <text x="1452" y="546" class="col">deposit_minor, status</text>
+    <text x="1452" y="562" class="col">created_by, created_at</text>
+
+    <rect x="1440" y="584" width="240" height="124" rx="8" class="body group-game"/>
+    <rect x="1440" y="584" width="240" height="26" rx="8" class="header"/>
+    <text x="1452" y="602" class="entity-name">tournaments</text>
+    <text x="1452" y="626" class="col pk">id (uuid) PK</text>
+    <text x="1452" y="642" class="col fk">branch_id FK</text>
+    <text x="1452" y="658" class="col">name, game_title, format</text>
+    <text x="1452" y="674" class="col">starts_at, ends_at, entry_fee_minor</text>
+    <text x="1452" y="690" class="col">prize_pool_minor, status</text>
+  </g>
+
+  <path class="relation-strong" d="M 1560 244 L 1560 264" marker-end="url(#arrow-strong)"/>
+  <text x="1566" y="258" class="card">1..N</text>
+  <path class="relation" d="M 1560 244 C 1700 244, 1700 502, 1680 502" marker-end="url(#arrow)"/>
+  <text x="1700" y="380" class="card">1..N</text>
+
+  <!-- ============ FINANCE (bottom center) ============ -->
+  <g>
+    <text x="640" y="1170" class="module" fill="#f38ba8">FINANCE</text>
+    <rect x="640" y="1180" width="220" height="92" rx="8" class="body group-fin"/>
+    <rect x="640" y="1180" width="220" height="26" rx="8" class="header"/>
+    <text x="652" y="1198" class="entity-name">partners</text>
+    <text x="652" y="1222" class="col pk">id (uuid) PK</text>
+    <text x="652" y="1238" class="col fk">company_id FK • user_id FK?</text>
+    <text x="652" y="1254" class="col">name, share_pct, joined_at</text>
+    <text x="652" y="1270" class="col">notes</text>
+
+    <rect x="640" y="1292" width="220" height="92" rx="8" class="body group-fin"/>
+    <rect x="640" y="1292" width="220" height="26" rx="8" class="header"/>
+    <text x="652" y="1310" class="entity-name">capital_entries</text>
+    <text x="652" y="1334" class="col pk">id (uuid) PK</text>
+    <text x="652" y="1350" class="col fk">partner_id FK</text>
+    <text x="652" y="1366" class="col">type (invest|withdraw|profit_share)</text>
+    <text x="652" y="1382" class="col">amount_minor, effective_at, note</text>
+
+    <rect x="880" y="1180" width="240" height="124" rx="8" class="body group-fin"/>
+    <rect x="880" y="1180" width="240" height="26" rx="8" class="header"/>
+    <text x="892" y="1198" class="entity-name">expenses</text>
+    <text x="892" y="1222" class="col pk">id (uuid) PK</text>
+    <text x="892" y="1238" class="col fk">branch_id FK • category_id FK</text>
+    <text x="892" y="1254" class="col fk">supplier_id FK? • ocr_extraction_id FK?</text>
+    <text x="892" y="1270" class="col">amount_minor, paid_via, paid_at</text>
+    <text x="892" y="1286" class="col">vendor_name, invoice_no, note</text>
+
+    <rect x="880" y="1316" width="240" height="68" rx="8" class="body group-fin"/>
+    <rect x="880" y="1316" width="240" height="26" rx="8" class="header"/>
+    <text x="892" y="1334" class="entity-name">expense_categories</text>
+    <text x="892" y="1358" class="col pk">id (uuid) PK</text>
+    <text x="892" y="1374" class="col">name, gl_account_id FK</text>
+
+    <rect x="1140" y="1180" width="240" height="124" rx="8" class="body group-fin"/>
+    <rect x="1140" y="1180" width="240" height="26" rx="8" class="header"/>
+    <text x="1152" y="1198" class="entity-name">accounts (CoA)</text>
+    <text x="1152" y="1222" class="col pk">id (uuid) PK</text>
+    <text x="1152" y="1238" class="col fk">company_id FK • parent_id FK?</text>
+    <text x="1152" y="1254" class="col">code, name</text>
+    <text x="1152" y="1270" class="col">type (asset|liability|equity|rev|exp)</text>
+    <text x="1152" y="1286" class="col">normal_side</text>
+
+    <rect x="1140" y="1316" width="240" height="68" rx="8" class="body group-fin"/>
+    <rect x="1140" y="1316" width="240" height="26" rx="8" class="header"/>
+    <text x="1152" y="1334" class="entity-name">journal_entries</text>
+    <text x="1152" y="1358" class="col pk">id (uuid) PK • ref_type, ref_id</text>
+    <text x="1152" y="1374" class="col">posted_at, memo, total_minor</text>
+
+    <rect x="1400" y="1180" width="260" height="124" rx="8" class="body group-fin"/>
+    <rect x="1400" y="1180" width="260" height="26" rx="8" class="header"/>
+    <text x="1412" y="1198" class="entity-name">journal_lines</text>
+    <text x="1412" y="1222" class="col pk">id (uuid) PK</text>
+    <text x="1412" y="1238" class="col fk">journal_entry_id FK • account_id FK</text>
+    <text x="1412" y="1254" class="col">side (dr|cr)</text>
+    <text x="1412" y="1270" class="col">amount_minor</text>
+    <text x="1412" y="1286" class="col">memo</text>
+
+    <rect x="1400" y="1316" width="260" height="68" rx="8" class="body group-fin"/>
+    <rect x="1400" y="1316" width="260" height="26" rx="8" class="header"/>
+    <text x="1412" y="1334" class="entity-name">assets</text>
+    <text x="1412" y="1358" class="col pk">id (uuid) PK • fk branch_id</text>
+    <text x="1412" y="1374" class="col">name, type, purchase_minor, depr_method</text>
+  </g>
+
+  <path class="relation" d="M 750 1272 L 750 1292" marker-end="url(#arrow)"/>
+  <text x="756" y="1286" class="card">1..N</text>
+  <path class="relation-strong" d="M 1260 1304 L 1260 1316" marker-end="url(#arrow-strong)"/>
+  <text x="1266" y="1314" class="card">1..N</text>
+  <path class="relation" d="M 1140 1350 L 1140 1350 L 1400 1350" marker-end="url(#arrow)"/>
+  <text x="1260" y="1346" class="card">1..N</text>
+  <path class="relation" d="M 1260 1304 L 1260 1316 L 1260 1316 L 1260 1316" />
+  <path class="relation" d="M 1260 1304 L 1260 1316" />
+  <path class="relation" d="M 1140 1240 L 1380 1240" marker-end="url(#arrow)"/>
+  <text x="1260" y="1234" class="card">N..1</text>
+
+  <!-- ============ OCR (bottom right) ============ -->
+  <g>
+    <text x="40" y="1170" class="module" fill="#74c7ec">OCR</text>
+    <rect x="40" y="1180" width="260" height="108" rx="8" class="body group-ocr"/>
+    <rect x="40" y="1180" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="1198" class="entity-name">ocr_uploads</text>
+    <text x="52" y="1222" class="col pk">id (uuid) PK</text>
+    <text x="52" y="1238" class="col fk">branch_id FK • uploaded_by FK→users</text>
+    <text x="52" y="1254" class="col">storage_key, mime, sha256, byte_size</text>
+    <text x="52" y="1270" class="col">source (manual|drive|whatsapp|telegram)</text>
+    <text x="52" y="1286" class="col">uploaded_at</text>
+
+    <rect x="40" y="1300" width="260" height="108" rx="8" class="body group-ocr"/>
+    <rect x="40" y="1300" width="260" height="26" rx="8" class="header"/>
+    <text x="52" y="1318" class="entity-name">ocr_extractions</text>
+    <text x="52" y="1342" class="col pk">id (uuid) PK</text>
+    <text x="52" y="1358" class="col fk">ocr_upload_id FK</text>
+    <text x="52" y="1374" class="col">vendor_name, invoice_no, invoice_date</text>
+    <text x="52" y="1390" class="col">amount_minor, tax_minor, confidence (jsonb)</text>
+    <text x="52" y="1406" class="col">status (parsed|needs_review|approved|dup|rejected)</text>
+
+    <rect x="320" y="1300" width="260" height="84" rx="8" class="body group-ocr"/>
+    <rect x="320" y="1300" width="260" height="26" rx="8" class="header"/>
+    <text x="332" y="1318" class="entity-name">ocr_verifications</text>
+    <text x="332" y="1342" class="col pk">id (uuid) PK</text>
+    <text x="332" y="1358" class="col fk">ocr_extraction_id FK • reviewed_by FK→users</text>
+    <text x="332" y="1374" class="col">decision, edits (jsonb), reviewed_at</text>
+  </g>
+
+  <path class="relation-strong" d="M 170 1288 L 170 1300" marker-end="url(#arrow-strong)"/>
+  <text x="176" y="1298" class="card">1..1</text>
+  <path class="relation" d="M 300 1342 L 320 1342" marker-end="url(#arrow)"/>
+  <text x="302" y="1336" class="card">1..N</text>
+  <!-- ocr -> expense -->
+  <path class="relation" d="M 300 1374 C 600 1374, 600 1254, 880 1254" marker-end="url(#arrow)"/>
+  <text x="560" y="1368" class="card">0..1</text>
+
+  <!-- ============ AUDIT + IDEMPOTENCY (bottom strip) ============ -->
+  <g>
+    <text x="640" y="430" class="module" fill="#cdd6f4">CROSS-CUTTING</text>
+    <rect x="340" y="900" width="260" height="124" rx="8" class="body" stroke="#cdd6f4" stroke-width="1"/>
+    <rect x="340" y="900" width="260" height="26" rx="8" class="header"/>
+    <text x="352" y="918" class="entity-name">audit_log</text>
+    <text x="352" y="942" class="col pk">id (bigserial) PK</text>
+    <text x="352" y="958" class="col fk">actor_user_id FK • company_id FK</text>
+    <text x="352" y="974" class="col">action, entity_type, entity_id</text>
+    <text x="352" y="990" class="col">before (jsonb), after (jsonb)</text>
+    <text x="352" y="1006" class="col">ip, user_agent, created_at</text>
+    <text x="352" y="1022" class="col">(append-only • partitioned by month)</text>
+
+    <rect x="340" y="1044" width="260" height="124" rx="8" class="body" stroke="#cdd6f4" stroke-width="1"/>
+    <rect x="340" y="1044" width="260" height="26" rx="8" class="header"/>
+    <text x="352" y="1062" class="entity-name">idempotency_keys</text>
+    <text x="352" y="1086" class="col pk">key (text) PK</text>
+    <text x="352" y="1102" class="col fk">terminal_id FK • user_id FK</text>
+    <text x="352" y="1118" class="col">request_hash (sha256)</text>
+    <text x="352" y="1134" class="col">response_status, response_body (jsonb)</text>
+    <text x="352" y="1150" class="col">created_at (TTL 24h)</text>
+
+    <rect x="340" y="1188" width="260" height="92" rx="8" class="body" stroke="#cdd6f4" stroke-width="1"/>
+    <rect x="340" y="1188" width="260" height="26" rx="8" class="header"/>
+    <text x="352" y="1206" class="entity-name">sync_outbox / recovery_log</text>
+    <text x="352" y="1230" class="col pk">id (uuid) PK</text>
+    <text x="352" y="1246" class="col fk">terminal_id FK • client_seq</text>
+    <text x="352" y="1262" class="col">payload (jsonb), replayed_at, conflict</text>
+  </g>
+
+  <!-- ============ Legend ============ -->
+  <g transform="translate(40, 1300)">
+    <text x="0" y="0" class="legend">Legend</text>
+    <line x1="0" y1="14" x2="40" y2="14" class="relation" marker-end="url(#arrow)"/>
+    <text x="48" y="18" class="legend">soft FK / association</text>
+    <line x1="0" y1="34" x2="40" y2="34" class="relation-strong" marker-end="url(#arrow-strong)"/>
+    <text x="48" y="38" class="legend">composition / required parent</text>
+    <text x="0" y="60" class="legend"><tspan class="pk">PK</tspan> primary key  <tspan class="fk">FK</tspan> foreign key  •  minor = integer minor currency units</text>
+  </g>
+
+</svg>

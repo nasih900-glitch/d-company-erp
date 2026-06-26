@@ -1,0 +1,139 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  scrollbar-gutter: stable;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: auto;
+}
+
+body {
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(950px 680px at 16% -8%, rgba(210, 179, 109, 0.17), transparent 58%),
+    radial-gradient(780px 560px at 100% 0%, rgba(155, 183, 212, 0.08), transparent 62%),
+    linear-gradient(145deg, #050403 0%, #0d0a06 48%, #030303 100%);
+  -webkit-font-smoothing: antialiased;
+  -webkit-overflow-scrolling: touch;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: pan-x pan-y;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+/* Touch-first hit targets for cashier workflows */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-semibold
+           bg-bg-raised text-fg hover:bg-bg-border active:scale-[0.98] transition shadow-glow
+           select-none touch-manipulation;
+    min-height: 56px;
+    min-width: 56px;
+  }
+  .btn-primary { @apply bg-accent text-bg hover:bg-accent/90; }
+  .btn-danger  { @apply bg-accent-bad text-bg hover:bg-accent-bad/90; }
+  .btn-ghost   { @apply bg-transparent border border-bg-border; }
+
+  .card {
+    @apply rounded-2xl bg-bg-surface/95 border border-bg-border p-5 shadow-glow;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-medium
+           bg-bg-raised text-fg-muted border border-bg-border;
+  }
+  .input {
+    @apply w-full rounded-xl bg-bg-raised border border-bg-border px-4 py-3 text-base
+           text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent/40;
+    min-height: 48px;
+  }
+
+  .scroll-strip {
+    @apply overflow-x-auto overscroll-x-contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .scroll-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-scroll {
+    @apply min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-card-list {
+    @apply space-y-3 p-3;
+  }
+
+  .mobile-record-card {
+    @apply rounded-xl border border-bg-border bg-bg-surface/70 p-3 shadow-sm;
+  }
+
+  .mobile-safe-bottom {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 767px) {
+  .modal-panel form .grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .modal-panel form .flex.justify-end {
+    @apply flex-col-reverse;
+  }
+
+  .modal-panel form .flex.justify-end > .btn {
+    @apply w-full justify-center;
+  }
+
+  .card:has(> table) {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .card > table {
+    min-width: 680px;
+  }
+
+  .btn {
+    @apply rounded-xl px-4 py-2 text-sm;
+    min-height: 44px;
+  }
+
+  .input {
+    @apply rounded-xl px-3 py-2 text-sm;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}

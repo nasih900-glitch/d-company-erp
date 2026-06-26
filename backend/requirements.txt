@@ -1,0 +1,21 @@
+# Generated from pyproject.toml — pin in CI with `pip-compile` for prod.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+pydantic-settings>=2.2
+SQLAlchemy>=2.0.27
+greenlet>=3.0
+alembic>=1.13
+psycopg[binary]>=3.1.18
+asyncpg>=0.29
+passlib[argon2]>=1.7.4
+python-jose[cryptography]>=3.3
+python-multipart>=0.0.9
+redis>=5.0
+arq>=0.25
+boto3>=1.34
+httpx>=0.27
+structlog>=24.1
+orjson>=3.9
+tenacity>=8.2
+email-validator>=2.1

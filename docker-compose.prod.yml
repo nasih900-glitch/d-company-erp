@@ -1,0 +1,125 @@
+# D Company ERP — Production stack for Oracle Cloud / any VM with Docker.
+#
+# Differences from dev docker-compose.yml:
+#   - Caddy in front with auto-HTTPS (ports 80 + 443)
+#   - Backend + frontend not exposed to the internet directly
+#   - Postgres / Redis / MinIO bound to the internal Docker network
+#   - Strong env values from .env
+#   - Restart policies set to "unless-stopped" so the stack survives reboots
+#
+# Bring up with:
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3 over QUIC
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@dcompany.local}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: erp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp -d erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: erp
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - miniodata:/data
+    # MinIO console intentionally not exposed publicly. SSH-tunnel if needed.
+
+  backend:
+    build:
+      context: .
+      dockerfile: infra/docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      ENV: prod
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: json
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
+      EXPOSE_DOCS: ${EXPOSE_DOCS:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      DEFAULT_CURRENCY: INR
+      DEFAULT_TIMEZONE: Asia/Kolkata
+      BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE:-Asia/Kolkata}
+      PUBLIC_URL: ${PUBLIC_URL:-https://dcompany.duckdns.org}
+      REPORT_RECIPIENT_EMAILS: ${REPORT_RECIPIENT_EMAILS:-}
+      ALERT_RECIPIENT_EMAILS: ${ALERT_RECIPIENT_EMAILS:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      FROM_EMAIL: ${FROM_EMAIL:-}
+      FROM_NAME: ${FROM_NAME:-D Company ERP}
+      SEED_OWNER_PASSWORD: ${SEED_OWNER_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Backend NOT bound to host — only Caddy can reach it.
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/docker/frontend.Dockerfile
+      args:
+        VITE_API_URL: https://${DOMAIN}/api/v1
+        VITE_APP_VERSION: ${APP_VERSION:-1.0.0}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Frontend NOT bound to host either.
+
+volumes:
+  pgdata:
+  miniodata:
+  caddy_data:
+  caddy_config:
