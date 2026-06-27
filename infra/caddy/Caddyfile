@@ -38,6 +38,14 @@
     # Gzip / Brotli compression for the SPA bundle.
     encode zstd gzip
 
+    # Do not let scanner probes for local/server files fall through to the SPA.
+    @blocked_sensitive {
+        path /.env* /.git* /.hg* /.svn* /.DS_Store /docker-compose* /Dockerfile* /Caddyfile* /id_rsa* /id_dsa*
+    }
+    handle @blocked_sensitive {
+        respond "Not found" 404
+    }
+
     # Backend API.
     handle /api/* {
         reverse_proxy backend:8000 {
