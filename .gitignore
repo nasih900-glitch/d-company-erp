@@ -54,6 +54,13 @@ miniodata/
 *.sqlite3
 *.db
 
+# Private operational/company documents kept locally, not in the public repo
+HANDOFF.md
+PROJECT_STATE.md
+COMPANY_COMPLIANCE_CHECKLIST.md
+LEGAL_DOCUMENTS_CHECKLIST.md
+D_Company_Legal_Documents_Checklist*.docx
+
 # Build artifacts
 *.log
 *.pid
