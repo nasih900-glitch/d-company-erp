@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
@@ -33,17 +33,49 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const { me, logout, demo } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const loc = useLocation();
-  const isSuperOwner = demo || me?.protected_access;
-  const navItems = NAV.filter((item) => {
-    if (item.superOwnerOnly) return isSuperOwner;
-    return true;
-  });
+  const isSuperOwner = Boolean(demo || me?.protected_access);
+  const navItems = useMemo(
+    () => NAV.filter((item) => !item.superOwnerOnly || isSuperOwner),
+    [isSuperOwner],
+  );
+
+  const current = useMemo(
+    () => navItems.find((n) => n.to === loc.pathname),
+    [loc.pathname, navItems],
+  );
+
+  const initials = useMemo(
+    () => (me?.name ?? 'D')
+      .split(' ')
+      .map((p) => p[0])
+      .slice(0, 2)
+      .join(''),
+    [me?.name],
+  );
 
   // Close the drawer whenever the route changes.
   const onNavigate = () => setDrawerOpen(false);
 
-  // Page title from the path — used in the mobile top bar.
-  const current = navItems.find((n) => n.to === loc.pathname);
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [loc.pathname]);
+
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDrawerOpen(false);
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [drawerOpen]);
 
   return (
     <div className="min-h-[100dvh] overflow-x-hidden md:grid md:h-[100dvh] md:grid-cols-[260px_1fr]">
@@ -74,7 +106,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           </div>
         </div>
         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-accent-purple grid place-items-center font-bold text-bg text-sm">
-          {(me?.name ?? 'D').split(' ').map((p) => p[0]).slice(0, 2).join('')}
+          {initials}
         </div>
       </header>
 
@@ -83,8 +115,8 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           Mobile:   off-canvas drawer; slides in when drawerOpen=true. */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-[260px] bg-bg-surface border-r border-bg-border p-4 flex min-h-0 flex-col
-          transition-transform md:translate-x-0 md:static md:z-auto
+          fixed inset-y-0 left-0 z-50 w-[min(84vw,280px)] bg-bg-surface border-r border-bg-border p-4 flex min-h-0 flex-col
+          transition-transform duration-200 ease-out will-change-transform md:w-[260px] md:translate-x-0 md:static md:z-auto md:will-change-auto
           ${drawerOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}
         `}
         style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}
@@ -161,7 +193,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
 
       {/* ===================== MAIN CONTENT ===================== */}
       <main
-        className="app-scroll px-3 py-4 md:p-6 min-w-0"
+        className="app-scroll route-frame px-3 py-4 md:p-6 min-w-0"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >
         {children ?? <Outlet />}

@@ -98,6 +98,7 @@ export default function AuditScreen() {
       const [r, f] = await Promise.all([
         audit.list({
           q: q.trim() || undefined,
+          area: area || undefined,
           entity_type: entityType || undefined,
           action: action || undefined,
           limit: 200,

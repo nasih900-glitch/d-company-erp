@@ -10,7 +10,7 @@
  *
  * Auto-opens a shift if one isn't already in localStorage.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
   Banknote, CreditCard, Smartphone, QrCode, X, Check, Loader2,
@@ -45,7 +45,7 @@ const CATEGORY_FROM_TYPE: Record<string, string> = {
 
 export default function LivePOSScreen() {
   const [items, setItems] = useState<MenuItemDTO[]>([]);
-  const [shiftId, setShiftId] = useState<string | null>(localStorage.getItem('shift_id'));
+  const [shiftId, setShiftId] = useState<string | null>(() => localStorage.getItem('shift_id'));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,17 +65,24 @@ export default function LivePOSScreen() {
   const [showPay, setShowPay] = useState(false);
   const [paying, setPaying] = useState(false);
   const [receipt, setReceipt] = useState<OrderDTO | null>(null);
+  const pendingOrderRef = useRef<OrderDTO | null>(null);
+  const checkoutKeyRef = useRef<string | null>(null);
 
   // Load menu items + ensure a shift is open
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        const storedShiftId = localStorage.getItem('shift_id');
         const all = await menu.items();
         if (!cancelled) setItems(all.filter((i) => i.is_available && isAppStoreAllowedType(i.type)));
-        const s = await pos.openShift(0);
-        localStorage.setItem('shift_id', s.id);
-        if (!cancelled) setShiftId(s.id);
+        if (storedShiftId) {
+          if (!cancelled) setShiftId(storedShiftId);
+          return;
+        }
+        const openedShift = await pos.openShift(0);
+        localStorage.setItem('shift_id', openedShift.id);
+        if (!cancelled) setShiftId(openedShift.id);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -83,7 +90,7 @@ export default function LivePOSScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [shiftId]);
+  }, []);
 
   // Group by type into pseudo-categories
   const categories = useMemo(() => {
@@ -131,6 +138,11 @@ export default function LivePOSScreen() {
     }, 0);
   }, [cart, membershipTier]);
   const estimatedPayable = Math.max(0, preview - estimatedMembershipDiscount);
+
+  useEffect(() => {
+    pendingOrderRef.current = null;
+    checkoutKeyRef.current = null;
+  }, [cart, customerName, customerPhone, deliveryStateCode, deliveryVia, orderType]);
 
   async function lookupCustomer() {
     const phone = customerPhone.trim();
@@ -193,26 +205,34 @@ export default function LivePOSScreen() {
     setPaying(true);
     setError(null);
     try {
-      const checkoutKey = `${shiftId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const order = await pos.createOrder(
-        {
-          type: orderType,
-          shift_id: shiftId,
-          lines: cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
-          delivery_via: orderType === 'delivery' ? deliveryVia : undefined,
-          customer_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
-          place_of_supply_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
-          customer_name: customerName.trim() || undefined,
-          customer_phone: customerPhone.trim() || undefined,
-        },
-        `order:${checkoutKey}`,
-      );
+      const fallbackNonce = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const checkoutKey = checkoutKeyRef.current ?? `${shiftId}:${globalThis.crypto?.randomUUID?.() ?? fallbackNonce}`;
+      checkoutKeyRef.current = checkoutKey;
+      let order = pendingOrderRef.current;
+      if (!order) {
+        order = await pos.createOrder(
+          {
+            type: orderType,
+            shift_id: shiftId,
+            lines: cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
+            delivery_via: orderType === 'delivery' ? deliveryVia : undefined,
+            customer_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
+            place_of_supply_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
+            customer_name: customerName.trim() || undefined,
+            customer_phone: customerPhone.trim() || undefined,
+          },
+          `order:${checkoutKey}`,
+        );
+        pendingOrderRef.current = order;
+      }
       await pos.recordPayment(order.id, {
         method,
         amount_minor: order.total_minor,
         tendered_minor: method === 'cash' ? order.total_minor : undefined,
       }, `payment:${checkoutKey}`);
       setReceipt({ ...order, status: 'paid' });
+      pendingOrderRef.current = null;
+      checkoutKeyRef.current = null;
       setShowPay(false);
       setCart([]);
       clearCustomer();

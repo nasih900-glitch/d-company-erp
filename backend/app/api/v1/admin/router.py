@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -27,8 +28,8 @@ class AuditEntry(BaseModel):
     action: str
     entity_type: str
     entity_id: str
-    before: dict | None
-    after: dict | None
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
     ip: str | None
     user_agent: str | None
     created_at: datetime
@@ -53,6 +54,32 @@ class PricingUnlockResponse(BaseModel):
     expires_in: int
 
 
+AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
+    "pos": ("Order", "OrderLine", "Payment", "Refund", "Shift"),
+    "customers": ("Customer", "CustomerMembership", "MembershipTier"),
+    "staff": ("User", "UserRole", "Role"),
+    "inventory": ("Ingredient", "Supplier", "GRN"),
+    "finance": ("Expense", "ExpenseCategory", "Partner", "CapitalEntry"),
+    "menu": ("MenuCategory", "MenuItem"),
+    "operations": ("Table", "Floor", "Reservation", "Station", "Event", "EventTicket"),
+    "system": ("AuditAccess", "PricingAccess"),
+}
+
+
+def _apply_audit_area_filter(stmt: Any, area: str | None) -> Any:
+    if not area:
+        return stmt
+    normalized = area.strip().lower()
+    if normalized == "login":
+        return stmt.where(AuditLog.action.like("login_%"))
+    if normalized == "changes":
+        return stmt.where(AuditLog.action.in_(("create", "update", "delete")))
+    entity_types = AUDIT_AREA_ENTITY_TYPES.get(normalized)
+    if entity_types:
+        return stmt.where(AuditLog.entity_type.in_(entity_types))
+    return stmt
+
+
 def _request_ip(request: Request) -> str | None:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
@@ -66,7 +93,7 @@ def _audit_security_event(
     request: Request,
     tenant: TenantContext,
     action: str,
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
     entity_type: str = "AuditAccess",
 ) -> None:
     session.add(
@@ -184,6 +211,7 @@ async def list_audit(
     action: str | None = None,
     actor_user_id: UUID | None = None,
     entity_id: str | None = None,
+    area: str | None = None,
     q: str | None = None,
 ) -> list[AuditEntry]:
     """List audit log entries newest-first, scoped to this company.
@@ -209,6 +237,7 @@ async def list_audit(
         stmt = stmt.where(AuditLog.actor_user_id == actor_user_id)
     if entity_id:
         stmt = stmt.where(AuditLog.entity_id == entity_id)
+    stmt = _apply_audit_area_filter(stmt, area)
     if q:
         # Cast JSONB to text and ilike — sufficient for "search for a phone
         # number" or "find an invoice change" without needing a full-text index.
