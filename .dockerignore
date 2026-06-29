@@ -1,0 +1,52 @@
+.git
+.gitignore
+.DS_Store
+**/.DS_Store
+
+# Local secrets and machine-specific config. Keep examples tracked, never real envs.
+.env
+.env.*
+!.env.example
+!.env.production.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Dependency and build output that should never be sent to Docker build context.
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+frontend/dist
+frontend/demo-dist*
+frontend/live-dist
+frontend/coverage
+frontend/ios/App/build
+frontend/ios/App/DerivedData
+frontend/ios/App/Pods
+frontend/ios/App/App.xcworkspace
+frontend/ios/App/*.xcarchive
+
+# Local distribution artifacts and screenshots.
+*.zip
+*.ipa
+*.dmg
+*.pkg
+*.msi
+*.exe
+*.xcarchive
+AppStore_Screenshots*
+Simulator Screen*
+simulator_screenshot_*.png
+
+# Internal handoff/legal docs are not needed inside production images.
+HANDOFF.md
+PROJECT_STATE.md
+D_Company_Legal_Documents_Checklist*.docx
+COMPANY_COMPLIANCE_CHECKLIST.md
+LEGAL_DOCUMENTS_CHECKLIST.md
+docs
+download
+preview-app
