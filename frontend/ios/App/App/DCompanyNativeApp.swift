@@ -613,6 +613,20 @@ private struct CheckoutDraft: Identifiable {
     var customerName = ""
     var customerPhone = ""
     var note = ""
+    var cashTenderedMinor: Int?
+    var printReceiptAfterCharge = true
+
+    func tenderedMinor(totalMinor: Int) -> Int? {
+        paymentMethod == .cash ? (cashTenderedMinor ?? totalMinor) : nil
+    }
+
+    func changeDueMinor(totalMinor: Int) -> Int {
+        max((cashTenderedMinor ?? totalMinor) - totalMinor, 0)
+    }
+
+    func isCashTenderReady(totalMinor: Int) -> Bool {
+        paymentMethod != .cash || (cashTenderedMinor ?? totalMinor) >= totalMinor
+    }
 }
 
 private struct ShiftDTO: Decodable, Identifiable {
@@ -633,6 +647,99 @@ private struct TerminalDTO: Decodable, Identifiable {
     let name: String
     let device_id: String?
     let last_seen_at: Date?
+}
+
+private struct EmptyRequest: Encodable {}
+
+private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
+    case ps5
+    case vr
+    case simulator
+    case projector
+    case hookah
+    case station
+
+    var id: String { rawValue }
+
+    static func from(_ rawValue: String) -> GamingStationKind {
+        switch rawValue.lowercased() {
+        case "ps5", "playstation", "console":
+            return .ps5
+        case "vr":
+            return .vr
+        case "simulator", "sim":
+            return .simulator
+        case "projector", "theatre", "theater":
+            return .projector
+        case "hookah", "shisha":
+            return .hookah
+        default:
+            return .station
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .ps5: return "PS5"
+        case .vr: return "VR"
+        case .simulator: return "Simulator"
+        case .projector: return "Projector"
+        case .hookah: return "Hookah"
+        case .station: return "Station"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .ps5: return "gamecontroller.fill"
+        case .vr: return "visionpro"
+        case .simulator: return "steeringwheel"
+        case .projector: return "projector.fill"
+        case .hookah: return "timer"
+        case .station: return "rectangle.on.rectangle"
+        }
+    }
+}
+
+private struct GamingStationDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let code: String
+    let name: String
+    let type: String
+    let rate_per_hour_minor: Int
+    let is_active: Bool
+
+    var kind: GamingStationKind {
+        GamingStationKind.from(type)
+    }
+}
+
+private struct GamingSessionStartRequest: Encodable {
+    let station_id: String
+    let shift_id: String
+    let customer_name: String?
+    let customer_phone: String?
+}
+
+private struct GamingSessionDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let station_id: String
+    let status: String
+    let start_at: Date
+    let end_at: Date?
+    let billable_minutes: Int?
+    let amount_minor: Int?
+    let customer_name: String?
+    let customer_phone: String?
+    let rate_per_hour_minor: Int?
+}
+
+private struct GamingSessionDraft: Identifiable {
+    let id = UUID()
+    let station: GamingStationDTO
+    var customerName = ""
+    var customerPhone = ""
+    var partySize = 2
 }
 
 private struct OrderListItemDTO: Decodable, Identifiable {
@@ -1210,17 +1317,17 @@ private struct LoginView: View {
 private enum NativeTab: Hashable, CaseIterable {
     case dashboard
     case pos
-    case inventory
+    case gaming
     case reports
-    case audit
+    case workspace
 
     var title: String {
         switch self {
         case .dashboard: return "Home"
         case .pos: return "POS"
-        case .inventory: return "Stock"
+        case .gaming: return "Gaming"
         case .reports: return "Reports"
-        case .audit: return "Audit"
+        case .workspace: return "Workspace"
         }
     }
 
@@ -1228,9 +1335,9 @@ private enum NativeTab: Hashable, CaseIterable {
         switch self {
         case .dashboard: return "house"
         case .pos: return "cart"
-        case .inventory: return "cube.box"
+        case .gaming: return "gamecontroller"
         case .reports: return "chart.bar"
-        case .audit: return "shield"
+        case .workspace: return "square.grid.2x2"
         }
     }
 }
@@ -1249,19 +1356,17 @@ private struct ERPHomeView: View {
                 .tabItem { Label(NativeTab.pos.title, systemImage: NativeTab.pos.icon) }
                 .tag(NativeTab.pos)
 
-            InventoryNativeView()
-                .tabItem { Label(NativeTab.inventory.title, systemImage: NativeTab.inventory.icon) }
-                .tag(NativeTab.inventory)
+            GamingNativeView()
+                .tabItem { Label(NativeTab.gaming.title, systemImage: NativeTab.gaming.icon) }
+                .tag(NativeTab.gaming)
 
             ReportsNativeView()
                 .tabItem { Label(NativeTab.reports.title, systemImage: NativeTab.reports.icon) }
                 .tag(NativeTab.reports)
 
-            if session.canSeeAudit {
-                AuditNativeView()
-                    .tabItem { Label(NativeTab.audit.title, systemImage: NativeTab.audit.icon) }
-                    .tag(NativeTab.audit)
-            }
+            WorkspaceNativeView(openTab: updateTab)
+                .tabItem { Label(NativeTab.workspace.title, systemImage: NativeTab.workspace.icon) }
+                .tag(NativeTab.workspace)
         }
         .premiumTabChrome()
     }
@@ -1339,16 +1444,14 @@ private struct DashboardNativeView: View {
                         QuickActionButton(title: "New bill", subtitle: "Open POS", icon: "cart.badge.plus") {
                             openTab(.pos)
                         }
-                        QuickActionButton(title: "Stock check", subtitle: "Inventory", icon: "cube.box") {
-                            openTab(.inventory)
+                        QuickActionButton(title: "Start PS5", subtitle: "Gaming", icon: "gamecontroller.fill") {
+                            openTab(.gaming)
                         }
                         QuickActionButton(title: "P&L", subtitle: "Reports", icon: "chart.line.uptrend.xyaxis") {
                             openTab(.reports)
                         }
-                        if session.canSeeAudit {
-                            QuickActionButton(title: "Activity", subtitle: "Audit", icon: "shield.checkered") {
-                                openTab(.audit)
-                            }
+                        QuickActionButton(title: "Workspace", subtitle: "All modules", icon: "square.grid.2x2") {
+                            openTab(.workspace)
                         }
                     }
 
@@ -1359,6 +1462,16 @@ private struct DashboardNativeView: View {
                                 .foregroundColor(.white)
                                 .padding(.bottom, 4)
 
+                            NavigationLink {
+                                MenuCatalogNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Menu", subtitle: "Catalog, GST rate, and sale price view", icon: "menucard")
+                            }
+                            NavigationLink {
+                                InventoryNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Inventory", subtitle: "Stock, reorder alerts, and ingredients", icon: "cube.box")
+                            }
                             NavigationLink {
                                 OrdersNativeView()
                             } label: {
@@ -1384,6 +1497,13 @@ private struct DashboardNativeView: View {
                                     .environmentObject(cache)
                             } label: {
                                 WorkspaceLinkRow(title: "Integrations", subtitle: "Printer, OCR, terminal, and offline store", icon: "externaldrive.connected.to.line.below")
+                            }
+                            if session.canSeeAudit {
+                                NavigationLink {
+                                    AuditNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Audit Log", subtitle: "Protected login and system activity", icon: "shield.checkered")
+                                }
                             }
                         }
                     }
@@ -1455,6 +1575,449 @@ private struct DashboardNativeView: View {
         }
         if cache.hasInventoryData {
             lowStockCount = cache.ingredients.filter(\.isLowStock).count
+        }
+    }
+}
+
+private struct WorkspaceNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var cache: AppCache
+    let openTab: (NativeTab) -> Void
+
+    var body: some View {
+        AppNavigation {
+            RefreshableScrollView(refresh: refresh) {
+                VStack(spacing: 16) {
+                    HeaderBlock(title: "Workspace", subtitle: "All business tools in one place", icon: "square.grid.2x2")
+
+                    LazyVGrid(columns: twoColumns, spacing: 12) {
+                        QuickActionButton(title: "New bill", subtitle: "POS", icon: "cart.badge.plus") {
+                            openTab(.pos)
+                        }
+                        QuickActionButton(title: "Start PS5", subtitle: "Gaming", icon: "gamecontroller.fill") {
+                            openTab(.gaming)
+                        }
+                        QuickActionButton(title: "P&L", subtitle: "Reports", icon: "chart.bar.xaxis") {
+                            openTab(.reports)
+                        }
+                        QuickActionButton(title: "Home", subtitle: "Overview", icon: "house") {
+                            openTab(.dashboard)
+                        }
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Operations")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.bottom, 4)
+
+                            NavigationLink {
+                                MenuCatalogNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Menu", subtitle: "Catalog, GST rate, and sale price view", icon: "menucard")
+                            }
+                            NavigationLink {
+                                InventoryNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Inventory", subtitle: "Ingredients, stock levels, reorder alerts", icon: "cube.box")
+                            }
+                            NavigationLink {
+                                OrdersNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Orders", subtitle: "Recent invoices and payment status", icon: "receipt")
+                            }
+                            NavigationLink {
+                                CustomersNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Customers", subtitle: "Visits, spend, and loyalty points", icon: "person.2")
+                            }
+                            NavigationLink {
+                                StaffNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Staff", subtitle: "Users, roles, and login history", icon: "person.badge.key")
+                            }
+                        }
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Control")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.bottom, 4)
+
+                            NavigationLink {
+                                SettingsNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Company Settings", subtitle: "GST, branch, and terminal readiness", icon: "gearshape")
+                            }
+                            NavigationLink {
+                                DeviceIntegrationsNativeView()
+                                    .environmentObject(cache)
+                            } label: {
+                                WorkspaceLinkRow(title: "Integrations", subtitle: "Printer, OCR, terminal, offline snapshot", icon: "externaldrive.connected.to.line.below")
+                            }
+                            if session.canSeeAudit {
+                                NavigationLink {
+                                    AuditNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Audit Log", subtitle: "Protected owner activity trail", icon: "shield.checkered")
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Workspace")
+            .background(Brand.background)
+        }
+    }
+
+    private var twoColumns: [GridItem] {
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    }
+
+    private func refresh() async {}
+}
+
+private struct MenuCatalogNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var cache: AppCache
+    @State private var categories: [MenuCategoryDTO] = []
+    @State private var items: [MenuItemDTO] = []
+    @State private var selectedCategory: String?
+    @State private var search = ""
+    @State private var isLoading = true
+    @State private var error: String?
+
+    var body: some View {
+        AppNavigation {
+            RefreshableScrollView(refresh: load) {
+                VStack(spacing: 16) {
+                    HeaderBlock(title: "Menu", subtitle: "\(filteredItems.count) items", icon: "menucard")
+
+                    if let error {
+                        ErrorBanner(message: error)
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextField("Search item or SKU", text: $search)
+                                .nativeField()
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    FilterChip(title: "All", isSelected: selectedCategory == nil) {
+                                        Haptics.selection()
+                                        selectedCategory = nil
+                                    }
+                                    ForEach(categories) { category in
+                                        FilterChip(title: category.name, isSelected: selectedCategory == category.id) {
+                                            Haptics.selection()
+                                            selectedCategory = category.id
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if isLoading && items.isEmpty {
+                        LoadingBlock(title: "Loading menu")
+                    } else if filteredItems.isEmpty {
+                        InlineEmptyCard(icon: "menucard", title: "No menu items", subtitle: "Try another category or search.")
+                    } else {
+                        BrandedCard {
+                            VStack(spacing: 0) {
+                                ForEach(filteredItems) { item in
+                                    MenuCatalogRow(item: item, categoryName: categoryName(for: item.category_id))
+                                    if item.id != filteredItems.last?.id {
+                                        Divider().background(Brand.hairline)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Menu")
+            .background(Brand.background)
+        }
+        .task { await load() }
+    }
+
+    private var filteredItems: [MenuItemDTO] {
+        items.filter { item in
+            let matchesCategory = selectedCategory == nil || item.category_id == selectedCategory
+            let matchesSearch = search.isEmpty || item.name.localizedCaseInsensitiveContains(search) || item.sku.localizedCaseInsensitiveContains(search)
+            return matchesCategory && matchesSearch
+        }
+    }
+
+    private func categoryName(for id: String?) -> String {
+        guard let id else { return "Uncategorised" }
+        return categories.first { $0.id == id }?.name ?? "Uncategorised"
+    }
+
+    private func load() async {
+        applyCachedMenu()
+        isLoading = items.isEmpty
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedCategories: [MenuCategoryDTO] = session.authorized { token in
+                try await APIClient.shared.get("menu/categories", token: token)
+            }
+            async let loadedItems: [MenuItemDTO] = session.authorized { token in
+                try await APIClient.shared.get("menu/items", token: token)
+            }
+            let (freshCategories, freshItems) = try await (loadedCategories, loadedItems)
+            withAnimation(.easeOut(duration: 0.18)) {
+                categories = freshCategories
+                items = freshItems
+                cache.categories = freshCategories
+                cache.menuItems = freshItems
+            }
+            await cache.markSynced()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func applyCachedMenu() {
+        if !cache.categories.isEmpty {
+            categories = cache.categories
+        }
+        if !cache.menuItems.isEmpty {
+            items = cache.menuItems
+        }
+    }
+}
+
+private struct GamingNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var network: NetworkMonitor
+    @State private var stations: [GamingStationDTO] = []
+    @State private var activeSessions: [GamingSessionDTO] = []
+    @State private var shifts: [ShiftDTO] = []
+    @State private var sessionDraft: GamingSessionDraft?
+    @State private var finishedSession: GamingSessionDTO?
+    @State private var isLoading = true
+    @State private var isSubmitting = false
+    @State private var error: String?
+
+    var body: some View {
+        AppNavigation {
+            RefreshableScrollView(refresh: load) {
+                VStack(spacing: 16) {
+                    HeaderBlock(
+                        title: "Gaming",
+                        subtitle: "\(activeSessions.count) active sessions",
+                        icon: "gamecontroller"
+                    )
+
+                    if !network.isOnline {
+                        NetworkBanner(label: network.connectionLabel)
+                    }
+
+                    if let error {
+                        ErrorBanner(message: error)
+                    }
+
+                    if let finishedSession {
+                        SuccessBanner(message: "Session closed. Amount \(inr(finishedSession.amount_minor ?? 0)).")
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack {
+                                Text("Active Sessions")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                Spacer()
+                                Text(activeShift == nil ? "No open shift" : "Shift open")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundColor(activeShift == nil ? Brand.danger : Brand.success)
+                            }
+
+                            if activeSessions.isEmpty {
+                                InlineEmptyRow(icon: "timer", title: "No active sessions", subtitle: "Start a PS5 or gaming station session.")
+                            } else {
+                                ForEach(activeSessions) { gamingSession in
+                                    GamingSessionCard(
+                                        session: gamingSession,
+                                        stationName: stationName(for: gamingSession.station_id),
+                                        isSubmitting: isSubmitting
+                                    ) {
+                                        Task { await stop(gamingSession) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Stations")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 2)
+
+                        if isLoading && stations.isEmpty {
+                            LoadingBlock(title: "Loading gaming stations")
+                        } else if stations.isEmpty {
+                            InlineEmptyCard(icon: "gamecontroller", title: "No stations set up", subtitle: "Create PS5 stations in the web setup first.")
+                        } else {
+                            LazyVGrid(columns: twoColumns, spacing: 12) {
+                                ForEach(stations.filter(\.is_active)) { station in
+                                    GamingStationCard(
+                                        station: station,
+                                        activeSession: activeSession(for: station.id)
+                                    ) {
+                                        Haptics.selection()
+                                        sessionDraft = GamingSessionDraft(station: station)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Gaming")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        Task { await load() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+            .background(Brand.background)
+            .sheet(item: $sessionDraft) { draft in
+                GamingSessionSheet(draft: draft, activeShift: activeShift, isSubmitting: isSubmitting) { updatedDraft in
+                    Task { await start(updatedDraft) }
+                }
+            }
+        }
+        .task { await load() }
+    }
+
+    private var twoColumns: [GridItem] {
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    }
+
+    private var activeShift: ShiftDTO? {
+        shifts.first { $0.status == "open" } ?? shifts.first
+    }
+
+    private func stationName(for stationID: String) -> String {
+        stations.first { $0.id == stationID }?.name ?? "Station"
+    }
+
+    private func activeSession(for stationID: String) -> GamingSessionDTO? {
+        activeSessions.first { $0.station_id == stationID && $0.status == "active" }
+    }
+
+    private func load() async {
+        isLoading = stations.isEmpty
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedStations: [GamingStationDTO] = session.authorized { token in
+                try await APIClient.shared.get("gaming/stations", token: token)
+            }
+            async let loadedSessions: [GamingSessionDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "gaming/sessions",
+                    token: token,
+                    queryItems: [
+                        URLQueryItem(name: "status", value: "active"),
+                        URLQueryItem(name: "limit", value: "80")
+                    ]
+                )
+            }
+            async let loadedShifts: [ShiftDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "pos/shifts",
+                    token: token,
+                    queryItems: [
+                        URLQueryItem(name: "only_open", value: "true"),
+                        URLQueryItem(name: "limit", value: "10")
+                    ]
+                )
+            }
+            let (freshStations, freshSessions, freshShifts) = try await (loadedStations, loadedSessions, loadedShifts)
+            withAnimation(.easeOut(duration: 0.18)) {
+                stations = freshStations
+                activeSessions = freshSessions
+                shifts = freshShifts
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func start(_ draft: GamingSessionDraft) async {
+        guard let shift = activeShift else {
+            error = "Open a POS shift before starting a gaming session."
+            return
+        }
+
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        finishedSession = nil
+
+        let partyLabel = "\(draft.partySize) players"
+        let displayName: String?
+        if let name = draft.customerName.nilIfBlank {
+            displayName = "\(name) - \(partyLabel)"
+        } else {
+            displayName = partyLabel
+        }
+
+        let request = GamingSessionStartRequest(
+            station_id: draft.station.id,
+            shift_id: shift.id,
+            customer_name: displayName,
+            customer_phone: draft.customerPhone.nilIfBlank
+        )
+
+        do {
+            let created: GamingSessionDTO = try await session.authorized { token in
+                try await APIClient.shared.post("gaming/sessions/start", body: request, token: token)
+            }
+            sessionDraft = nil
+            Haptics.success()
+            activeSessions.insert(created, at: 0)
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func stop(_ gamingSession: GamingSessionDTO) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+
+        do {
+            let ended: GamingSessionDTO = try await session.authorized { token in
+                try await APIClient.shared.post("gaming/sessions/\(gamingSession.id)/stop", body: EmptyRequest(), token: token)
+            }
+            finishedSession = ended
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
         }
     }
 }
@@ -1740,6 +2303,10 @@ private struct POSNativeView: View {
             error = "No registered POS terminal is available for this shift."
             return
         }
+        guard draft.isCashTenderReady(totalMinor: cartTotal) else {
+            error = "Cash received is below the bill total."
+            return
+        }
 
         isSubmitting = true
         defer { isSubmitting = false }
@@ -1782,7 +2349,7 @@ private struct POSNativeView: View {
             let paymentRequest = PaymentCreateRequest(
                 method: draft.paymentMethod.rawValue,
                 amount_minor: order.total_minor,
-                tendered_minor: draft.paymentMethod == .cash ? order.total_minor : nil,
+                tendered_minor: draft.tenderedMinor(totalMinor: order.total_minor),
                 ref_external: nil
             )
             let paymentHeaders = [
@@ -1797,6 +2364,11 @@ private struct POSNativeView: View {
             cart.removeAll()
             createdInvoice = order.invoice_no ?? "Order \(order.id.prefix(8))"
             lastChargedOrder = order
+            if draft.printReceiptAfterCharge {
+                await MainActor.run {
+                    ReceiptPrinter.print(order: order)
+                }
+            }
             Haptics.success()
             await load()
         } catch is CancellationError {
@@ -2979,6 +3551,15 @@ private struct CheckoutSheet: View {
                                     }
                                 }
                                 PaymentTerminalNotice(method: draft.paymentMethod)
+                                if draft.paymentMethod == .cash {
+                                    CashTenderPad(totalMinor: totalMinor, tenderedMinor: $draft.cashTenderedMinor)
+                                }
+                                Toggle(isOn: $draft.printReceiptAfterCharge) {
+                                    Label("Print receipt after charge", systemImage: "printer")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white)
+                                }
+                                .toggleStyle(SwitchToggleStyle(tint: Brand.gold))
                             }
                         }
 
@@ -3035,7 +3616,7 @@ private struct CheckoutSheet: View {
                             ProgressView()
                                 .tint(.black)
                         }
-                        Text("Charge \(inr(totalMinor))")
+                        Text(draft.isCashTenderReady(totalMinor: totalMinor) ? "Charge \(inr(totalMinor))" : "Enter cash received")
                             .font(.headline)
                     }
                     .frame(maxWidth: .infinity)
@@ -3054,7 +3635,130 @@ private struct CheckoutSheet: View {
     }
 
     private var canCharge: Bool {
-        !isSubmitting && shift != nil && terminal != nil && !cartRows.isEmpty
+        !isSubmitting && shift != nil && terminal != nil && !cartRows.isEmpty && draft.isCashTenderReady(totalMinor: totalMinor)
+    }
+}
+
+private struct CashTenderPad: View {
+    let totalMinor: Int
+    @Binding var tenderedMinor: Int?
+
+    private let keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0", "Back"]
+
+    private var receivedMinor: Int {
+        tenderedMinor ?? totalMinor
+    }
+
+    private var changeMinor: Int {
+        max(receivedMinor - totalMinor, 0)
+    }
+
+    private var isShort: Bool {
+        receivedMinor < totalMinor
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                TenderSummaryTile(title: "Received", value: inr(receivedMinor), isAlert: isShort)
+                TenderSummaryTile(title: "Change", value: inr(changeMinor), isAlert: false)
+            }
+
+            LazyVGrid(columns: keypadColumns, spacing: 8) {
+                ForEach(keys, id: \.self) { key in
+                    Button {
+                        Haptics.selection()
+                        tap(key)
+                    } label: {
+                        Text(key == "Back" ? "⌫" : key)
+                            .font(.headline.weight(.bold))
+                            .foregroundColor(key == "Back" ? Brand.gold : .white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(Brand.elevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Haptics.selection()
+                    tenderedMinor = totalMinor
+                } label: {
+                    Label("Exact", systemImage: "checkmark.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.black)
+                .background(Brand.gold)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Button {
+                    Haptics.selection()
+                    tenderedMinor = 0
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white)
+                .background(Brand.elevated)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if isShort {
+                Text("Cash received is short by \(inr(totalMinor - receivedMinor)).")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(Brand.danger)
+            }
+        }
+    }
+
+    private var keypadColumns: [GridItem] {
+        [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+    }
+
+    private func tap(_ key: String) {
+        if key == "Back" {
+            var digits = String(max((tenderedMinor ?? 0) / 100, 0))
+            _ = digits.popLast()
+            tenderedMinor = Int(digits).map { $0 * 100 } ?? 0
+            return
+        }
+
+        var digits = tenderedMinor == nil ? "" : String(max((tenderedMinor ?? 0) / 100, 0))
+        digits += key
+        let value = min(Int(digits) ?? 0, 999_999)
+        tenderedMinor = value * 100
+    }
+}
+
+private struct TenderSummaryTile: View {
+    let title: String
+    let value: String
+    let isAlert: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundColor(Brand.muted)
+            Text(value)
+                .font(.headline.weight(.bold))
+                .foregroundColor(isAlert ? Brand.danger : Brand.softGold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background((isAlert ? Brand.danger : Brand.gold).opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -3875,6 +4579,310 @@ private struct WorkspaceLinkRow: View {
         .padding(12)
         .background(Brand.elevated)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private struct MenuCatalogRow: View {
+    let item: MenuItemDTO
+    let categoryName: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: item.is_available ? "fork.knife.circle.fill" : "pause.circle.fill")
+                .font(.title3)
+                .foregroundColor(item.is_available ? Brand.gold : Brand.muted)
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(categoryName) - \(item.sku)")
+                    .font(.caption)
+                    .foregroundColor(Brand.muted)
+                    .lineLimit(1)
+                if let description = item.description?.nilIfBlank {
+                    Text(description)
+                        .font(.caption2)
+                        .foregroundColor(Brand.muted.opacity(0.85))
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: 10)
+
+            VStack(alignment: .trailing, spacing: 5) {
+                Text(inr(item.base_price_minor))
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(Brand.softGold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.80)
+                Text("GST \(String(format: "%.1f", item.tax_rate))%")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Brand.muted)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+private struct GamingStationCard: View {
+    let station: GamingStationDTO
+    let activeSession: GamingSessionDTO?
+    let action: () -> Void
+
+    private var isRunning: Bool {
+        activeSession != nil
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: station.kind.icon)
+                        .font(.title3)
+                        .foregroundColor(Brand.gold)
+                        .frame(width: 34, height: 34)
+                        .background(Brand.gold.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    Spacer()
+                    Text(isRunning ? "Running" : "Free")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(isRunning ? Brand.danger : Brand.success)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background((isRunning ? Brand.danger : Brand.success).opacity(0.12))
+                        .clipShape(Capsule())
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(station.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                    Text("\(station.kind.title) - \(station.code)")
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                        .lineLimit(1)
+                }
+
+                HStack {
+                    Text("\(inr(station.rate_per_hour_minor))/hr")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(Brand.softGold)
+                    Spacer()
+                    Image(systemName: isRunning ? "lock.fill" : "plus.circle.fill")
+                        .foregroundColor(isRunning ? Brand.muted : Brand.gold)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
+            .background(Brand.cardGradient)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(isRunning ? Brand.danger.opacity(0.25) : Brand.gold.opacity(0.22), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(isRunning)
+        .opacity(isRunning ? 0.74 : 1)
+    }
+}
+
+private struct GamingSessionCard: View {
+    let session: GamingSessionDTO
+    let stationName: String
+    let isSubmitting: Bool
+    let onStop: () -> Void
+
+    private var elapsedMinutes: Int {
+        max(1, Int(Date().timeIntervalSince(session.start_at) / 60))
+    }
+
+    private var estimateMinor: Int {
+        if let amount = session.amount_minor {
+            return amount
+        }
+        guard let rate = session.rate_per_hour_minor else { return 0 }
+        return Int((Double(rate) * Double(elapsedMinutes) / 60.0).rounded(.up))
+    }
+
+    private var customerLabel: String {
+        let trimmed = session.customer_name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Walk-in" : trimmed
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "timer.circle.fill")
+                    .font(.title3)
+                    .foregroundColor(Brand.gold)
+                    .frame(width: 34)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(stationName)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text(customerLabel)
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button(action: onStop) {
+                    Text("Stop")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Brand.danger.opacity(0.18))
+                        .foregroundColor(Brand.danger)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .disabled(isSubmitting)
+            }
+
+            HStack(spacing: 10) {
+                TenderSummaryTile(title: "Elapsed", value: "\(elapsedMinutes)m", isAlert: false)
+                TenderSummaryTile(title: "Estimate", value: inr(estimateMinor), isAlert: false)
+            }
+        }
+        .padding(12)
+        .background(Brand.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+    }
+}
+
+private struct GamingSessionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: GamingSessionDraft
+
+    let activeShift: ShiftDTO?
+    let isSubmitting: Bool
+    let onStart: (GamingSessionDraft) -> Void
+
+    init(
+        draft: GamingSessionDraft,
+        activeShift: ShiftDTO?,
+        isSubmitting: Bool,
+        onStart: @escaping (GamingSessionDraft) -> Void
+    ) {
+        self._draft = State(initialValue: draft)
+        self.activeShift = activeShift
+        self.isSubmitting = isSubmitting
+        self.onStart = onStart
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        BrandedCard {
+                            HStack(spacing: 14) {
+                                Image(systemName: draft.station.kind.icon)
+                                    .font(.title2)
+                                    .foregroundColor(Brand.gold)
+                                    .frame(width: 44, height: 44)
+                                    .background(Brand.gold.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(draft.station.name)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Text("\(draft.station.kind.title) - \(inr(draft.station.rate_per_hour_minor))/hr")
+                                        .font(.caption)
+                                        .foregroundColor(Brand.muted)
+                                }
+                                Spacer()
+                            }
+                        }
+
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Session")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+
+                                Stepper(value: $draft.partySize, in: 1...8) {
+                                    HStack {
+                                        Label("Players", systemImage: "person.2")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundColor(.white)
+                                        Spacer()
+                                        Text("\(draft.partySize)")
+                                            .font(.headline.weight(.bold))
+                                            .foregroundColor(Brand.softGold)
+                                    }
+                                }
+                                .tint(Brand.gold)
+
+                                TextField("Customer name optional", text: $draft.customerName)
+                                    .textInputAutocapitalization(.words)
+                                    .nativeField()
+
+                                TextField("Phone optional", text: $draft.customerPhone)
+                                    .keyboardType(.phonePad)
+                                    .nativeField()
+                            }
+                        }
+
+                        BrandedCard {
+                            CheckoutReadinessRow(
+                                title: "POS shift",
+                                value: activeShift == nil ? "Open a shift before starting" : "Ready",
+                                isReady: activeShift != nil,
+                                icon: "clock.badge.checkmark"
+                            )
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Start session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    Haptics.selection()
+                    onStart(draft)
+                } label: {
+                    HStack {
+                        if isSubmitting {
+                            ProgressView()
+                                .tint(.black)
+                        }
+                        Text(activeShift == nil ? "Open shift first" : "Start session")
+                            .font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.black)
+                .background(canStart ? Brand.gold : Brand.muted.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(16)
+                .background(.ultraThinMaterial)
+                .disabled(!canStart)
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private var canStart: Bool {
+        activeShift != nil && !isSubmitting
     }
 }
 

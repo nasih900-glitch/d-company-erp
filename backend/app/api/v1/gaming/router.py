@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from math import ceil
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -60,6 +60,9 @@ class SessionRead(BaseModel):
     end_at: datetime | None
     billable_minutes: int | None
     amount_minor: int | None
+    customer_name: str | None = None
+    customer_phone: str | None = None
+    rate_per_hour_minor: int | None = None
 
 
 class BookingCreate(BaseModel):
@@ -70,6 +73,21 @@ class BookingCreate(BaseModel):
     contact: str | None = None
     party_size: int = Field(default=1, gt=0)
     deposit_minor: int = 0
+
+
+def session_read(gs: GamingSession) -> SessionRead:
+    return SessionRead(
+        id=gs.id,
+        station_id=gs.station_id,
+        status=gs.status,
+        start_at=gs.start_at,
+        end_at=gs.end_at,
+        billable_minutes=gs.billable_minutes,
+        amount_minor=gs.amount_minor,
+        customer_name=gs.customer_name,
+        customer_phone=gs.customer_phone,
+        rate_per_hour_minor=gs.rate_per_hour_minor,
+    )
 
 
 @router.get("/stations", response_model=list[StationRead])
@@ -180,6 +198,21 @@ async def delete_station(
     await session.flush()
 
 
+@router.get("/sessions", response_model=list[SessionRead])
+async def list_sessions(
+    session: SessionDep,
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=80, ge=1, le=200),
+    tenant: TenantContext = Depends(requires("gaming.read")),
+) -> list[SessionRead]:
+    stmt = select(GamingSession).where(GamingSession.company_id == tenant.company_id)
+    if status_filter:
+        stmt = stmt.where(GamingSession.status == status_filter)
+    stmt = stmt.order_by(GamingSession.start_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [session_read(row) for row in rows]
+
+
 @router.post("/sessions/start", response_model=SessionRead, status_code=status.HTTP_201_CREATED)
 async def start_session(
     payload: SessionStart,
@@ -191,6 +224,17 @@ async def start_session(
         raise NotFoundError("station not found")
     if not station.is_active:
         raise BusinessRuleError("station is not active")
+    active = (
+        await session.execute(
+            select(GamingSession.id).where(
+                GamingSession.company_id == tenant.company_id,
+                GamingSession.station_id == payload.station_id,
+                GamingSession.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if active:
+        raise ConflictError("station already has an active session")
     gs = GamingSession(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -205,15 +249,7 @@ async def start_session(
     )
     session.add(gs)
     await session.flush()
-    return SessionRead(
-        id=gs.id,
-        station_id=gs.station_id,
-        status=gs.status,
-        start_at=gs.start_at,
-        end_at=gs.end_at,
-        billable_minutes=gs.billable_minutes,
-        amount_minor=gs.amount_minor,
-    )
+    return session_read(gs)
 
 
 @router.post("/sessions/{session_id}/stop", response_model=SessionRead)
@@ -232,15 +268,7 @@ async def stop_session(
     gs.billable_minutes = max(0, elapsed_minutes - gs.paused_minutes)
     gs.amount_minor = ceil(gs.billable_minutes / 60 * gs.rate_per_hour_minor)
     gs.status = "ended"
-    return SessionRead(
-        id=gs.id,
-        station_id=gs.station_id,
-        status=gs.status,
-        start_at=gs.start_at,
-        end_at=gs.end_at,
-        billable_minutes=gs.billable_minutes,
-        amount_minor=gs.amount_minor,
-    )
+    return session_read(gs)
 
 
 @router.post("/bookings", status_code=status.HTTP_201_CREATED)
