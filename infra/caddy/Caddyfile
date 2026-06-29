@@ -40,9 +40,16 @@
 
     # Do not let scanner probes for local/server files fall through to the SPA.
     @blocked_sensitive {
-        path /.env* /.git* /.hg* /.svn* /.ssh* /.DS_Store /docker-compose* /Dockerfile* /Caddyfile* /id_rsa* /id_dsa* /*.key /*.pem /AGENTS.md /HANDOFF.md /PROJECT_STATE.md /README.md /COMPANY_COMPLIANCE_CHECKLIST.md /LEGAL_DOCUMENTS_CHECKLIST* /D_Company_Legal_Documents_Checklist* /docs* /backend* /frontend* /infra* /scripts* /tests* /package*.json /vite.config.* /tsconfig*.json /pyproject.toml /requirements*.txt /alembic.ini /pytest.ini /Makefile
+        path /.env* /.git* /.hg* /.svn* /.ssh* /.DS_Store /docker-compose* /Dockerfile* /Caddyfile* /id_rsa* /id_dsa* /*.key /*.pem
     }
     handle @blocked_sensitive {
+        respond "Not found" 404
+    }
+
+    @blocked_public_source {
+        path_regexp public_source ^/(?:AGENTS|HANDOFF|PROJECT_STATE|README|COMPANY_COMPLIANCE_CHECKLIST)\.md$|^/(?:LEGAL_DOCUMENTS_CHECKLIST|D_Company_Legal_Documents_Checklist).*$|^/(?:docs|backend|frontend|infra|scripts|tests)(?:/.*)?$|^/(?:package.*\.json|vite\.config\..*|tsconfig.*\.json|pyproject\.toml|requirements.*\.txt|alembic\.ini|pytest\.ini|Makefile)$
+    }
+    handle @blocked_public_source {
         respond "Not found" 404
     }
 
