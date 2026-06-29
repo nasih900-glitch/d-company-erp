@@ -11,7 +11,15 @@ const RUNTIME_URL =
     (window as unknown as { __ERP_API_URL__?: string }).__ERP_API_URL__) ||
   undefined;
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? RUNTIME_URL ?? '/api/v1';
+function normalizedApiUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+const BASE_URL =
+  normalizedApiUrl(import.meta.env.VITE_API_URL) ??
+  normalizedApiUrl(RUNTIME_URL) ??
+  '/api/v1';
 
 export const api = axios.create({
   baseURL: BASE_URL,

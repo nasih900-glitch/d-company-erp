@@ -418,7 +418,7 @@ export const audit = {
     api.post<AuditUnlockDTO>('/admin/audit/unlock', { password }).then((r) => r.data),
   list: (params?: {
     limit?: number; entity_type?: string; action?: string;
-    actor_user_id?: string; entity_id?: string; q?: string;
+    actor_user_id?: string; entity_id?: string; q?: string; area?: string;
   }, auditToken?: string) =>
     api
       .get<AuditEntryDTO[]>('/admin/audit', {

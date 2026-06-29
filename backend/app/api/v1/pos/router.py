@@ -568,6 +568,7 @@ async def list_orders(
 
 class ShiftRead(BaseModel):
     id: UUID
+    terminal_id: UUID | None = None
     status: str
     opened_at: datetime
     closed_at: datetime | None
@@ -595,7 +596,7 @@ async def list_shifts(
     rows = (await session.execute(stmt)).scalars().all()
     return [
         ShiftRead(
-            id=s.id, status=s.status,
+            id=s.id, terminal_id=s.terminal_id, status=s.status,
             opened_at=s.opened_at, closed_at=s.closed_at,
             opening_float_minor=int(s.opening_float_minor or 0),
             expected_minor=int(s.expected_minor) if s.expected_minor is not None else None,
