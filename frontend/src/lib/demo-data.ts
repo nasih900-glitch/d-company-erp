@@ -29,7 +29,7 @@ export type MenuItem = {
   hsn: string;     // HSN/SAC code
   price: number;   // minor units, tax-inclusive
   rate: number;    // GST rate as decimal (0.05 = 5%)
-  type: 'food' | 'drink' | 'dessert';
+  type: 'food' | 'drink' | 'dessert' | 'gaming' | 'hookah' | 'streaming';
   emoji: string;
   description?: string;
 };
@@ -64,6 +64,12 @@ export const MENU: MenuItem[] = [
   { id: 'cola',  category: 'Beverages', sku: 'BEV-COL',  name: 'Coca-Cola (300ml)',   hsn: '220210', price: 6000,  rate: 0.28, type: 'drink',   emoji: '🥤' },
   { id: 'oj',    category: 'Beverages', sku: 'BEV-OJ',   name: 'Fresh Orange Juice',  hsn: '220290', price: 14000, rate: 0.12, type: 'drink',   emoji: '🧃' },
   { id: 'mshk',  category: 'Beverages', sku: 'BEV-MSH',  name: 'Cold Coffee Shake',   hsn: '996331', price: 16000, rate: 0.05, type: 'drink',   emoji: '🥤' },
+  // ----- Billable service blocks -----
+  { id: 'ps515', category: 'Gaming',    sku: 'GAM-PS5-15',  name: 'PS5 Session - 15 min',       hsn: '999692', price: 5000,  rate: 0.18, type: 'gaming',    emoji: '🎮' },
+  { id: 'vr15',  category: 'Gaming',    sku: 'GAM-VR-15',   name: 'VR Session - 15 min',        hsn: '999692', price: 8750,  rate: 0.18, type: 'gaming',    emoji: '🥽' },
+  { id: 'sim15', category: 'Gaming',    sku: 'GAM-SIM-15',  name: 'Simulator Session - 15 min', hsn: '999692', price: 10000, rate: 0.18, type: 'gaming',    emoji: '🏎️' },
+  { id: 'shi',   category: 'Shisha',    sku: 'SHI-SESSION', name: 'Shisha Session',             hsn: '999692', price: 35000, rate: 0.18, type: 'hookah',    emoji: '💨' },
+  { id: 'str15', category: 'Streaming', sku: 'STR-BOOTH-15',name: 'Streaming Booth - 15 min',   hsn: '999692', price: 5000,  rate: 0.18, type: 'streaming', emoji: '📺' },
 ];
 
 export const CATEGORIES = Array.from(new Set(MENU.map((m) => m.category)));
@@ -102,7 +108,7 @@ export type Station = {
   id: string;
   code: string;
   name: string;
-  type: 'ps5' | 'vr' | 'simulator';
+  type: 'ps5' | 'vr' | 'simulator' | 'projector' | 'hookah' | 'streaming';
   rate_per_hour: number; // minor units
   sac: string;
   rate_tax: number;
@@ -114,6 +120,8 @@ export const STATIONS: Station[] = [
   { id: 'ps4', code: 'PS5-04', name: 'PS5 Station 4', type: 'ps5', rate_per_hour: 20000, sac: '999692', rate_tax: 0.18 },
   { id: 'vr1', code: 'VR-01',  name: 'VR Pod 1',      type: 'vr',  rate_per_hour: 35000, sac: '999692', rate_tax: 0.18 },
   { id: 'sim1',code: 'SIM-01', name: 'Racing Sim',    type: 'simulator', rate_per_hour: 40000, sac: '999692', rate_tax: 0.18 },
+  { id: 'shi1',code: 'SH-01',  name: 'Shisha Table 1', type: 'hookah', rate_per_hour: 35000, sac: '999692', rate_tax: 0.18 },
+  { id: 'str1',code: 'STR-01', name: 'Streaming Booth', type: 'streaming', rate_per_hour: 20000, sac: '999692', rate_tax: 0.18 },
 ];
 
 // ----- Tables (floor plan) -----

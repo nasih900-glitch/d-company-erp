@@ -474,14 +474,14 @@ async def tax_compliance(
     service_bad_rate = sum(
         1
         for item in menu_items
-        if item.type in {"gaming", "hookah", "event"} and Decimal(str(item.tax_rate or 0)) != Decimal("0.18")
+        if item.type in {"gaming", "hookah", "streaming", "event"} and Decimal(str(item.tax_rate or 0)) != Decimal("0.18")
     )
     _issue(
         issues,
         severity="critical",
         area="Menu tax",
-        title="Gaming/hookah/event item tax is not 18%",
-        detail="Recreation/gaming-style service items are expected at 18% GST in this ERP setup.",
+        title="Gaming/hookah/streaming/event item tax is not 18%",
+        detail="Recreation, shisha, streaming and event service items are expected at 18% GST in this ERP setup.",
         action="Correct the rate or document the accountant-approved exception.",
         count=service_bad_rate,
     )

@@ -143,7 +143,7 @@ async def _compute_points_with_multiplier(
 
     Rules:
       - Food/drink/dessert: 1 point per ₹10
-      - Gaming / hookah / event tickets: 2 points per ₹10  (high-margin, encourages repeat visits)
+      - Gaming / hookah / streaming / event tickets: 2 points per ₹10  (high-margin, encourages repeat visits)
       - Multiplied by the customer's membership multiplier (e.g. 1.5× for Gold tier).
     """
     if not order_lines:
@@ -156,7 +156,7 @@ async def _compute_points_with_multiplier(
     ).scalars().all()
     type_by_id = {i.id: i.type for i in items}
 
-    high_margin = {"gaming", "hookah", "event"}
+    high_margin = {"gaming", "hookah", "streaming", "event"}
     points = 0.0
     for ol in order_lines:
         line_total = int(ol.line_total_minor or 0)
@@ -176,7 +176,7 @@ async def _upsert_and_attach_customer(
     order_lines: list[OrderLine] | None = None,
 ) -> None:
     """Find or create customer by phone, bump visit_count + total_spent,
-    award loyalty points (1× food, 2× gaming/hookah/events, × membership tier).
+    award loyalty points (1× food, 2× gaming/hookah/streaming/events, × membership tier).
     """
     existing = (
         await session.execute(

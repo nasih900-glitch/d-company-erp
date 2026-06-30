@@ -52,6 +52,7 @@ DEFAULT_ACCOUNTS: list[dict] = [
     {"code": "4020", "name": "Revenue — Desserts", "type": "revenue", "normal_side": "cr"},
     {"code": "4100", "name": "Revenue — Gaming", "type": "revenue", "normal_side": "cr"},
     {"code": "4150", "name": "Revenue — Hookah", "type": "revenue", "normal_side": "cr"},
+    {"code": "4160", "name": "Revenue — Streaming", "type": "revenue", "normal_side": "cr"},
     {"code": "4200", "name": "Revenue — Events", "type": "revenue", "normal_side": "cr"},
     {"code": "5000", "name": "COGS", "type": "expense", "normal_side": "dr"},
     {"code": "5100", "name": "Wages", "type": "expense", "normal_side": "dr"},
@@ -166,7 +167,9 @@ async def seed() -> None:
         # Menu skeleton
         coffee = MenuCategory(id=uuid4(), company_id=company.id, name="Coffee", sort_order=10)
         gaming = MenuCategory(id=uuid4(), company_id=company.id, name="Gaming", sort_order=90)
-        s.add_all([coffee, gaming])
+        shisha = MenuCategory(id=uuid4(), company_id=company.id, name="Shisha", sort_order=95)
+        streaming = MenuCategory(id=uuid4(), company_id=company.id, name="Streaming", sort_order=96)
+        s.add_all([coffee, gaming, shisha, streaming])
         await s.flush()  # flush categories so menu items can reference category_id
 
         cappuccino = MenuItem(
@@ -178,8 +181,71 @@ async def seed() -> None:
             type="drink",
             base_price_minor=18000,  # ₹180.00
             tax_rate=0.05,
+            hsn_code="996331",
         )
-        s.add(cappuccino)
+        service_items = [
+            MenuItem(
+                id=uuid4(),
+                company_id=company.id,
+                category_id=gaming.id,
+                sku="GAM-PS5-15",
+                name="PS5 Session - 15 min",
+                description="PlayStation 5 session block",
+                type="gaming",
+                base_price_minor=5000,
+                tax_rate=0.18,
+                hsn_code="999692",
+            ),
+            MenuItem(
+                id=uuid4(),
+                company_id=company.id,
+                category_id=gaming.id,
+                sku="GAM-VR-15",
+                name="VR Session - 15 min",
+                description="VR pod session block",
+                type="gaming",
+                base_price_minor=8750,
+                tax_rate=0.18,
+                hsn_code="999692",
+            ),
+            MenuItem(
+                id=uuid4(),
+                company_id=company.id,
+                category_id=gaming.id,
+                sku="GAM-SIM-15",
+                name="Simulator Session - 15 min",
+                description="Racing simulator session block",
+                type="gaming",
+                base_price_minor=10000,
+                tax_rate=0.18,
+                hsn_code="999692",
+            ),
+            MenuItem(
+                id=uuid4(),
+                company_id=company.id,
+                category_id=shisha.id,
+                sku="SHI-SESSION",
+                name="Shisha Session",
+                description="Shisha lounge session",
+                type="hookah",
+                base_price_minor=35000,
+                tax_rate=0.18,
+                hsn_code="999692",
+            ),
+            MenuItem(
+                id=uuid4(),
+                company_id=company.id,
+                category_id=streaming.id,
+                sku="STR-BOOTH-15",
+                name="Streaming Booth - 15 min",
+                description="Streaming booth session block",
+                type="streaming",
+                base_price_minor=5000,
+                tax_rate=0.18,
+                hsn_code="999692",
+            ),
+        ]
+        s.add_all([cappuccino, *service_items])
 
         # Ingredients + recipe
         milk = Ingredient(
@@ -217,6 +283,22 @@ async def seed() -> None:
                 name=f"PS5 Station {n}",
                 type="ps5",
                 rate_per_hour_minor=20000,  # ₹200/hr
+            ))
+        extra_stations = [
+            ("VR-01", "VR Pod 1", "vr", 35000),
+            ("SIM-01", "Racing Simulator 1", "simulator", 40000),
+            ("SH-01", "Shisha Table 1", "hookah", 35000),
+            ("STR-01", "Streaming Booth 1", "streaming", 20000),
+        ]
+        for code, name, station_type, rate in extra_stations:
+            s.add(Station(
+                id=uuid4(),
+                company_id=company.id,
+                branch_id=branch.id,
+                code=code,
+                name=name,
+                type=station_type,
+                rate_per_hour_minor=rate,
             ))
 
         # ============================================================

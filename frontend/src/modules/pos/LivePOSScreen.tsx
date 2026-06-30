@@ -41,6 +41,7 @@ type CustomerLookupState = 'idle' | 'found' | 'new' | 'error';
 
 const CATEGORY_FROM_TYPE: Record<string, string> = {
   food: 'Food', drink: 'Drinks', dessert: 'Desserts', gaming: 'Gaming', event: 'Events',
+  hookah: 'Shisha', streaming: 'Streaming',
 };
 
 export default function LivePOSScreen() {
@@ -565,7 +566,7 @@ function CustomerAttachPanel({
 
 function discountRateForItem(item: MenuItemDTO, tier: MembershipTierDTO): number {
   if (['food', 'drink', 'dessert'].includes(item.type)) return tier.food_discount_pct;
-  if (item.type === 'gaming') return tier.gaming_discount_pct;
+  if (item.type === 'gaming' || item.type === 'streaming') return tier.gaming_discount_pct;
   if (item.type === 'hookah') return tier.hookah_discount_pct;
   return 0;
 }

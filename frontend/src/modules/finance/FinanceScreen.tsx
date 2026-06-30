@@ -122,7 +122,7 @@ function OverviewTab() {
           </h3>
           {rev.food_minor > 0 && <Row label="Food (5% GST)" v={rev.food_minor}/>}
           {rev.gaming_minor > 0 && <Row label="Gaming (18% GST)" v={rev.gaming_minor}/>}
-          {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label="Hookah (28% GST)" v={rev.hookah_minor}/>}
+          {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label="Shisha (18% GST)" v={rev.hookah_minor}/>}
           {rev.event_tickets_minor > 0 && <Row label="Event tickets (18% GST)" v={rev.event_tickets_minor}/>}
           {rev.delivery_aggregator_minor > 0 && (
             <Row label="Delivery aggregator (§9(5))" v={rev.delivery_aggregator_minor} sub="zero GST on our invoice"/>

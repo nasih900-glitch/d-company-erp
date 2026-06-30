@@ -35,7 +35,7 @@ class MenuItem(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     image_url: Mapped[str | None] = mapped_column(String(500))
     type: Mapped[str] = mapped_column(
         String(20), nullable=False
-    )  # food|drink|dessert|gaming|event
+    )  # food|drink|dessert|gaming|event|hookah|streaming
     base_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
     # ----- India / GST -----

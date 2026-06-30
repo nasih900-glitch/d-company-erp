@@ -657,6 +657,7 @@ private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
     case simulator
     case projector
     case hookah
+    case streaming
     case station
 
     var id: String { rawValue }
@@ -673,6 +674,8 @@ private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
             return .projector
         case "hookah", "shisha":
             return .hookah
+        case "streaming", "stream", "booth":
+            return .streaming
         default:
             return .station
         }
@@ -684,7 +687,8 @@ private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
         case .vr: return "VR"
         case .simulator: return "Simulator"
         case .projector: return "Projector"
-        case .hookah: return "Hookah"
+        case .hookah: return "Shisha"
+        case .streaming: return "Streaming"
         case .station: return "Station"
         }
     }
@@ -696,6 +700,7 @@ private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
         case .simulator: return "steeringwheel"
         case .projector: return "projector.fill"
         case .hookah: return "timer"
+        case .streaming: return "play.rectangle.fill"
         case .station: return "rectangle.on.rectangle"
         }
     }
@@ -2030,12 +2035,16 @@ private struct POSNativeView: View {
     @State private var items: [MenuItemDTO] = []
     @State private var shifts: [ShiftDTO] = []
     @State private var terminals: [TerminalDTO] = []
+    @State private var stations: [GamingStationDTO] = []
+    @State private var activeSessions: [GamingSessionDTO] = []
     @State private var selectedCategory: String?
     @State private var search = ""
     @State private var cart: [String: Int] = [:]
     @State private var checkoutDraft: CheckoutDraft?
+    @State private var sessionDraft: GamingSessionDraft?
     @State private var createdInvoice: String?
     @State private var lastChargedOrder: OrderReadDTO?
+    @State private var finishedSession: GamingSessionDTO?
     @State private var isLoading = true
     @State private var isSubmitting = false
     @State private var error: String?
@@ -2083,7 +2092,38 @@ private struct POSNativeView: View {
                     .padding(.bottom, 8)
                 }
 
+                if let finishedSession {
+                    SuccessBanner(message: "Session closed. Amount \(inr(finishedSession.amount_minor ?? 0)). Add the matching service item to the bill if not already charged.")
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
+
                 List {
+                    if !stations.isEmpty || !activeSessions.isEmpty {
+                        Section(header: sectionHeader("Sessions")) {
+                            if activeServiceStations.isEmpty {
+                                InlineEmptyRow(icon: "gamecontroller", title: "No service stations", subtitle: "Add PS5, VR, simulator, shisha, or streaming stations in Gaming.")
+                                    .listRowBackground(Brand.background)
+                                    .listRowSeparator(.hidden)
+                            } else {
+                                ForEach(activeServiceStations) { station in
+                                    POSServiceStationRow(
+                                        station: station,
+                                        activeSession: activeSession(for: station.id),
+                                        isSubmitting: isSubmitting
+                                    ) {
+                                        Haptics.selection()
+                                        sessionDraft = GamingSessionDraft(station: station)
+                                    } onStop: { gamingSession in
+                                        Task { await stop(gamingSession) }
+                                    }
+                                    .listRowBackground(Brand.background)
+                                    .listRowSeparatorTint(Brand.hairline)
+                                }
+                            }
+                        }
+                    }
+
                     Section(header: sectionHeader("Menu")) {
                         if isLoading && items.isEmpty {
                             ForEach(0..<6, id: \.self) { _ in
@@ -2146,6 +2186,11 @@ private struct POSNativeView: View {
                     isSubmitting: isSubmitting
                 ) { updatedDraft in
                     Task { await submitCheckout(updatedDraft) }
+                }
+            }
+            .sheet(item: $sessionDraft) { draft in
+                GamingSessionSheet(draft: draft, activeShift: activeShift, isSubmitting: isSubmitting) { updatedDraft in
+                    Task { await start(updatedDraft) }
                 }
             }
         }
@@ -2224,6 +2269,15 @@ private struct POSNativeView: View {
         cartRows.reduce(0) { $0 + ($1.item.base_price_minor * $1.quantity) }
     }
 
+    private var activeServiceStations: [GamingStationDTO] {
+        stations.filter(\.is_active).sorted { lhs, rhs in
+            if lhs.kind.title == rhs.kind.title {
+                return lhs.code.localizedStandardCompare(rhs.code) == .orderedAscending
+            }
+            return lhs.kind.title.localizedStandardCompare(rhs.kind.title) == .orderedAscending
+        }
+    }
+
     private var activeShift: ShiftDTO? {
         shifts.first { $0.status == "open" } ?? shifts.first
     }
@@ -2234,6 +2288,10 @@ private struct POSNativeView: View {
             return terminals.first { $0.id == terminalID } ?? terminals.first
         }
         return terminals.first
+    }
+
+    private func activeSession(for stationID: String) -> GamingSessionDTO? {
+        activeSessions.first { $0.station_id == stationID && $0.status == "active" }
     }
 
     private func load() async {
@@ -2261,12 +2319,27 @@ private struct POSNativeView: View {
             async let loadedTerminals: [TerminalDTO] = session.authorized { token in
                 try await APIClient.shared.get("settings/terminals", token: token)
             }
+            async let loadedStations: [GamingStationDTO] = session.authorized { token in
+                try await APIClient.shared.get("gaming/stations", token: token)
+            }
+            async let loadedSessions: [GamingSessionDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "gaming/sessions",
+                    token: token,
+                    queryItems: [
+                        URLQueryItem(name: "status", value: "active"),
+                        URLQueryItem(name: "limit", value: "80")
+                    ]
+                )
+            }
 
-            let (freshCategories, freshItems, freshShifts, freshTerminals) = try await (
+            let (freshCategories, freshItems, freshShifts, freshTerminals, freshStations, freshSessions) = try await (
                 loadedCategories,
                 loadedItems,
                 loadedShifts,
-                loadedTerminals
+                loadedTerminals,
+                loadedStations,
+                loadedSessions
             )
 
             withAnimation(.easeOut(duration: 0.18)) {
@@ -2276,6 +2349,8 @@ private struct POSNativeView: View {
                 items = freshItems.filter(\.is_available)
                 shifts = freshShifts
                 terminals = freshTerminals
+                stations = freshStations
+                activeSessions = freshSessions
             }
             await cache.markSynced()
         } catch is CancellationError {
@@ -2290,6 +2365,64 @@ private struct POSNativeView: View {
         }
         if !cache.menuItems.isEmpty {
             items = cache.menuItems.filter(\.is_available)
+        }
+    }
+
+    private func start(_ draft: GamingSessionDraft) async {
+        guard let shift = activeShift else {
+            error = "Open a POS shift before starting a session."
+            return
+        }
+
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        finishedSession = nil
+
+        let partyLabel = "\(draft.partySize) guests"
+        let displayName: String?
+        if let name = draft.customerName.nilIfBlank {
+            displayName = "\(name) - \(partyLabel)"
+        } else {
+            displayName = partyLabel
+        }
+
+        let request = GamingSessionStartRequest(
+            station_id: draft.station.id,
+            shift_id: shift.id,
+            customer_name: displayName,
+            customer_phone: draft.customerPhone.nilIfBlank
+        )
+
+        do {
+            let created: GamingSessionDTO = try await session.authorized { token in
+                try await APIClient.shared.post("gaming/sessions/start", body: request, token: token)
+            }
+            sessionDraft = nil
+            activeSessions.insert(created, at: 0)
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func stop(_ gamingSession: GamingSessionDTO) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+
+        do {
+            let ended: GamingSessionDTO = try await session.authorized { token in
+                try await APIClient.shared.post("gaming/sessions/\(gamingSession.id)/stop", body: EmptyRequest(), token: token)
+            }
+            finishedSession = ended
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
         }
     }
 
@@ -3861,18 +3994,11 @@ private struct LogoBadge: View {
     let size: CGFloat
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.black)
-            Circle()
-                .stroke(Brand.gold, lineWidth: size * 0.055)
-            Circle()
-                .stroke(Brand.gold.opacity(0.45), lineWidth: 1)
-                .padding(size * 0.12)
-            Text("D")
-                .font(.system(size: size * 0.48, weight: .black, design: .rounded))
-                .foregroundColor(Brand.gold)
-        }
+        Image("BrandLogo")
+            .resizable()
+            .interpolation(.high)
+            .antialiased(true)
+            .scaledToFit()
         .frame(width: size, height: size)
         .shadow(color: Brand.gold.opacity(0.22), radius: 18, x: 0, y: 10)
     }
@@ -4319,6 +4445,84 @@ private struct FilterChip: View {
     }
 }
 
+private struct POSServiceStationRow: View {
+    let station: GamingStationDTO
+    let activeSession: GamingSessionDTO?
+    let isSubmitting: Bool
+    let onStart: () -> Void
+    let onStop: (GamingSessionDTO) -> Void
+
+    private var isRunning: Bool {
+        activeSession != nil
+    }
+
+    private var elapsedMinutes: Int {
+        guard let activeSession else { return 0 }
+        return max(1, Int(Date().timeIntervalSince(activeSession.start_at) / 60))
+    }
+
+    private var estimateMinor: Int {
+        guard let activeSession else { return station.rate_per_hour_minor }
+        let rate = activeSession.rate_per_hour_minor ?? station.rate_per_hour_minor
+        return Int((Double(rate) * Double(elapsedMinutes) / 60.0).rounded(.up))
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: station.kind.icon)
+                .font(.title3)
+                .foregroundColor(Brand.gold)
+                .frame(width: 38, height: 38)
+                .background(Brand.gold.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(station.name)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Text(isRunning ? "\(station.kind.title) running - \(elapsedMinutes) min - \(inr(estimateMinor)) est." : "\(station.kind.title) - \(inr(station.rate_per_hour_minor))/hr")
+                    .font(.caption)
+                    .foregroundColor(Brand.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Spacer(minLength: 8)
+
+            if let activeSession {
+                Button {
+                    onStop(activeSession)
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                        .labelStyle(.iconOnly)
+                        .font(.headline)
+                        .frame(width: 44, height: 44)
+                        .background(Brand.danger.opacity(0.18))
+                        .foregroundColor(Brand.danger)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSubmitting)
+            } else {
+                Button(action: onStart) {
+                    Label("Start", systemImage: "play.fill")
+                        .labelStyle(.iconOnly)
+                        .font(.headline)
+                        .frame(width: 44, height: 44)
+                        .background(Brand.gold)
+                        .foregroundColor(.black)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSubmitting)
+            }
+        }
+        .padding(.vertical, 10)
+    }
+}
+
 private struct MenuItemRow: View {
     let item: MenuItemDTO
     let quantity: Int
@@ -4327,33 +4531,48 @@ private struct MenuItemRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(item.name)
                     .font(.headline)
                     .foregroundColor(.white)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("\(item.type.capitalized) - \(inr(item.base_price_minor))")
                     .font(.caption)
                     .foregroundColor(Brand.muted)
             }
             Spacer()
-            HStack(spacing: 10) {
-                if quantity > 0 {
-                    Button(action: decrement) {
-                        Image(systemName: "minus.circle.fill")
-                    }
-                    Text("\(quantity)")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(minWidth: 24)
+            HStack(spacing: 8) {
+                Button(action: decrement) {
+                    Image(systemName: "minus")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 42, height: 42)
+                        .background(quantity > 0 ? Brand.elevated : Brand.surface.opacity(0.45))
+                        .foregroundColor(quantity > 0 ? Brand.gold : Brand.muted.opacity(0.45))
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .disabled(quantity == 0)
+                .contentShape(Circle())
+
+                Text("\(quantity)")
+                    .font(.headline.monospacedDigit())
+                    .foregroundColor(.white)
+                    .frame(width: 30)
+
                 Button(action: increment) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title3)
+                    Image(systemName: "plus")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 42, height: 42)
+                        .background(Brand.gold)
+                        .foregroundColor(.black)
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .contentShape(Circle())
             }
-            .foregroundColor(Brand.gold)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
     }
 }
 

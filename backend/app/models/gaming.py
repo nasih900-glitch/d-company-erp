@@ -21,7 +21,7 @@ class Station(Base, TimestampMixin, TenantMixin):
     )
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    type: Mapped[str] = mapped_column(String(20), nullable=False)  # ps5|vr|simulator|projector
+    type: Mapped[str] = mapped_column(String(20), nullable=False)  # ps5|vr|simulator|projector|hookah|streaming
     rate_per_hour_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(String(500))

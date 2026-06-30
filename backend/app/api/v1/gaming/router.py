@@ -32,7 +32,7 @@ class StationRead(BaseModel):
 class StationCreate(BaseModel):
     code: str = Field(min_length=1, max_length=20)
     name: str = Field(min_length=1, max_length=100)
-    type: str = Field(min_length=1, max_length=20)  # ps5|vr|simulator|projector|hookah
+    type: str = Field(min_length=1, max_length=20)  # ps5|vr|simulator|projector|hookah|streaming
     rate_per_hour_minor: int = Field(ge=0)
     branch_id: UUID | None = None
     notes: str | None = None

@@ -1,7 +1,7 @@
 /**
  * Gaming screen — stations + sessions (live + demo).
  *
- *  - List stations (PS5, VR, simulator, projector)
+ *  - List stations (PS5, VR, simulator, projector, shisha, streaming)
  *  - Add station (admin)
  *  - Edit / disable / delete station (admin)
  *  - Start session (live mode hits backend; demo runs a JS timer)
@@ -28,13 +28,15 @@ const ICON: Record<StationDTO['type'], React.ReactNode> = {
   simulator: <CarFront size={22}/>,
   projector: <Tv size={22}/>,
   hookah:    <Flame size={22}/>,
+  streaming: <Tv size={22}/>,
 };
 const TYPE_LABEL: Record<StationDTO['type'], string> = {
   ps5: 'PlayStation 5',
   vr: 'VR Pod',
   simulator: 'Racing Simulator',
   projector: 'Projector',
-  hookah: 'Hookah Lounge',
+  hookah: 'Shisha',
+  streaming: 'Streaming Booth',
 };
 
 type LocalSession = {
@@ -193,7 +195,7 @@ export default function GamingScreen() {
       ) : !stations.length ? (
         <div className="card text-fg-muted text-sm">
           {canManageStations
-            ? <>No stations yet. Click <b>Manage → New station</b> to add your PS5s, VR pods, simulators.</>
+            ? <>No stations yet. Click <b>Manage → New station</b> to add PS5, VR, simulator, shisha, or streaming stations.</>
             : 'No stations configured yet.'}
         </div>
       ) : (
@@ -346,6 +348,7 @@ function StationForm({
               <option value="simulator">Racing Simulator</option>
               <option value="projector">Projector</option>
               {!APP_STORE_REVIEW && <option value="hookah">Hookah Lounge</option>}
+              <option value="streaming">Streaming Booth</option>
             </select>
           </Field>
         </div>

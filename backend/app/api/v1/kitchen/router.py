@@ -38,7 +38,7 @@ _KITCHEN_ITEM_TYPES = {"food", "drink", "dessert"}
 class KitchenLineDTO(BaseModel):
     menu_item_id: UUID
     name: str
-    type: str       # food/drink/dessert/hookah — kitchen handles food/drink
+    type: str       # food/drink/dessert only
     qty: float
     notes: str | None = None
 

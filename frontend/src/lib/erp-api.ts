@@ -190,7 +190,7 @@ export const menuAdmin = {
   deleteCategory: (id: string) => api.delete(`/menu/categories/${id}`),
   createItem: (body: {
     category_id: string; sku: string; name: string;
-    type: 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah';
+    type: 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
     base_price_minor: number; tax_rate: number; description?: string;
   }) => api.post<MenuItemDTO>('/menu/items', body).then((r) => r.data),
   updateItem: (id: string, body: Partial<{
@@ -872,7 +872,7 @@ export interface StationDTO {
   id: string;
   code: string;
   name: string;
-  type: 'ps5' | 'vr' | 'simulator' | 'projector' | 'hookah';
+  type: 'ps5' | 'vr' | 'simulator' | 'projector' | 'hookah' | 'streaming';
   rate_per_hour_minor: number;
   is_active: boolean;
 }
@@ -891,7 +891,7 @@ export const gaming = {
   listStations: () => api.get<StationDTO[]>('/gaming/stations').then((r) => r.data),
   createStation: (body: {
     code: string; name: string;
-    type: 'ps5' | 'vr' | 'simulator' | 'projector' | 'hookah';
+    type: 'ps5' | 'vr' | 'simulator' | 'projector' | 'hookah' | 'streaming';
     rate_per_hour_minor: number; branch_id?: string; notes?: string;
   }) => api.post<StationDTO>('/gaming/stations', body).then((r) => r.data),
   updateStation: (id: string, body: Partial<{

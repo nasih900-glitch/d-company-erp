@@ -53,7 +53,7 @@ class ItemCreate(BaseModel):
     category_id: UUID
     sku: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=200)
-    type: Literal["food", "drink", "dessert", "gaming", "event", "hookah"]
+    type: Literal["food", "drink", "dessert", "gaming", "event", "hookah", "streaming"]
     base_price_minor: int = Field(ge=0)
     tax_rate: float = Field(ge=0, le=1, default=0)
     description: str | None = None

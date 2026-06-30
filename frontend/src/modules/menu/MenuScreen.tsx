@@ -19,7 +19,7 @@ import {
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
-type ItemType = 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah';
+type ItemType = 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
 
 export default function MenuScreen() {
   const { me, demo } = useAuth();
@@ -47,7 +47,7 @@ export default function MenuScreen() {
       } else {
         setCats(CATEGORIES.map((c, idx) => ({ id: c, name: c, sort_order: idx })));
         setItems(MENU.map((m) => ({
-          id: m.id, category_id: m.category, sku: m.sku, name: m.name, type: 'food',
+          id: m.id, category_id: m.category, sku: m.sku, name: m.name, type: m.type,
           base_price_minor: m.price, tax_rate: m.rate, is_available: true,
         })));
       }
@@ -329,6 +329,7 @@ function ItemForm({
             <option value="gaming">Gaming</option>
             <option value="event">Event</option>
             {!APP_STORE_REVIEW && <option value="hookah">Hookah</option>}
+            <option value="streaming">Streaming</option>
           </select>
         </Field>
         <div className="grid grid-cols-2 gap-3">

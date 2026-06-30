@@ -128,7 +128,7 @@ def _discount_for_item_type(item_type: str, rates: MembershipDiscountRates) -> D
     """Return the membership discount rate that applies to this menu item type."""
     if item_type in {"food", "drink", "dessert"}:
         return rates.food
-    if item_type == "gaming":
+    if item_type in {"gaming", "streaming"}:
         return rates.gaming
     if item_type == "hookah":
         return rates.hookah
