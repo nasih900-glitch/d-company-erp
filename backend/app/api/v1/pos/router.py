@@ -48,22 +48,22 @@ class OrderLineCreate(BaseModel):
     variant_id: UUID | None = None
     qty: float = Field(gt=0)
     modifiers: list[dict] | None = None
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 class OrderCreate(BaseModel):
     type: Literal["dine_in", "takeaway", "delivery"]
     table_id: UUID | None = None
     shift_id: UUID
-    lines: list[OrderLineCreate]
+    lines: list[OrderLineCreate] = Field(min_length=1, max_length=100)
     delivery_via: Literal["inhouse", "zomato", "swiggy", "ubereats", "other_aggregator"] | None = None
-    customer_name: str | None = None
-    customer_phone: str | None = None
+    customer_name: str | None = Field(default=None, max_length=200)
+    customer_phone: str | None = Field(default=None, max_length=20)
     customer_gstin: str | None = Field(default=None, max_length=15)
     customer_address: str | None = Field(default=None, max_length=500)
     customer_state_code: str | None = Field(default=None, pattern=r"^\d{2}$")
     place_of_supply_state_code: str | None = Field(default=None, pattern=r"^\d{2}$")
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class OrderLineRead(BaseModel):
@@ -109,15 +109,15 @@ class PaymentCreate(BaseModel):
     method: Literal["cash", "card", "upi", "qr", "wallet"]
     amount_minor: int = Field(gt=0)
     tendered_minor: int | None = None
-    ref_external: str | None = None
+    ref_external: str | None = Field(default=None, max_length=200)
 
 
 class RefundCreate(BaseModel):
-    reason_code: str
+    reason_code: str = Field(min_length=1, max_length=50)
     amount_minor: int = Field(gt=0)
     mode: Literal["cash", "original", "credit_note"] = "original"
     manager_override_user_id: UUID | None = None
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 class ShiftOpenRequest(BaseModel):
@@ -483,8 +483,18 @@ async def get_order(
     order = await session.get(Order, order_id)
     if not order or order.company_id != tenant.company_id:
         raise NotFoundError("order not found")
+    line_rows = (
+        await session.execute(
+            select(OrderLine, MenuItem)
+            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+            .where(OrderLine.order_id == order.id)
+            .order_by(OrderLine.created_at, OrderLine.id)
+        )
+    ).all()
     return OrderRead(
         id=order.id,
+        invoice_no=order.invoice_no,
+        fiscal_year=order.fiscal_year,
         status=order.status,
         type=order.type,
         subtotal_minor=order.subtotal_minor,
@@ -502,6 +512,23 @@ async def get_order(
         customer_phone=order.customer_phone,
         customer_gstin=order.customer_gstin,
         customer_state_code=order.customer_state_code,
+        lines=[
+            OrderLineRead(
+                menu_item_id=line.menu_item_id,
+                name=item.name,
+                sku=item.sku,
+                hsn_or_sac=line.hsn_or_sac or item.hsn_code or "",
+                qty=float(line.qty),
+                unit_price_minor=int(line.unit_price_minor),
+                line_total_minor=int(line.line_total_minor),
+                taxable_value_minor=int(line.taxable_value_minor),
+                tax_rate=float(line.tax_rate),
+                cgst_minor=int(line.cgst_minor),
+                sgst_minor=int(line.sgst_minor),
+                igst_minor=int(line.igst_minor),
+            )
+            for line, item in line_rows
+        ],
     )
 
 

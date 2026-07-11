@@ -15,7 +15,7 @@ from app.models.base import Base
 class IdempotencyKey(Base):
     __tablename__ = "idempotency_keys"
 
-    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
     terminal_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="SET NULL")
     )

@@ -63,6 +63,7 @@ export default function LivePOSScreen() {
   const [customerLookupState, setCustomerLookupState] = useState<CustomerLookupState>('idle');
   const [customerMessage, setCustomerMessage] = useState<string | null>(null);
   const [customerBusy, setCustomerBusy] = useState(false);
+  const [showCart, setShowCart] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [paying, setPaying] = useState(false);
   const [receipt, setReceipt] = useState<OrderDTO | null>(null);
@@ -145,6 +146,10 @@ export default function LivePOSScreen() {
     checkoutKeyRef.current = null;
   }, [cart, customerName, customerPhone, deliveryStateCode, deliveryVia, orderType]);
 
+  useEffect(() => {
+    if (!cart.length) setShowCart(false);
+  }, [cart.length]);
+
   async function lookupCustomer() {
     const phone = customerPhone.trim();
     setCustomer(null);
@@ -207,7 +212,7 @@ export default function LivePOSScreen() {
     setError(null);
     try {
       const fallbackNonce = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const checkoutKey = checkoutKeyRef.current ?? `${shiftId}:${globalThis.crypto?.randomUUID?.() ?? fallbackNonce}`;
+      const checkoutKey = checkoutKeyRef.current ?? (globalThis.crypto?.randomUUID?.() ?? fallbackNonce);
       checkoutKeyRef.current = checkoutKey;
       let order = pendingOrderRef.current;
       if (!order) {
@@ -394,10 +399,25 @@ export default function LivePOSScreen() {
               </div>
               <div className="w-20 text-right font-mono text-sm">{inr(l.item.base_price_minor * l.qty)}</div>
               <div className="flex items-center gap-1">
-                <button onClick={() => adjust(l.item.id, -1)} className="btn btn-ghost !min-h-[36px] !p-2"><Minus size={12} /></button>
+                <button
+                  onClick={() => adjust(l.item.id, -1)}
+                  className="btn btn-ghost !min-h-[36px] !p-2"
+                  aria-label={`Decrease ${l.item.name} quantity`}
+                  title="Decrease quantity"
+                ><Minus size={12} /></button>
                 <span className="w-6 text-center font-mono text-sm">{l.qty}</span>
-                <button onClick={() => adjust(l.item.id, 1)} className="btn btn-ghost !min-h-[36px] !p-2"><Plus size={12} /></button>
-                <button onClick={() => adjust(l.item.id, -l.qty)} className="btn btn-ghost !min-h-[36px] !p-2"><Trash2 size={12} /></button>
+                <button
+                  onClick={() => adjust(l.item.id, 1)}
+                  className="btn btn-ghost !min-h-[36px] !p-2"
+                  aria-label={`Increase ${l.item.name} quantity`}
+                  title="Increase quantity"
+                ><Plus size={12} /></button>
+                <button
+                  onClick={() => adjust(l.item.id, -l.qty)}
+                  className="btn btn-ghost !min-h-[36px] !p-2"
+                  aria-label={`Remove ${l.item.name} from cart`}
+                  title="Remove item"
+                ><Trash2 size={12} /></button>
               </div>
             </div>
           ))}
@@ -425,15 +445,78 @@ export default function LivePOSScreen() {
       {/* Mobile sticky charge bar (live mode) */}
       {cart.length > 0 && (
         <button
-          onClick={() => setShowPay(true)}
+          onClick={() => setShowCart(true)}
           className="xl:hidden fixed left-3 right-3 bottom-3 z-30 btn btn-primary !min-h-[60px] min-w-0 text-sm font-bold shadow-2xl sm:text-base"
           style={{ bottom: 'max(0.75rem, calc(env(safe-area-inset-bottom) + 0.5rem))' }}
         >
-          <ReceiptIcon size={18}/>
+          <ShoppingCart size={18}/>
           <span className="shrink-0">{cartQty} items</span>
           <span className="opacity-80">·</span>
-          <span className="min-w-0 truncate">Charge {inr(estimatedPayable)}</span>
+          <span className="min-w-0 truncate">Review cart · {inr(estimatedPayable)}</span>
         </button>
+      )}
+
+      {showCart && (
+        <Modal title={`Cart · ${cartQty}`} onClose={() => setShowCart(false)}>
+          <div className="space-y-3">
+            {cart.map((line) => (
+              <div key={line.item.id} className="border-b border-bg-border pb-3 last:border-0 last:pb-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-sm break-words">{line.item.name}</div>
+                    <div className="text-xs text-fg-muted mt-1">{inr(line.item.base_price_minor)} each</div>
+                  </div>
+                  <div className="font-mono text-sm shrink-0">{inr(line.item.base_price_minor * line.qty)}</div>
+                </div>
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => adjust(line.item.id, -1)}
+                    className="btn btn-ghost !min-h-[44px] !min-w-[44px] !p-2"
+                    aria-label={`Decrease ${line.item.name} quantity`}
+                    title="Decrease quantity"
+                  ><Minus size={16}/></button>
+                  <span className="w-8 text-center font-mono text-sm" aria-label={`${line.item.name} quantity`}>{line.qty}</span>
+                  <button
+                    onClick={() => adjust(line.item.id, 1)}
+                    className="btn btn-ghost !min-h-[44px] !min-w-[44px] !p-2"
+                    aria-label={`Increase ${line.item.name} quantity`}
+                    title="Increase quantity"
+                  ><Plus size={16}/></button>
+                  <button
+                    onClick={() => adjust(line.item.id, -line.qty)}
+                    className="btn btn-ghost !min-h-[44px] !min-w-[44px] !p-2 text-accent-bad"
+                    aria-label={`Remove ${line.item.name} from cart`}
+                    title="Remove item"
+                  ><Trash2 size={16}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 border-t border-bg-border pt-3 text-sm">
+            {estimatedMembershipDiscount > 0 && (
+              <div className="mb-1 flex justify-between gap-3 text-accent-good">
+                <span>Membership discount (est.)</span>
+                <span>-{inr(estimatedMembershipDiscount)}</span>
+              </div>
+            )}
+            <div className="flex justify-between gap-3 text-lg font-bold">
+              <span>Total (est.)</span>
+              <span>{inr(estimatedPayable)}</span>
+            </div>
+            <p className="mt-1 text-xs text-fg-muted">Final GST split and round-off are computed by the backend.</p>
+          </div>
+
+          <button
+            onClick={() => {
+              setShowCart(false);
+              setShowPay(true);
+            }}
+            className="btn btn-primary mt-4 w-full"
+          >
+            <ReceiptIcon size={16}/> Continue to payment · {inr(estimatedPayable)}
+          </button>
+        </Modal>
       )}
 
       {showPay && (
@@ -591,7 +674,12 @@ function Modal({ title, children, onClose, wide }: { title: string; children: Re
       >
         <div className="flex items-center justify-between p-4 border-b border-bg-border print:hidden sticky top-0 bg-bg-surface">
           <h3 className="font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-fg-muted hover:text-fg p-1 -m-1"><X size={20}/></button>
+          <button
+            onClick={onClose}
+            className="text-fg-muted hover:text-fg p-1 -m-1"
+            aria-label={`Close ${title}`}
+            title="Close"
+          ><X size={20}/></button>
         </div>
         <div className="p-4">{children}</div>
       </div>

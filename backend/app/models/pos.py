@@ -76,7 +76,7 @@ class Order(Base, TimestampMixin, TenantMixin):
     total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    idempotency_key: Mapped[str | None] = mapped_column(String(80), unique=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True, index=True)
     # ----- Invoice numbering (per branch, per FY, no gaps) -----
     invoice_no: Mapped[str | None] = mapped_column(String(20), unique=True, index=True)
     fiscal_year: Mapped[str | None] = mapped_column(String(7))  # e.g. "2026-27"

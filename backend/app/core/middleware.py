@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.core.logging import get_logger
 
@@ -72,8 +72,20 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            key = request.headers.get("Idempotency-Key")
+            key = request.headers.get("Idempotency-Key") or request.headers.get(
+                "X-Idempotency-Key"
+            )
             if key:
+                if len(key) > 160:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": {
+                                "code": "invalid_idempotency_key",
+                                "message": "Idempotency-Key must be 160 characters or fewer",
+                            }
+                        },
+                    )
                 body = await request.body()
                 request.state.idempotency_key = key
                 request.state.idempotency_request_hash = hashlib.sha256(

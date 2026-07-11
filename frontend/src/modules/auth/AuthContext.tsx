@@ -12,6 +12,8 @@ interface Me {
   branch_id: string | null;
 }
 
+const AUTH_BOOT_TIMEOUT_MS = 8000;
+
 /**
  * Claim a POS terminal so X-Terminal-Id can be sent on every request.
  *
@@ -21,10 +23,10 @@ interface Me {
  *   2. Ask /settings/terminals — pick the first one.
  *   3. None exist? Skip silently; POS will surface a friendly error.
  */
-async function ensureTerminalClaimed(): Promise<void> {
+async function ensureTerminalClaimed(signal?: AbortSignal): Promise<void> {
   if (localStorage.getItem('terminal_id')) return;
   try {
-    const r = await api.get<Array<{ id: string }>>('/settings/terminals');
+    const r = await api.get<Array<{ id: string }>>('/settings/terminals', { signal });
     if (r.data?.length) {
       localStorage.setItem('terminal_id', r.data[0].id);
     }
@@ -62,19 +64,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      controller.abort();
+    }, AUTH_BOOT_TIMEOUT_MS);
+
     const token = localStorage.getItem('access_token');
     if (!token) {
+      window.clearTimeout(timeout);
       setLoading(false);
-      return;
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
     }
     api
-      .get<Me>('/auth/me')
+      .get<Me>('/auth/me', { signal: controller.signal })
       .then(async (r) => {
+        if (cancelled) return;
         setMe(r.data);
-        await ensureTerminalClaimed();
+        await ensureTerminalClaimed(controller.signal);
       })
       .catch(() => clearStoredSession())
-      .finally(() => setLoading(false));
+      .finally(() => {
+        window.clearTimeout(timeout);
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
   async function login(email: string, password: string) {
@@ -85,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearStoredSession();
     const r = await api.post<{ access_token: string; refresh_token: string }>(
       '/auth/login',
-      { email, password },
+      { email: email.trim().toLowerCase(), password },
     );
     localStorage.setItem('access_token', r.data.access_token);
     localStorage.setItem('refresh_token', r.data.refresh_token);

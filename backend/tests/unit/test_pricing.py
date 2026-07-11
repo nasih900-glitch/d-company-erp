@@ -14,6 +14,7 @@ from app.services.pos.pricing import (
     _round_to_rupee,
     _split_tax_from_inclusive,
     fiscal_year_for,
+    format_invoice_number,
 )
 
 
@@ -107,3 +108,13 @@ class TestFiscalYear:
 
     def test_calendar_year_end(self) -> None:
         assert fiscal_year_for(date(2026, 12, 31)) == "2026-27"
+
+    def test_invoice_number_is_rule_46_length_with_long_branch_code(self) -> None:
+        invoice = format_invoice_number(
+            prefix="DCompany",
+            branch_code="LIVE_E2E_LONG_BRANCH",
+            fiscal_year="2026-27",
+            sequence=1,
+        )
+        assert invoice == "D/LI/26-27/00001"
+        assert len(invoice) == 16

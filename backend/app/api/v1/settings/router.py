@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import NotFoundError, ConflictError
@@ -40,15 +41,17 @@ class CompanyRead(BaseModel):
 
 
 class CompanyUpdate(BaseModel):
-    name: str | None = None
-    legal_name: str | None = None
-    timezone: str | None = None
-    gstin: str | None = None
-    pan: str | None = None
-    gst_registration_type: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    legal_name: str | None = Field(default=None, max_length=200)
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    gstin: str | None = Field(default=None, min_length=15, max_length=15)
+    pan: str | None = Field(default=None, min_length=10, max_length=10)
+    gst_registration_type: str | None = Field(
+        default=None, pattern="^(regular|composition|unregistered|sez)$"
+    )
     is_composition: bool | None = None
     e_invoicing_enabled: bool | None = None
-    google_sheets_webhook_url: str | None = None
+    google_sheets_webhook_url: str | None = Field(default=None, max_length=500)
 
 
 class BranchRead(BaseModel):
@@ -67,28 +70,28 @@ class BranchRead(BaseModel):
 
 class BranchCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    code: str | None = None
-    address: str | None = None
-    timezone: str | None = "Asia/Kolkata"
-    opens_at: str | None = None
-    closes_at: str | None = None
-    state_code: str | None = "32"
-    fssai_license_no: str | None = None
-    trade_license_no: str | None = None
-    branch_gstin: str | None = None
+    code: str | None = Field(default=None, max_length=10)
+    address: str | None = Field(default=None, max_length=500)
+    timezone: str | None = Field(default="Asia/Kolkata", max_length=64)
+    opens_at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    closes_at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    state_code: str | None = Field(default="32", pattern=r"^\d{2}$")
+    fssai_license_no: str | None = Field(default=None, pattern=r"^\d{14}$")
+    trade_license_no: str | None = Field(default=None, max_length=50)
+    branch_gstin: str | None = Field(default=None, min_length=15, max_length=15)
 
 
 class BranchUpdate(BaseModel):
-    name: str | None = None
-    code: str | None = None
-    address: str | None = None
-    timezone: str | None = None
-    opens_at: str | None = None
-    closes_at: str | None = None
-    state_code: str | None = None
-    fssai_license_no: str | None = None
-    trade_license_no: str | None = None
-    branch_gstin: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=10)
+    address: str | None = Field(default=None, max_length=500)
+    timezone: str | None = Field(default=None, max_length=64)
+    opens_at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    closes_at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    state_code: str | None = Field(default=None, pattern=r"^\d{2}$")
+    fssai_license_no: str | None = Field(default=None, pattern=r"^\d{14}$")
+    trade_license_no: str | None = Field(default=None, max_length=50)
+    branch_gstin: str | None = Field(default=None, min_length=15, max_length=15)
 
 
 class TerminalRead(BaseModel):
@@ -102,7 +105,7 @@ class TerminalRead(BaseModel):
 class TerminalCreate(BaseModel):
     branch_id: UUID
     name: str = Field(min_length=1, max_length=100)
-    device_id: str | None = None
+    device_id: str | None = Field(default=None, max_length=100)
 
 
 class ExpenseCategoryRead(BaseModel):
@@ -113,7 +116,7 @@ class ExpenseCategoryRead(BaseModel):
 
 class ExpenseCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    code: str | None = None
+    code: str | None = Field(default=None, min_length=1, max_length=20)
 
 
 # ============================================================================
@@ -195,6 +198,17 @@ async def create_branch(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("admin.system")),
 ) -> BranchRead:
+    existing = (
+        await session.execute(
+            select(Branch.id).where(
+                Branch.company_id == tenant.company_id,
+                Branch.name == payload.name,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise ConflictError("an active branch with this name already exists")
     b = Branch(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -279,7 +293,7 @@ async def create_terminal(
     tenant: TenantContext = Depends(requires("admin.system")),
 ) -> TerminalRead:
     b = await session.get(Branch, payload.branch_id)
-    if not b or b.company_id != tenant.company_id:
+    if not b or b.company_id != tenant.company_id or b.deleted_at:
         raise NotFoundError("branch not found")
     t = Terminal(
         id=uuid4(),
@@ -307,8 +321,14 @@ async def delete_terminal(
     b = await session.get(Branch, t.branch_id)
     if not b or b.company_id != tenant.company_id:
         raise NotFoundError("terminal not found")
-    await session.delete(t)
-    await session.flush()
+    try:
+        await session.delete(t)
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError(
+            "cannot delete terminal because it has shift, order, or audit history"
+        ) from exc
 
 
 # ============================================================================
@@ -325,7 +345,7 @@ async def list_expense_categories(
         )
     ).scalars().all()
     return [
-        ExpenseCategoryRead(id=r.id, name=r.name, code=getattr(r, "code", None))
+        ExpenseCategoryRead(id=r.id, name=r.name, code=r.code)
         for r in rows
     ]
 
@@ -340,6 +360,21 @@ async def create_expense_category(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseCategoryRead:
+    duplicate = (
+        await session.execute(
+            select(ExpenseCategory.id).where(
+                ExpenseCategory.company_id == tenant.company_id,
+                (ExpenseCategory.name == payload.name)
+                | (
+                    ExpenseCategory.code == payload.code
+                    if payload.code is not None
+                    else False
+                ),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if duplicate:
+        raise ConflictError("an expense category with this name or code already exists")
     c = ExpenseCategory(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -348,4 +383,4 @@ async def create_expense_category(
     )
     session.add(c)
     await session.flush()
-    return ExpenseCategoryRead(id=c.id, name=c.name, code=getattr(c, "code", None))
+    return ExpenseCategoryRead(id=c.id, name=c.name, code=c.code)

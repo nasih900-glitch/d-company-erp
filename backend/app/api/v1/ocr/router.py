@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.db import SessionDep
-from app.core.errors import NotFoundError
+from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import OcrExtraction, OcrUpload, OcrVerification
+from app.models import Branch, OcrExtraction, OcrUpload, OcrVerification
 
 router = APIRouter()
 
@@ -38,7 +39,7 @@ class ExtractionRead(BaseModel):
 class VerificationDecision(BaseModel):
     decision: Literal["approve", "reject", "edit"]
     edits: dict | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 @router.post(
@@ -54,22 +55,43 @@ async def upload_receipt(
     source: Literal["manual", "drive", "whatsapp", "telegram"] = Form("manual"),
     tenant: TenantContext = Depends(requires("ocr.upload")),
 ) -> UploadResponse:
+    branch = await session.get(Branch, branch_id)
+    if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
     body = await file.read()
+    if not body:
+        raise BusinessRuleError("uploaded file is empty")
+    if len(body) > 10 * 1024 * 1024:
+        raise BusinessRuleError("uploaded file exceeds the 10 MB limit")
+    allowed_types = {
+        "application/pdf",
+        "image/heic",
+        "image/heif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+    if file.content_type not in allowed_types:
+        raise BusinessRuleError("upload a PDF, JPEG, PNG, WebP, HEIC, or HEIF receipt")
     sha = hashlib.sha256(body).hexdigest()
     # NOTE: in production, body goes to object storage and we only store the key.
-    storage_key = f"ocr/{tenant.company_id}/{sha}/{file.filename}"
+    safe_filename = Path(file.filename or "receipt").name[:180]
+    storage_key = f"ocr/{tenant.company_id}/{sha}/{safe_filename}"
     upload = OcrUpload(
         id=uuid4(),
         company_id=tenant.company_id,
         branch_id=branch_id,
         uploaded_by=tenant.user_id,
         storage_key=storage_key,
-        mime=file.content_type or "application/octet-stream",
+        mime=file.content_type,
         sha256=sha,
         byte_size=len(body),
         source=source,
     )
     session.add(upload)
+    # Persist the parent first. These models intentionally have no ORM
+    # relationship, so SQLAlchemy cannot otherwise guarantee insert order.
+    await session.flush()
     # Background worker enqueues OCR job; for now we insert a stub extraction.
     session.add(
         OcrExtraction(
@@ -121,7 +143,16 @@ async def verify_extraction(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("ocr.verify")),
 ) -> dict:
-    ex = await session.get(OcrExtraction, extraction_id)
+    ex = (
+        await session.execute(
+            select(OcrExtraction)
+            .join(OcrUpload, OcrUpload.id == OcrExtraction.ocr_upload_id)
+            .where(
+                OcrExtraction.id == extraction_id,
+                OcrUpload.company_id == tenant.company_id,
+            )
+        )
+    ).scalar_one_or_none()
     if not ex:
         raise NotFoundError("extraction not found")
     v = OcrVerification(

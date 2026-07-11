@@ -14,7 +14,16 @@ from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import Batch, Ingredient, StockMovement, Supplier
+from app.models import (
+    Batch,
+    GRN,
+    GRNLine,
+    Ingredient,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    StockMovement,
+    Supplier,
+)
 
 router = APIRouter()
 
@@ -287,27 +296,69 @@ async def post_grn(
 ) -> dict:
     """Record receipt of stock — creates a Batch per line and bumps Ingredient.current_qty.
 
-    Skips the formal PurchaseOrder/GRN tables (used by the heavier procurement
-    flow); for the simple "I just received some stock" path the cashier-level
-    GRN modal posts here.
+    The simple receive-stock path creates an implicit closed purchase order so
+    every stock receipt has a durable GRN header, line, batch, and movement trail.
     """
     if not payload.lines:
         raise BusinessRuleError("at least one line required")
+    if payload.supplier_id is None:
+        raise BusinessRuleError("supplier_id is required to record a GRN")
+    supplier = await session.get(Supplier, payload.supplier_id)
+    if not supplier or supplier.company_id != tenant.company_id or supplier.deleted_at:
+        raise NotFoundError("supplier not found")
 
     received_at = payload.received_at or datetime.now(timezone.utc)
+    total_minor = sum(int(ln.qty * ln.unit_cost_minor) for ln in payload.lines)
+    po = PurchaseOrder(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        supplier_id=payload.supplier_id,
+        branch_id=payload.branch_id,
+        po_number=f"GRN-{received_at:%Y%m%d}-{uuid4().hex[:8].upper()}",
+        status="closed",
+        expected_at=received_at,
+        total_minor=total_minor,
+        created_by=tenant.user_id,
+    )
+    session.add(po)
+    await session.flush()
+
+    grn = GRN(
+        id=uuid4(),
+        purchase_order_id=po.id,
+        received_at=received_at,
+        received_by=tenant.user_id,
+        supplier_invoice_no=payload.supplier_invoice_no,
+        supplier_invoice_amount_minor=payload.supplier_invoice_amount_minor,
+        notes=payload.notes,
+    )
+    session.add(grn)
+    await session.flush()
+
     batch_ids: list[str] = []
+    line_ids: list[str] = []
 
     for ln in payload.lines:
         ing = await session.get(Ingredient, ln.ingredient_id)
         if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
             raise NotFoundError(f"ingredient {ln.ingredient_id} not found")
 
+        po_line = PurchaseOrderLine(
+            id=uuid4(),
+            purchase_order_id=po.id,
+            ingredient_id=ing.id,
+            qty_ordered=ln.qty,
+            qty_received=ln.qty,
+            unit_cost_minor=ln.unit_cost_minor,
+        )
+        session.add(po_line)
+
         batch = Batch(
             id=uuid4(),
             ingredient_id=ing.id,
             branch_id=payload.branch_id,
             supplier_id=payload.supplier_id,
-            grn_id=None,
+            grn_id=grn.id,
             received_at=received_at,
             expires_at=ln.expires_at,
             qty_initial=ln.qty,
@@ -318,13 +369,23 @@ async def post_grn(
         session.add(batch)
         await session.flush()
 
+        grn_line = GRNLine(
+            id=uuid4(),
+            grn_id=grn.id,
+            ingredient_id=ing.id,
+            batch_id=batch.id,
+            qty_received=ln.qty,
+            cost_per_unit_minor=ln.unit_cost_minor,
+        )
+        session.add(grn_line)
+
         mv = StockMovement(
             id=uuid4(),
             batch_id=batch.id,
             branch_id=payload.branch_id,
             type="grn",
             ref_type="grn",
-            ref_id=None,
+            ref_id=grn.id,
             qty_delta=ln.qty,
             cost_per_unit_minor=ln.unit_cost_minor,
             created_by=tenant.user_id,
@@ -341,12 +402,17 @@ async def post_grn(
         ing.avg_cost_minor = int(new_val / new_qty) if new_qty > 0 else int(ln.unit_cost_minor)
 
         batch_ids.append(str(batch.id))
+        line_ids.append(str(grn_line.id))
 
     await session.flush()
     return {
         "ok": True,
+        "id": str(grn.id),
+        "purchase_order_id": str(po.id),
         "batches_created": len(batch_ids),
         "batch_ids": batch_ids,
+        "line_ids": line_ids,
+        "total_minor": total_minor,
         "supplier_invoice_no": payload.supplier_invoice_no,
     }
 

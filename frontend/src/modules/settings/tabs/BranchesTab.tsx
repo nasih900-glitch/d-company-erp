@@ -85,7 +85,7 @@ function BranchForm({
     timezone: branch?.timezone ?? 'Asia/Kolkata',
     opens_at: branch?.opens_at ?? '09:00',
     closes_at: branch?.closes_at ?? '23:30',
-    state_code: branch?.state_code ?? 'KL',
+    state_code: branch?.state_code ?? '32',
     fssai_license_no: branch?.fssai_license_no ?? '',
     trade_license_no: branch?.trade_license_no ?? '',
     branch_gstin: branch?.branch_gstin ?? '',
@@ -96,8 +96,21 @@ function BranchForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      if (isEdit) await settings.updateBranch(branch!.id, form);
-      else await settings.createBranch(form);
+      const payload: Partial<BranchDTO> = {
+        ...form,
+        name: form.name?.trim(),
+        code: form.code?.trim() || null,
+        address: form.address?.trim() || null,
+        timezone: form.timezone?.trim() || null,
+        opens_at: form.opens_at?.trim() || null,
+        closes_at: form.closes_at?.trim() || null,
+        state_code: form.state_code?.trim() || null,
+        fssai_license_no: form.fssai_license_no?.trim() || null,
+        trade_license_no: form.trade_license_no?.trim() || null,
+        branch_gstin: form.branch_gstin?.trim() || null,
+      };
+      if (isEdit) await settings.updateBranch(branch!.id, payload);
+      else await settings.createBranch(payload);
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
@@ -119,9 +132,10 @@ function BranchForm({
             onChange={(e) => setForm({ ...form, address: e.target.value })}/>
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="State code (KL, KA, MH…)">
+          <Field label="GST state code (Kerala = 32)">
             <input className="input font-mono" maxLength={2} value={form.state_code ?? ''}
-              onChange={(e) => setForm({ ...form, state_code: e.target.value.toUpperCase() })}/>
+              inputMode="numeric"
+              onChange={(e) => setForm({ ...form, state_code: e.target.value.replace(/\D/g, '') })}/>
           </Field>
           <Field label="Timezone">
             <input className="input" value={form.timezone ?? ''}

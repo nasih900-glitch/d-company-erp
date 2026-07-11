@@ -63,7 +63,7 @@ class TableCreate(BaseModel):
 
 
 class TableUpdate(BaseModel):
-    code: str | None = None
+    code: str | None = Field(default=None, min_length=1, max_length=20)
     seats: int | None = Field(default=None, gt=0, le=20)
     shape: Literal["rect", "round", "booth"] | None = None
     x: float | None = None
@@ -76,12 +76,12 @@ class TableStatusUpdate(BaseModel):
 
 class ReservationCreate(BaseModel):
     table_id: UUID
-    guest_name: str
+    guest_name: str = Field(min_length=1, max_length=200)
     party_size: int = Field(gt=0)
-    contact: str | None = None
+    contact: str | None = Field(default=None, max_length=50)
     starts_at: datetime
     ends_at: datetime
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 # ---------------------------------------------------------------- helpers
@@ -118,6 +118,35 @@ async def _ensure_default_floor(session, tenant: TenantContext) -> UUID:
     return floor.id
 
 
+async def _tenant_floor(session, company_id: UUID, floor_id: UUID) -> Floor | None:
+    return (
+        await session.execute(
+            select(Floor)
+            .join(Branch, Branch.id == Floor.branch_id)
+            .where(
+                Floor.id == floor_id,
+                Branch.company_id == company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _tenant_table(session, company_id: UUID, table_id: UUID) -> Table | None:
+    return (
+        await session.execute(
+            select(Table)
+            .join(Floor, Floor.id == Table.floor_id)
+            .join(Branch, Branch.id == Floor.branch_id)
+            .where(
+                Table.id == table_id,
+                Branch.company_id == company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
 # ---------------------------------------------------------------- FLOORS
 @router.get("/floors", response_model=list[FloorRead])
 async def list_floors(
@@ -143,6 +172,9 @@ async def create_floor(
     branch_id = payload.branch_id or tenant.branch_id or await _default_branch_id(session, tenant.company_id)
     if not branch_id:
         raise BusinessRuleError("no branch exists — create one in Settings → Branches first")
+    branch = await session.get(Branch, branch_id)
+    if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
     f = Floor(id=uuid4(), branch_id=branch_id, name=payload.name)
     session.add(f)
     await session.flush()
@@ -182,6 +214,8 @@ async def create_table(
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> TableRead:
     floor_id = payload.floor_id or await _ensure_default_floor(session, tenant)
+    if not await _tenant_floor(session, tenant.company_id, floor_id):
+        raise NotFoundError("floor not found")
     existing = (
         await session.execute(
             select(Table).where(Table.floor_id == floor_id, Table.code == payload.code)
@@ -213,7 +247,7 @@ async def update_table(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> TableRead:
-    t = await session.get(Table, table_id)
+    t = await _tenant_table(session, tenant.company_id, table_id)
     if not t:
         raise NotFoundError("table not found")
     for f, v in payload.model_dump(exclude_unset=True).items():
@@ -232,7 +266,7 @@ async def update_status(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> TableRead:
-    t = await session.get(Table, table_id)
+    t = await _tenant_table(session, tenant.company_id, table_id)
     if not t:
         raise NotFoundError("table not found")
     t.status = payload.status
@@ -249,7 +283,7 @@ async def delete_table(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ):
-    t = await session.get(Table, table_id)
+    t = await _tenant_table(session, tenant.company_id, table_id)
     if not t:
         raise NotFoundError("table not found")
     await session.delete(t)
@@ -263,6 +297,11 @@ async def create_reservation(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.reservations.write")),
 ) -> dict:
+    if payload.ends_at <= payload.starts_at:
+        raise BusinessRuleError("ends_at must be after starts_at")
+    table = await _tenant_table(session, tenant.company_id, payload.table_id)
+    if not table:
+        raise NotFoundError("table not found")
     r = Reservation(
         id=uuid4(),
         table_id=payload.table_id,

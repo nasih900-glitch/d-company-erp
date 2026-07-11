@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.db import SessionDep
@@ -30,8 +30,8 @@ class LoginRequest(BaseModel):
     # `.local`, `.lan`, and various dev-friendly TLDs even when the
     # email format is valid. The database is the source of truth for
     # what's a real account; we don't need format checks at the door.
-    email: str
-    password: str
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
 
 
 class TokenPair(BaseModel):

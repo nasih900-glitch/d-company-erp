@@ -15,7 +15,7 @@ from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
-from app.models import Branch, GamingBooking, GamingSession, Station
+from app.models import Branch, GamingBooking, GamingSession, Shift, Station
 
 router = APIRouter()
 
@@ -35,21 +35,21 @@ class StationCreate(BaseModel):
     type: str = Field(min_length=1, max_length=20)  # ps5|vr|simulator|projector|hookah|streaming
     rate_per_hour_minor: int = Field(ge=0)
     branch_id: UUID | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class StationUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=100)
     rate_per_hour_minor: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class SessionStart(BaseModel):
     station_id: UUID
     shift_id: UUID
-    customer_name: str | None = None
-    customer_phone: str | None = None
+    customer_name: str | None = Field(default=None, max_length=200)
+    customer_phone: str | None = Field(default=None, max_length=20)
 
 
 class SessionRead(BaseModel):
@@ -69,10 +69,10 @@ class BookingCreate(BaseModel):
     station_id: UUID
     starts_at: datetime
     ends_at: datetime
-    guest_name: str
-    contact: str | None = None
+    guest_name: str = Field(min_length=1, max_length=200)
+    contact: str | None = Field(default=None, max_length=50)
     party_size: int = Field(default=1, gt=0)
-    deposit_minor: int = 0
+    deposit_minor: int = Field(default=0, ge=0)
 
 
 def session_read(gs: GamingSession) -> SessionRead:
@@ -194,7 +194,9 @@ async def delete_station(
     st = await session.get(Station, station_id)
     if not st or st.company_id != tenant.company_id:
         raise NotFoundError("station not found")
-    await session.delete(st)
+    # Historical sessions reference stations for billing, GST, and audit trail.
+    # Keep the row and hide it from active operations instead of breaking history.
+    st.is_active = False
     await session.flush()
 
 
@@ -224,6 +226,19 @@ async def start_session(
         raise NotFoundError("station not found")
     if not station.is_active:
         raise BusinessRuleError("station is not active")
+    shift = await session.get(Shift, payload.shift_id)
+    if (
+        not shift
+        or shift.company_id != tenant.company_id
+        or shift.branch_id != station.branch_id
+    ):
+        raise NotFoundError("shift not found")
+    if shift.status != "open":
+        raise BusinessRuleError(f"shift is not open (status={shift.status})")
+    if tenant.branch_id and shift.branch_id != tenant.branch_id:
+        raise BusinessRuleError("session shift belongs to a different branch")
+    if tenant.terminal_id and shift.terminal_id != tenant.terminal_id:
+        raise BusinessRuleError("session shift belongs to a different terminal")
     active = (
         await session.execute(
             select(GamingSession.id).where(
@@ -264,7 +279,8 @@ async def stop_session(
     if gs.status == "ended":
         raise BusinessRuleError("session already ended")
     gs.end_at = datetime.now(timezone.utc)
-    elapsed_minutes = max(0, int((gs.end_at - gs.start_at).total_seconds() // 60))
+    elapsed_seconds = max(0.0, (gs.end_at - gs.start_at).total_seconds())
+    elapsed_minutes = ceil(elapsed_seconds / 60) if elapsed_seconds > 0 else 0
     gs.billable_minutes = max(0, elapsed_minutes - gs.paused_minutes)
     gs.amount_minor = ceil(gs.billable_minutes / 60 * gs.rate_per_hour_minor)
     gs.status = "ended"
@@ -279,6 +295,11 @@ async def create_booking(
 ) -> dict:
     if payload.ends_at <= payload.starts_at:
         raise BusinessRuleError("ends_at must be after starts_at")
+    station = await session.get(Station, payload.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if not station.is_active:
+        raise BusinessRuleError("station is not active")
     bk = GamingBooking(
         id=uuid4(),
         station_id=payload.station_id,

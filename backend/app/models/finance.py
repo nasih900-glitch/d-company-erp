@@ -89,9 +89,15 @@ class CapitalEntry(Base, TimestampMixin):
 
 class ExpenseCategory(Base, TimestampMixin, TenantMixin):
     __tablename__ = "expense_categories"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "code", name="uq_expense_category_code_per_company"
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(20))
     gl_account_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL")
     )

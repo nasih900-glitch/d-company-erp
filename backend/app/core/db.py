@@ -57,4 +57,6 @@ async def get_session() -> AsyncIterator[AsyncSession]:
             raise
 
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+# Commit or roll back before FastAPI sends the response. Otherwise a deferred
+# constraint failure can reach the client as a false 2xx success.
+SessionDep = Annotated[AsyncSession, Depends(get_session, scope="function")]

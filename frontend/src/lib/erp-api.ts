@@ -32,7 +32,10 @@ export interface MenuItemDTO {
   type: string;
   base_price_minor: number;
   tax_rate: number;
+  hsn_code: string | null;
+  price_includes_tax: boolean;
   is_available: boolean;
+  description?: string | null;
 }
 
 export interface MenuCategoryDTO {
@@ -191,11 +194,13 @@ export const menuAdmin = {
   createItem: (body: {
     category_id: string; sku: string; name: string;
     type: 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
-    base_price_minor: number; tax_rate: number; description?: string;
+    base_price_minor: number; tax_rate: number; hsn_code?: string;
+    price_includes_tax?: boolean; description?: string;
   }) => api.post<MenuItemDTO>('/menu/items', body).then((r) => r.data),
   updateItem: (id: string, body: Partial<{
     category_id: string; name: string; base_price_minor: number;
-    tax_rate: number; description: string; is_available: boolean;
+    tax_rate: number; hsn_code: string; price_includes_tax: boolean;
+    description: string; is_available: boolean;
   }>) => api.patch<MenuItemDTO>(`/menu/items/${id}`, body).then((r) => r.data),
   deleteItem: (id: string) => api.delete(`/menu/items/${id}`),
 };

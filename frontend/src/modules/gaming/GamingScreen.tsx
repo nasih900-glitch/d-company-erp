@@ -18,7 +18,7 @@ import { LIVE_MODE } from '@/lib/demo';
 import { STATIONS, type Station as DemoStation } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
-import { gaming, type StationDTO } from '@/lib/erp-api';
+import { gaming, shifts, type StationDTO } from '@/lib/erp-api';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
@@ -77,19 +77,29 @@ export default function GamingScreen() {
     return () => clearInterval(id);
   }, []);
 
+  async function ensureShiftId() {
+    const stored = localStorage.getItem('shift_id');
+    if (stored) return stored;
+
+    const openShifts = await shifts.list(true);
+    const openShift = openShifts[0] ?? await shifts.open(0);
+    localStorage.setItem('shift_id', openShift.id);
+    return openShift.id;
+  }
+
   async function startSession(st: StationDTO, customer = '') {
     let backendId: string | undefined;
     if (LIVE_MODE) {
       try {
-        // Need a shift_id; for now use a placeholder UUID. Real fix: open/track shifts.
+        const shiftId = await ensureShiftId();
         const r = await gaming.startSession({
           station_id: st.id,
-          shift_id: '00000000-0000-0000-0000-000000000000',
+          shift_id: shiftId,
           customer_name: customer || undefined,
         });
         backendId = r.id;
       } catch (e) {
-        alert(`Cannot start session: ${(e as Error).message}\n\nDid you open a shift in POS first?`);
+        alert(`Cannot start session: ${(e as Error).message}\n\nOpen a POS shift or check this terminal before starting a session.`);
         return;
       }
     }
@@ -331,9 +341,18 @@ function StationForm({
     finally { setBusy(false); }
   }
 
+  const hasPricingUnlock =
+    !!localStorage.getItem('pricing_token') &&
+    Number(localStorage.getItem('pricing_token_expires_at') || '0') > Date.now();
+
   return (
     <Modal open onClose={onClose} title={isEdit ? `Edit ${station!.name}` : 'New gaming station'}>
       <form onSubmit={submit} className="space-y-3">
+        {!hasPricingUnlock && LIVE_MODE && (
+          <div className="p-2.5 rounded-lg bg-accent-gold/10 border border-accent-gold/30 text-accent-gold text-xs">
+            Station setup changes are pricing locked. Unlock pricing in Settings before creating, editing, or deleting stations.
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Code (e.g. PS5-01, VR-02, SIM-01)">
             <input className="input font-mono" required disabled={isEdit}

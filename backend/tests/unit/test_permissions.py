@@ -16,7 +16,7 @@ def test_super_owner_has_all_permissions() -> None:
 def test_owner_has_business_access_but_not_protected_system_controls() -> None:
     assert "pos.write" in ROLE_PERMISSIONS["owner"]
     assert "finance.read" in ROLE_PERMISSIONS["owner"]
-    assert "inventory.read" in ROLE_PERMISSIONS["owner"]
+    assert "inventory.read" not in ROLE_PERMISSIONS["owner"]
     assert "inventory.write" not in ROLE_PERMISSIONS["owner"]
     assert "admin.audit.read" not in ROLE_PERMISSIONS["owner"]
     assert "admin.system" not in ROLE_PERMISSIONS["owner"]
@@ -44,9 +44,10 @@ def test_audit_read_is_owner_only() -> None:
 def test_inventory_control_is_owner_only() -> None:
     assert "inventory.write" in ROLE_PERMISSIONS["super_owner"]
     assert "inventory.adjust.large" in ROLE_PERMISSIONS["super_owner"]
+    assert "inventory.read" not in ROLE_PERMISSIONS["owner"]
     assert "inventory.write" not in ROLE_PERMISSIONS["owner"]
     assert "inventory.adjust.large" not in ROLE_PERMISSIONS["owner"]
-    assert "inventory.read" in ROLE_PERMISSIONS["manager"]
+    assert "inventory.read" not in ROLE_PERMISSIONS["manager"]
     assert "inventory.write" not in ROLE_PERMISSIONS["manager"]
     assert "inventory.adjust.large" not in ROLE_PERMISSIONS["manager"]
 

@@ -23,11 +23,11 @@ export default function CompanyTab() {
     setBusy(true); setErr(null); setDone(false);
     try {
       const updated = await settings.updateCompany({
-        name: data.name,
-        legal_name: data.legal_name,
-        timezone: data.timezone,
-        gstin: data.gstin,
-        pan: data.pan,
+        name: data.name.trim(),
+        legal_name: data.legal_name?.trim() || null,
+        timezone: data.timezone.trim(),
+        gstin: data.gstin?.trim() || null,
+        pan: data.pan?.trim() || null,
         gst_registration_type: data.gst_registration_type,
         is_composition: data.is_composition,
         e_invoicing_enabled: data.e_invoicing_enabled,

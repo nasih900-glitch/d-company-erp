@@ -51,30 +51,30 @@ class TierCreate(BaseModel):
     code: str = Field(min_length=1, max_length=20)
     name: str = Field(min_length=1, max_length=100)
     monthly_price_minor: int = Field(ge=0)
-    annual_price_minor: int | None = None
+    annual_price_minor: int | None = Field(default=None, ge=0)
     food_discount_pct: float = Field(ge=0, le=1, default=0)
     gaming_discount_pct: float = Field(ge=0, le=1, default=0)
     hookah_discount_pct: float = Field(ge=0, le=1, default=0)
     point_multiplier: float = Field(ge=1, le=10, default=1)
-    free_gaming_minutes_per_week: int = 0
-    free_hookah_per_month: int = 0
+    free_gaming_minutes_per_week: int = Field(default=0, ge=0)
+    free_hookah_per_month: int = Field(default=0, ge=0)
     priority_booking: bool = False
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=500)
     sort_order: int = 0
 
 
 class TierUpdate(BaseModel):
     name: str | None = None
     monthly_price_minor: int | None = Field(default=None, ge=0)
-    annual_price_minor: int | None = None
+    annual_price_minor: int | None = Field(default=None, ge=0)
     food_discount_pct: float | None = Field(default=None, ge=0, le=1)
     gaming_discount_pct: float | None = Field(default=None, ge=0, le=1)
     hookah_discount_pct: float | None = Field(default=None, ge=0, le=1)
     point_multiplier: float | None = Field(default=None, ge=1, le=10)
-    free_gaming_minutes_per_week: int | None = None
-    free_hookah_per_month: int | None = None
+    free_gaming_minutes_per_week: int | None = Field(default=None, ge=0)
+    free_hookah_per_month: int | None = Field(default=None, ge=0)
     priority_booking: bool | None = None
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=500)
     sort_order: int | None = None
 
 
@@ -231,6 +231,9 @@ async def get_customer_subscription(
     tenant: TenantContext = Depends(requires("pos.read")),
 ) -> SubscriptionRead | None:
     """Most-recent ACTIVE subscription for a customer, or null."""
+    customer = await session.get(Customer, customer_id)
+    if not customer or customer.company_id != tenant.company_id or customer.deleted_at:
+        raise NotFoundError("customer not found")
     now = datetime.now(timezone.utc)
     sub = (
         await session.execute(
@@ -255,6 +258,9 @@ async def cancel_subscription(
 ) -> SubscriptionRead:
     sub = await session.get(CustomerMembership, subscription_id)
     if not sub:
+        raise NotFoundError("subscription not found")
+    customer = await session.get(Customer, sub.customer_id)
+    if not customer or customer.company_id != tenant.company_id or customer.deleted_at:
         raise NotFoundError("subscription not found")
     if sub.cancelled_at:
         raise BusinessRuleError("subscription already cancelled")

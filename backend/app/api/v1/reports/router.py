@@ -286,9 +286,9 @@ def _registered_for_gst(company: Company | None) -> bool:
 
 @router.get("/tax-compliance", response_model=TaxComplianceDTO)
 async def tax_compliance(
-    from_date: date,
-    to_date: date,
     session: SessionDep,
+    from_date: date | None = None,
+    to_date: date | None = None,
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> TaxComplianceDTO:
     """Owner-facing GST sanity check for a reporting period.
@@ -296,11 +296,14 @@ async def tax_compliance(
     This does not file a return. It highlights configuration and data problems
     before the accountant exports GSTR data.
     """
-    if to_date < from_date:
+    period_end = to_date or datetime.now(timezone.utc).date()
+    period_start = from_date or period_end.replace(day=1)
+
+    if period_end < period_start:
         raise BusinessRuleError("to_date must be on or after from_date")
 
-    start_dt = datetime.combine(from_date, time.min, tzinfo=timezone.utc)
-    end_dt = datetime.combine(to_date, time.max, tzinfo=timezone.utc)
+    start_dt = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(period_end, time.max, tzinfo=timezone.utc)
     company = await session.get(Company, tenant.company_id)
     branches = (
         await session.execute(
@@ -632,8 +635,8 @@ async def tax_compliance(
         )
 
     return TaxComplianceDTO(
-        period_start=from_date,
-        period_end=to_date,
+        period_start=period_start,
+        period_end=period_end,
         company_gst_registered=gst_registered,
         gstin=gstin,
         checked_orders=checked_orders,

@@ -45,6 +45,8 @@ class ItemRead(BaseModel):
     type: str
     base_price_minor: int
     tax_rate: float
+    hsn_code: str | None = None
+    price_includes_tax: bool
     is_available: bool
     description: str | None = None
 
@@ -56,6 +58,8 @@ class ItemCreate(BaseModel):
     type: Literal["food", "drink", "dessert", "gaming", "event", "hookah", "streaming"]
     base_price_minor: int = Field(ge=0)
     tax_rate: float = Field(ge=0, le=1, default=0)
+    hsn_code: str | None = Field(default=None, max_length=8)
+    price_includes_tax: bool = True
     description: str | None = None
 
 
@@ -64,8 +68,42 @@ class ItemUpdate(BaseModel):
     name: str | None = None
     base_price_minor: int | None = Field(default=None, ge=0)
     tax_rate: float | None = Field(default=None, ge=0, le=1)
+    hsn_code: str | None = Field(default=None, max_length=8)
+    price_includes_tax: bool | None = None
     description: str | None = None
     is_available: bool | None = None
+
+
+def default_hsn_or_sac(item_type: str) -> str:
+    """Fallback codes for D Company billing categories.
+
+    These are conservative defaults; the business accountant can override them
+    item-by-item from the menu screen.
+    """
+    if item_type in {"gaming", "event", "hookah", "streaming"}:
+        return "999692"
+    return "996331"
+
+
+def clean_hsn_or_sac(value: str | None, item_type: str) -> str:
+    cleaned = (value or "").strip()
+    return cleaned or default_hsn_or_sac(item_type)
+
+
+def item_read(item: MenuItem) -> ItemRead:
+    return ItemRead(
+        id=item.id,
+        category_id=item.category_id,
+        sku=item.sku,
+        name=item.name,
+        type=item.type,
+        base_price_minor=item.base_price_minor,
+        tax_rate=float(item.tax_rate),
+        hsn_code=item.hsn_code,
+        price_includes_tax=bool(item.price_includes_tax),
+        is_available=item.is_available,
+        description=item.description,
+    )
 
 
 # ---------------------------------------------------------------- CATEGORIES
@@ -155,14 +193,7 @@ async def list_items(
     if category_id:
         stmt = stmt.where(MenuItem.category_id == category_id)
     rows = (await session.execute(stmt)).scalars().all()
-    return [
-        ItemRead(
-            id=r.id, category_id=r.category_id, sku=r.sku, name=r.name, type=r.type,
-            base_price_minor=r.base_price_minor, tax_rate=float(r.tax_rate),
-            is_available=r.is_available, description=r.description,
-        )
-        for r in rows
-    ]
+    return [item_read(r) for r in rows]
 
 
 @router.post("/items", response_model=ItemRead, status_code=status.HTTP_201_CREATED)
@@ -192,16 +223,13 @@ async def create_item(
         category_id=payload.category_id,
         sku=payload.sku, name=payload.name, type=payload.type,
         base_price_minor=payload.base_price_minor, tax_rate=payload.tax_rate,
+        hsn_code=clean_hsn_or_sac(payload.hsn_code, payload.type),
+        price_includes_tax=payload.price_includes_tax,
         description=payload.description, is_available=True,
     )
     session.add(item)
     await session.flush()
-    return ItemRead(
-        id=item.id, category_id=item.category_id, sku=item.sku, name=item.name,
-        type=item.type, base_price_minor=item.base_price_minor,
-        tax_rate=float(item.tax_rate), is_available=item.is_available,
-        description=item.description,
-    )
+    return item_read(item)
 
 
 @router.patch("/items/{item_id}", response_model=ItemRead)
@@ -212,7 +240,8 @@ async def update_item(
     tenant: TenantContext = Depends(requires("menu.write")),
     x_pricing_token: str | None = Header(default=None, alias="X-Pricing-Token"),
 ) -> ItemRead:
-    if payload.base_price_minor is not None or payload.tax_rate is not None:
+    pricing_fields = {"base_price_minor", "tax_rate", "hsn_code", "price_includes_tax"}
+    if pricing_fields.intersection(payload.model_fields_set):
         require_pricing_unlock(x_pricing_token, tenant)
     item = await session.get(MenuItem, item_id)
     if not item or item.company_id != tenant.company_id or item.deleted_at:
@@ -225,15 +254,14 @@ async def update_item(
     if payload.name is not None: item.name = payload.name
     if payload.base_price_minor is not None: item.base_price_minor = payload.base_price_minor
     if payload.tax_rate is not None: item.tax_rate = payload.tax_rate
+    if "hsn_code" in payload.model_fields_set:
+        item.hsn_code = clean_hsn_or_sac(payload.hsn_code, item.type)
+    if payload.price_includes_tax is not None:
+        item.price_includes_tax = payload.price_includes_tax
     if payload.description is not None: item.description = payload.description
     if payload.is_available is not None: item.is_available = payload.is_available
     await session.flush()
-    return ItemRead(
-        id=item.id, category_id=item.category_id, sku=item.sku, name=item.name,
-        type=item.type, base_price_minor=item.base_price_minor,
-        tax_rate=float(item.tax_rate), is_available=item.is_available,
-        description=item.description,
-    )
+    return item_read(item)
 
 
 @router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

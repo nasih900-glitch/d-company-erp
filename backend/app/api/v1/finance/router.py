@@ -21,7 +21,8 @@ from app.core.errors import NotFoundError, BusinessRuleError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import (
-    Asset, CapitalEntry, Expense, ExpenseCategory, Partner,
+    Asset, Branch, CapitalEntry, Expense, ExpenseCategory, OcrExtraction,
+    OcrUpload, Partner, Supplier, User,
 )
 
 router = APIRouter()
@@ -35,9 +36,9 @@ class ExpenseCreate(BaseModel):
     amount_minor: int = Field(gt=0)
     paid_via: Literal["cash", "card", "bank", "upi"]
     paid_at: datetime
-    vendor_name: str | None = None
-    invoice_no: str | None = None
-    note: str | None = None
+    vendor_name: str | None = Field(default=None, max_length=200)
+    invoice_no: str | None = Field(default=None, max_length=100)
+    note: str | None = Field(default=None, max_length=500)
     ocr_extraction_id: UUID | None = None
 
 
@@ -59,9 +60,9 @@ class ExpenseUpdate(BaseModel):
     amount_minor: int | None = Field(default=None, gt=0)
     paid_via: Literal["cash", "card", "bank", "upi"] | None = None
     paid_at: datetime | None = None
-    vendor_name: str | None = None
-    invoice_no: str | None = None
-    note: str | None = None
+    vendor_name: str | None = Field(default=None, max_length=200)
+    invoice_no: str | None = Field(default=None, max_length=100)
+    note: str | None = Field(default=None, max_length=500)
 
 
 class PartnerRead(BaseModel):
@@ -74,17 +75,17 @@ class PartnerRead(BaseModel):
 
 
 class PartnerCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     share_pct: float = Field(gt=0, le=100)
     joined_at: datetime
     user_id: UUID | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class PartnerUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     share_pct: float | None = Field(default=None, gt=0, le=100)
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class CapitalEntryCreate(BaseModel):
@@ -92,7 +93,7 @@ class CapitalEntryCreate(BaseModel):
     type: Literal["invest", "withdraw", "profit_share"]
     amount_minor: int = Field(gt=0)
     effective_at: datetime
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 class CapitalEntryRead(BaseModel):
@@ -125,12 +126,46 @@ class AssetRead(BaseModel):
 
 class AssetCreate(BaseModel):
     branch_id: UUID
-    name: str
-    type: str
+    name: str = Field(min_length=1, max_length=200)
+    type: str = Field(min_length=1, max_length=50)
     purchase_minor: int = Field(gt=0)
     purchase_date: datetime
-    useful_life_months: int = 60
-    salvage_minor: int = 0
+    useful_life_months: int = Field(default=60, gt=0, le=1200)
+    salvage_minor: int = Field(default=0, ge=0)
+
+
+async def _validate_expense_references(
+    session,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    category_id: UUID,
+    supplier_id: UUID | None = None,
+    ocr_extraction_id: UUID | None = None,
+) -> None:
+    branch = await session.get(Branch, branch_id)
+    if not branch or branch.company_id != company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
+    category = await session.get(ExpenseCategory, category_id)
+    if not category or category.company_id != company_id:
+        raise NotFoundError("expense category not found")
+    if supplier_id is not None:
+        supplier = await session.get(Supplier, supplier_id)
+        if not supplier or supplier.company_id != company_id or supplier.deleted_at:
+            raise NotFoundError("supplier not found")
+    if ocr_extraction_id is not None:
+        extraction = (
+            await session.execute(
+                select(OcrExtraction)
+                .join(OcrUpload, OcrUpload.id == OcrExtraction.ocr_upload_id)
+                .where(
+                    OcrExtraction.id == ocr_extraction_id,
+                    OcrUpload.company_id == company_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not extraction:
+            raise NotFoundError("OCR extraction not found")
 
 
 # ============================================================================
@@ -171,6 +206,14 @@ async def create_expense(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseRead:
+    await _validate_expense_references(
+        session,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        category_id=payload.category_id,
+        supplier_id=payload.supplier_id,
+        ocr_extraction_id=payload.ocr_extraction_id,
+    )
     ex = Expense(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -196,6 +239,15 @@ async def update_expense(
     ex = await session.get(Expense, expense_id)
     if not ex or ex.company_id != tenant.company_id or ex.deleted_at:
         raise NotFoundError("expense not found")
+    next_category_id = payload.category_id or ex.category_id
+    await _validate_expense_references(
+        session,
+        company_id=tenant.company_id,
+        branch_id=ex.branch_id,
+        category_id=next_category_id,
+        supplier_id=ex.supplier_id,
+        ocr_extraction_id=ex.ocr_extraction_id,
+    )
     for f, v in payload.model_dump(exclude_unset=True).items():
         setattr(ex, f, v)
     await session.flush()
@@ -270,6 +322,10 @@ async def create_partner(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.partner.write")),
 ) -> PartnerRead:
+    if payload.user_id is not None:
+        user = await session.get(User, payload.user_id)
+        if not user or user.company_id != tenant.company_id or user.deleted_at:
+            raise NotFoundError("user not found")
     p = Partner(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -389,6 +445,11 @@ async def create_asset(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> AssetRead:
+    branch = await session.get(Branch, payload.branch_id)
+    if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
+    if payload.salvage_minor > payload.purchase_minor:
+        raise BusinessRuleError("salvage value cannot exceed purchase value")
     a = Asset(
         id=uuid4(),
         company_id=tenant.company_id,

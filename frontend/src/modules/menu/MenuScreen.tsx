@@ -21,6 +21,13 @@ import Modal from '@/components/ui/Modal';
 
 type ItemType = 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
 
+function defaultTaxMeta(type: ItemType) {
+  if (['gaming', 'event', 'hookah', 'streaming'].includes(type)) {
+    return { hsn_code: '999692', tax_rate_pct: '18' };
+  }
+  return { hsn_code: '996331', tax_rate_pct: '5' };
+}
+
 export default function MenuScreen() {
   const { me, demo } = useAuth();
   const canManageMenu = Boolean(demo || me?.protected_access);
@@ -48,7 +55,8 @@ export default function MenuScreen() {
         setCats(CATEGORIES.map((c, idx) => ({ id: c, name: c, sort_order: idx })));
         setItems(MENU.map((m) => ({
           id: m.id, category_id: m.category, sku: m.sku, name: m.name, type: m.type,
-          base_price_minor: m.price, tax_rate: m.rate, is_available: true,
+          base_price_minor: m.price, tax_rate: m.rate, hsn_code: defaultTaxMeta(m.type as ItemType).hsn_code,
+          price_includes_tax: true, is_available: true,
         })));
       }
     } catch (e) {
@@ -141,6 +149,7 @@ export default function MenuScreen() {
                 <th className="text-left p-3">Item</th>
                 <th className="text-left p-3">SKU</th>
                 <th className="text-left p-3">Type</th>
+                <th className="text-left p-3">HSN/SAC</th>
                 <th className="text-right p-3">Price</th>
                 <th className="text-right p-3">GST</th>
                 <th className="text-center p-3">Avail.</th>
@@ -153,8 +162,11 @@ export default function MenuScreen() {
                   <td className="p-3 font-medium">{m.name}</td>
                   <td className="p-3 font-mono text-xs text-fg-muted">{m.sku}</td>
                   <td className="p-3 text-fg-muted text-xs">{m.type}</td>
+                  <td className="p-3 font-mono text-xs text-fg-muted">{m.hsn_code || '-'}</td>
                   <td className="p-3 text-right font-mono">{inr(m.base_price_minor)}</td>
-                  <td className="p-3 text-right text-fg-muted">{(m.tax_rate * 100).toFixed(0)}%</td>
+                  <td className="p-3 text-right text-fg-muted">
+                    {(m.tax_rate * 100).toFixed(0)}% {m.price_includes_tax ? 'incl.' : 'extra'}
+                  </td>
                   <td className="p-3 text-center">
                     {canManageMenu ? (
                       <button onClick={() => onToggleAvail(m)} className="hover:text-accent"
@@ -192,10 +204,15 @@ export default function MenuScreen() {
                     <div className="mt-1 truncate font-mono text-[10px] text-fg-muted">
                       {m.sku} · {m.type}
                     </div>
+                    <div className="mt-1 font-mono text-[10px] text-fg-muted">
+                      HSN/SAC {m.hsn_code || '-'}
+                    </div>
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="font-mono text-sm font-semibold">{inr(m.base_price_minor)}</div>
-                    <div className="text-[10px] text-fg-muted">{(m.tax_rate * 100).toFixed(0)}% GST</div>
+                    <div className="text-[10px] text-fg-muted">
+                      {(m.tax_rate * 100).toFixed(0)}% GST {m.price_includes_tax ? 'incl.' : 'extra'}
+                    </div>
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
@@ -260,14 +277,17 @@ function ItemForm({
   onSuccess: () => void;
 }) {
   const isEdit = !!item;
+  const initialMeta = defaultTaxMeta((item?.type as ItemType) ?? 'food');
   const [form, setForm] = useState({
     category_id: (item as MenuItemDTO & { category_id?: string })?.category_id ?? cats[0]?.id ?? '',
     sku: item?.sku ?? '',
     name: item?.name ?? '',
     type: (item?.type as ItemType) ?? 'food',
     price_rupees: item ? (item.base_price_minor / 100).toFixed(2) : '',
-    tax_rate_pct: item ? Math.round(item.tax_rate * 100).toString() : '5',
-    description: '',
+    tax_rate_pct: item ? Math.round(item.tax_rate * 100).toString() : initialMeta.tax_rate_pct,
+    hsn_code: item?.hsn_code ?? initialMeta.hsn_code,
+    price_includes_tax: item?.price_includes_tax ?? true,
+    description: item?.description ?? '',
     is_available: item?.is_available ?? true,
   });
   const [busy, setBusy] = useState(false);
@@ -284,6 +304,8 @@ function ItemForm({
           name: form.name.trim(),
           base_price_minor,
           tax_rate,
+          hsn_code: form.hsn_code.trim(),
+          price_includes_tax: form.price_includes_tax,
           description: form.description || undefined,
           is_available: form.is_available,
         });
@@ -295,6 +317,8 @@ function ItemForm({
           type: form.type,
           base_price_minor,
           tax_rate,
+          hsn_code: form.hsn_code.trim(),
+          price_includes_tax: form.price_includes_tax,
           description: form.description || undefined,
         });
       }
@@ -322,7 +346,16 @@ function ItemForm({
         </Field>
         <Field label="Type">
           <select className="input" disabled={isEdit} value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value as ItemType })}>
+            onChange={(e) => {
+              const nextType = e.target.value as ItemType;
+              const meta = defaultTaxMeta(nextType);
+              setForm({
+                ...form,
+                type: nextType,
+                hsn_code: meta.hsn_code,
+                tax_rate_pct: meta.tax_rate_pct,
+              });
+            }}>
             <option value="food">Food</option>
             <option value="drink">Drink</option>
             <option value="dessert">Dessert</option>
@@ -333,7 +366,7 @@ function ItemForm({
           </select>
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Price (₹, before GST)">
+          <Field label="Price (₹)">
             <input type="number" min={0} step="0.01" required className="input font-mono text-right"
               value={form.price_rupees}
               onChange={(e) => setForm({ ...form, price_rupees: e.target.value })}/>
@@ -347,6 +380,19 @@ function ItemForm({
               <option value="18">18% (AC dining, gaming)</option>
               <option value="28">28%</option>
             </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="HSN/SAC">
+            <input className="input font-mono" maxLength={8} required value={form.hsn_code}
+              onChange={(e) => setForm({ ...form, hsn_code: e.target.value })}/>
+          </Field>
+          <Field label="GST mode">
+            <label className="input flex items-center gap-2">
+              <input type="checkbox" checked={form.price_includes_tax}
+                onChange={(e) => setForm({ ...form, price_includes_tax: e.target.checked })}/>
+              <span className="text-sm">Price includes GST</span>
+            </label>
           </Field>
         </div>
         <Field label="Description (optional)">

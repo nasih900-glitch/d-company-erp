@@ -69,6 +69,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "admin.system",
         "staff.write",
         "staff.payroll.write",
+        "inventory.read",
         "inventory.write",
         "inventory.adjust.large",
     },
@@ -83,7 +84,6 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "pos.shift.open", "pos.shift.close",
         "tables.read", "tables.write", "tables.reservations.write",
         "menu.read", "menu.write",
-        "inventory.read",
         "gaming.read", "gaming.write", "gaming.tournament.manage",
         "finance.read", "finance.write",
         "ocr.upload", "ocr.verify",
@@ -94,7 +94,6 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "pos.read", "pos.write", "pos.shift.open", "pos.shift.close",
         "tables.read", "tables.write",
         "menu.read",
-        "inventory.read",
     },
     "kitchen": {
         "pos.read", "menu.read",
@@ -106,7 +105,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "menu.read",
     },
     "auditor": {
-        "pos.read", "tables.read", "menu.read", "inventory.read",
+        "pos.read", "tables.read", "menu.read",
         "gaming.read", "finance.read", "staff.read", "analytics.read",
     },
 }

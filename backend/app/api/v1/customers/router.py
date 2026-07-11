@@ -42,17 +42,17 @@ class CustomerRead(BaseModel):
 
 class CustomerUpsert(BaseModel):
     phone: str = Field(min_length=4, max_length=20)
-    name: str | None = None
-    email: str | None = None
+    name: str | None = Field(default=None, max_length=200)
+    email: str | None = Field(default=None, max_length=254)
     birthday: datetime | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class CustomerUpdate(BaseModel):
-    name: str | None = None
-    email: str | None = None
+    name: str | None = Field(default=None, max_length=200)
+    email: str | None = Field(default=None, max_length=254)
     birthday: datetime | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 # ---------------------------------------------------------------- helpers

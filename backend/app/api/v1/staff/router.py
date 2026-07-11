@@ -20,7 +20,7 @@ from app.core.permissions import requires
 from app.core.roles import PROTECTED_OWNER_ROLE, public_roles
 from app.core.security import hash_password
 from app.core.tenant import TenantContext
-from app.models import Attendance, Role, User, UserRole
+from app.models import Attendance, Branch, Role, User, UserRole
 
 router = APIRouter()
 
@@ -30,14 +30,14 @@ class UserCreate(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     name: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=8)
-    phone: str | None = None
+    phone: str | None = Field(default=None, max_length=20)
     # owner|partner|manager|cashier|kitchen|gaming_supervisor|auditor
-    role_code: str = Field(default="cashier")
+    role_code: str = Field(default="cashier", min_length=1, max_length=50)
 
 
 class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    phone: str | None = None
+    phone: str | None = Field(default=None, max_length=20)
     status: str | None = Field(default=None, pattern="^(active|suspended)$")
     role_code: str | None = None
 
@@ -58,7 +58,7 @@ class UserRead(BaseModel):
 
 class ClockInRequest(BaseModel):
     branch_id: UUID
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
 # ---------------------------------------------------------------- helpers
@@ -294,6 +294,9 @@ async def clock_in(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.attendance.write")),
 ) -> dict:
+    branch = await session.get(Branch, payload.branch_id)
+    if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
     a = Attendance(
         id=uuid4(),
         company_id=tenant.company_id,

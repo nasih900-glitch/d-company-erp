@@ -34,27 +34,27 @@ router = APIRouter()
 # ----------------------------- schemas -----------------------------
 class EventCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=1000)
     event_type: Literal["football", "cricket", "movie", "esports", "other"]
-    screen: str = "Main Screen"
+    screen: str = Field(default="Main Screen", min_length=1, max_length=50)
     starts_at: datetime
     ends_at: datetime | None = None
     capacity: int = Field(gt=0)
     base_ticket_price_minor: int = Field(ge=0)
-    poster_url: str | None = None
+    poster_url: str | None = Field(default=None, max_length=500)
     branch_id: UUID | None = None  # optional — falls back to company default
 
 
 class EventUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=1000)
     event_type: Literal["football", "cricket", "movie", "esports", "other"] | None = None
-    screen: str | None = None
+    screen: str | None = Field(default=None, min_length=1, max_length=50)
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     capacity: int | None = Field(default=None, gt=0)
     base_ticket_price_minor: int | None = Field(default=None, ge=0)
-    poster_url: str | None = None
+    poster_url: str | None = Field(default=None, max_length=500)
     status: Literal["scheduled", "live", "ended", "cancelled"] | None = None
 
 
@@ -78,10 +78,10 @@ class EventRead(BaseModel):
 
 class TicketSell(BaseModel):
     customer_name: str = Field(min_length=1, max_length=200)
-    customer_phone: str | None = None
-    seat: str | None = None
+    customer_phone: str | None = Field(default=None, max_length=20)
+    seat: str | None = Field(default=None, max_length=10)
     qty: int = Field(default=1, ge=1, le=20)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 class TicketRead(BaseModel):
@@ -98,8 +98,17 @@ class TicketRead(BaseModel):
 
 
 # ----------------------------- helpers -----------------------------
-async def _event_or_404(session, event_id: UUID, company_id: UUID) -> Event:
-    ev = await session.get(Event, event_id)
+async def _event_or_404(
+    session, event_id: UUID, company_id: UUID, *, lock: bool = False
+) -> Event:
+    stmt = select(Event).where(
+        Event.id == event_id,
+        Event.company_id == company_id,
+        Event.deleted_at.is_(None),
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    ev = (await session.execute(stmt)).scalar_one_or_none()
     if not ev or ev.company_id != company_id or ev.deleted_at is not None:
         raise NotFoundError("event not found")
     return ev
@@ -118,9 +127,9 @@ async def _sold_count(session, event_id: UUID) -> int:
     return int(result.scalar_one() or 0)
 
 
-def _ticket_number(event_starts: datetime, seq: int) -> str:
-    """Format: EVT-YYYYMMDD-NNNN  (e.g. EVT-20260612-0001)."""
-    return f"EVT-{event_starts.strftime('%Y%m%d')}-{seq:04d}"
+def _ticket_number(event_id: UUID, event_starts: datetime, seq: int) -> str:
+    """Include an event fragment so same-day screenings never collide."""
+    return f"EVT-{event_starts.strftime('%Y%m%d')}-{event_id.hex[:4].upper()}-{seq:04d}"
 
 
 # ----------------------------- endpoints -----------------------------
@@ -179,6 +188,9 @@ async def create_event(
         raise BusinessRuleError(
             "no branch exists for this company — create one in Settings → Branches first"
         )
+    branch = await session.get(Branch, branch_id)
+    if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
 
     ev = Event(
         id=uuid4(),
@@ -209,7 +221,7 @@ async def update_event(
 ) -> EventRead:
     if payload.base_ticket_price_minor is not None:
         require_pricing_unlock(x_pricing_token, tenant)
-    ev = await _event_or_404(session, event_id, tenant.company_id)
+    ev = await _event_or_404(session, event_id, tenant.company_id, lock=True)
     for f, v in payload.model_dump(exclude_unset=True).items():
         setattr(ev, f, v)
     if ev.ends_at and ev.ends_at <= ev.starts_at:
@@ -289,7 +301,7 @@ async def sell_tickets(
     against the parent Order (next iteration wires this into the POS pipeline);
     for now we record price_paid_minor on the ticket as the GST-inclusive amount.
     """
-    ev = await _event_or_404(session, event_id, tenant.company_id)
+    ev = await _event_or_404(session, event_id, tenant.company_id, lock=True)
     if ev.status not in {"scheduled", "live"}:
         raise BusinessRuleError(f"event status={ev.status}, cannot sell tickets")
 
@@ -301,7 +313,7 @@ async def sell_tickets(
 
     out: list[TicketRead] = []
     for i in range(payload.qty):
-        tno = _ticket_number(ev.starts_at, sold + i + 1)
+        tno = _ticket_number(ev.id, ev.starts_at, sold + i + 1)
         ticket = EventTicket(
             id=uuid4(),
             event_id=ev.id,

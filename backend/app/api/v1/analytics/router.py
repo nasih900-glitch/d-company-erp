@@ -6,9 +6,12 @@ plus a few quick aggregate queries for inventory + open gaming sessions.
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date as _date, datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -39,8 +42,8 @@ class DashboardKPIs(BaseModel):
 
 @router.get("/dashboard", response_model=DashboardKPIs)
 async def dashboard(
-    on_date: _date,
     session: SessionDep,
+    on_date: _date | None = None,
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> DashboardKPIs:
     """Real-time KPIs for the given date.
@@ -49,8 +52,9 @@ async def dashboard(
     numbers always agree with what /reports/daily and the Finance Overview
     tab display.
     """
+    target_date = on_date or datetime.now(timezone.utc).date()
     agg = ReportsAggregator(session)
-    report = await agg.aggregate_daily(company_id=tenant.company_id, d=on_date)
+    report = await agg.aggregate_daily(company_id=tenant.company_id, d=target_date)
 
     # Inventory value = sum(current_qty * avg_cost_minor) for non-deleted
     inv_rows = (
@@ -89,7 +93,7 @@ async def dashboard(
     ).scalar_one()
 
     return DashboardKPIs(
-        date=on_date,
+        date=target_date,
         revenue_food_minor=report.revenue.food_minor,
         revenue_gaming_minor=report.revenue.gaming_minor,
         revenue_hookah_minor=report.revenue.hookah_minor,
@@ -107,12 +111,66 @@ async def dashboard(
 
 @router.get("/export.csv")
 async def export_csv(
+    session: SessionDep,
     period_start: _date,
     period_end: _date,
     tenant: TenantContext = Depends(requires("analytics.export")),
-) -> dict:
-    return {
-        "url": "/exports/placeholder.csv",
-        "period_start": period_start.isoformat(),
-        "period_end": period_end.isoformat(),
-    }
+) -> StreamingResponse:
+    if period_end < period_start:
+        raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
+
+    report = await ReportsAggregator(session).aggregate(
+        company_id=tenant.company_id,
+        period_start=period_start,
+        period_end=period_end,
+        period="custom",
+        label=f"{period_start.isoformat()} to {period_end.isoformat()}",
+    )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["D Company ERP analytics export"])
+    writer.writerow(["Period", report.period_start.isoformat(), report.period_end.isoformat()])
+    writer.writerow([])
+    writer.writerow(["Metric", "Amount minor", "Amount INR"])
+    writer.writerow(["Gross revenue", report.gross_revenue_minor, f"{report.gross_revenue_minor / 100:.2f}"])
+    writer.writerow(["Net revenue", report.net_revenue_minor, f"{report.net_revenue_minor / 100:.2f}"])
+    writer.writerow(["Net profit", report.net_profit_minor, f"{report.net_profit_minor / 100:.2f}"])
+    writer.writerow(["Average ticket", report.avg_ticket_minor, f"{report.avg_ticket_minor / 100:.2f}"])
+    writer.writerow(["Orders count", report.orders_count, ""])
+    writer.writerow(["Event tickets count", report.tickets_count, ""])
+    writer.writerow([])
+    writer.writerow(["Revenue stream", "Amount minor", "Amount INR"])
+    writer.writerow(["Food, drinks, desserts", report.revenue.food_minor, f"{report.revenue.food_minor / 100:.2f}"])
+    writer.writerow(["Gaming", report.revenue.gaming_minor, f"{report.revenue.gaming_minor / 100:.2f}"])
+    writer.writerow(["Shisha", report.revenue.hookah_minor, f"{report.revenue.hookah_minor / 100:.2f}"])
+    writer.writerow(["Events", report.revenue.event_tickets_minor, f"{report.revenue.event_tickets_minor / 100:.2f}"])
+    writer.writerow(["Delivery aggregators", report.revenue.delivery_aggregator_minor, f"{report.revenue.delivery_aggregator_minor / 100:.2f}"])
+    writer.writerow(["Other", report.revenue.other_minor, f"{report.revenue.other_minor / 100:.2f}"])
+    writer.writerow([])
+    writer.writerow(["Tax", "Amount minor", "Amount INR"])
+    writer.writerow(["CGST", report.tax_collected.cgst_minor, f"{report.tax_collected.cgst_minor / 100:.2f}"])
+    writer.writerow(["SGST", report.tax_collected.sgst_minor, f"{report.tax_collected.sgst_minor / 100:.2f}"])
+    writer.writerow(["IGST", report.tax_collected.igst_minor, f"{report.tax_collected.igst_minor / 100:.2f}"])
+    writer.writerow(["CESS", report.tax_collected.cess_minor, f"{report.tax_collected.cess_minor / 100:.2f}"])
+    writer.writerow(["Total GST", report.tax_collected.total_minor, f"{report.tax_collected.total_minor / 100:.2f}"])
+    writer.writerow([])
+    writer.writerow(["Payment method", "Amount minor", "Amount INR"])
+    writer.writerow(["Cash", report.payments_received.cash_minor, f"{report.payments_received.cash_minor / 100:.2f}"])
+    writer.writerow(["UPI", report.payments_received.upi_minor, f"{report.payments_received.upi_minor / 100:.2f}"])
+    writer.writerow(["Card", report.payments_received.card_minor, f"{report.payments_received.card_minor / 100:.2f}"])
+    writer.writerow(["QR", report.payments_received.qr_minor, f"{report.payments_received.qr_minor / 100:.2f}"])
+    writer.writerow(["Wallet", report.payments_received.wallet_minor, f"{report.payments_received.wallet_minor / 100:.2f}"])
+    writer.writerow(["Other", report.payments_received.other_minor, f"{report.payments_received.other_minor / 100:.2f}"])
+    writer.writerow([])
+    writer.writerow(["Expense category", "Amount minor", "Amount INR"])
+    for expense in report.expenses:
+        writer.writerow([expense.category, expense.amount_minor, f"{expense.amount_minor / 100:.2f}"])
+    writer.writerow(["Total expenses", report.expense_total_minor, f"{report.expense_total_minor / 100:.2f}"])
+
+    filename = f"dcompany-analytics-{period_start.isoformat()}-to-{period_end.isoformat()}.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

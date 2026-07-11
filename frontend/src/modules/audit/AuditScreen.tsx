@@ -179,17 +179,17 @@ export default function AuditScreen() {
         className="card mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_180px_180px_180px_auto] xl:items-end"
       >
         <div className="sm:col-span-2 xl:col-span-1">
-          <span className="text-xs text-fg-muted">Search</span>
+          <label htmlFor="audit-search" className="text-xs text-fg-muted">Search</label>
           <div className="flex items-center gap-2 mt-1">
             <Search size={14} className="text-fg-muted"/>
-            <input value={q} onChange={(e) => setQ(e.target.value)}
+            <input id="audit-search" value={q} onChange={(e) => setQ(e.target.value)}
               placeholder="customer name, invoice no., phone…"
               className="input !min-h-[38px] !py-2 flex-1"/>
           </div>
         </div>
         <div className="min-w-0">
-          <span className="text-xs text-fg-muted">Area</span>
-          <select className="input !min-h-[38px] !py-2 mt-1"
+          <label htmlFor="audit-area" className="text-xs text-fg-muted">Area</label>
+          <select id="audit-area" className="input !min-h-[38px] !py-2 mt-1"
             value={area} onChange={(e) => setArea(e.target.value)}>
             {AREA_OPTIONS.map((opt) => (
               <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
@@ -197,16 +197,16 @@ export default function AuditScreen() {
           </select>
         </div>
         <div className="min-w-0">
-          <span className="text-xs text-fg-muted">Entity</span>
-          <select className="input !min-h-[38px] !py-2 mt-1"
+          <label htmlFor="audit-entity" className="text-xs text-fg-muted">Entity</label>
+          <select id="audit-entity" className="input !min-h-[38px] !py-2 mt-1"
             value={entityType} onChange={(e) => setEntityType(e.target.value)}>
             <option value="">All</option>
             {facets?.entity_types.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         <div className="min-w-0">
-          <span className="text-xs text-fg-muted">Action</span>
-          <select className="input !min-h-[38px] !py-2 mt-1"
+          <label htmlFor="audit-action" className="text-xs text-fg-muted">Action</label>
+          <select id="audit-action" className="input !min-h-[38px] !py-2 mt-1"
             value={action} onChange={(e) => setAction(e.target.value)}>
             <option value="">All</option>
             {facets?.actions.map((a) => <option key={a} value={a}>{a}</option>)}

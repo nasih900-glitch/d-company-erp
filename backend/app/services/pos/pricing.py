@@ -3,8 +3,8 @@
 Given a list of (menu_item_id, qty, modifiers) tuples, this service:
 
   1. Loads the menu items snapshot (price, tax rate, HSN/SAC).
-  2. For each line, treats the menu price as TAX-INCLUSIVE (Kerala café
-     convention) and works backwards: taxable = price / (1 + rate).
+  2. For each line, uses the item's price mode. Café menu prices usually include
+     GST; editable service items can also be priced before GST.
   3. Splits tax into CGST + SGST (intra-state) or IGST (inter-state)
      depending on place_of_supply vs branch state.
   4. Aggregates order totals: subtotal, tax-by-bucket, round-off to nearest
@@ -107,6 +107,22 @@ def _split_tax_from_inclusive(
     return (int(taxable), 0, 0, tax)
 
 
+def _split_tax_from_exclusive(
+    exclusive_minor: int, rate: Decimal, intra_state: bool
+) -> tuple[int, int, int, int]:
+    """Return (taxable, cgst, sgst, igst) when base price excludes GST."""
+    taxable = max(0, exclusive_minor)
+    if rate <= 0:
+        return (taxable, 0, 0, 0)
+    tax = (Decimal(taxable) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    tax_minor = int(tax)
+    if intra_state:
+        cgst = tax_minor // 2
+        sgst = tax_minor - cgst
+        return (taxable, cgst, sgst, 0)
+    return (taxable, 0, 0, tax_minor)
+
+
 def split_tax_from_inclusive_minor(
     inclusive_minor: int, rate: Decimal, intra_state: bool = True
 ) -> tuple[int, int, int, int]:
@@ -141,6 +157,14 @@ def _discount_minor(inclusive_minor: int, rate: Decimal) -> int:
         return 0
     discount = (Decimal(inclusive_minor) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return min(inclusive_minor, max(0, int(discount)))
+
+
+def _unit_inclusive_minor(line_inclusive_minor: int, qty: int) -> int:
+    if qty <= 0:
+        return 0
+    return int((Decimal(line_inclusive_minor) / Decimal(qty)).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -214,21 +238,28 @@ class OrderPricingService:
             if lr.qty <= 0:
                 raise BusinessRuleError(f"qty must be positive for {item.sku}")
 
-            line_gross_inclusive = item.base_price_minor * lr.qty
+            line_base = item.base_price_minor * lr.qty
             line_discount = _discount_minor(
-                line_gross_inclusive,
+                line_base,
                 _discount_for_item_type(item.type, membership_rates),
             )
-            line_inclusive = line_gross_inclusive - line_discount
+            line_net_base = line_base - line_discount
             rate = Decimal(str(item.tax_rate or 0))
 
             # Composition and aggregator: zero tax on OUR bill.
             if is_composition or is_aggregator:
-                taxable, cgst, sgst, igst = (line_inclusive, 0, 0, 0)
-            else:
+                taxable, cgst, sgst, igst = (line_net_base, 0, 0, 0)
+                line_inclusive = line_net_base
+            elif bool(item.price_includes_tax):
+                line_inclusive = line_net_base
                 taxable, cgst, sgst, igst = _split_tax_from_inclusive(
                     line_inclusive, rate, intra_state
                 )
+            else:
+                taxable, cgst, sgst, igst = _split_tax_from_exclusive(
+                    line_net_base, rate, intra_state
+                )
+                line_inclusive = taxable + cgst + sgst + igst
 
             priced_lines.append(
                 PricedLine(
@@ -237,7 +268,7 @@ class OrderPricingService:
                     sku=item.sku,
                     hsn_or_sac=item.hsn_code or "",
                     qty=lr.qty,
-                    unit_inclusive_minor=item.base_price_minor,
+                    unit_inclusive_minor=_unit_inclusive_minor(line_inclusive, lr.qty),
                     line_inclusive_minor=line_inclusive,
                     discount_minor=line_discount,
                     taxable_value_minor=taxable,
@@ -319,6 +350,24 @@ def fiscal_year_for(d: date) -> str:
     return f"{d.year - 1}-{str(d.year)[-2:]}"
 
 
+def _invoice_component(value: str, *, fallback: str, length: int) -> str:
+    """Return a stable uppercase alphanumeric invoice component."""
+    cleaned = "".join(char for char in value.upper() if char.isalnum())
+    return (cleaned or fallback)[:length]
+
+
+def format_invoice_number(
+    *, prefix: str, branch_code: str, fiscal_year: str, sequence: int
+) -> str:
+    """Build a Rule 46 serial number that always fits the 16-character limit."""
+    safe_prefix = _invoice_component(prefix, fallback="D", length=1)
+    safe_branch = _invoice_component(branch_code, fallback="MN", length=2)
+    fiscal_year_short = fiscal_year[-5:]
+    if sequence < 1 or sequence > 99_999:
+        raise BusinessRuleError("invoice sequence is outside the supported range")
+    return f"{safe_prefix}/{safe_branch}/{fiscal_year_short}/{sequence:05d}"
+
+
 class InvoiceNumberService:
     """Allocates the next invoice number atomically using a row-level lock.
 
@@ -366,9 +415,10 @@ class InvoiceNumberService:
             existing.last_seq += 1
             seq = existing.last_seq
 
-        invoice_no = f"{prefix}/{branch_code}/{fy}/{seq:05d}"
-        if len(invoice_no) > 16:
-            # Trim FY to two digits if needed, e.g. "D/MN/26-27/00001"
-            fy_short = fy.replace("20", "", 1)
-            invoice_no = f"{prefix}/{branch_code}/{fy_short}/{seq:05d}"
+        invoice_no = format_invoice_number(
+            prefix=prefix,
+            branch_code=branch_code,
+            fiscal_year=fy,
+            sequence=seq,
+        )
         return invoice_no, fy
