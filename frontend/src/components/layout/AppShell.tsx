@@ -15,18 +15,18 @@ const NAV = [
   { to: '/operations',label: 'Operations', Icon: ClipboardList },
   { to: '/tables',    label: 'Tables',     Icon: LayoutGrid },
   { to: '/menu',      label: 'Menu',       Icon: BookOpen },
-  { to: '/inventory', label: 'Inventory',  Icon: Boxes, superOwnerOnly: true },
+  { to: '/inventory', label: 'Inventory',  Icon: Boxes },
   { to: '/gaming',    label: 'Gaming',     Icon: Gamepad2 },
   { to: '/events',    label: 'Events',     Icon: Tv },
   { to: '/finance',   label: 'Finance',    Icon: Wallet },
   { to: '/ocr',       label: 'OCR',        Icon: ScanLine },
-  { to: '/staff',     label: 'Staff',      Icon: Users, superOwnerOnly: true },
+  { to: '/staff',     label: 'Staff',      Icon: Users },
   { to: '/customers', label: 'Customers',  Icon: UserCircle },
   { to: '/analytics', label: 'Analytics',  Icon: BarChart3 },
   { to: '/insights',  label: 'Insights',   Icon: Sparkles },
   { to: '/reports',   label: 'Reports',    Icon: FileText },
-  { to: '/audit',     label: 'Audit Log',  Icon: ShieldCheck, superOwnerOnly: true },
-  { to: '/settings',  label: 'Settings',   Icon: Settings, superOwnerOnly: true },
+  { to: '/audit',     label: 'Audit Log',  Icon: ShieldCheck, protectedOnly: true },
+  { to: '/settings',  label: 'Settings',   Icon: Settings },
 ];
 
 export default function AppShell({ children }: { children?: ReactNode }) {
@@ -35,7 +35,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const loc = useLocation();
   const isSuperOwner = Boolean(demo || me?.protected_access);
   const navItems = useMemo(
-    () => NAV.filter((item) => !item.superOwnerOnly || isSuperOwner),
+    () => NAV.filter((item) => !('protectedOnly' in item) || isSuperOwner),
     [isSuperOwner],
   );
 

@@ -4,7 +4,7 @@ import {
   Banknote, CreditCard, Smartphone, QrCode, X, Check, ChevronDown,
 } from 'lucide-react';
 
-import { CATEGORIES, COMPANY, MENU, type MenuItem } from '@/lib/demo-data';
+import { CATEGORIES, MENU, type MenuItem } from '@/lib/demo-data';
 import { inr, splitTaxFromInclusive, roundToRupee } from '@/lib/inr';
 import { pushToSheet } from '@/lib/google-sheets';
 import Receipt from './Receipt';
@@ -92,8 +92,8 @@ export default function POSScreen() {
       round_off_minor: totals.round_off,
       total_minor: totals.total,
       method,
-      gstin: COMPANY.gstin,
-      place_of_supply: `${COMPANY.state_code}-${COMPANY.state_name}`,
+      gstin: '',
+      place_of_supply: '',
     });
   }
 

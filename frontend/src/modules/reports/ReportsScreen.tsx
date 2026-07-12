@@ -16,6 +16,7 @@ import { COMPANY, HOURLY_REVENUE, TODAY_KPI } from '@/lib/demo-data';
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
+import { settings, type BranchDTO, type CompanyDTO } from '@/lib/erp-api';
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
@@ -64,6 +65,8 @@ interface ReportData {
     other_minor: number;
     total_minor: number;
   };
+  refunds_issued_minor: number;
+  net_payments_received_minor: number;
   expenses: Array<{ category: string; amount_minor: number }>;
   expense_total_minor: number;
   gross_revenue_minor: number;
@@ -104,6 +107,8 @@ export default function ReportsScreen() {
   const [taxError, setTaxError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [company, setCompany] = useState<CompanyDTO | null>(null);
+  const [branch, setBranch] = useState<BranchDTO | null>(null);
 
   // Period-specific selectors
   const today = new Date().toISOString().slice(0, 10);
@@ -117,6 +122,19 @@ export default function ReportsScreen() {
   const [halfYear, setHalfYear] = useState<HalfYear>(currentFiscalHalf(new Date()));
 
   useEffect(() => { load(); }, [period, onDate, weekDate, month, year, quarter, halfYear]);
+
+  useEffect(() => {
+    if (!LIVE_MODE) return;
+    Promise.all([settings.getCompany(), settings.listBranches()])
+      .then(([companyData, branches]) => {
+        setCompany(companyData);
+        setBranch(branches[0] ?? null);
+      })
+      .catch(() => {
+        setCompany(null);
+        setBranch(null);
+      });
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -167,11 +185,19 @@ export default function ReportsScreen() {
     <div className="reports-screen">
       {/* Print-only header */}
       <div className="hidden print:block mb-4">
-        <h1 className="text-2xl font-bold text-black">{COMPANY.name}</h1>
-        <p className="text-xs text-black/70">{COMPANY.address}</p>
+        <h1 className="text-2xl font-bold text-black">
+          {LIVE_MODE ? (company?.legal_name || company?.name || 'D Company') : COMPANY.name}
+        </h1>
         <p className="text-xs text-black/70">
-          GSTIN: {COMPANY.gstin} · FSSAI: {COMPANY.fssai}
+          {LIVE_MODE ? (branch?.address || 'Business address not configured') : COMPANY.address}
         </p>
+        {LIVE_MODE && (branch?.branch_gstin || company?.gstin) && (
+          <p className="text-xs text-black/70">GSTIN: {branch?.branch_gstin || company?.gstin}</p>
+        )}
+        {LIVE_MODE && branch?.fssai_license_no && (
+          <p className="text-xs text-black/70">FSSAI: {branch.fssai_license_no}</p>
+        )}
+        {!LIVE_MODE && <p className="text-xs text-black/70">Sample report - not for filing</p>}
       </div>
 
       {/* Screen-only controls (hidden in print) */}
@@ -328,7 +354,7 @@ export default function ReportsScreen() {
 
             {/* Payments */}
             <section className="card print:border print:border-black/30 print:p-3">
-              <h4 className="font-bold mb-3">Payments received</h4>
+              <h4 className="font-bold mb-3">Payment movement</h4>
               <Row label="Cash"   v={report.payments_received.cash_minor}/>
               <Row label="UPI"    v={report.payments_received.upi_minor}/>
               <Row label="Card"   v={report.payments_received.card_minor}/>
@@ -337,7 +363,12 @@ export default function ReportsScreen() {
               {report.payments_received.other_minor > 0 &&
                 <Row label="Other" v={report.payments_received.other_minor}/>}
               <Divider/>
-              <Row label="Total received" v={report.payments_received.total_minor} bold/>
+              <Row label="Gross payments collected" v={report.payments_received.total_minor}/>
+              {report.refunds_issued_minor > 0 && (
+                <Row label="Less: refunds issued" v={-report.refunds_issued_minor}/>
+              )}
+              <Divider/>
+              <Row label="Net payment movement" v={report.net_payments_received_minor} bold/>
             </section>
 
             {/* Expenses */}
@@ -474,8 +505,8 @@ async function fetchTaxCompliance(from_date: string, to_date: string): Promise<T
   return {
     period_start: from_date,
     period_end: to_date,
-    company_gst_registered: true,
-    gstin: COMPANY.gstin,
+    company_gst_registered: false,
+    gstin: null,
     checked_orders: 87,
     checked_order_lines: 214,
     taxable_minor: 9_84_300,
@@ -581,6 +612,8 @@ function demoReport(
       other_minor:  0,
       total_minor:  gross,
     },
+    refunds_issued_minor: 0,
+    net_payments_received_minor: gross,
     expenses: [
       { category: 'COGS (Food)',      amount_minor: cogs },
       { category: 'Wages',            amount_minor: wages },

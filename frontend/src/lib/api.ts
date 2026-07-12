@@ -21,8 +21,11 @@ const BASE_URL =
   normalizedApiUrl(RUNTIME_URL) ??
   '/api/v1';
 
+const API_TIMEOUT_MS = 20_000;
+
 export const api = axios.create({
   baseURL: BASE_URL,
+  timeout: API_TIMEOUT_MS,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -64,6 +67,7 @@ async function refreshAccessToken(): Promise<string> {
     const r = await axios.post<{ access_token: string; refresh_token: string }>(
       `${BASE_URL}/auth/refresh`,
       { refresh_token: refresh },
+      { timeout: API_TIMEOUT_MS },
     );
     localStorage.setItem('access_token', r.data.access_token);
     localStorage.setItem('refresh_token', r.data.refresh_token);

@@ -62,52 +62,29 @@ PERMISSIONS: dict[str, str] = {
     "admin.system": "Tenant / company / branch admin",
 }
 
+STANDARD_ACCESS = set(PERMISSIONS) - {"admin.audit.read"}
+
+ROLE_DESCRIPTIONS: dict[str, str] = {
+    "owner": "Business owner title — all standard modules",
+    "partner": "Business partner title — all standard modules",
+    "manager": "Operations manager title — all standard modules",
+    "cashier": "Cashier title — all standard modules",
+    "kitchen": "Kitchen team title — all standard modules",
+    "gaming_supervisor": "Gaming team title — all standard modules",
+    "auditor": "Audit staff title — all standard modules",
+}
+
+# D Company operates with open module access for every active account. Role names
+# remain useful for staff records, but Audit is the sole protected-owner module.
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "super_owner": set(PERMISSIONS.keys()),
-    "owner": set(PERMISSIONS.keys()) - {
-        "admin.audit.read",
-        "admin.system",
-        "staff.write",
-        "staff.payroll.write",
-        "inventory.read",
-        "inventory.write",
-        "inventory.adjust.large",
-    },
-    "partner": {
-        "finance.read",
-        "finance.partner.write",
-        "analytics.read",
-        "analytics.export",
-    },
-    "manager": {
-        "pos.read", "pos.write", "pos.void", "pos.refund", "pos.discount.large",
-        "pos.shift.open", "pos.shift.close",
-        "tables.read", "tables.write", "tables.reservations.write",
-        "menu.read", "menu.write",
-        "gaming.read", "gaming.write", "gaming.tournament.manage",
-        "finance.read", "finance.write",
-        "ocr.upload", "ocr.verify",
-        "staff.read", "staff.write", "staff.attendance.write",
-        "analytics.read",
-    },
-    "cashier": {
-        "pos.read", "pos.write", "pos.shift.open", "pos.shift.close",
-        "tables.read", "tables.write",
-        "menu.read",
-    },
-    "kitchen": {
-        "pos.read", "menu.read",
-    },
-    "gaming_supervisor": {
-        "gaming.read", "gaming.write",
-        "pos.read", "pos.write",
-        "tables.read",
-        "menu.read",
-    },
-    "auditor": {
-        "pos.read", "tables.read", "menu.read",
-        "gaming.read", "finance.read", "staff.read", "analytics.read",
-    },
+    "super_owner": set(PERMISSIONS),
+    "owner": set(STANDARD_ACCESS),
+    "partner": set(STANDARD_ACCESS),
+    "manager": set(STANDARD_ACCESS),
+    "cashier": set(STANDARD_ACCESS),
+    "kitchen": set(STANDARD_ACCESS),
+    "gaming_supervisor": set(STANDARD_ACCESS),
+    "auditor": set(STANDARD_ACCESS),
 }
 
 

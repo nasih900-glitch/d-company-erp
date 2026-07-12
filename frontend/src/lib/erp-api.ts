@@ -24,6 +24,16 @@ export interface TokenPair {
   expires_in: number;
 }
 
+export interface OtpChallengeDTO {
+  challenge_id: string;
+  expires_in: number;
+  destination: string;
+}
+
+export interface AccountActionDTO {
+  message: string;
+}
+
 export interface MenuItemDTO {
   id: string;
   category_id: string;
@@ -102,6 +112,23 @@ export const auth = {
   login: (email: string, password: string) =>
     api.post<TokenPair>('/auth/login', { email, password }).then((r) => r.data),
   me: () => api.get<MeResponse>('/auth/me').then((r) => r.data),
+  requestRegistration: (body: {
+    email: string;
+    name: string;
+    phone?: string;
+    password: string;
+  }) => api.post<OtpChallengeDTO>('/auth/register/request', body).then((r) => r.data),
+  confirmRegistration: (challenge_id: string, code: string) =>
+    api.post<AccountActionDTO>('/auth/register/confirm', { challenge_id, code })
+      .then((r) => r.data),
+  requestPasswordReset: (email: string) =>
+    api.post<OtpChallengeDTO>('/auth/password-reset/request', { email }).then((r) => r.data),
+  confirmPasswordReset: (challenge_id: string, code: string, new_password: string) =>
+    api.post<AccountActionDTO>('/auth/password-reset/confirm', {
+      challenge_id,
+      code,
+      new_password,
+    }).then((r) => r.data),
 };
 
 // ----- Menu -----
@@ -168,18 +195,11 @@ export interface RoleDTO {
 export const staff = {
   listUsers: () => api.get<UserDTO[]>('/staff/users').then((r) => r.data),
   getUser: (id: string) => api.get<UserDTO>(`/staff/users/${id}`).then((r) => r.data),
-  createUser: (body: {
-    email: string; name: string; password: string; phone?: string; role_code: string;
-  }) => api.post<UserDTO>('/staff/users', body).then((r) => r.data),
   updateUser: (id: string, body: {
     name?: string; phone?: string; status?: 'active' | 'suspended'; role_code?: string;
   }) => api.patch<UserDTO>(`/staff/users/${id}`, body).then((r) => r.data),
-  changePassword: (id: string, new_password: string) =>
-    api.post(`/staff/users/${id}/password`, { new_password }),
   deleteUser: (id: string) => api.delete(`/staff/users/${id}`),
   listRoles: () => api.get<RoleDTO[]>('/staff/roles').then((r) => r.data),
-  changeMyPassword: (current_password: string, new_password: string) =>
-    api.post('/staff/me/password', { current_password, new_password }),
 };
 
 // =============================================================================

@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.core.logging import get_logger
+from app.services.audit.recorder import clear_actor
 
 log = get_logger(__name__)
 
@@ -23,6 +24,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        clear_actor()
         request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
@@ -31,9 +33,12 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             method=request.method,
         )
         request.state.request_id = request_id
-        response = await call_next(request)
-        response.headers["X-Request-Id"] = request_id
-        return response
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-Id"] = request_id
+            return response
+        finally:
+            clear_actor()
 
 
 class TimingMiddleware(BaseHTTPMiddleware):

@@ -6,13 +6,15 @@ Usage:
 
 Roles:
     super_owner       — protected full access (Nasih)
-    owner             — business owner access without protected system controls
-    partner           — finance read + capital write + analytics
-    manager           — branch operations
-    cashier           — POS only
-    kitchen           — KDS only
-    gaming_supervisor — gaming + POS read
-    auditor           — read-only across every module (good for accountants / overseas partners)
+    owner             — business owner title; all standard modules
+    partner           — business partner title; all standard modules
+    manager           — operations manager title; all standard modules
+    cashier           — cashier title; all standard modules
+    kitchen           — kitchen team title; all standard modules
+    gaming_supervisor — gaming team title; all standard modules
+    auditor           — audit staff title; all standard modules
+
+Only the protected owner role can open the Audit Log.
 
 Idempotent: re-running with the same email updates name/password/role instead of
 creating duplicates.

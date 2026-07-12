@@ -34,6 +34,13 @@ from app.services.reports import (
 router = APIRouter()
 
 
+def _current_indian_fiscal_period(today: date) -> tuple[str, int]:
+    start_year = today.year if today.month >= 4 else today.year - 1
+    fiscal_year = f"{start_year}-{str(start_year + 1)[-2:]}"
+    fiscal_quarter = ((today.month - 4) % 12) // 3 + 1
+    return fiscal_year, fiscal_quarter
+
+
 # ----------------------------- response shapes -----------------------------
 class RevenueDTO(BaseModel):
     food_minor: int
@@ -82,6 +89,8 @@ class ReportDTO(BaseModel):
     revenue: RevenueDTO
     tax_collected: TaxDTO
     payments_received: PaymentsDTO
+    refunds_issued_minor: int
+    net_payments_received_minor: int
     expenses: list[ExpenseLineDTO] = Field(default_factory=list)
     expense_total_minor: int
 
@@ -151,6 +160,8 @@ def _to_dto(r: PnLReport) -> ReportDTO:
             other_minor=r.payments_received.other_minor,
             total_minor=r.payments_received.total_minor,
         ),
+        refunds_issued_minor=r.refunds_issued_minor,
+        net_payments_received_minor=r.net_payments_received_minor,
         expenses=[
             ExpenseLineDTO(category=e.category, amount_minor=e.amount_minor)
             for e in r.expenses
@@ -178,11 +189,12 @@ async def daily_report(
 
 @router.get("/monthly", response_model=ReportDTO)
 async def monthly_report(
-    yyyy_mm: str,
     session: SessionDep,
+    yyyy_mm: str | None = None,
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
-    """P&L for a calendar month. yyyy_mm like '2026-06'."""
+    """P&L for a calendar month. Defaults to the current month."""
+    yyyy_mm = yyyy_mm or date.today().strftime("%Y-%m")
     if len(yyyy_mm) != 7 or yyyy_mm[4] != "-":
         raise BusinessRuleError("yyyy_mm must look like '2026-06'")
     agg = ReportsAggregator(session)
@@ -192,12 +204,15 @@ async def monthly_report(
 
 @router.get("/quarterly", response_model=ReportDTO)
 async def quarterly_report(
-    fy: str,
-    q: int,
     session: SessionDep,
+    fy: str | None = None,
+    q: int | None = None,
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
-    """P&L for one Indian fiscal quarter. fy like '2026-27', q in 1..4."""
+    """P&L for one Indian fiscal quarter. Defaults to the current quarter."""
+    current_fy, current_q = _current_indian_fiscal_period(date.today())
+    fy = fy or current_fy
+    q = q or current_q
     if q not in (1, 2, 3, 4):
         raise BusinessRuleError("q must be 1, 2, 3 or 4")
     if len(fy) != 7 or fy[4] != "-":
@@ -209,11 +224,12 @@ async def quarterly_report(
 
 @router.get("/yearly", response_model=ReportDTO)
 async def yearly_report(
-    fy: str,
     session: SessionDep,
+    fy: str | None = None,
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
-    """P&L for a full Indian fiscal year (1 Apr → 31 Mar). fy like '2026-27'."""
+    """P&L for an Indian fiscal year. Defaults to the current fiscal year."""
+    fy = fy or _current_indian_fiscal_period(date.today())[0]
     if len(fy) != 7 or fy[4] != "-":
         raise BusinessRuleError("fy must look like '2026-27'")
     agg = ReportsAggregator(session)

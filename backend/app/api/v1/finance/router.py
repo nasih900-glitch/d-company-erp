@@ -469,12 +469,17 @@ async def create_asset(
 # ============================================================================
 @router.get("/pnl", response_model=PLReport)
 async def profit_loss(
-    period_start: date,
-    period_end: date,
     session: SessionDep,
+    period_start: date | None = None,
+    period_end: date | None = None,
     tenant: TenantContext = Depends(requires("finance.read")),
 ) -> PLReport:
-    """Returns a zero PL stub. Use /api/v1/reports/* for real numbers."""
+    """Returns the legacy P&L stub, defaulting to the current month."""
+    today = date.today()
+    period_start = period_start or today.replace(day=1)
+    period_end = period_end or today
+    if period_end < period_start:
+        raise BusinessRuleError("period_end must be on or after period_start")
     return PLReport(
         period_start=period_start, period_end=period_end,
         revenue_minor=0, cogs_minor=0, gross_profit_minor=0,

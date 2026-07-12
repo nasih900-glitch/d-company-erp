@@ -31,6 +31,7 @@ from app.models.finance import (
 )
 from app.models.ocr import OcrUpload, OcrExtraction, OcrVerification
 from app.models.audit import AuditLog
+from app.models.auth_challenge import AuthOtpChallenge
 from app.models.customer import Customer
 from app.models.membership import MembershipTier, CustomerMembership
 from app.models.events import Event, EventTicket
@@ -49,6 +50,7 @@ __all__ = [
     "Asset",
     "Attendance",
     "AuditLog",
+    "AuthOtpChallenge",
     "Base",
     "Batch",
     "Branch",

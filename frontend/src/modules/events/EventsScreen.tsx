@@ -24,7 +24,6 @@ import { inr } from '@/lib/inr';
 import {
   events as eventsApi, type EventDTO, type EventTicketDTO,
 } from '@/lib/erp-api';
-import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
 const TYPE_LABEL: Record<EventDTO['event_type'], string> = {
@@ -49,8 +48,7 @@ const STATUS_COLOR: Record<EventDTO['status'], string> = {
 };
 
 export default function EventsScreen() {
-  const { me, demo } = useAuth();
-  const canManageEvents = Boolean(demo || me?.protected_access);
+  const canManageEvents = true;
   const [rows, setRows] = useState<EventDTO[]>([]);
   const [includeP, setIncludeP] = useState(true);
   const [loading, setLoading] = useState(true);

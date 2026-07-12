@@ -26,6 +26,12 @@ class User(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auth_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
 
 
 class Role(Base, TimestampMixin, TenantMixin):

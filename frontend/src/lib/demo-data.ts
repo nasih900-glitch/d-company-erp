@@ -6,17 +6,17 @@
  */
 
 export const COMPANY = {
-  name: 'D Company',
-  legal: 'D Company Cafés & Gaming Pvt. Ltd.',
-  gstin: '32ABCDE1234F1Z5', // 32 = Kerala
-  pan: 'ABCDE1234F',
-  fssai: '12345678901234',
-  trade_license: 'KMC/2026/CAFE/0042',
+  name: 'D Company Demo',
+  legal: 'Sample data only',
+  gstin: null,
+  pan: null,
+  fssai: null,
+  trade_license: null,
   state_code: '32',
   state_name: 'Kerala',
-  address: 'No. 12, MG Road, Kochi, Kerala 682011',
-  phone: '+91 484 222 1234',
-  email: 'hello@dcompany.cloud',
+  address: 'Demo data - not a business address',
+  phone: null,
+  email: null,
   currency: 'INR',
   currency_symbol: '₹',
 };

@@ -41,7 +41,7 @@ function Screen({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }
 
-function SuperOwnerOnly({ children }: { children: ReactNode }) {
+function ProtectedOwnerOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
   if (demo || me?.protected_access) return <>{children}</>;
   return <Navigate to="/pos" replace />;
@@ -86,18 +86,18 @@ export default function App() {
         <Route path="/pos" element={<Screen>{LIVE_MODE ? <LivePOSScreen /> : <POSScreen />}</Screen>} />
         <Route path="/operations" element={<Screen><OrdersAndShiftsScreen /></Screen>} />
         <Route path="/tables" element={<Screen><TablesScreen /></Screen>} />
-        <Route path="/inventory" element={<Screen><SuperOwnerOnly><InventoryScreen /></SuperOwnerOnly></Screen>} />
+        <Route path="/inventory" element={<Screen><InventoryScreen /></Screen>} />
         <Route path="/gaming" element={<Screen><GamingScreen /></Screen>} />
         <Route path="/events" element={<Screen><EventsScreen /></Screen>} />
         <Route path="/finance" element={<Screen><FinanceScreen /></Screen>} />
         <Route path="/ocr" element={<Screen><OcrScreen /></Screen>} />
-        <Route path="/staff" element={<Screen><SuperOwnerOnly><StaffScreen /></SuperOwnerOnly></Screen>} />
+        <Route path="/staff" element={<Screen><StaffScreen /></Screen>} />
         <Route path="/customers" element={<Screen><CustomersScreen /></Screen>} />
         <Route path="/insights" element={<Screen><InsightsScreen /></Screen>} />
-        <Route path="/audit" element={<Screen><SuperOwnerOnly><AuditScreen /></SuperOwnerOnly></Screen>} />
+        <Route path="/audit" element={<Screen><ProtectedOwnerOnly><AuditScreen /></ProtectedOwnerOnly></Screen>} />
         <Route path="/analytics" element={<Screen><AnalyticsScreen /></Screen>} />
         <Route path="/reports" element={<Screen><ReportsScreen /></Screen>} />
-        <Route path="/settings" element={<Screen><SuperOwnerOnly><SettingsScreen /></SuperOwnerOnly></Screen>} />
+        <Route path="/settings" element={<Screen><SettingsScreen /></Screen>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

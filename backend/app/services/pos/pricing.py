@@ -19,9 +19,11 @@ See docs/INDIA_TAX_COMPLIANCE.md for the rules being applied.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Literal, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -37,6 +39,48 @@ from app.models import (
     MembershipTier,
     MenuItem,
 )
+
+
+_GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+_STATE_CODE_RE = re.compile(r"^[0-9]{2}$")
+BillingTaxMode = Literal["regular", "composition", "unregistered", "sez"]
+
+
+def _billing_tax_mode(
+    *,
+    registration_type: str | None,
+    is_composition: bool,
+    supplier_gstin: str | None,
+    branch_state: str | None,
+) -> BillingTaxMode:
+    """Validate the supplier identity before calculating or collecting GST."""
+    mode = (registration_type or "regular").strip().lower()
+    if mode not in {"regular", "composition", "unregistered", "sez"}:
+        raise BusinessRuleError("unsupported GST registration type")
+
+    if (mode == "composition") != bool(is_composition):
+        raise BusinessRuleError(
+            "GST composition settings disagree; correct Company Settings before billing"
+        )
+
+    state_code = (branch_state or "").strip()
+    if not _STATE_CODE_RE.fullmatch(state_code):
+        raise BusinessRuleError(
+            "branch GST state code is missing or invalid; set the two-digit code in Settings"
+        )
+
+    if mode != "unregistered":
+        gstin = (supplier_gstin or "").strip().upper()
+        if not _GSTIN_RE.fullmatch(gstin):
+            raise BusinessRuleError(
+                "GSTIN is missing or invalid; correct it in Settings before issuing GST bills"
+            )
+        if not gstin.startswith(state_code):
+            raise BusinessRuleError(
+                "GSTIN state code does not match the billing branch"
+            )
+
+    return cast("BillingTaxMode", mode)
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +244,17 @@ class OrderPricingService:
         if not branch:
             raise NotFoundError("branch not found")
 
-        is_composition = bool(company.is_composition)
+        branch_state = (branch.state_code or "").strip()
+        supplier_gstin = branch.branch_gstin or company.gstin
+        tax_mode = _billing_tax_mode(
+            registration_type=company.gst_registration_type,
+            is_composition=bool(company.is_composition),
+            supplier_gstin=supplier_gstin,
+            branch_state=branch_state,
+        )
+        is_composition = tax_mode == "composition"
+        is_unregistered = tax_mode == "unregistered"
         is_aggregator = delivery_via and delivery_via.lower() not in {"inhouse", ""}
-        # Place of supply: defaults to branch state. D Company is Kerala-first,
-        # so missing legacy branch state falls back to GST state code 32.
-        branch_state = branch.state_code or "32"
         pos_state = place_of_supply_state_code or branch_state
         intra_state = pos_state == branch_state
         membership_rates = await self._membership_discount_rates(
@@ -246,8 +296,9 @@ class OrderPricingService:
             line_net_base = line_base - line_discount
             rate = Decimal(str(item.tax_rate or 0))
 
-            # Composition and aggregator: zero tax on OUR bill.
-            if is_composition or is_aggregator:
+            # Composition, unregistered suppliers and aggregators do not collect
+            # line-level GST on this customer document.
+            if is_composition or is_unregistered or is_aggregator:
                 taxable, cgst, sgst, igst = (line_net_base, 0, 0, 0)
                 line_inclusive = line_net_base
             elif bool(item.price_includes_tax):
