@@ -123,6 +123,19 @@ private struct APIClient {
         return try await send(request)
     }
 
+    func patch<T: Decodable, B: Encodable>(
+        _ path: String,
+        body: B,
+        token: String? = nil,
+        headers: [String: String] = [:]
+    ) async throws -> T {
+        var request = try makeRequest(path: path, token: token, headers: headers)
+        request.httpMethod = "PATCH"
+        request.httpBody = try JSONEncoder().encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try await send(request)
+    }
+
     private func makeRequest(
         path: String,
         token: String?,
@@ -503,6 +516,16 @@ private struct AuditUnlockResponse: Decodable {
     let expires_in: Int
 }
 
+private struct PricingUnlockResponse: Decodable {
+    let pricing_token: String
+    let expires_in: Int
+}
+
+private struct MenuItemPricingUpdateRequest: Encodable {
+    let base_price_minor: Int?
+    let tax_rate: Double?
+}
+
 private struct AuditEntryDTO: Decodable, Identifiable {
     let id: Int
     let actor_user_id: String?
@@ -651,6 +674,15 @@ private struct TerminalDTO: Decodable, Identifiable {
 
 private struct EmptyRequest: Encodable {}
 
+private struct ShiftOpenRequest: Encodable {
+    let opening_float_minor: Int
+}
+
+private struct ShiftOpenResponse: Decodable {
+    let id: String
+    let status: String
+}
+
 private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
     case ps5
     case vr
@@ -704,6 +736,51 @@ private enum GamingStationKind: String, CaseIterable, Identifiable, Hashable {
         case .station: return "rectangle.on.rectangle"
         }
     }
+
+    var participantLabel: String {
+        switch self {
+        case .ps5, .vr, .simulator, .station:
+            return "Players"
+        case .projector, .hookah, .streaming:
+            return "Guests"
+        }
+    }
+
+    var codePrefix: String {
+        switch self {
+        case .ps5: return "PS5"
+        case .vr: return "VR"
+        case .simulator: return "SIM"
+        case .projector: return "PROJ"
+        case .hookah: return "SHISHA"
+        case .streaming: return "STREAM"
+        case .station: return "SERV"
+        }
+    }
+
+    var defaultRateMinor: Int {
+        switch self {
+        case .ps5: return 20_000
+        case .vr: return 30_000
+        case .simulator: return 35_000
+        case .projector: return 30_000
+        case .hookah: return 25_000
+        case .streaming: return 30_000
+        case .station: return 20_000
+        }
+    }
+
+    func suggestedName(sequence: Int) -> String {
+        switch self {
+        case .ps5: return "PS5 Station \(sequence)"
+        case .vr: return "VR Bay \(sequence)"
+        case .simulator: return "Simulator \(sequence)"
+        case .projector: return "Projector Room \(sequence)"
+        case .hookah: return "Shisha Table \(sequence)"
+        case .streaming: return "Sports Streaming \(sequence)"
+        case .station: return "Service Station \(sequence)"
+        }
+    }
 }
 
 private struct GamingStationDTO: Decodable, Identifiable, Hashable {
@@ -716,6 +793,68 @@ private struct GamingStationDTO: Decodable, Identifiable, Hashable {
 
     var kind: GamingStationKind {
         GamingStationKind.from(type)
+    }
+}
+
+private struct GamingStationCreateRequest: Encodable {
+    let code: String
+    let name: String
+    let type: String
+    let rate_per_hour_minor: Int
+    let branch_id: String?
+    let notes: String?
+}
+
+private struct GamingStationUpdateRequest: Encodable {
+    let name: String?
+    let rate_per_hour_minor: Int?
+    let is_active: Bool?
+    let notes: String?
+}
+
+private struct StationEditorDraft: Identifiable {
+    let id = UUID()
+    var stationID: String?
+    var code: String
+    var name: String
+    var kind: GamingStationKind
+    var rateText: String
+    var isActive: Bool
+    var notes: String
+    var branchID: String?
+
+    var isNew: Bool {
+        stationID == nil
+    }
+
+    static func blank(branchID: String?) -> StationEditorDraft {
+        blank(branchID: branchID, kind: .ps5, code: "", sequence: 1)
+    }
+
+    static func blank(branchID: String?, kind: GamingStationKind, code: String, sequence: Int) -> StationEditorDraft {
+        StationEditorDraft(
+            stationID: nil,
+            code: code,
+            name: code.isEmpty ? "" : kind.suggestedName(sequence: sequence),
+            kind: kind,
+            rateText: code.isEmpty ? "" : currencyInput(kind.defaultRateMinor),
+            isActive: true,
+            notes: "",
+            branchID: branchID
+        )
+    }
+
+    static func editing(_ station: GamingStationDTO) -> StationEditorDraft {
+        StationEditorDraft(
+            stationID: station.id,
+            code: station.code,
+            name: station.name,
+            kind: station.kind,
+            rateText: currencyInput(station.rate_per_hour_minor),
+            isActive: station.is_active,
+            notes: "",
+            branchID: nil
+        )
     }
 }
 
@@ -745,6 +884,10 @@ private struct GamingSessionDraft: Identifiable {
     var customerName = ""
     var customerPhone = ""
     var partySize = 2
+
+    var participantSummary: String {
+        "\(partySize) \(station.kind.participantLabel.lowercased())"
+    }
 }
 
 private struct OrderListItemDTO: Decodable, Identifiable {
@@ -1087,7 +1230,15 @@ private final class AppSession: ObservableObject {
     }
 
     var canSeeAudit: Bool {
+        hasProtectedOwnerAccess
+    }
+
+    var hasProtectedOwnerAccess: Bool {
         me?.protected_access == true
+    }
+
+    var canSeeInventory: Bool {
+        hasProtectedOwnerAccess
     }
 
     func restore() async {
@@ -1214,6 +1365,502 @@ struct NativeERPAppView: View {
             await cache.restoreFromDisk()
             await session.restore()
         }
+    }
+}
+
+struct DCompanyAppStoreView: View {
+    @State private var selectedTab: PublicAppTab = .home
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            PublicHomeView(selectedTab: $selectedTab)
+                .tabItem { Label("Home", systemImage: "house.fill") }
+                .tag(PublicAppTab.home)
+
+            PublicMenuBrowserView()
+                .tabItem { Label("Menu", systemImage: "menucard.fill") }
+                .tag(PublicAppTab.menu)
+
+            PublicServicesView()
+                .tabItem { Label("Services", systemImage: "gamecontroller.fill") }
+                .tag(PublicAppTab.services)
+
+            PublicVisitView()
+                .tabItem { Label("Visit", systemImage: "mappin.and.ellipse") }
+                .tag(PublicAppTab.visit)
+        }
+        .preferredColorScheme(.dark)
+        .tint(Brand.gold)
+        .premiumTabChrome()
+        .background(Brand.appGradient)
+    }
+}
+
+private enum PublicAppTab: Hashable {
+    case home
+    case menu
+    case services
+    case visit
+}
+
+private enum PublicMenuCategory: String, CaseIterable, Identifiable {
+    case drinks
+    case cafe
+    case desserts
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .drinks: return "Drinks"
+        case .cafe: return "Cafe"
+        case .desserts: return "Desserts"
+        }
+    }
+}
+
+private struct PublicMenuItem: Identifiable {
+    let id: String
+    let category: PublicMenuCategory
+    let name: String
+    let detail: String
+    let priceMinor: Int
+    let icon: String
+}
+
+private struct PublicService: Identifiable {
+    let id: String
+    let name: String
+    let detail: String
+    let priceMinor: Int
+    let icon: String
+    let accent: Color
+}
+
+private enum PublicCatalog {
+    static let menuItems: [PublicMenuItem] = [
+        PublicMenuItem(id: "cappuccino", category: .drinks, name: "Cappuccino", detail: "Fresh espresso, steamed milk, cafe foam", priceMinor: 18000, icon: "cup.and.saucer.fill"),
+        PublicMenuItem(id: "iced-latte", category: .drinks, name: "Iced Latte", detail: "Cold milk, espresso, light sweetness", priceMinor: 19000, icon: "snowflake"),
+        PublicMenuItem(id: "fresh-lime", category: .drinks, name: "Fresh Lime", detail: "Chilled lime, mint, soda or water", priceMinor: 9000, icon: "leaf.fill"),
+        PublicMenuItem(id: "club-sandwich", category: .cafe, name: "Club Sandwich", detail: "Toasted bread, egg, chicken, house sauce", priceMinor: 22000, icon: "takeoutbag.and.cup.and.straw.fill"),
+        PublicMenuItem(id: "loaded-fries", category: .cafe, name: "Loaded Fries", detail: "Crispy fries, cheese, sauce, seasoning", priceMinor: 18000, icon: "fork.knife"),
+        PublicMenuItem(id: "brownie", category: .desserts, name: "Chocolate Brownie", detail: "Warm brownie with vanilla scoop option", priceMinor: 15000, icon: "birthday.cake.fill"),
+        PublicMenuItem(id: "waffle", category: .desserts, name: "Waffle", detail: "Crisp waffle, chocolate, fruit topping", priceMinor: 21000, icon: "circle.grid.cross.fill")
+    ]
+
+    static let services: [PublicService] = [
+        PublicService(id: "ps5", name: "PS5 Stations", detail: "Console gaming bays for solo and group sessions.", priceMinor: 20000, icon: "gamecontroller.fill", accent: Brand.softGold),
+        PublicService(id: "vr", name: "VR Bay", detail: "Immersive headset sessions with staff setup.", priceMinor: 25000, icon: "visionpro.fill", accent: Color(red: 0.46, green: 0.70, blue: 1.0)),
+        PublicService(id: "simulator", name: "Racing Simulator", detail: "Wheel-and-seat simulator for timed sessions.", priceMinor: 30000, icon: "steeringwheel", accent: Color(red: 0.96, green: 0.56, blue: 0.32)),
+        PublicService(id: "streaming", name: "Sports Streaming", detail: "Screened matches and group viewing tables.", priceMinor: 15000, icon: "play.tv.fill", accent: Color(red: 0.40, green: 0.86, blue: 0.58)),
+        PublicService(id: "cafe", name: "Cafe Tables", detail: "Walk-in seating for food, drinks, and desserts.", priceMinor: 0, icon: "table.furniture.fill", accent: Color(red: 0.96, green: 0.78, blue: 0.44))
+    ]
+}
+
+private struct PublicHomeView: View {
+    @Binding var selectedTab: PublicAppTab
+
+    private let columns = [GridItem(.adaptive(minimum: 155), spacing: 12)]
+
+    var body: some View {
+        AppNavigation {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PublicHeroCard()
+
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        PublicActionCard(title: "Menu", subtitle: "Cafe favourites", icon: "menucard.fill") {
+                            selectedTab = .menu
+                        }
+                        PublicActionCard(title: "Games", subtitle: "PS5, VR, simulator", icon: "gamecontroller.fill") {
+                            selectedTab = .services
+                        }
+                        PublicActionCard(title: "Lounge", subtitle: "Group seating", icon: "person.2.fill") {
+                            selectedTab = .services
+                        }
+                        PublicActionCard(title: "Visit", subtitle: "Hours and support", icon: "mappin.and.ellipse") {
+                            selectedTab = .visit
+                        }
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Today at D Company")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            HStack(spacing: 10) {
+                                PublicInfoPill(title: "Cafe", value: "Open")
+                                PublicInfoPill(title: "Games", value: "Walk in")
+                                PublicInfoPill(title: "Lounge", value: "Reserve")
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Popular")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.white)
+
+                        ForEach(PublicCatalog.menuItems.prefix(4)) { item in
+                            PublicMenuItemRow(item: item)
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 20)
+            }
+            .background(Brand.appGradient.ignoresSafeArea())
+            .navigationTitle("D Company")
+            .navigationBarTitleDisplayMode(.large)
+        }
+    }
+}
+
+private struct PublicMenuBrowserView: View {
+    @State private var selectedCategory: PublicMenuCategory = .drinks
+
+    private var filteredItems: [PublicMenuItem] {
+        PublicCatalog.menuItems.filter { $0.category == selectedCategory }
+    }
+
+    private let columns = [GridItem(.adaptive(minimum: 280), spacing: 12)]
+
+    var body: some View {
+        AppNavigation {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HeaderBlock(title: "Menu", subtitle: "Cafe, drinks, desserts, and lounge items", icon: "menucard.fill")
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(PublicMenuCategory.allCases) { category in
+                                Button {
+                                    Haptics.selection()
+                                    selectedCategory = category
+                                } label: {
+                                    Text(category.title)
+                                        .font(.subheadline.weight(.bold))
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 10)
+                                        .background(selectedCategory == category ? Brand.gold : Brand.elevated)
+                                        .foregroundColor(selectedCategory == category ? .black : Brand.softGold)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(PressableButtonStyle())
+                            }
+                        }
+                        .padding(.horizontal, 1)
+                    }
+
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(filteredItems) { item in
+                            PublicMenuItemCard(item: item)
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 20)
+            }
+            .background(Brand.appGradient.ignoresSafeArea())
+            .navigationTitle("Menu")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct PublicServicesView: View {
+    private let columns = [GridItem(.adaptive(minimum: 260), spacing: 12)]
+
+    var body: some View {
+        AppNavigation {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HeaderBlock(title: "Games & Lounge", subtitle: "PS5, VR, simulator, sports, and cafe tables", icon: "gamecontroller.fill")
+
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(PublicCatalog.services) { service in
+                            PublicServiceCard(service: service)
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 20)
+            }
+            .background(Brand.appGradient.ignoresSafeArea())
+            .navigationTitle("Services")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct PublicVisitView: View {
+    var body: some View {
+        AppNavigation {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HeaderBlock(title: "Visit D Company", subtitle: "Cafe, games lounge, and after dark seating", icon: "mappin.and.ellipse")
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            PublicVisitRow(icon: "clock.fill", title: "Opening", detail: "Daily hours and special match screenings may change by day.")
+                            PublicVisitRow(icon: "mappin.circle.fill", title: "Area", detail: "Nilambur, Malappuram, Kerala")
+                            PublicVisitRow(icon: "person.2.fill", title: "Bookings", detail: "Ask staff for group gaming, cafe seating, or sports streaming reservations.")
+                        }
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Support")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Text("For bookings, billing questions, or help with an order, contact D Company support.")
+                                .font(.subheadline)
+                                .foregroundColor(Brand.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Link(destination: URL(string: "https://dcompany.duckdns.org/support.html")!) {
+                                HStack {
+                                    Text("Open support")
+                                        .font(.headline)
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right")
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 13)
+                                .background(Brand.gold)
+                                .foregroundColor(.black)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 20)
+            }
+            .background(Brand.appGradient.ignoresSafeArea())
+            .navigationTitle("Visit")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct PublicHeroCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 16) {
+                LogoBadge(size: 78)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("D Company")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Text("Cafe, games, lounge, and after dark")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(Brand.softGold)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                PublicInfoPill(title: "Menu", value: "\(PublicCatalog.menuItems.count) items")
+                PublicInfoPill(title: "Services", value: "\(PublicCatalog.services.count) live")
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Brand.cardGradient)
+                .shadow(color: .black.opacity(0.34), radius: 24, x: 0, y: 14)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Brand.gold.opacity(0.26), lineWidth: 1)
+        )
+    }
+}
+
+private struct PublicActionCard: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            Haptics.selection()
+            action()
+        } label: {
+            BrandedCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Image(systemName: icon)
+                        .font(.title2.weight(.semibold))
+                        .foregroundColor(Brand.gold)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
+            }
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+}
+
+private struct PublicMenuItemRow: View {
+    let item: PublicMenuItem
+
+    var body: some View {
+        BrandedCard {
+            HStack(spacing: 12) {
+                PublicIconBox(icon: item.icon, color: Brand.gold)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text(item.detail)
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Text(inr(item.priceMinor))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(Brand.softGold)
+            }
+        }
+    }
+}
+
+private struct PublicMenuItemCard: View {
+    let item: PublicMenuItem
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 13) {
+                HStack {
+                    PublicIconBox(icon: item.icon, color: Brand.gold)
+                    Spacer()
+                    Text(inr(item.priceMinor))
+                        .font(.headline.weight(.bold))
+                        .foregroundColor(Brand.softGold)
+                        .monospacedDigit()
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(item.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text(item.detail)
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 128, alignment: .leading)
+        }
+    }
+}
+
+private struct PublicServiceCard: View {
+    let service: PublicService
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    PublicIconBox(icon: service.icon, color: service.accent)
+                    Spacer()
+                    Text(service.priceMinor == 0 ? "Walk in" : "\(inr(service.priceMinor))/hr")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(service.accent.opacity(0.16))
+                        .foregroundColor(service.accent)
+                        .clipShape(Capsule())
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(service.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text(service.detail)
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
+        }
+    }
+}
+
+private struct PublicVisitRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            PublicIconBox(icon: icon, color: Brand.gold)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundColor(Brand.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct PublicInfoPill: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundColor(Brand.muted)
+            Text(value)
+                .font(.caption.weight(.bold))
+                .foregroundColor(Brand.softGold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(Brand.elevated.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Brand.gold.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private struct PublicIconBox: View {
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.headline.weight(.bold))
+            .foregroundColor(color)
+            .frame(width: 42, height: 42)
+            .background(color.opacity(0.13))
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
     }
 }
 
@@ -1361,7 +2008,7 @@ private struct ERPHomeView: View {
                 .tabItem { Label(NativeTab.pos.title, systemImage: NativeTab.pos.icon) }
                 .tag(NativeTab.pos)
 
-            GamingNativeView()
+            GamingNativeView(openTab: updateTab)
                 .tabItem { Label(NativeTab.gaming.title, systemImage: NativeTab.gaming.icon) }
                 .tag(NativeTab.gaming)
 
@@ -1429,36 +2076,12 @@ private struct DashboardNativeView: View {
                         report: report,
                         lowStockCount: lowStockCount,
                         menuCount: menuCount,
+                        canSeeInventory: session.canSeeInventory,
                         isOnline: network.isOnline,
                         connectionLabel: network.connectionLabel
                     )
 
-                    BrandedCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("Operations")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            HStack(spacing: 12) {
-                                StatusPill(title: "Menu", value: "\(menuCount)", icon: "menucard")
-                                StatusPill(title: "Low Stock", value: "\(lowStockCount)", icon: "exclamationmark.triangle")
-                            }
-                        }
-                    }
-
-                    LazyVGrid(columns: twoColumns, spacing: 12) {
-                        QuickActionButton(title: "New bill", subtitle: "Open POS", icon: "cart.badge.plus") {
-                            openTab(.pos)
-                        }
-                        QuickActionButton(title: "Start PS5", subtitle: "Gaming", icon: "gamecontroller.fill") {
-                            openTab(.gaming)
-                        }
-                        QuickActionButton(title: "P&L", subtitle: "Reports", icon: "chart.line.uptrend.xyaxis") {
-                            openTab(.reports)
-                        }
-                        QuickActionButton(title: "Workspace", subtitle: "All modules", icon: "square.grid.2x2") {
-                            openTab(.workspace)
-                        }
-                    }
+                    ERPWorkflowCard(openTab: openTab, canUseProtectedControls: session.hasProtectedOwnerAccess)
 
                     BrandedCard {
                         VStack(alignment: .leading, spacing: 8) {
@@ -1472,10 +2095,12 @@ private struct DashboardNativeView: View {
                             } label: {
                                 WorkspaceLinkRow(title: "Menu", subtitle: "Catalog, GST rate, and sale price view", icon: "menucard")
                             }
-                            NavigationLink {
-                                InventoryNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Inventory", subtitle: "Stock, reorder alerts, and ingredients", icon: "cube.box")
+                            if session.canSeeInventory {
+                                NavigationLink {
+                                    InventoryNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Inventory", subtitle: "Stock, reorder alerts, and ingredients", icon: "cube.box")
+                                }
                             }
                             NavigationLink {
                                 OrdersNativeView()
@@ -1492,18 +2117,18 @@ private struct DashboardNativeView: View {
                             } label: {
                                 WorkspaceLinkRow(title: "Staff", subtitle: "Users, roles, and login history", icon: "person.badge.key")
                             }
-                            NavigationLink {
-                                SettingsNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Company", subtitle: "GST, branch, and terminal readiness", icon: "gearshape")
-                            }
-                            NavigationLink {
-                                DeviceIntegrationsNativeView()
-                                    .environmentObject(cache)
-                            } label: {
-                                WorkspaceLinkRow(title: "Integrations", subtitle: "Printer, OCR, terminal, and offline store", icon: "externaldrive.connected.to.line.below")
-                            }
-                            if session.canSeeAudit {
+                            if session.hasProtectedOwnerAccess {
+                                NavigationLink {
+                                    SettingsNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Company", subtitle: "GST, branch, and terminal readiness", icon: "gearshape")
+                                }
+                                NavigationLink {
+                                    DeviceIntegrationsNativeView()
+                                        .environmentObject(cache)
+                                } label: {
+                                    WorkspaceLinkRow(title: "Integrations", subtitle: "Printer, OCR, terminal, and offline store", icon: "externaldrive.connected.to.line.below")
+                                }
                                 NavigationLink {
                                     AuditNativeView()
                                 } label: {
@@ -1536,7 +2161,7 @@ private struct DashboardNativeView: View {
     }
 
     private var hasCachedSnapshot: Bool {
-        report != nil || menuCount > 0 || lowStockCount > 0 || cache.dailyReport != nil || cache.hasMenuData || cache.hasInventoryData
+        report != nil || menuCount > 0 || (session.canSeeInventory && lowStockCount > 0) || cache.dailyReport != nil || cache.hasMenuData || (session.canSeeInventory && cache.hasInventoryData)
     }
 
     private func load() async {
@@ -1551,18 +2176,26 @@ private struct DashboardNativeView: View {
             async let loadedItems: [MenuItemDTO] = session.authorized { token in
                 try await APIClient.shared.get("menu/items", token: token)
             }
-            async let loadedIngredients: [IngredientDTO] = session.authorized { token in
-                try await APIClient.shared.get("inventory/ingredients", token: token)
+            let (freshReport, freshItems) = try await (loadedReport, loadedItems)
+            let freshIngredients: [IngredientDTO]
+            if session.canSeeInventory {
+                freshIngredients = try await session.authorized { token in
+                    try await APIClient.shared.get("inventory/ingredients", token: token)
+                }
+            } else {
+                freshIngredients = []
             }
-
-            let (freshReport, freshItems, freshIngredients) = try await (loadedReport, loadedItems, loadedIngredients)
             withAnimation(.easeOut(duration: 0.18)) {
                 report = freshReport
                 menuCount = freshItems.count
-                lowStockCount = freshIngredients.filter(\.isLowStock).count
+                lowStockCount = session.canSeeInventory ? freshIngredients.filter(\.isLowStock).count : 0
                 cache.dailyReport = freshReport
                 cache.menuItems = freshItems
-                cache.ingredients = freshIngredients
+                if session.canSeeInventory {
+                    cache.ingredients = freshIngredients
+                } else {
+                    cache.ingredients = []
+                }
             }
             await cache.markSynced()
         } catch is CancellationError {
@@ -1578,8 +2211,10 @@ private struct DashboardNativeView: View {
         if cache.hasMenuData {
             menuCount = cache.menuItems.count
         }
-        if cache.hasInventoryData {
+        if session.canSeeInventory && cache.hasInventoryData {
             lowStockCount = cache.ingredients.filter(\.isLowStock).count
+        } else if !session.canSeeInventory {
+            lowStockCount = 0
         }
     }
 }
@@ -1593,13 +2228,13 @@ private struct WorkspaceNativeView: View {
         AppNavigation {
             RefreshableScrollView(refresh: refresh) {
                 VStack(spacing: 16) {
-                    HeaderBlock(title: "Workspace", subtitle: "All business tools in one place", icon: "square.grid.2x2")
+                    HeaderBlock(title: "Workspace", subtitle: "Daily work, records, and protected setup", icon: "square.grid.2x2")
 
                     LazyVGrid(columns: twoColumns, spacing: 12) {
                         QuickActionButton(title: "New bill", subtitle: "POS", icon: "cart.badge.plus") {
                             openTab(.pos)
                         }
-                        QuickActionButton(title: "Start PS5", subtitle: "Gaming", icon: "gamecontroller.fill") {
+                        QuickActionButton(title: "Sessions", subtitle: "PS5, VR, shisha", icon: "gamecontroller.fill") {
                             openTab(.gaming)
                         }
                         QuickActionButton(title: "P&L", subtitle: "Reports", icon: "chart.bar.xaxis") {
@@ -1612,20 +2247,46 @@ private struct WorkspaceNativeView: View {
 
                     BrandedCard {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Operations")
+                            Text("Daily Work")
                                 .font(.headline)
                                 .foregroundColor(.white)
                                 .padding(.bottom, 4)
 
+                            Button {
+                                Haptics.selection()
+                                openTab(.pos)
+                            } label: {
+                                WorkspaceLinkRow(title: "POS Billing", subtitle: "Food, drinks, shisha, streaming, and gaming bills", icon: "cart")
+                            }
+                            .buttonStyle(.plain)
+                            Button {
+                                Haptics.selection()
+                                openTab(.gaming)
+                            } label: {
+                                WorkspaceLinkRow(title: "Cafe Sessions", subtitle: "Start and stop PS5, VR, simulator, shisha, and streaming", icon: "gamecontroller")
+                            }
+                            .buttonStyle(.plain)
                             NavigationLink {
                                 MenuCatalogNativeView()
                             } label: {
                                 WorkspaceLinkRow(title: "Menu", subtitle: "Catalog, GST rate, and sale price view", icon: "menucard")
                             }
-                            NavigationLink {
-                                InventoryNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Inventory", subtitle: "Ingredients, stock levels, reorder alerts", icon: "cube.box")
+                        }
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Records")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.bottom, 4)
+
+                            if session.canSeeInventory {
+                                NavigationLink {
+                                    InventoryNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Inventory", subtitle: "Ingredients, stock levels, reorder alerts", icon: "cube.box")
+                                }
                             }
                             NavigationLink {
                                 OrdersNativeView()
@@ -1645,25 +2306,35 @@ private struct WorkspaceNativeView: View {
                         }
                     }
 
-                    BrandedCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Control")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.bottom, 4)
+                    if session.hasProtectedOwnerAccess {
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Protected Controls")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .padding(.bottom, 4)
 
-                            NavigationLink {
-                                SettingsNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Company Settings", subtitle: "GST, branch, and terminal readiness", icon: "gearshape")
-                            }
-                            NavigationLink {
-                                DeviceIntegrationsNativeView()
-                                    .environmentObject(cache)
-                            } label: {
-                                WorkspaceLinkRow(title: "Integrations", subtitle: "Printer, OCR, terminal, offline snapshot", icon: "externaldrive.connected.to.line.below")
-                            }
-                            if session.canSeeAudit {
+                                NavigationLink {
+                                    PricingNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Pricing", subtitle: "Password-locked menu and session rates", icon: "indianrupeesign.circle")
+                                }
+                                NavigationLink {
+                                    StationManagementNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Stations & Services", subtitle: "PS5, VR, simulator, shisha, and streaming setup", icon: "slider.horizontal.3")
+                                }
+                                NavigationLink {
+                                    SettingsNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Company Settings", subtitle: "GST, branch, and terminal readiness", icon: "gearshape")
+                                }
+                                NavigationLink {
+                                    DeviceIntegrationsNativeView()
+                                        .environmentObject(cache)
+                                } label: {
+                                    WorkspaceLinkRow(title: "Integrations", subtitle: "Printer, OCR, terminal, offline snapshot", icon: "externaldrive.connected.to.line.below")
+                                }
                                 NavigationLink {
                                     AuditNativeView()
                                 } label: {
@@ -1806,6 +2477,7 @@ private struct MenuCatalogNativeView: View {
 private struct GamingNativeView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var network: NetworkMonitor
+    let openTab: (NativeTab) -> Void
     @State private var stations: [GamingStationDTO] = []
     @State private var activeSessions: [GamingSessionDTO] = []
     @State private var shifts: [ShiftDTO] = []
@@ -1835,6 +2507,18 @@ private struct GamingNativeView: View {
 
                     if let finishedSession {
                         SuccessBanner(message: "Session closed. Amount \(inr(finishedSession.amount_minor ?? 0)).")
+                    }
+
+                    ServiceControlCard(canUseProtectedControls: session.hasProtectedOwnerAccess) {
+                        openTab(.pos)
+                    }
+
+                    ServiceKindSummaryStrip(
+                        stations: stations,
+                        activeSessions: activeSessions,
+                        canManageServices: session.hasProtectedOwnerAccess
+                    ) {
+                        openTab(.pos)
                     }
 
                     BrandedCard {
@@ -1874,7 +2558,24 @@ private struct GamingNativeView: View {
                         if isLoading && stations.isEmpty {
                             LoadingBlock(title: "Loading gaming stations")
                         } else if stations.isEmpty {
-                            InlineEmptyCard(icon: "gamecontroller", title: "No stations set up", subtitle: "Create PS5 stations in the web setup first.")
+                            BrandedCard {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    InlineEmptyRow(icon: "gamecontroller", title: "No stations set up", subtitle: "Create PS5, VR, simulator, shisha, and streaming services before taking timed bills.")
+                                    if session.hasProtectedOwnerAccess {
+                                        NavigationLink {
+                                            StationManagementNativeView()
+                                        } label: {
+                                            Label("Add services", systemImage: "plus.circle.fill")
+                                                .font(.subheadline.weight(.bold))
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, 12)
+                                                .background(Brand.gold)
+                                                .foregroundColor(.black)
+                                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             LazyVGrid(columns: twoColumns, spacing: 12) {
                                 ForEach(stations.filter(\.is_active)) { station in
@@ -1917,7 +2618,7 @@ private struct GamingNativeView: View {
     }
 
     private var activeShift: ShiftDTO? {
-        shifts.first { $0.status == "open" } ?? shifts.first
+        shifts.first { $0.status == "open" }
     }
 
     private func stationName(for stationID: String) -> String {
@@ -1979,7 +2680,7 @@ private struct GamingNativeView: View {
         error = nil
         finishedSession = nil
 
-        let partyLabel = "\(draft.partySize) players"
+        let partyLabel = draft.participantSummary
         let displayName: String?
         if let name = draft.customerName.nilIfBlank {
             displayName = "\(name) - \(partyLabel)"
@@ -2027,6 +2728,30 @@ private struct GamingNativeView: View {
     }
 }
 
+private enum POSMode: String, CaseIterable, Identifiable {
+    case all
+    case sessions
+    case menu
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "Bill"
+        case .sessions: return "Sessions"
+        case .menu: return "Menu"
+        }
+    }
+
+    var showsSessions: Bool {
+        self == .all || self == .sessions
+    }
+
+    var showsMenu: Bool {
+        self == .all || self == .menu
+    }
+}
+
 private struct POSNativeView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var network: NetworkMonitor
@@ -2042,9 +2767,11 @@ private struct POSNativeView: View {
     @State private var cart: [String: Int] = [:]
     @State private var checkoutDraft: CheckoutDraft?
     @State private var sessionDraft: GamingSessionDraft?
+    @State private var posMode: POSMode = .all
     @State private var createdInvoice: String?
     @State private var lastChargedOrder: OrderReadDTO?
     @State private var finishedSession: GamingSessionDTO?
+    @State private var sessionBillNote: String?
     @State private var isLoading = true
     @State private var isSubmitting = false
     @State private var error: String?
@@ -2058,11 +2785,18 @@ private struct POSNativeView: View {
                         .padding(.top, 10)
                 }
 
-                categoryScroller
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
-                .background(Brand.background)
+                posModeControl
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, posMode.showsMenu ? 6 : 10)
+                    .background(Brand.background)
+
+                if posMode.showsMenu {
+                    categoryScroller
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .background(Brand.background)
+                }
 
                 if let error {
                     ErrorBanner(message: error)
@@ -2092,19 +2826,80 @@ private struct POSNativeView: View {
                     .padding(.bottom, 8)
                 }
 
-                if let finishedSession {
-                    SuccessBanner(message: "Session closed. Amount \(inr(finishedSession.amount_minor ?? 0)). Add the matching service item to the bill if not already charged.")
+                if let sessionBillNote {
+                    SuccessBanner(message: sessionBillNote)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 8)
                 }
 
+                POSShiftCommandCard(
+                    shift: activeShift,
+                    terminal: activeTerminal,
+                    cartItems: cartRows.reduce(0) { $0 + $1.quantity },
+                    cartTotalMinor: cartTotal,
+                    activeSessionCount: activeSessions.filter { $0.status == "active" }.count,
+                    serviceCount: activeServiceStations.count,
+                    isSubmitting: isSubmitting
+                ) {
+                    Haptics.selection()
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        posMode = .sessions
+                    }
+                } openShift: {
+                    Haptics.selection()
+                    Task { await openShift() }
+                } openMenu: {
+                    Haptics.selection()
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        posMode = .menu
+                    }
+                } reviewBill: {
+                    Haptics.selection()
+                    if !cartRows.isEmpty {
+                        checkoutDraft = CheckoutDraft()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
+                if !cartRows.isEmpty {
+                    POSCartEditorCard(
+                        rows: cartRows,
+                        totalMinor: cartTotal,
+                        increment: increment,
+                        decrement: decrement,
+                        clear: clearCart
+                    ) {
+                        Haptics.selection()
+                        checkoutDraft = CheckoutDraft()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 List {
-                    if !stations.isEmpty || !activeSessions.isEmpty {
+                    if posMode.showsSessions && (!stations.isEmpty || !activeSessions.isEmpty) {
                         Section(header: sectionHeader("Sessions")) {
                             if activeServiceStations.isEmpty {
-                                InlineEmptyRow(icon: "gamecontroller", title: "No service stations", subtitle: "Add PS5, VR, simulator, shisha, or streaming stations in Gaming.")
-                                    .listRowBackground(Brand.background)
-                                    .listRowSeparator(.hidden)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    InlineEmptyRow(icon: "gamecontroller", title: "No service stations", subtitle: "Add PS5, VR, simulator, shisha, or streaming services before billing timed sessions.")
+                                    if session.hasProtectedOwnerAccess {
+                                        NavigationLink {
+                                            StationManagementNativeView()
+                                        } label: {
+                                            Label("Manage services", systemImage: "slider.horizontal.3")
+                                                .font(.subheadline.weight(.bold))
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, 12)
+                                                .background(Brand.gold)
+                                                .foregroundColor(.black)
+                                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        }
+                                    }
+                                }
+                                .listRowBackground(Brand.background)
+                                .listRowSeparator(.hidden)
                             } else {
                                 ForEach(activeServiceStations) { station in
                                     POSServiceStationRow(
@@ -2124,33 +2919,28 @@ private struct POSNativeView: View {
                         }
                     }
 
-                    Section(header: sectionHeader("Menu")) {
-                        if isLoading && items.isEmpty {
-                            ForEach(0..<6, id: \.self) { _ in
-                                MenuItemSkeletonRow()
+                    if posMode.showsMenu {
+                        Section(header: sectionHeader("Menu")) {
+                            if isLoading && items.isEmpty {
+                                ForEach(0..<6, id: \.self) { _ in
+                                    MenuItemSkeletonRow()
+                                        .listRowBackground(Brand.background)
+                                        .listRowSeparator(.hidden)
+                                }
+                            } else if filteredItems.isEmpty {
+                                InlineEmptyRow(icon: "menucard", title: "No menu items", subtitle: "Try another category or search.")
                                     .listRowBackground(Brand.background)
                                     .listRowSeparator(.hidden)
-                            }
-                        } else if filteredItems.isEmpty {
-                            InlineEmptyRow(icon: "menucard", title: "No menu items", subtitle: "Try another category or search.")
-                                .listRowBackground(Brand.background)
-                                .listRowSeparator(.hidden)
-                        } else {
-                            ForEach(filteredItems) { item in
-                                MenuItemRow(item: item, quantity: cart[item.id] ?? 0) {
-                                    Haptics.impact()
-                                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
-                                        cart[item.id, default: 0] += 1
+                            } else {
+                                ForEach(filteredItems) { item in
+                                    MenuItemRow(item: item, quantity: cart[item.id] ?? 0) {
+                                        increment(item)
+                                    } decrement: {
+                                        decrement(item)
                                     }
-                                } decrement: {
-                                    Haptics.selection()
-                                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
-                                        let next = max((cart[item.id] ?? 0) - 1, 0)
-                                        cart[item.id] = next == 0 ? nil : next
-                                    }
+                                    .listRowBackground(Brand.background)
+                                    .listRowSeparatorTint(Brand.hairline)
                                 }
-                                .listRowBackground(Brand.background)
-                                .listRowSeparatorTint(Brand.hairline)
                             }
                         }
                     }
@@ -2215,6 +3005,28 @@ private struct POSNativeView: View {
         }
     }
 
+    private var posModeControl: some View {
+        HStack(spacing: 8) {
+            ForEach(POSMode.allCases) { mode in
+                Button {
+                    Haptics.selection()
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        posMode = mode
+                    }
+                } label: {
+                    Text(mode.title)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(posMode == mode ? Brand.gold : Brand.surface)
+                        .foregroundColor(posMode == mode ? .black : Brand.softGold)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     private var cartSummaryBar: some View {
         VStack(spacing: 0) {
             Rectangle()
@@ -2269,6 +3081,28 @@ private struct POSNativeView: View {
         cartRows.reduce(0) { $0 + ($1.item.base_price_minor * $1.quantity) }
     }
 
+    private func increment(_ item: MenuItemDTO) {
+        Haptics.impact()
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+            cart[item.id, default: 0] += 1
+        }
+    }
+
+    private func decrement(_ item: MenuItemDTO) {
+        Haptics.selection()
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+            let next = max((cart[item.id] ?? 0) - 1, 0)
+            cart[item.id] = next == 0 ? nil : next
+        }
+    }
+
+    private func clearCart() {
+        Haptics.selection()
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+            cart.removeAll()
+        }
+    }
+
     private var activeServiceStations: [GamingStationDTO] {
         stations.filter(\.is_active).sorted { lhs, rhs in
             if lhs.kind.title == rhs.kind.title {
@@ -2279,7 +3113,7 @@ private struct POSNativeView: View {
     }
 
     private var activeShift: ShiftDTO? {
-        shifts.first { $0.status == "open" } ?? shifts.first
+        shifts.first { $0.status == "open" }
     }
 
     private var activeTerminal: TerminalDTO? {
@@ -2368,6 +3202,34 @@ private struct POSNativeView: View {
         }
     }
 
+    private func openShift() async {
+        guard activeShift == nil else { return }
+        guard let terminal = activeTerminal ?? terminals.first else {
+            error = "No POS terminal is registered. Add a terminal in Settings before opening a shift."
+            return
+        }
+
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+
+        do {
+            let _: ShiftOpenResponse = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "pos/shifts/open",
+                    body: ShiftOpenRequest(opening_float_minor: 0),
+                    token: token,
+                    headers: ["X-Terminal-Id": terminal.id]
+                )
+            }
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
     private func start(_ draft: GamingSessionDraft) async {
         guard let shift = activeShift else {
             error = "Open a POS shift before starting a session."
@@ -2378,8 +3240,9 @@ private struct POSNativeView: View {
         defer { isSubmitting = false }
         error = nil
         finishedSession = nil
+        sessionBillNote = nil
 
-        let partyLabel = "\(draft.partySize) guests"
+        let partyLabel = draft.participantSummary
         let displayName: String?
         if let name = draft.customerName.nilIfBlank {
             displayName = "\(name) - \(partyLabel)"
@@ -2417,12 +3280,56 @@ private struct POSNativeView: View {
             let ended: GamingSessionDTO = try await session.authorized { token in
                 try await APIClient.shared.post("gaming/sessions/\(gamingSession.id)/stop", body: EmptyRequest(), token: token)
             }
+            let addedToCart = addSessionChargeToCart(for: ended)
             finishedSession = ended
+            if addedToCart {
+                sessionBillNote = "Session closed. Matching service added to the bill. Estimate: \(inr(ended.amount_minor ?? 0))."
+            } else {
+                sessionBillNote = "Session closed at \(inr(ended.amount_minor ?? 0)). No matching service item was found, so add it manually before charging."
+            }
             Haptics.success()
             await load()
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
+        }
+    }
+
+    private func addSessionChargeToCart(for ended: GamingSessionDTO) -> Bool {
+        guard let station = stations.first(where: { $0.id == ended.station_id }),
+              let item = serviceMenuItem(for: station) else {
+            return false
+        }
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+            cart[item.id, default: 0] += 1
+        }
+        return true
+    }
+
+    private func serviceMenuItem(for station: GamingStationDTO) -> MenuItemDTO? {
+        let tokens = serviceTokens(for: station.kind)
+        return items.first { item in
+            let haystack = "\(item.name) \(item.sku) \(item.type)".uppercased()
+            return tokens.contains { haystack.contains($0) }
+        }
+    }
+
+    private func serviceTokens(for kind: GamingStationKind) -> [String] {
+        switch kind {
+        case .ps5:
+            return ["PS5", "PLAYSTATION", "CONSOLE"]
+        case .vr:
+            return ["VR", "VIRTUAL"]
+        case .simulator:
+            return ["SIMULATOR", "SIM "]
+        case .projector:
+            return ["PROJECTOR", "THEATRE", "THEATER"]
+        case .hookah:
+            return ["SHISHA", "HOOKAH"]
+        case .streaming:
+            return ["STREAMING", "STREAM", "BOOTH"]
+        case .station:
+            return ["SESSION", "SERVICE"]
         }
     }
 
@@ -2472,7 +3379,7 @@ private struct POSNativeView: View {
 
         do {
             let orderHeaders = [
-                "X-Idempotency-Key": UUID().uuidString,
+                "Idempotency-Key": UUID().uuidString,
                 "X-Terminal-Id": terminal.id
             ]
             let order: OrderReadDTO = try await session.authorized { token in
@@ -2486,7 +3393,7 @@ private struct POSNativeView: View {
                 ref_external: nil
             )
             let paymentHeaders = [
-                "X-Idempotency-Key": UUID().uuidString,
+                "Idempotency-Key": UUID().uuidString,
                 "X-Terminal-Id": terminal.id
             ]
             let _: PaymentResponseDTO = try await session.authorized { token in
@@ -3125,6 +4032,981 @@ private struct SettingsNativeView: View {
     }
 }
 
+private struct PriceDraft {
+    var priceText: String
+    var taxText: String
+}
+
+private struct PricingNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var cache: AppCache
+    @State private var password = ""
+    @State private var pricingToken: String?
+    @State private var items: [MenuItemDTO] = []
+    @State private var stations: [GamingStationDTO] = []
+    @State private var menuDrafts: [String: PriceDraft] = [:]
+    @State private var stationDrafts: [String: String] = [:]
+    @State private var search = ""
+    @State private var isLoading = false
+    @State private var isUnlocking = false
+    @State private var savingKey: String?
+    @State private var error: String?
+    @State private var notice: String?
+
+    var body: some View {
+        RefreshableScrollView(refresh: reloadIfUnlocked) {
+            VStack(spacing: 16) {
+                HeaderBlock(
+                    title: "Pricing",
+                    subtitle: pricingToken == nil ? "Locked owner control" : "\(filteredItems.count) items, \(filteredStations.count) stations",
+                    icon: "indianrupeesign.circle"
+                )
+
+                if let error {
+                    ErrorBanner(message: error)
+                }
+
+                if let notice {
+                    SuccessBanner(message: notice)
+                }
+
+                if pricingToken == nil {
+                    lockedPricingCard
+                } else {
+                    BrandedCard {
+                        SearchBar(text: $search, placeholder: "Search menu, SKU, PS5, shisha, streaming")
+                    }
+
+                    menuPricingCard
+                    stationPricingCard
+                }
+            }
+            .padding(16)
+        }
+        .navigationTitle("Pricing")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    Haptics.selection()
+                    Task { await reloadIfUnlocked() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(pricingToken == nil)
+            }
+        }
+        .background(Brand.background)
+    }
+
+    private var lockedPricingCard: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Price changes need your password", systemImage: "lock.shield")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text("Menu prices, GST rates, and station hourly rates are protected because they affect every bill and audit entry.")
+                    .font(.subheadline)
+                    .foregroundColor(Brand.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                SecureField("Owner password", text: $password)
+                    .textContentType(.password)
+                    .nativeField()
+                Button {
+                    Haptics.selection()
+                    Task { await unlock() }
+                } label: {
+                    Label(isUnlocking ? "Unlocking" : "Unlock pricing", systemImage: "key.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                }
+                .buttonStyle(PressableButtonStyle())
+                .background(Brand.gold)
+                .foregroundColor(.black)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .disabled(isUnlocking || password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var menuPricingCard: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Menu Prices")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                if isLoading && items.isEmpty {
+                    LoadingBlock(title: "Loading menu prices")
+                } else if filteredItems.isEmpty {
+                    InlineEmptyRow(icon: "menucard", title: "No menu items", subtitle: "Try a different search.")
+                } else {
+                    ForEach(filteredItems) { item in
+                        PricingMenuRow(
+                            item: item,
+                            draft: Binding(
+                                get: { menuDrafts[item.id] ?? PriceDraft(priceText: currencyInput(item.base_price_minor), taxText: taxInput(item.tax_rate)) },
+                                set: { menuDrafts[item.id] = $0 }
+                            ),
+                            isSaving: savingKey == "menu-\(item.id)"
+                        ) {
+                            Task { await saveMenuItem(item) }
+                        }
+                        if item.id != filteredItems.last?.id {
+                            Divider().background(Brand.hairline)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var stationPricingCard: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Session Rates")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                if isLoading && stations.isEmpty {
+                    LoadingBlock(title: "Loading station rates")
+                } else if filteredStations.isEmpty {
+                    InlineEmptyRow(icon: "gamecontroller", title: "No stations", subtitle: "Add PS5, VR, simulator, shisha, or streaming stations in Stations & Services.")
+                } else {
+                    ForEach(filteredStations) { station in
+                        PricingStationRow(
+                            station: station,
+                            rateText: Binding(
+                                get: { stationDrafts[station.id] ?? currencyInput(station.rate_per_hour_minor) },
+                                set: { stationDrafts[station.id] = $0 }
+                            ),
+                            isSaving: savingKey == "station-\(station.id)"
+                        ) {
+                            Task { await saveStation(station) }
+                        }
+                        if station.id != filteredStations.last?.id {
+                            Divider().background(Brand.hairline)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var filteredItems: [MenuItemDTO] {
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let list = items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        guard !term.isEmpty else { return list }
+        return list.filter {
+            $0.name.localizedCaseInsensitiveContains(term)
+            || $0.sku.localizedCaseInsensitiveContains(term)
+            || $0.type.localizedCaseInsensitiveContains(term)
+        }
+    }
+
+    private var filteredStations: [GamingStationDTO] {
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let list = stations.sorted {
+            if $0.kind.title == $1.kind.title {
+                return $0.code.localizedStandardCompare($1.code) == .orderedAscending
+            }
+            return $0.kind.title.localizedStandardCompare($1.kind.title) == .orderedAscending
+        }
+        guard !term.isEmpty else { return list }
+        return list.filter {
+            $0.name.localizedCaseInsensitiveContains(term)
+            || $0.code.localizedCaseInsensitiveContains(term)
+            || $0.kind.title.localizedCaseInsensitiveContains(term)
+        }
+    }
+
+    private func unlock() async {
+        isUnlocking = true
+        defer { isUnlocking = false }
+        error = nil
+        notice = nil
+        do {
+            let response: PricingUnlockResponse = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "admin/pricing/unlock",
+                    body: AuditUnlockRequest(password: password),
+                    token: token
+                )
+            }
+            pricingToken = response.pricing_token
+            password = ""
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func reloadIfUnlocked() async {
+        guard pricingToken != nil else { return }
+        await load()
+    }
+
+    private func load() async {
+        if !cache.menuItems.isEmpty {
+            items = cache.menuItems
+        }
+        isLoading = true
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedItems: [MenuItemDTO] = session.authorized { token in
+                try await APIClient.shared.get("menu/items", token: token)
+            }
+            async let loadedStations: [GamingStationDTO] = session.authorized { token in
+                try await APIClient.shared.get("gaming/stations", token: token)
+            }
+            let (freshItems, freshStations) = try await (loadedItems, loadedStations)
+            withAnimation(.easeOut(duration: 0.18)) {
+                items = freshItems
+                stations = freshStations
+                menuDrafts = Dictionary(uniqueKeysWithValues: freshItems.map {
+                    ($0.id, PriceDraft(priceText: currencyInput($0.base_price_minor), taxText: taxInput($0.tax_rate)))
+                })
+                stationDrafts = Dictionary(uniqueKeysWithValues: freshStations.map {
+                    ($0.id, currencyInput($0.rate_per_hour_minor))
+                })
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func saveMenuItem(_ item: MenuItemDTO) async {
+        guard let pricingToken else { return }
+        guard let draft = menuDrafts[item.id] else { return }
+        savingKey = "menu-\(item.id)"
+        defer { savingKey = nil }
+        error = nil
+        notice = nil
+        do {
+            let priceMinor = try minorFromCurrencyInput(draft.priceText)
+            let taxRate = try taxRateFromInput(draft.taxText)
+            let updated: MenuItemDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "menu/items/\(item.id)",
+                    body: MenuItemPricingUpdateRequest(base_price_minor: priceMinor, tax_rate: taxRate),
+                    token: token,
+                    headers: ["X-Pricing-Token": pricingToken]
+                )
+            }
+            replaceMenuItem(updated)
+            notice = "\(updated.name) updated."
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func saveStation(_ station: GamingStationDTO) async {
+        guard let pricingToken else { return }
+        savingKey = "station-\(station.id)"
+        defer { savingKey = nil }
+        error = nil
+        notice = nil
+        do {
+            let rateMinor = try minorFromCurrencyInput(stationDrafts[station.id] ?? currencyInput(station.rate_per_hour_minor))
+            let updated: GamingStationDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "gaming/stations/\(station.id)",
+                    body: GamingStationUpdateRequest(name: nil, rate_per_hour_minor: rateMinor, is_active: nil, notes: nil),
+                    token: token,
+                    headers: ["X-Pricing-Token": pricingToken]
+                )
+            }
+            replaceStation(updated)
+            notice = "\(updated.name) rate updated."
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func replaceMenuItem(_ updated: MenuItemDTO) {
+        if let index = items.firstIndex(where: { $0.id == updated.id }) {
+            items[index] = updated
+        }
+        menuDrafts[updated.id] = PriceDraft(priceText: currencyInput(updated.base_price_minor), taxText: taxInput(updated.tax_rate))
+    }
+
+    private func replaceStation(_ updated: GamingStationDTO) {
+        if let index = stations.firstIndex(where: { $0.id == updated.id }) {
+            stations[index] = updated
+        }
+        stationDrafts[updated.id] = currencyInput(updated.rate_per_hour_minor)
+    }
+}
+
+private struct StationManagementNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @State private var password = ""
+    @State private var pricingToken: String?
+    @State private var stations: [GamingStationDTO] = []
+    @State private var branches: [BranchDTO] = []
+    @State private var search = ""
+    @State private var editorDraft: StationEditorDraft?
+    @State private var isLoading = false
+    @State private var isUnlocking = false
+    @State private var isSaving = false
+    @State private var savingStationID: String?
+    @State private var error: String?
+    @State private var notice: String?
+
+    var body: some View {
+        RefreshableScrollView(refresh: reloadIfUnlocked) {
+            VStack(spacing: 16) {
+                HeaderBlock(
+                    title: "Stations & Services",
+                    subtitle: pricingToken == nil ? "Locked setup" : "\(activeCount) active of \(stations.count)",
+                    icon: "slider.horizontal.3"
+                )
+
+                if let error {
+                    ErrorBanner(message: error)
+                }
+
+                if let notice {
+                    SuccessBanner(message: notice)
+                }
+
+                if pricingToken == nil {
+                    lockedStationsCard
+                } else {
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SearchBar(text: $search, placeholder: "Search PS5, VR, simulator, shisha, streaming")
+                            Text("Quick add")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Text("Choose a service type. Code, name, and hourly rate are prefilled and can be edited before saving.")
+                                .font(.caption)
+                                .foregroundColor(Brand.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(GamingStationKind.allCases) { kind in
+                                        ServicePresetButton(kind: kind, configuredCount: configuredCount(for: kind)) {
+                                            Haptics.selection()
+                                            editorDraft = newDraft(for: kind)
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+
+                            Button {
+                                Haptics.selection()
+                                editorDraft = .blank(branchID: branches.first?.id)
+                            } label: {
+                                Label("Add custom service", systemImage: "plus.circle.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 13)
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                            .background(Brand.gold)
+                            .foregroundColor(.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+
+                    stationListCard
+                }
+            }
+            .padding(16)
+        }
+        .navigationTitle("Stations")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    Haptics.selection()
+                    Task { await reloadIfUnlocked() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(pricingToken == nil)
+            }
+        }
+        .background(Brand.background)
+        .sheet(item: $editorDraft) { draft in
+            StationEditorSheet(
+                draft: draft,
+                branches: branches,
+                isSaving: isSaving
+            ) { updatedDraft in
+                Task { await save(updatedDraft) }
+            }
+        }
+    }
+
+    private var lockedStationsCard: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Setup is protected", systemImage: "lock.shield")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text("Station names, active status, and hourly rates affect billing. Unlock once, then manage PS5, VR, simulator, shisha, streaming, and other services here.")
+                    .font(.subheadline)
+                    .foregroundColor(Brand.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                SecureField("Owner password", text: $password)
+                    .textContentType(.password)
+                    .nativeField()
+                Button {
+                    Haptics.selection()
+                    Task { await unlock() }
+                } label: {
+                    Label(isUnlocking ? "Unlocking" : "Unlock setup", systemImage: "key.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                }
+                .buttonStyle(PressableButtonStyle())
+                .background(Brand.gold)
+                .foregroundColor(.black)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .disabled(isUnlocking || password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var stationListCard: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Cafe Services")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                if isLoading && stations.isEmpty {
+                    LoadingBlock(title: "Loading stations")
+                } else if filteredStations.isEmpty {
+                    InlineEmptyRow(icon: "gamecontroller", title: "No matching stations", subtitle: "Add PS5, VR, simulator, shisha, or streaming services.")
+                } else {
+                    ForEach(filteredStations) { station in
+                        StationSetupRow(
+                            station: station,
+                            isSaving: savingStationID == station.id
+                        ) {
+                            Haptics.selection()
+                            editorDraft = .editing(station)
+                        } toggleActive: {
+                            Task { await setActive(!station.is_active, station: station) }
+                        }
+                        if station.id != filteredStations.last?.id {
+                            Divider().background(Brand.hairline)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var filteredStations: [GamingStationDTO] {
+        let list = stations.sorted {
+            if $0.kind.title == $1.kind.title {
+                return $0.code.localizedStandardCompare($1.code) == .orderedAscending
+            }
+            return $0.kind.title.localizedStandardCompare($1.kind.title) == .orderedAscending
+        }
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return list }
+        return list.filter {
+            $0.name.localizedCaseInsensitiveContains(term)
+            || $0.code.localizedCaseInsensitiveContains(term)
+            || $0.kind.title.localizedCaseInsensitiveContains(term)
+        }
+    }
+
+    private var activeCount: Int {
+        stations.filter(\.is_active).count
+    }
+
+    private func configuredCount(for kind: GamingStationKind) -> Int {
+        stations.filter { $0.kind == kind }.count
+    }
+
+    private func newDraft(for kind: GamingStationKind) -> StationEditorDraft {
+        let sequence = nextSequence(for: kind)
+        let code = "\(kind.codePrefix)-\(String(format: "%02d", sequence))"
+        return .blank(branchID: branches.first?.id, kind: kind, code: code, sequence: sequence)
+    }
+
+    private func nextSequence(for kind: GamingStationKind) -> Int {
+        let prefix = "\(kind.codePrefix)-"
+        let existingNumbers = stations.compactMap { station -> Int? in
+            let code = station.code.uppercased()
+            guard code.hasPrefix(prefix) else { return nil }
+            return Int(code.dropFirst(prefix.count))
+        }
+        return (existingNumbers.max() ?? 0) + 1
+    }
+
+    private func unlock() async {
+        isUnlocking = true
+        defer { isUnlocking = false }
+        error = nil
+        notice = nil
+        do {
+            let response: PricingUnlockResponse = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "admin/pricing/unlock",
+                    body: AuditUnlockRequest(password: password),
+                    token: token
+                )
+            }
+            pricingToken = response.pricing_token
+            password = ""
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func reloadIfUnlocked() async {
+        guard pricingToken != nil else { return }
+        await load()
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedStations: [GamingStationDTO] = session.authorized { token in
+                try await APIClient.shared.get("gaming/stations", token: token)
+            }
+            async let loadedBranches: [BranchDTO] = session.authorized { token in
+                try await APIClient.shared.get("settings/branches", token: token)
+            }
+            let (freshStations, freshBranches) = try await (loadedStations, loadedBranches)
+            withAnimation(.easeOut(duration: 0.18)) {
+                stations = freshStations
+                branches = freshBranches
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func save(_ draft: StationEditorDraft) async {
+        guard let pricingToken else { return }
+        isSaving = true
+        defer { isSaving = false }
+        error = nil
+        notice = nil
+        do {
+            let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else {
+                throw InputParseError.invalidStationName
+            }
+            let trimmedCode = draft.code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard !draft.isNew || !trimmedCode.isEmpty else {
+                throw InputParseError.invalidStationCode
+            }
+            let rateMinor = try minorFromCurrencyInput(draft.rateText)
+            if let stationID = draft.stationID {
+                let updated: GamingStationDTO = try await session.authorized { token in
+                    try await APIClient.shared.patch(
+                        "gaming/stations/\(stationID)",
+                        body: GamingStationUpdateRequest(
+                            name: trimmedName,
+                            rate_per_hour_minor: rateMinor,
+                            is_active: draft.isActive,
+                            notes: draft.notes.nilIfBlank
+                        ),
+                        token: token,
+                        headers: ["X-Pricing-Token": pricingToken]
+                    )
+                }
+                replaceStation(updated)
+                notice = "\(updated.name) updated."
+            } else {
+                let created: GamingStationDTO = try await session.authorized { token in
+                    try await APIClient.shared.post(
+                        "gaming/stations",
+                        body: GamingStationCreateRequest(
+                            code: trimmedCode,
+                            name: trimmedName,
+                            type: draft.kind.rawValue,
+                            rate_per_hour_minor: rateMinor,
+                            branch_id: draft.branchID,
+                            notes: draft.notes.nilIfBlank
+                        ),
+                        token: token,
+                        headers: ["X-Pricing-Token": pricingToken]
+                    )
+                }
+                stations.append(created)
+                notice = "\(created.name) created."
+            }
+            editorDraft = nil
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func setActive(_ isActive: Bool, station: GamingStationDTO) async {
+        guard let pricingToken else { return }
+        savingStationID = station.id
+        defer { savingStationID = nil }
+        error = nil
+        notice = nil
+        do {
+            let updated: GamingStationDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "gaming/stations/\(station.id)",
+                    body: GamingStationUpdateRequest(name: nil, rate_per_hour_minor: nil, is_active: isActive, notes: nil),
+                    token: token,
+                    headers: ["X-Pricing-Token": pricingToken]
+                )
+            }
+            replaceStation(updated)
+            notice = updated.is_active ? "\(updated.name) enabled." : "\(updated.name) hidden from POS."
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func replaceStation(_ updated: GamingStationDTO) {
+        if let index = stations.firstIndex(where: { $0.id == updated.id }) {
+            stations[index] = updated
+        }
+    }
+}
+
+private struct PricingMenuRow: View {
+    let item: MenuItemDTO
+    @Binding var draft: PriceDraft
+    let isSaving: Bool
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: item.type == "service" ? "timer.circle.fill" : "fork.knife.circle.fill")
+                    .font(.title3)
+                    .foregroundColor(Brand.gold)
+                    .frame(width: 34, height: 34)
+                    .background(Brand.gold.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("\(item.sku) - \(item.type.capitalized)")
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(action: onSave) {
+                    HStack(spacing: 6) {
+                        if isSaving {
+                            ProgressView()
+                                .tint(.black)
+                                .scaleEffect(0.78)
+                        }
+                        Text("Save")
+                    }
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Brand.gold)
+                    .foregroundColor(.black)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaving)
+            }
+
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Price")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(Brand.muted)
+                    TextField("0.00", text: $draft.priceText)
+                        .keyboardType(.decimalPad)
+                        .nativeField()
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("GST %")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(Brand.muted)
+                    TextField("18", text: $draft.taxText)
+                        .keyboardType(.decimalPad)
+                        .nativeField()
+                }
+            }
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+private struct PricingStationRow: View {
+    let station: GamingStationDTO
+    @Binding var rateText: String
+    let isSaving: Bool
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: station.kind.icon)
+                    .font(.title3)
+                    .foregroundColor(Brand.gold)
+                    .frame(width: 34, height: 34)
+                    .background(Brand.gold.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(station.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Text("\(station.kind.title) - \(station.code)")
+                        .font(.caption)
+                        .foregroundColor(Brand.muted)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(action: onSave) {
+                    HStack(spacing: 6) {
+                        if isSaving {
+                            ProgressView()
+                                .tint(.black)
+                                .scaleEffect(0.78)
+                        }
+                        Text("Save")
+                    }
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Brand.gold)
+                    .foregroundColor(.black)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaving)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Rate per hour")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Brand.muted)
+                TextField("0.00", text: $rateText)
+                    .keyboardType(.decimalPad)
+                    .nativeField()
+            }
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+private struct StationSetupRow: View {
+    let station: GamingStationDTO
+    let isSaving: Bool
+    let onEdit: () -> Void
+    let toggleActive: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: station.kind.icon)
+                .font(.title3)
+                .foregroundColor(station.is_active ? Brand.gold : Brand.muted)
+                .frame(width: 38, height: 38)
+                .background((station.is_active ? Brand.gold : Brand.muted).opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(station.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Text("\(station.kind.title) - \(station.code) - \(inr(station.rate_per_hour_minor))/hr")
+                    .font(.caption)
+                    .foregroundColor(Brand.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 8) {
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .font(.headline)
+                        .frame(width: 38, height: 38)
+                        .background(Brand.elevated)
+                        .foregroundColor(Brand.gold)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: toggleActive) {
+                    Group {
+                        if isSaving {
+                            ProgressView()
+                                .tint(station.is_active ? Brand.danger : Brand.success)
+                        } else {
+                            Image(systemName: station.is_active ? "eye.fill" : "eye.slash.fill")
+                        }
+                    }
+                    .font(.headline)
+                    .frame(width: 38, height: 38)
+                    .background((station.is_active ? Brand.success : Brand.danger).opacity(0.12))
+                    .foregroundColor(station.is_active ? Brand.success : Brand.danger)
+                    .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaving)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+private struct StationEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: StationEditorDraft
+
+    let branches: [BranchDTO]
+    let isSaving: Bool
+    let onSave: (StationEditorDraft) -> Void
+
+    init(
+        draft: StationEditorDraft,
+        branches: [BranchDTO],
+        isSaving: Bool,
+        onSave: @escaping (StationEditorDraft) -> Void
+    ) {
+        self._draft = State(initialValue: draft)
+        self.branches = branches
+        self.isSaving = isSaving
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text(draft.isNew ? "New service" : "Edit service")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+
+                                TextField("Code, e.g. PS5-01", text: $draft.code)
+                                    .textInputAutocapitalization(.characters)
+                                    .autocorrectionDisabled()
+                                    .nativeField()
+                                    .disabled(!draft.isNew)
+                                    .opacity(draft.isNew ? 1 : 0.65)
+
+                                TextField("Display name", text: $draft.name)
+                                    .textInputAutocapitalization(.words)
+                                    .nativeField()
+
+                                Picker("Type", selection: $draft.kind) {
+                                    ForEach(GamingStationKind.allCases) { kind in
+                                        Text(kind.title).tag(kind)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(Brand.gold)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Brand.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                                TextField("Rate per hour", text: $draft.rateText)
+                                    .keyboardType(.decimalPad)
+                                    .nativeField()
+
+                                Toggle(isOn: $draft.isActive) {
+                                    Label("Visible in POS", systemImage: "eye")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white)
+                                }
+                                .toggleStyle(SwitchToggleStyle(tint: Brand.gold))
+
+                                if draft.isNew && !branches.isEmpty {
+                                    Picker("Branch", selection: $draft.branchID) {
+                                        Text("Default branch").tag(nil as String?)
+                                        ForEach(branches) { branch in
+                                            Text(branch.name).tag(branch.id as String?)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .tint(Brand.gold)
+                                    .foregroundColor(.white)
+                                    .padding(12)
+                                    .background(Brand.surface)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
+
+                                TextField("Notes optional", text: $draft.notes)
+                                    .nativeField()
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle(draft.isNew ? "Add Service" : "Edit Service")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        onSave(draft)
+                    } label: {
+                        if isSaving {
+                            ProgressView()
+                                .tint(Brand.gold)
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .disabled(!canSave || isSaving)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private var canSave: Bool {
+        !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !draft.rateText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!draft.isNew || !draft.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+}
+
 private struct DeviceIntegrationsNativeView: View {
     @EnvironmentObject private var cache: AppCache
     @State private var showScanner = false
@@ -3594,6 +5476,134 @@ private struct CartLine: Identifiable {
     let item: MenuItemDTO
     let quantity: Int
     var id: String { item.id }
+}
+
+private struct POSCartEditorCard: View {
+    let rows: [CartLine]
+    let totalMinor: Int
+    let increment: (MenuItemDTO) -> Void
+    let decrement: (MenuItemDTO) -> Void
+    let clear: () -> Void
+    let charge: () -> Void
+
+    private var itemCount: Int {
+        rows.reduce(0) { $0 + $1.quantity }
+    }
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Current Bill")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text("\(itemCount) items ready to charge")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Text(inr(totalMinor))
+                        .font(.title3.weight(.bold))
+                        .foregroundColor(Brand.softGold)
+                }
+
+                VStack(spacing: 8) {
+                    ForEach(Array(rows.prefix(4))) { row in
+                        POSCartEditorLine(row: row) {
+                            decrement(row.item)
+                        } increment: {
+                            increment(row.item)
+                        }
+                    }
+
+                    if rows.count > 4 {
+                        Text("\(rows.count - 4) more bill lines")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(Brand.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button(role: .destructive, action: clear) {
+                        Label("Clear", systemImage: "trash")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Brand.danger)
+                    .background(Brand.danger.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    Button(action: charge) {
+                        Label("Charge", systemImage: "creditcard")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.black)
+                    .background(Brand.gold)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+        }
+    }
+}
+
+private struct POSCartEditorLine: View {
+    let row: CartLine
+    let decrement: () -> Void
+    let increment: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.item.name)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Text("\(inr(row.item.base_price_minor)) each - \(inr(row.item.base_price_minor * row.quantity))")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Brand.muted)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 8) {
+                CartStepperButton(systemName: "minus", disabled: row.quantity == 0, action: decrement)
+                Text("\(row.quantity)")
+                    .font(.headline.monospacedDigit())
+                    .foregroundColor(.white)
+                    .frame(width: 32)
+                CartStepperButton(systemName: "plus", disabled: false, action: increment)
+            }
+        }
+        .padding(10)
+        .background(Brand.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+}
+
+private struct CartStepperButton: View {
+    let systemName: String
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.subheadline.weight(.heavy))
+                .frame(width: 36, height: 36)
+                .background(systemName == "plus" ? Brand.gold : Brand.surface)
+                .foregroundColor(systemName == "plus" ? .black : Brand.softGold)
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.45 : 1)
+    }
 }
 
 private struct CheckoutSheet: View {
@@ -4099,6 +6109,7 @@ private struct OwnerCommandCenter: View {
     let report: ReportDTO?
     let lowStockCount: Int
     let menuCount: Int
+    let canSeeInventory: Bool
     let isOnline: Bool
     let connectionLabel: String
 
@@ -4134,13 +6145,15 @@ private struct OwnerCommandCenter: View {
                         isReady: report != nil,
                         icon: "chart.line.uptrend.xyaxis"
                     )
-                    OperationalSignalRow(
-                        title: "Inventory",
-                        value: lowStockCount == 0 ? "No low stock" : "\(lowStockCount) low",
-                        detail: lowStockCount == 0 ? "Stock risk looks clear" : "Review reorder list before service",
-                        isReady: lowStockCount == 0,
-                        icon: lowStockCount == 0 ? "cube.box.fill" : "exclamationmark.triangle.fill"
-                    )
+                    if canSeeInventory {
+                        OperationalSignalRow(
+                            title: "Inventory",
+                            value: lowStockCount == 0 ? "No low stock" : "\(lowStockCount) low",
+                            detail: lowStockCount == 0 ? "Stock risk looks clear" : "Review reorder list before service",
+                            isReady: lowStockCount == 0,
+                            icon: lowStockCount == 0 ? "cube.box.fill" : "exclamationmark.triangle.fill"
+                        )
+                    }
                     OperationalSignalRow(
                         title: "Menu",
                         value: "\(menuCount) items",
@@ -4151,6 +6164,523 @@ private struct OwnerCommandCenter: View {
                 }
             }
         }
+    }
+}
+
+private struct ERPWorkflowCard: View {
+    let openTab: (NativeTab) -> Void
+    let canUseProtectedControls: Bool
+
+    private var columns: [GridItem] {
+        [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+    }
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Operate Cafe")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text("Billing, sessions, prices, stock, and control.")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Image(systemName: "bolt.fill")
+                        .foregroundColor(Brand.gold)
+                }
+
+                LazyVGrid(columns: columns, spacing: 10) {
+                    Button {
+                        Haptics.selection()
+                        openTab(.pos)
+                    } label: {
+                        OperationCommandTile(title: "New Bill", subtitle: "Food, drinks, services", icon: "cart.badge.plus", isPrimary: true)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        Haptics.selection()
+                        openTab(.gaming)
+                    } label: {
+                        OperationCommandTile(title: "Sessions", subtitle: "PS5, VR, shisha", icon: "gamecontroller.fill")
+                    }
+                    .buttonStyle(.plain)
+
+                    if canUseProtectedControls {
+                        NavigationLink {
+                            PricingNativeView()
+                        } label: {
+                            OperationCommandTile(title: "Prices", subtitle: "Owner locked", icon: "indianrupeesign.circle")
+                        }
+                        .buttonStyle(.plain)
+
+                        NavigationLink {
+                            StationManagementNativeView()
+                        } label: {
+                            OperationCommandTile(title: "Services", subtitle: "Add station", icon: "plus.circle")
+                        }
+                        .buttonStyle(.plain)
+
+                        NavigationLink {
+                            InventoryNativeView()
+                        } label: {
+                            OperationCommandTile(title: "Stock", subtitle: "Reorder risk", icon: "cube.box")
+                        }
+                        .buttonStyle(.plain)
+
+                        NavigationLink {
+                            SettingsNativeView()
+                        } label: {
+                            OperationCommandTile(title: "Settings", subtitle: "GST, terminal", icon: "gearshape")
+                        }
+                        .buttonStyle(.plain)
+
+                        NavigationLink {
+                            AuditNativeView()
+                        } label: {
+                            OperationCommandTile(title: "Audit", subtitle: "Owner trail", icon: "shield.checkered")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct OperationCommandTile: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    var isPrimary = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(isPrimary ? .black : Brand.gold)
+                    .frame(width: 36, height: 36)
+                    .background(isPrimary ? Brand.gold : Brand.gold.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(isPrimary ? .black.opacity(0.55) : Brand.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(isPrimary ? .black : .white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Text(subtitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(isPrimary ? .black.opacity(0.65) : Brand.muted)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+        .padding(14)
+        .background(isPrimary ? Brand.gold : Brand.elevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Brand.gold.opacity(isPrimary ? 0 : 0.18), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct ServiceControlCard: View {
+    let canUseProtectedControls: Bool
+    let openPOS: () -> Void
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Service Control")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text("Set up billable cafe services once, then use them from sessions and POS.")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundColor(Brand.gold)
+                }
+
+                VStack(spacing: 8) {
+                    if canUseProtectedControls {
+                        NavigationLink {
+                            StationManagementNativeView()
+                        } label: {
+                            ERPWorkflowRow(number: "1", title: "Add PS5, VR, simulator, shisha, streaming", subtitle: "Create station/service records and hourly rates", icon: "plus.circle")
+                        }
+
+                        NavigationLink {
+                            PricingNativeView()
+                        } label: {
+                            ERPWorkflowRow(number: "2", title: "Update rates", subtitle: "Change session and menu pricing under owner lock", icon: "indianrupeesign.circle")
+                        }
+                    }
+
+                    Button {
+                        Haptics.selection()
+                        openPOS()
+                    } label: {
+                        ERPWorkflowRow(
+                            number: canUseProtectedControls ? "3" : "1",
+                            title: "Bill in POS",
+                            subtitle: "Charge session, service, food, and drink items",
+                            icon: "receipt"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+private struct POSShiftCommandCard: View {
+    let shift: ShiftDTO?
+    let terminal: TerminalDTO?
+    let cartItems: Int
+    let cartTotalMinor: Int
+    let activeSessionCount: Int
+    let serviceCount: Int
+    let isSubmitting: Bool
+    let openSessions: () -> Void
+    let openShift: () -> Void
+    let openMenu: () -> Void
+    let reviewBill: () -> Void
+
+    private var isReady: Bool {
+        shift != nil && terminal != nil
+    }
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("POS Command")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(isReady ? "Ready for billing and receipt printing." : "Open a shift and terminal before charging.")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Text(isReady ? "Ready" : "Setup")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background((isReady ? Brand.success : Brand.danger).opacity(0.16))
+                        .foregroundColor(isReady ? Brand.success : Brand.danger)
+                        .clipShape(Capsule())
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    POSCommandMetric(title: "Shift", value: shift == nil ? "Closed" : "Open", icon: "clock.badge.checkmark", isReady: shift != nil)
+                    POSCommandMetric(title: "Terminal", value: terminal?.name ?? "Missing", icon: "printer", isReady: terminal != nil)
+                    POSCommandMetric(title: "Cart", value: "\(cartItems) items", icon: "cart.fill", isReady: cartItems > 0)
+                    POSCommandMetric(title: "Total", value: inr(cartTotalMinor), icon: "indianrupeesign.circle", isReady: cartTotalMinor > 0)
+                }
+
+                HStack(spacing: 10) {
+                    POSCommandButton(title: "Menu", icon: "menucard", action: openMenu)
+                    POSCommandButton(title: "Sessions", icon: "timer", action: openSessions)
+                    POSCommandButton(title: "Bill", icon: "receipt", action: reviewBill)
+                        .opacity(cartItems == 0 ? 0.48 : 1)
+                        .disabled(cartItems == 0)
+                }
+
+                if shift == nil {
+                    Button(action: openShift) {
+                        Label(isSubmitting ? "Opening shift..." : "Open shift", systemImage: "clock.badge.plus")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.black)
+                    .background((terminal == nil || isSubmitting) ? Brand.muted.opacity(0.45) : Brand.gold)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .disabled(terminal == nil || isSubmitting)
+                }
+
+                Text("\(serviceCount) services configured - \(activeSessionCount) running now")
+                    .font(.caption)
+                    .foregroundColor(Brand.muted)
+            }
+        }
+    }
+}
+
+private struct POSCommandMetric: View {
+    let title: String
+    let value: String
+    let icon: String
+    let isReady: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(isReady ? Brand.gold : Brand.muted)
+                .frame(width: 30, height: 30)
+                .background((isReady ? Brand.gold : Brand.muted).opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Brand.muted)
+                Text(value)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(Brand.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+}
+
+private struct POSCommandButton: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.headline)
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Brand.gold.opacity(0.16))
+            .foregroundColor(Brand.softGold)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ServiceKindSummaryStrip: View {
+    let stations: [GamingStationDTO]
+    let activeSessions: [GamingSessionDTO]
+    let canManageServices: Bool
+    let openPOS: () -> Void
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Billable Services")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text("Configured service types available for timed billing.")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Text("\(stations.filter(\.is_active).count) active")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(Brand.softGold)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Brand.gold.opacity(0.13))
+                        .clipShape(Capsule())
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(GamingStationKind.allCases) { kind in
+                            ServiceKindPill(
+                                kind: kind,
+                                configuredCount: configuredCount(for: kind),
+                                runningCount: runningCount(for: kind)
+                            )
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+
+                HStack(spacing: 10) {
+                    if canManageServices {
+                        NavigationLink {
+                            StationManagementNativeView()
+                        } label: {
+                            Label("Manage services", systemImage: "slider.horizontal.3")
+                                .font(.caption.weight(.bold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Brand.gold)
+                                .foregroundColor(.black)
+                                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        }
+                    }
+
+                    Button {
+                        Haptics.selection()
+                        openPOS()
+                    } label: {
+                        Label("Open POS", systemImage: "receipt")
+                            .font(.caption.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(Brand.gold.opacity(0.16))
+                            .foregroundColor(Brand.softGold)
+                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func configuredCount(for kind: GamingStationKind) -> Int {
+        stations.filter { $0.is_active && $0.kind == kind }.count
+    }
+
+    private func runningCount(for kind: GamingStationKind) -> Int {
+        let stationIDs = Set(stations.filter { $0.kind == kind }.map(\.id))
+        return activeSessions.filter { $0.status == "active" && stationIDs.contains($0.station_id) }.count
+    }
+}
+
+private struct ServiceKindPill: View {
+    let kind: GamingStationKind
+    let configuredCount: Int
+    let runningCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: kind.icon)
+                .font(.headline)
+                .foregroundColor(configuredCount == 0 ? Brand.muted : Brand.gold)
+            Text(kind.title)
+                .font(.caption.weight(.bold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+            Text(configuredCount == 0 ? "Add" : "\(configuredCount) setup")
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(configuredCount == 0 ? Brand.danger : Brand.softGold)
+            if runningCount > 0 {
+                Text("\(runningCount) running")
+                    .font(.caption2.weight(.bold))
+                    .foregroundColor(Brand.success)
+            }
+        }
+        .frame(width: 96, alignment: .leading)
+        .padding(12)
+        .background(Brand.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+    }
+}
+
+private struct ServicePresetButton: View {
+    let kind: GamingStationKind
+    let configuredCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: kind.icon)
+                        .font(.headline)
+                        .foregroundColor(Brand.gold)
+                    Spacer()
+                    Text("\(configuredCount)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(configuredCount == 0 ? Brand.muted : Brand.success)
+                }
+
+                Text(kind.title)
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Text("\(inr(kind.defaultRateMinor))/hr")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Brand.softGold)
+            }
+            .frame(width: 112, alignment: .leading)
+            .padding(12)
+            .background(Brand.elevated)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(Brand.gold.opacity(0.16), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ERPWorkflowRow: View {
+    let number: String
+    let title: String
+    let subtitle: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(number)
+                .font(.caption.weight(.bold))
+                .foregroundColor(.black)
+                .frame(width: 28, height: 28)
+                .background(Brand.gold)
+                .clipShape(Circle())
+
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(Brand.gold)
+                .frame(width: 30, height: 30)
+                .background(Brand.gold.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(Brand.muted)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundColor(Brand.muted)
+        }
+        .padding(12)
+        .background(Brand.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -4837,7 +7367,7 @@ private struct MenuCatalogRow: View {
                     .foregroundColor(Brand.softGold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.80)
-                Text("GST \(String(format: "%.1f", item.tax_rate))%")
+                Text("GST \(taxInput(item.tax_rate))%")
                     .font(.caption2.weight(.semibold))
                     .foregroundColor(Brand.muted)
             }
@@ -5030,9 +7560,9 @@ private struct GamingSessionSheet: View {
                                     .font(.headline)
                                     .foregroundColor(.white)
 
-                                Stepper(value: $draft.partySize, in: 1...8) {
+                                Stepper(value: $draft.partySize, in: 1...12) {
                                     HStack {
-                                        Label("Players", systemImage: "person.2")
+                                        Label(draft.station.kind.participantLabel, systemImage: "person.2")
                                             .font(.subheadline.weight(.semibold))
                                             .foregroundColor(.white)
                                         Spacer()
@@ -5714,6 +8244,43 @@ private func inr(_ minor: Int) -> String {
     return NumberFormatters.inr.string(from: NSNumber(value: rupees)) ?? "INR \(String(format: "%.2f", rupees))"
 }
 
+private func currencyInput(_ minor: Int) -> String {
+    let rupees = Double(minor) / 100
+    if rupees.rounded() == rupees {
+        return String(format: "%.0f", rupees)
+    }
+    return String(format: "%.2f", rupees)
+}
+
+private func taxInput(_ rate: Double) -> String {
+    let percent = rate <= 1 ? rate * 100 : rate
+    if percent.rounded() == percent {
+        return String(format: "%.0f", percent)
+    }
+    return String(format: "%.2f", percent)
+}
+
+private func minorFromCurrencyInput(_ value: String) throws -> Int {
+    let cleaned = value
+        .replacingOccurrences(of: "₹", with: "")
+        .replacingOccurrences(of: ",", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty, let amount = Double(cleaned), amount >= 0 else {
+        throw InputParseError.invalidMoney
+    }
+    return Int((amount * 100).rounded())
+}
+
+private func taxRateFromInput(_ value: String) throws -> Double {
+    let cleaned = value
+        .replacingOccurrences(of: "%", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty, let percent = Double(cleaned), percent >= 0, percent <= 100 else {
+        throw InputParseError.invalidTax
+    }
+    return percent / 100
+}
+
 private func decimalString(_ value: Double) -> String {
     return NumberFormatters.decimal.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
 }
@@ -5731,6 +8298,26 @@ private func readable(_ error: Error) -> String {
 
 private func readableAction(_ value: String) -> String {
     value.replacingOccurrences(of: "_", with: " ").capitalized
+}
+
+private enum InputParseError: LocalizedError {
+    case invalidMoney
+    case invalidTax
+    case invalidStationName
+    case invalidStationCode
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidMoney:
+            return "Enter a valid rupee amount, for example 180 or 180.50."
+        case .invalidTax:
+            return "Enter GST as a percentage from 0 to 100, for example 5, 12, or 18."
+        case .invalidStationName:
+            return "Station name is required."
+        case .invalidStationCode:
+            return "Station code is required."
+        }
+    }
 }
 
 private extension String {

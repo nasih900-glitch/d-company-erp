@@ -16,7 +16,6 @@ import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-complia
 import {
   menu, menuAdmin, type MenuItemDTO, type MenuCategoryDTO,
 } from '@/lib/erp-api';
-import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
 type ItemType = 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
@@ -29,8 +28,7 @@ function defaultTaxMeta(type: ItemType) {
 }
 
 export default function MenuScreen() {
-  const { me, demo } = useAuth();
-  const canManageMenu = Boolean(demo || me?.protected_access);
+  const canManageMenu = true;
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [cats, setCats] = useState<MenuCategoryDTO[]>([]);
   const [q, setQ] = useState('');

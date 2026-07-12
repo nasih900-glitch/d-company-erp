@@ -1,137 +1,159 @@
-# D Company ERP App Store Submission Checklist
+# D Company Private App Submission Checklist
 
-This project is now prepared as a Capacitor iOS app, but final App Store upload still has to be done from Xcode with your Apple Developer account.
+This app is now positioned as a private/custom D Company ERP app. Do not submit it as a normal public App Store app. Apple already flagged the public submission under Guideline 3.2 because the app is intended for one business, its staff, owners, partners, or approved operators. That assessment is correct.
 
-## What Apple Will Check
+## Current Private App Build
 
-- Build with the current required Apple SDK in Xcode 26 or newer.
-- The app must be complete, stable, and use HTTPS for backend traffic.
-- Privacy details in App Store Connect must match the app's data collection.
-- A working support URL and privacy policy URL must be provided.
-- The reviewer must be able to sign in with a demo account.
-- Apps that facilitate tobacco, vape, or other controlled-substance sales can be rejected, so the App Store review build hides hookah/tobacco surfaces.
+- App name: `D Company ERP`
+- Bundle ID: `cloud.dcompany.erp`
+- Version: `1.0`
+- Build: `7` or newer
+- iOS root view: `NativeERPAppView`
+- Backend: `https://dcompany.duckdns.org/api/v1/`
+- Sign-in: required
+- Distribution: Apple Business Manager custom app / private distribution
 
-Official references:
+## What The App Is
 
-- https://developer.apple.com/app-store/submitting/
-- https://developer.apple.com/app-store/review/guidelines/
-- https://developer.apple.com/documentation/bundleresources/privacy-manifest-files
+D Company ERP is a private operations app for D Company cafe, games, lounge, shisha, and streaming operations. It is for authorized users only.
 
-## Build The App Store Version
+The app includes:
 
-Run this from the project frontend folder:
+- POS billing and order handling
+- Gaming, VR, simulator, shisha, and streaming session management
+- Inventory, stock movement, and supplier control
+- Pricing, settings, staff, and owner controls
+- Reports, analytics, P&L, and operational summaries
+- Audit logs for sensitive business actions
 
-```bash
-cd "/path/to/d-company-erp/frontend"
-npm run ios:prepare:store
-npm run ios:open
-```
+It is not a general public consumer app. It should not be discoverable by normal App Store users.
 
-The `ios:prepare:store` script builds with:
+## Apple Review Position
 
-- `VITE_API_URL=https://dcompany.duckdns.org/api/v1`
-- `VITE_ROUTER_MODE=hash`
-- `VITE_APP_STORE_REVIEW=true`
-
-That last flag is important. It keeps the normal ERP behavior for the live web/VPS build, but hides hookah/tobacco-related UI in the App Store build.
-
-## Xcode Steps
-
-1. Open `frontend/ios/App/App.xcodeproj`.
-2. Select the `App` target.
-3. Confirm the bundle identifier is `cloud.dcompany.erp`.
-4. Set Team to your paid Apple Developer team.
-5. Confirm signing is automatic.
-6. Confirm deployment target and device families are correct for iPhone/iPad.
-7. Product -> Archive.
-8. In Organizer, Distribute App -> App Store Connect -> Upload.
-
-The live backend must allow the Capacitor app origins in `CORS_ORIGINS`:
+Use this direction in App Review responses:
 
 ```text
-https://localhost
-capacitor://localhost
-ionic://localhost
+We agree this app is intended for a specific business. This submission is being moved to private/custom distribution through Apple Business Manager. D Company ERP is for authorized D Company staff, owners, and approved business users only. It is not intended for general public discovery on the App Store.
+
+The app supports private business operations including POS, inventory, session management, reports, pricing/settings, and audit logs. Sign-in is required and access is granted by D Company.
 ```
-
-Without those origins, the iOS app opens but login fails with a generic network error.
-
-If Xcode blocks you with license terms, run this in Terminal first:
-
-```bash
-sudo xcodebuild -license
-```
-
-If Xcode says the iOS platform is not installed, open Xcode -> Settings -> Components and install the latest iOS platform, then archive again.
 
 ## App Store Connect Metadata
 
-Use these values unless you want different branding:
+Use these values:
 
 - App name: `D Company ERP`
+- Subtitle: `Private cafe operations`
 - Category: `Business`
 - Secondary category: `Productivity`
 - Privacy Policy URL: `https://dcompany.duckdns.org/privacy.html`
 - Support URL: `https://dcompany.duckdns.org/support.html`
 - Copyright: `D Company`
+- Sign-in required: checked
 
-You must deploy the latest frontend before submission so those two URLs work publicly.
+Keywords:
+
+```text
+erp,pos,inventory,reports,audit,cafe,operations
+```
+
+Promotional text:
+
+```text
+Private operations app for D Company POS, inventory, reports, sessions, pricing, and audit tracking.
+```
+
+Description:
+
+```text
+D Company ERP is a private custom operations app for authorized D Company users. It supports cafe POS, orders, inventory, gaming and lounge sessions, shisha and streaming sessions, pricing controls, staff workflows, reports, P&L visibility, and audit tracking.
+
+Access is restricted to approved D Company users. Sign-in is required.
+```
 
 ## Privacy Labels
 
-The iOS project includes `PrivacyInfo.xcprivacy`, but App Store Connect privacy labels still need manual entry.
+Do not answer `Data Not Collected` for this private ERP build. That was only suitable for the old public venue shell.
 
-Expected data categories:
+Recommended App Store privacy direction:
 
-- Contact Info: name, email address, phone number
-- Identifiers: user ID
-- Purchases: purchase history
-- Financial Info: business finance/expense records
+- Tracking: `No`
+- Third-party advertising: `No`
+- Data sold: `No`
+- Data used for third-party advertising: `No`
 
-Expected answers:
+Data handled by the app may include:
 
-- Data is linked to user/business records.
-- Data is used for app functionality.
-- No third-party advertising.
-- No tracking across other companies' apps or websites.
+- Name, email address, user ID, role, and login status
+- Phone number or customer contact details when entered for orders or billing
+- Purchases, orders, invoices, refunds, payments, and POS records
+- Inventory records, suppliers, stock movements, and pricing changes
+- Staff activity, audit logs, timestamps, and security events
+- Photos or scans only when an authorized user chooses OCR/document scanning
+- Device, IP, error, and server logs needed for security and reliability
+
+Purpose:
+
+- App functionality
+- Business operations
+- Fraud prevention and security
+- Legal, accounting, tax, and audit compliance
+
+Do not mark any data as used for advertising or cross-app tracking.
+
+## Screenshots
+
+For private/custom distribution, ERP screenshots are acceptable, but use demo data only.
+
+Upload:
+
+- iPhone 6.5-inch screenshots
+- 13-inch iPad screenshots
+
+Recommended screenshot set:
+
+- Login
+- Home/workspace
+- POS checkout
+- Gaming/session management
+- Inventory
+- Reports/P&L
+- Audit Log locked screen or clean demo audit entries
+
+Do not show:
+
+- Real customer data
+- Real phone numbers
+- Real payment details
+- Real owner passwords
+- Real audit entries
+- Live private financial numbers
 
 ## Review Notes
 
-Put this in App Review notes:
+Enter the demo account only in App Store Connect review fields, not in committed files.
 
 ```text
-D Company ERP is a private staff/admin ERP for our cafe operations. It manages POS, orders, inventory, finance, audit logs, reports, customers, memberships, and staff access.
+This app is a private custom app for D Company operations. Sign-in is required. Access is limited to authorized D Company users.
 
-The app does not sell digital goods or unlock digital content for consumers. Any payments recorded in the app are for physical goods/services handled by the business outside Apple's digital content system.
+The app supports private business workflows including POS, inventory, gaming/shisha/streaming session management, pricing controls, reports, and audit logs.
 
-This App Store build hides controlled-substance/tobacco-related business surfaces. The review account has limited demo data and can be used to inspect the app.
-
-Demo login:
-Email: [create a dedicated reviewer account]
-Password: [create a temporary reviewer password]
+Please do not publish this app for public App Store discovery. It is intended for private/custom distribution to D Company through Apple Business Manager.
 ```
 
-Do not give Apple your real owner password. Create a separate review account with enough permissions to inspect the app and delete or rotate it after review.
+## Before Resubmission
 
-## Screenshots Needed
+1. Cancel or replace the public App Store review submission if it is still active.
+2. In App Store Connect, use private/custom distribution rather than public App Store availability.
+3. Add the D Company Apple Business Manager organization/customer for custom app distribution.
+4. Archive and upload build `7` or newer from Xcode.
+5. Select the new build in App Store Connect.
+6. Set sign-in required to checked.
+7. Fill privacy labels as data collected, not `Data Not Collected`.
+8. Upload only demo/sanitized screenshots.
+9. Put demo credentials in the App Review sign-in fields.
+10. Submit the private/custom app for review.
 
-Prepare screenshots for each device size Apple asks for in App Store Connect. Use clean demo data only.
+## Separate Public ERP Product
 
-Recommended screens:
-
-- Login
-- POS
-- Inventory
-- Reports
-- Audit Log locked state
-- Settings or dashboard
-
-## Hard Blockers Before Upload
-
-- Accept the Xcode license on this Mac.
-- Install the latest iOS platform from Xcode -> Settings -> Components.
-- Create a dedicated App Review demo account.
-- Deploy latest frontend so `/privacy.html` and `/support.html` are live.
-- Confirm production `CORS_ORIGINS` includes the Capacitor iOS origins listed above.
-- Confirm the live backend is reachable over HTTPS from outside your network.
-- Archive and upload from Xcode with your Apple Developer team.
+If you want a public SaaS ERP later, keep it separate from D Company. Use the separate public-product plan in `docs/PUBLIC_ERP_PRODUCT.md`. That product needs generic branding, public signup, company workspace creation, tenant isolation, subscription/payment design, and public support/legal pages.

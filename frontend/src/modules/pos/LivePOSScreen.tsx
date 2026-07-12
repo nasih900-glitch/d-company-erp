@@ -23,15 +23,21 @@ import {
   memberships,
   menu,
   pos,
+  settings,
   type CustomerDTO,
   type MembershipTierDTO,
   type MenuItemDTO,
   type OrderDTO,
   type SubscriptionDTO,
 } from '@/lib/erp-api';
-import { COMPANY } from '@/lib/demo-data';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
+import { useAuth } from '@/modules/auth/AuthContext';
 import LiveReceipt from './LiveReceipt';
+import {
+  buildReceiptBusinessDetails,
+  receiptConfigurationIssue,
+  type ReceiptBusinessDetails,
+} from './receipt-business';
 
 type CartLine = { item: MenuItemDTO; qty: number };
 type PayMethod = 'cash' | 'upi' | 'card' | 'qr';
@@ -45,6 +51,7 @@ const CATEGORY_FROM_TYPE: Record<string, string> = {
 };
 
 export default function LivePOSScreen() {
+  const { me } = useAuth();
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [shiftId, setShiftId] = useState<string | null>(() => localStorage.getItem('shift_id'));
   const [loading, setLoading] = useState(true);
@@ -67,6 +74,8 @@ export default function LivePOSScreen() {
   const [showPay, setShowPay] = useState(false);
   const [paying, setPaying] = useState(false);
   const [receipt, setReceipt] = useState<OrderDTO | null>(null);
+  const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
+  const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
   const pendingOrderRef = useRef<OrderDTO | null>(null);
   const checkoutKeyRef = useRef<string | null>(null);
 
@@ -93,6 +102,30 @@ export default function LivePOSScreen() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setReceiptSettingsError(null);
+    Promise.all([settings.getCompany(), settings.listBranches()])
+      .then(([company, branches]) => {
+        if (cancelled) return;
+        const branch = branches.find((candidate) => candidate.id === me?.branch_id) ?? branches[0] ?? null;
+        if (!branch) {
+          setReceiptBusiness(null);
+          setReceiptSettingsError('No branch is configured. Add a branch in Settings before using POS.');
+          return;
+        }
+        const details = buildReceiptBusinessDetails(company, branch, me?.name);
+        setReceiptBusiness(details);
+        setReceiptSettingsError(receiptConfigurationIssue(details));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setReceiptBusiness(null);
+        setReceiptSettingsError('Receipt settings could not be loaded. Refresh before charging an order.');
+      });
+    return () => { cancelled = true; };
+  }, [me?.branch_id, me?.name]);
 
   // Group by type into pseudo-categories
   const categories = useMemo(() => {
@@ -207,7 +240,10 @@ export default function LivePOSScreen() {
   }
 
   async function pay(method: PayMethod) {
-    if (!cart.length || !shiftId) return;
+    if (!cart.length || !shiftId || !receiptBusiness || receiptSettingsError) {
+      if (receiptSettingsError) setError(receiptSettingsError);
+      return;
+    }
     setPaying(true);
     setError(null);
     try {
@@ -252,7 +288,7 @@ export default function LivePOSScreen() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96 text-fg-muted">
-        <Loader2 className="animate-spin mr-2" /> Connecting to {COMPANY.name} backend…
+        <Loader2 className="animate-spin mr-2" /> Connecting to D Company backend…
       </div>
     );
   }
@@ -320,6 +356,13 @@ export default function LivePOSScreen() {
               </p>
             )}
           </section>
+        )}
+
+        {receiptSettingsError && (
+          <div className="mb-4 flex max-w-3xl items-start gap-2 rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-sm text-accent-bad">
+            <AlertCircle size={16} className="mt-0.5 shrink-0"/>
+            <span>{receiptSettingsError}</span>
+          </div>
         )}
 
         <CustomerAttachPanel
@@ -435,7 +478,7 @@ export default function LivePOSScreen() {
           <p className="text-xs text-fg-muted mt-1">Final GST split &amp; round-off computed by backend on charge.</p>
         </div>
 
-        <button onClick={() => setShowPay(true)} disabled={!cart.length || paying}
+        <button onClick={() => setShowPay(true)} disabled={!cart.length || paying || !receiptBusiness || !!receiptSettingsError}
           className="btn btn-primary mt-3 disabled:opacity-40 disabled:cursor-not-allowed">
           <ReceiptIcon size={16} /> Charge {inr(estimatedPayable)}
         </button>
@@ -512,7 +555,8 @@ export default function LivePOSScreen() {
               setShowCart(false);
               setShowPay(true);
             }}
-            className="btn btn-primary mt-4 w-full"
+            disabled={!receiptBusiness || !!receiptSettingsError}
+            className="btn btn-primary mt-4 w-full disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ReceiptIcon size={16}/> Continue to payment · {inr(estimatedPayable)}
           </button>
@@ -540,9 +584,9 @@ export default function LivePOSScreen() {
         </Modal>
       )}
 
-      {receipt && (
+      {receipt && receiptBusiness && (
         <Modal title="Receipt" onClose={() => setReceipt(null)} wide>
-          <LiveReceipt order={receipt} />
+          <LiveReceipt order={receipt} business={receiptBusiness} />
           <div className="flex gap-2 mt-4 print:hidden">
             <button onClick={() => window.print()} className="btn btn-primary flex-1"><ReceiptIcon size={16}/> Print</button>
             <button onClick={() => setReceipt(null)} className="btn btn-ghost"><Check size={16}/> Done</button>

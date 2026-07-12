@@ -1,16 +1,17 @@
-"""Auth endpoints — login, refresh, me."""
+"""Auth endpoints — login, refresh, account registration, and password recovery."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.db import SessionDep
-from app.core.errors import AuthError
+from app.core.errors import AuthError, BusinessRuleError, ConflictError, ServiceUnavailableError
 from app.core.roles import has_protected_owner_access, public_roles
 from app.core.security import (
     decode_token,
@@ -20,7 +21,16 @@ from app.core.security import (
     verify_password,
 )
 from app.core.tenant import TenantDep
-from app.models import AuditLog, Company, Role, User, UserRole
+from app.models import AuditLog, Branch, Company, Role, User, UserRole
+from app.services.audit.recorder import set_actor
+from app.services.auth.otp import (
+    OTP_PASSWORD_RESET,
+    OTP_REGISTER,
+    consume_challenge,
+    create_challenge,
+    masked_security_email,
+    normalize_account_email,
+)
 
 router = APIRouter()
 
@@ -55,16 +65,133 @@ class MeResponse(BaseModel):
     branch_id: str | None
 
 
+class OtpChallengeResponse(BaseModel):
+    challenge_id: UUID
+    expires_in: int
+    destination: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class PasswordResetConfirm(BaseModel):
+    challenge_id: UUID
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=10, max_length=256)
+
+
+class RegistrationRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=200)
+    phone: str | None = Field(default=None, max_length=20)
+    password: str = Field(min_length=10, max_length=256)
+
+
+class RegistrationConfirm(BaseModel):
+    challenge_id: UUID
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class AccountActionResponse(BaseModel):
+    message: str
+
+
 async def _fallback_company_id(session: SessionDep):
     company = (await session.execute(select(Company).limit(1))).scalar_one_or_none()
     return company.id if company else None
 
 
+async def _account_security_company(session: SessionDep) -> Company:
+    configured_id = get_settings().account_security_company_id
+    if configured_id:
+        company = (
+            await session.execute(
+                select(Company).where(
+                    Company.id == configured_id,
+                    Company.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if company:
+            return company
+        raise ServiceUnavailableError("account registration company is not available")
+
+    companies = (
+        await session.execute(
+            select(Company).where(Company.deleted_at.is_(None)).limit(2)
+        )
+    ).scalars().all()
+    if len(companies) != 1:
+        raise ServiceUnavailableError("account registration company is not configured")
+    return companies[0]
+
+
+async def _default_branch_id(session: SessionDep, company_id: UUID) -> UUID | None:
+    return (
+        await session.execute(
+            select(Branch.id)
+            .where(
+                Branch.company_id == company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .order_by(Branch.created_at.asc(), Branch.id.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _roles_and_branch(
+    session: SessionDep,
+    user: User,
+) -> tuple[list[str], UUID | None]:
+    rows = (
+        await session.execute(
+            select(Role.code, UserRole.branch_id)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .where(UserRole.user_id == user.id)
+            .order_by(UserRole.created_at.asc(), UserRole.id.asc())
+        )
+    ).all()
+    roles = [row.code for row in rows]
+    assigned_branch_id = next(
+        (row.branch_id for row in rows if row.branch_id is not None),
+        None,
+    )
+    return roles, assigned_branch_id or await _default_branch_id(session, user.company_id)
+
+
+async def _optional_requester(
+    request: Request,
+    session: SessionDep,
+    company_id: UUID,
+) -> User | None:
+    authorization = request.headers.get("authorization", "")
+    if not authorization.lower().startswith("bearer "):
+        return None
+    try:
+        claims = decode_token(authorization.split(" ", 1)[1])
+        if claims.get("type") != "access":
+            return None
+        user = await session.get(User, UUID(claims["sub"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        not user
+        or user.company_id != company_id
+        or user.deleted_at
+        or user.status != "active"
+    ):
+        return None
+    return user
+
+
 def _request_ip(request: Request) -> str | None:
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    return request.client.host if request.client else None
+    value = forwarded.split(",", 1)[0].strip() if forwarded else None
+    if not value and request.client:
+        value = request.client.host
+    return value[:64] if value else None
 
 
 def _audit_auth_event(
@@ -98,8 +225,220 @@ def _audit_auth_event(
     )
 
 
+@router.post(
+    "/register/request",
+    response_model=OtpChallengeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_registration(
+    payload: RegistrationRequest,
+    request: Request,
+    session: SessionDep,
+) -> OtpChallengeResponse:
+    company = await _account_security_company(session)
+    email = normalize_account_email(payload.email)
+    name = payload.name.strip()
+    if not name:
+        raise BusinessRuleError("enter the account holder's name")
+    existing = (
+        await session.execute(
+            select(User).where(User.company_id == company.id, User.email == email)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise ConflictError("a login with this email already exists")
+    requester = await _optional_requester(request, session, company.id)
+    challenge = await create_challenge(
+        session,
+        request,
+        purpose=OTP_REGISTER,
+        company_id=company.id,
+        target_email=email,
+        target_user_id=None,
+        requested_by_user_id=requester.id if requester else None,
+        pending_name=name,
+        pending_phone=(payload.phone.strip() or None) if payload.phone else None,
+        pending_role_code="owner",
+        pending_password_hash=hash_password(payload.password),
+    )
+    return OtpChallengeResponse(
+        challenge_id=challenge.id,
+        expires_in=get_settings().account_otp_ttl_minutes * 60,
+        destination=masked_security_email(),
+    )
+
+
+@router.post(
+    "/register/confirm",
+    response_model=AccountActionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_registration(
+    payload: RegistrationConfirm,
+    request: Request,
+    session: SessionDep,
+) -> AccountActionResponse:
+    challenge = await consume_challenge(
+        session,
+        challenge_id=payload.challenge_id,
+        code=payload.code,
+        purpose=OTP_REGISTER,
+    )
+    if not challenge.pending_name or not challenge.pending_password_hash:
+        raise BusinessRuleError("invalid or expired approval code")
+    existing = (
+        await session.execute(
+            select(User).where(
+                User.company_id == challenge.company_id,
+                User.email == challenge.target_email,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise ConflictError("a login with this email already exists")
+    role_code = challenge.pending_role_code or "owner"
+    role = (
+        await session.execute(
+            select(Role).where(
+                Role.company_id == challenge.company_id,
+                Role.code == role_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if not role:
+        raise ServiceUnavailableError("the default account role is not configured")
+
+    set_actor(
+        user_id=challenge.requested_by_user_id,
+        company_id=challenge.company_id,
+        ip=_request_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    user = User(
+        id=uuid4(),
+        company_id=challenge.company_id,
+        email=challenge.target_email,
+        name=challenge.pending_name,
+        password_hash=challenge.pending_password_hash,
+        phone=challenge.pending_phone,
+        status="active",
+    )
+    session.add(user)
+    await session.flush()
+    session.add(
+        UserRole(
+            id=uuid4(),
+            user_id=user.id,
+            role_id=role.id,
+            branch_id=await _default_branch_id(session, challenge.company_id),
+            granted_by=challenge.requested_by_user_id,
+        )
+    )
+    session.add(
+        AuditLog(
+            actor_user_id=challenge.requested_by_user_id,
+            company_id=challenge.company_id,
+            action="otp_account_created",
+            entity_type="User",
+            entity_id=str(user.id),
+            before=None,
+            after={"email": user.email, "name": user.name, "role": role_code},
+            ip=_request_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    return AccountActionResponse(message="Login created. You can sign in now.")
+
+
+@router.post(
+    "/password-reset/request",
+    response_model=OtpChallengeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_password_reset(
+    payload: PasswordResetRequest,
+    request: Request,
+    session: SessionDep,
+) -> OtpChallengeResponse:
+    email = normalize_account_email(payload.email)
+    company = await _account_security_company(session)
+    user = (
+        await session.execute(
+            select(User).where(
+                User.company_id == company.id,
+                User.email == email,
+                User.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    requester = await _optional_requester(request, session, company.id)
+    challenge = await create_challenge(
+        session,
+        request,
+        purpose=OTP_PASSWORD_RESET,
+        company_id=company.id,
+        target_email=email,
+        target_user_id=user.id if user else None,
+        requested_by_user_id=requester.id if requester else None,
+    )
+    return OtpChallengeResponse(
+        challenge_id=challenge.id,
+        expires_in=get_settings().account_otp_ttl_minutes * 60,
+        destination=masked_security_email(),
+    )
+
+
+@router.post("/password-reset/confirm", response_model=AccountActionResponse)
+async def confirm_password_reset(
+    payload: PasswordResetConfirm,
+    request: Request,
+    session: SessionDep,
+) -> AccountActionResponse:
+    challenge = await consume_challenge(
+        session,
+        challenge_id=payload.challenge_id,
+        code=payload.code,
+        purpose=OTP_PASSWORD_RESET,
+    )
+    user = await session.get(User, challenge.target_user_id) if challenge.target_user_id else None
+    if (
+        not user
+        or user.company_id != challenge.company_id
+        or user.deleted_at
+        or user.email != challenge.target_email
+    ):
+        await session.commit()
+        raise BusinessRuleError("invalid or expired approval code")
+
+    set_actor(
+        user_id=challenge.requested_by_user_id,
+        company_id=challenge.company_id,
+        ip=_request_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    user.password_hash = hash_password(payload.new_password)
+    user.failed_login_count = 0
+    user.locked_until = None
+    user.auth_version += 1
+    session.add(
+        AuditLog(
+            actor_user_id=challenge.requested_by_user_id,
+            company_id=challenge.company_id,
+            action="otp_password_reset_success",
+            entity_type="User",
+            entity_id=str(user.id),
+            before=None,
+            after={"email": user.email, "approval": "central_email_otp"},
+            ip=_request_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    return AccountActionResponse(message="Password updated. You can sign in now.")
+
+
 @router.post("/login", response_model=TokenPair, status_code=status.HTTP_200_OK)
 async def login(payload: LoginRequest, request: Request, session: SessionDep) -> TokenPair:
+    settings = get_settings()
     email = payload.email.strip().lower()
     user = (
         await session.execute(select(User).where(User.email == email))
@@ -142,8 +481,10 @@ async def login(payload: LoginRequest, request: Request, session: SessionDep) ->
         raise AuthError("account temporarily locked")
     if not verify_password(payload.password, user.password_hash):
         user.failed_login_count = (user.failed_login_count or 0) + 1
-        if user.failed_login_count >= 5:
-            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+        if user.failed_login_count >= settings.failed_login_lockout_threshold:
+            user.locked_until = datetime.now(timezone.utc) + timedelta(
+                minutes=settings.failed_login_lockout_minutes
+            )
         _audit_auth_event(
             session=session,
             request=request,
@@ -165,14 +506,7 @@ async def login(payload: LoginRequest, request: Request, session: SessionDep) ->
     user.last_login_at = datetime.now(timezone.utc)
 
     # Roles
-    role_rows = (
-        await session.execute(
-            select(Role.code)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == user.id)
-        )
-    ).all()
-    roles = [r[0] for r in role_rows]
+    roles, branch_id = await _roles_and_branch(session, user)
 
     _audit_auth_event(
         session=session,
@@ -189,44 +523,64 @@ async def login(payload: LoginRequest, request: Request, session: SessionDep) ->
         user_id=user.id,
         company_id=user.company_id,
         roles=public_roles(roles),
+        branch_id=branch_id,
+        auth_version=user.auth_version,
         extra={"protected_access": protected_access},
     )
-    refresh = issue_refresh_token(user_id=user.id, jti=str(uuid4()))
+    refresh = issue_refresh_token(
+        user_id=user.id,
+        jti=str(uuid4()),
+        auth_version=user.auth_version,
+    )
 
-    return TokenPair(access_token=access, refresh_token=refresh, expires_in=15 * 60)
+    return TokenPair(
+        access_token=access,
+        refresh_token=refresh,
+        expires_in=settings.access_token_minutes * 60,
+    )
 
 
 @router.post("/refresh", response_model=TokenPair)
 async def refresh(payload: RefreshRequest, session: SessionDep) -> TokenPair:
+    settings = get_settings()
     try:
         claims = decode_token(payload.refresh_token)
     except ValueError as exc:
         raise AuthError(str(exc)) from exc
     if claims.get("type") != "refresh":
         raise AuthError("not a refresh token")
-    user_id = claims["sub"]
+    try:
+        user_id = UUID(claims["sub"])
+        auth_version = int(claims.get("auth_version", 0))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AuthError("malformed token claims") from exc
     user = (
         await session.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
     if not user or user.deleted_at or user.status != "active":
         raise AuthError("user not found")
-    role_rows = (
-        await session.execute(
-            select(Role.code)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == user.id)
-        )
-    ).all()
-    roles = [r[0] for r in role_rows]
+    if auth_version != user.auth_version:
+        raise AuthError("session expired")
+    roles, branch_id = await _roles_and_branch(session, user)
     protected_access = has_protected_owner_access(roles)
     access = issue_access_token(
         user_id=user.id,
         company_id=user.company_id,
         roles=public_roles(roles),
+        branch_id=branch_id,
+        auth_version=user.auth_version,
         extra={"protected_access": protected_access},
     )
-    new_refresh = issue_refresh_token(user_id=user.id, jti=str(uuid4()))
-    return TokenPair(access_token=access, refresh_token=new_refresh, expires_in=15 * 60)
+    new_refresh = issue_refresh_token(
+        user_id=user.id,
+        jti=str(uuid4()),
+        auth_version=user.auth_version,
+    )
+    return TokenPair(
+        access_token=access,
+        refresh_token=new_refresh,
+        expires_in=settings.access_token_minutes * 60,
+    )
 
 
 @router.get("/me", response_model=MeResponse)

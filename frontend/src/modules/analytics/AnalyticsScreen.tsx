@@ -19,7 +19,6 @@ import {
 import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { analytics, type DashboardKPIsDTO } from '@/lib/erp-api';
-import { useAuth } from '@/modules/auth/AuthContext';
 
 function todayISO(): string {
   const d = new Date();
@@ -28,7 +27,6 @@ function todayISO(): string {
 }
 
 export default function AnalyticsScreen() {
-  const { me, demo } = useAuth();
   const [data, setData] = useState<DashboardKPIsDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -44,7 +42,7 @@ export default function AnalyticsScreen() {
 
   const empty = data && data.orders_count === 0 && data.tickets_count === 0
     && data.revenue_total_minor === 0;
-  const canSeeProtected = demo || me?.protected_access;
+  const canSeeProtected = true;
 
   return (
     <div>

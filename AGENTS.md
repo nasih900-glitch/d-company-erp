@@ -35,7 +35,7 @@ Live at: <https://dcompany.duckdns.org>
 | **Frontend** | React 18, TypeScript strict, Vite, TailwindCSS, React Router (Hash router), axios, React Query, Recharts |
 | **Deploy** | Docker Compose · Caddy reverse proxy (auto-HTTPS via Let's Encrypt) · DigitalOcean or any VM |
 | **Domain** | `dcompany.duckdns.org` (DuckDNS, free) |
-| **DB migrations** | Alembic — 6 revisions so far (`0001` → `0006`) |
+| **DB migrations** | Alembic — 10 revisions so far (`0001` → `0010`) |
 | **Tax engine** | India GST · Kerala intra-state CGST+SGST · Section 9(5) for delivery aggregators · FY April→March |
 
 ---
@@ -48,7 +48,7 @@ Live at: <https://dcompany.duckdns.org>
 4. **Audit trail auto-records** every write on tracked models (see `app/services/audit/recorder.py`). To add a new model to the trail, append it to `TRACKED` — no per-endpoint code change.
 5. **Permissions** are enforced via `Depends(requires("perm.string"))`. Declared in `app/core/permissions.py`. **Don't use a permission string in code without declaring it first** — the diagnostic script catches drift.
 6. **Demo mode is permanently OFF**. `frontend/src/lib/demo.ts` hardcodes `LIVE_MODE = true`. Dead `if (!LIVE_MODE)` branches still exist in some screens — leave them; they're unreachable.
-7. **JWT secret must be ≥16 chars**. Pydantic settings validates this.
+7. **JWT secret must be at least 32 chars**. Pydantic settings validates this.
 8. **Schema changes require an alembic migration**. Never add a column to a model without writing `alembic/versions/000N_*.py`. The deploy entrypoint runs `alembic upgrade head`.
 9. **GST math is centralised** in `app/services/pos/pricing.py`. Don't re-implement tax splitting elsewhere.
 10. **Reports aggregator** is in `app/services/reports/aggregator.py`. All P&L reads go through it for consistency.
@@ -61,7 +61,7 @@ Live at: <https://dcompany.duckdns.org>
 # === Backend ===
 cd backend
 python -m compileall -q app                                # compile-check
-python -m pytest tests/ -q --no-header --no-cov            # all tests (26)
+python -m pytest tests/ -q --no-header --no-cov            # all tests
 python -m scripts.seed                                     # seed (idempotent)
 python -m scripts.create_user --email x --name X --role owner --password Y
 
@@ -115,7 +115,7 @@ backend/
       email/mailer.py                SMTP mailer (env-driven)
     workers/
       daily_pnl.py                   Cron-target for 8am IST P&L email
-  alembic/versions/                  6 migrations, chained 0001 → 0006
+  alembic/versions/                  10 migrations, chained 0001 → 0010
   scripts/seed.py                    Idempotent seed (company, accounts, ingredients, tiers)
   tests/                             pytest — 26 tests (unit + integration)
   entrypoint.sh                      Runs alembic + seed + uvicorn
@@ -174,8 +174,6 @@ If all three pass: you're green.
 - WhatsApp alerts (need Twilio or Meta Business creds)
 - Daily P&L SMTP (infra ready, need creds — see `docs/DEFERRED_FEATURES.md`)
 - Razorpay subscription billing (need test keys)
-- KDS doesn't yet filter to food/drink/dessert types (gaming/event orders also show)
-- Membership tier discount NOT auto-applied at checkout pricing (~30 min wiring)
 - No POS UI for ad-hoc order discount (column exists; UI doesn't)
 - Subscription expiry worker doesn't exist (subs expire by date but nothing cancels them)
 - Free PS5/hookah weekly counters never auto-reset
@@ -195,7 +193,7 @@ If all three pass: you're green.
 
 ## Real-world context
 
-D Company is run by **3 partners**: Nasih (the user — based in UK, café in Kerala), Shemeer, and Rafi. They've invested ₹19,23,365 against a ₹20 lakh budget — the café is in construction. Opening soon.
+D Company is a real café and gaming-lounge operation in Kerala. Ownership, investment figures, personal locations, and credentials are private production information and must not be committed to this public repository.
 
 The user manages:
 - An existing Google Sheet configured privately by the owner. Do not commit spreadsheet URLs or Apps Script web-app URLs.

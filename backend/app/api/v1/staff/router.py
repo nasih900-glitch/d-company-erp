@@ -1,8 +1,8 @@
-"""Staff endpoints — users, roles, attendance.
+"""Staff endpoints — users, roles, and attendance.
 
-Full CRUD: list, create, update (name/phone/status), change role, change password,
-soft-delete. Each user can have multiple roles (multi-branch); for the simple
-single-branch flow we expose a single `role` field that returns/sets one role.
+Login creation and password changes are deliberately handled by the central-email
+OTP endpoints under ``/auth``. The legacy write routes remain as explicit guards
+so old clients cannot bypass that approval flow.
 """
 
 from __future__ import annotations
@@ -15,10 +15,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.core.db import SessionDep
-from app.core.errors import ConflictError, NotFoundError, BusinessRuleError
-from app.core.permissions import requires
+from app.core.errors import BusinessRuleError, NotFoundError
+from app.core.permissions import ROLE_DESCRIPTIONS, requires
 from app.core.roles import PROTECTED_OWNER_ROLE, public_roles
-from app.core.security import hash_password
 from app.core.tenant import TenantContext
 from app.models import Attendance, Branch, Role, User, UserRole
 
@@ -29,7 +28,7 @@ router = APIRouter()
 class UserCreate(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     name: str = Field(min_length=1, max_length=200)
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=10)
     phone: str | None = Field(default=None, max_length=20)
     # owner|partner|manager|cashier|kitchen|gaming_supervisor|auditor
     role_code: str = Field(default="cashier", min_length=1, max_length=50)
@@ -43,7 +42,7 @@ class UserUpdate(BaseModel):
 
 
 class PasswordChange(BaseModel):
-    new_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=10)
 
 
 class UserRead(BaseModel):
@@ -153,31 +152,9 @@ async def create_user(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.write")),
 ) -> UserRead:
-    email = payload.email.strip().lower()
-    existing = (
-        await session.execute(
-            select(User).where(
-                User.company_id == tenant.company_id, User.email == email
-            )
-        )
-    ).scalar_one_or_none()
-    if existing:
-        raise ConflictError("a user with this email already exists in this company")
-    u = User(
-        id=uuid4(),
-        company_id=tenant.company_id,
-        email=email,
-        name=payload.name,
-        password_hash=hash_password(payload.password),
-        phone=payload.phone,
-        status="active",
-    )
-    session.add(u)
-    await session.flush()
-    await _set_role(session, tenant, u.id, payload.role_code)
-    return UserRead(
-        id=u.id, email=u.email, name=u.name, phone=u.phone, status=u.status,
-        roles=await _roles_for_user(session, u.id), last_login_at=u.last_login_at,
+    del payload, session, tenant
+    raise BusinessRuleError(
+        "OTP approval is required. Use Create new login from the sign-in or Staff screen."
     )
 
 
@@ -203,8 +180,10 @@ async def update_user(
         u.phone = payload.phone
     if payload.status is not None:
         u.status = payload.status
+        u.auth_version += 1
     if payload.role_code is not None:
         await _set_role(session, tenant, u.id, payload.role_code)
+        u.auth_version += 1
     await session.flush()
     return UserRead(
         id=u.id, email=u.email, name=u.name, phone=u.phone, status=u.status,
@@ -219,13 +198,10 @@ async def change_password(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.write")),
 ):
-    u = await session.get(User, user_id)
-    if not u or u.company_id != tenant.company_id or u.deleted_at:
-        raise NotFoundError("user not found")
-    if u.id != tenant.user_id and PROTECTED_OWNER_ROLE in await _raw_roles_for_user(session, u.id):
-        raise BusinessRuleError("protected owner password cannot be changed from Staff")
-    u.password_hash = hash_password(payload.new_password)
-    await session.flush()
+    del user_id, payload, session, tenant
+    raise BusinessRuleError(
+        "OTP approval is required. Use Reset password from the sign-in or Staff screen."
+    )
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -243,6 +219,7 @@ async def delete_user(
         raise BusinessRuleError("protected owner cannot be deleted")
     u.deleted_at = datetime.now(timezone.utc)
     u.status = "suspended"
+    u.auth_version += 1
     await session.flush()
 
 
@@ -260,7 +237,11 @@ async def list_roles(
         )
     ).scalars().all()
     return [
-        {"code": r.code, "name": r.name, "description": r.description}
+        {
+            "code": r.code,
+            "name": r.name,
+            "description": ROLE_DESCRIPTIONS.get(r.code, r.description),
+        }
         for r in rows
     ]
 
@@ -268,7 +249,7 @@ async def list_roles(
 # ---------------------------------------------------------------- own password
 class MyPasswordChange(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=10)
 
 
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
@@ -277,14 +258,10 @@ async def change_my_password(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.read")),  # any logged-in user
 ):
-    from app.core.security import verify_password
-    u = await session.get(User, tenant.user_id)
-    if not u or u.deleted_at:
-        raise NotFoundError("user not found")
-    if not verify_password(payload.current_password, u.password_hash):
-        raise BusinessRuleError("current password is incorrect")
-    u.password_hash = hash_password(payload.new_password)
-    await session.flush()
+    del payload, session, tenant
+    raise BusinessRuleError(
+        "OTP approval is required. Use Reset password from Account settings."
+    )
 
 
 # ---------------------------------------------------------------- attendance

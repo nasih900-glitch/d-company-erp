@@ -5,9 +5,9 @@
  * Demo mode: falls back to the seeded STAFF roster.
  *
  * Capabilities:
- *  - Add user (email, name, password, role, phone)
+ *  - Add user after central-email OTP approval
  *  - Edit user (name, phone, role, status)
- *  - Reset password
+ *  - Reset password after central-email OTP approval
  *  - Suspend / activate
  *  - Soft-delete
  */
@@ -19,7 +19,7 @@ import {
 
 import { LIVE_MODE } from '@/lib/demo';
 import { STAFF, type StaffMember } from '@/lib/demo-data';
-import { staff, type UserDTO, type RoleDTO } from '@/lib/erp-api';
+import { auth, staff, type UserDTO, type RoleDTO } from '@/lib/erp-api';
 import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
@@ -36,14 +36,16 @@ const ROLE_COLOR: Record<string, string> = {
 };
 
 const DEFAULT_ROLES: RoleDTO[] = [
-  { code: 'owner', name: 'Owner', description: 'Business owner access' },
-  { code: 'partner', name: 'Partner', description: 'Finance + reports' },
-  { code: 'manager', name: 'Manager', description: 'Operations' },
-  { code: 'cashier', name: 'Cashier', description: 'POS only' },
-  { code: 'kitchen', name: 'Kitchen', description: 'KDS' },
-  { code: 'gaming_supervisor', name: 'Gaming Supervisor', description: 'Gaming + POS' },
-  { code: 'auditor', name: 'Auditor', description: 'Read-only' },
+  { code: 'owner', name: 'Owner', description: 'Business owner title' },
+  { code: 'partner', name: 'Partner', description: 'Business partner title' },
+  { code: 'manager', name: 'Manager', description: 'Operations manager title' },
+  { code: 'cashier', name: 'Cashier', description: 'Cashier title' },
+  { code: 'kitchen', name: 'Kitchen', description: 'Kitchen team title' },
+  { code: 'gaming_supervisor', name: 'Gaming Supervisor', description: 'Gaming team title' },
+  { code: 'auditor', name: 'Auditor', description: 'Audit staff title' },
 ];
+
+const ROLE_DESCRIPTIONS = new Map(DEFAULT_ROLES.map((role) => [role.code, role.description]));
 
 export default function StaffScreen() {
   const [users, setUsers] = useState<UserDTO[]>([]);
@@ -62,7 +64,12 @@ export default function StaffScreen() {
       if (LIVE_MODE) {
         const [u, r] = await Promise.all([staff.listUsers(), staff.listRoles().catch(() => DEFAULT_ROLES)]);
         setUsers(u);
-        if (r.length) setRoles(r);
+        if (r.length) {
+          setRoles(r.map((role) => ({
+            ...role,
+            description: ROLE_DESCRIPTIONS.get(role.code) ?? role.description,
+          })));
+        }
       } else {
         setUsers(STAFF.map(staffToDTO));
       }
@@ -103,7 +110,7 @@ export default function StaffScreen() {
         <div>
           <h2 className="text-2xl font-bold">Staff</h2>
           <p className="text-fg-muted text-sm">
-            {users.length} user{users.length === 1 ? '' : 's'} · {onShift} active · Roles &amp; permissions
+            {users.length} user{users.length === 1 ? '' : 's'} · {onShift} active · Staff titles
           </p>
         </div>
         <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
@@ -139,7 +146,6 @@ export default function StaffScreen() {
 
       {addOpen && (
         <AddUserModal
-          roles={roles}
           onClose={() => setAddOpen(false)}
           onSuccess={() => { setAddOpen(false); load(); }}
         />
@@ -225,12 +231,13 @@ function UserCard({
 
 // ---------------------------------------------------------------- Add
 function AddUserModal({
-  roles, onClose, onSuccess,
-}: { roles: RoleDTO[]; onClose: () => void; onSuccess: () => void }) {
-  const roleOptions = roles.filter((role) => role.code !== 'super_owner');
+  onClose, onSuccess,
+}: { onClose: () => void; onSuccess: () => void }) {
   const [form, setForm] = useState({
-    email: '', name: '', password: '', phone: '', role_code: 'cashier',
+    email: '', name: '', password: '', confirm: '', phone: '',
   });
+  const [challenge, setChallenge] = useState<{ id: string; destination: string } | null>(null);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -238,14 +245,19 @@ function AddUserModal({
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
-      await staff.createUser({
-        email: form.email.trim(),
-        name: form.name.trim(),
-        password: form.password,
-        phone: form.phone.trim() || undefined,
-        role_code: form.role_code,
-      });
-      onSuccess();
+      if (!challenge) {
+        if (form.password !== form.confirm) throw new Error('Passwords do not match');
+        const result = await auth.requestRegistration({
+          email: form.email.trim(),
+          name: form.name.trim(),
+          password: form.password,
+          phone: form.phone.trim() || undefined,
+        });
+        setChallenge({ id: result.challenge_id, destination: result.destination });
+      } else {
+        await auth.confirmRegistration(challenge.id, code);
+        onSuccess();
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -256,36 +268,47 @@ function AddUserModal({
   return (
     <Modal open onClose={onClose} title="Add user" size="md">
       <form onSubmit={submit} className="space-y-3">
-        <Field label="Full name">
-          <input className="input" required value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}/>
-        </Field>
-        <Field label="Email">
-          <input type="email" className="input" required value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}/>
-        </Field>
-        <Field label="Phone (optional)">
-          <input className="input" value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
-        </Field>
-        <Field label="Temporary password (≥ 8 chars)">
-          <input type="password" className="input" required minLength={8} value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}/>
-        </Field>
-        <Field label="Role">
-          <select className="input" value={form.role_code}
-            onChange={(e) => setForm({ ...form, role_code: e.target.value })}>
-            {roleOptions.map((r) => (
-              <option key={r.code} value={r.code}>{r.name}{r.description ? ` — ${r.description}` : ''}</option>
-            ))}
-          </select>
-        </Field>
+        {!challenge ? (
+          <>
+            <Field label="Full name">
+              <input className="input" required value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}/>
+            </Field>
+            <Field label="Email">
+              <input type="email" className="input" required value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}/>
+            </Field>
+            <Field label="Phone (optional)">
+              <input className="input" value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
+            </Field>
+            <Field label="Password (at least 10 characters)">
+              <input type="password" className="input" required minLength={10} value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}/>
+            </Field>
+            <Field label="Confirm password">
+              <input type="password" className="input" required minLength={10} value={form.confirm}
+                onChange={(e) => setForm({ ...form, confirm: e.target.value })}/>
+            </Field>
+          </>
+        ) : (
+          <>
+            <div className="rounded-lg border border-accent-gold/30 bg-accent-gold/10 p-3 text-sm text-accent-gold">
+              Approval code sent to {challenge.destination}
+            </div>
+            <Field label="6-digit approval code">
+              <input className="input text-center text-xl tracking-[0.35em]" required autoFocus
+                inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}"
+                value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}/>
+            </Field>
+          </>
+        )}
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <UserPlus size={14}/>}
-            {busy ? 'Adding…' : 'Add user'}
+            {busy ? 'Please wait…' : challenge ? 'Create approved login' : 'Send approval code'}
           </button>
         </div>
       </form>
@@ -381,6 +404,9 @@ function PasswordModal({
   user, onClose, onSuccess,
 }: { user: UserDTO; onClose: () => void; onSuccess: () => void }) {
   const [pwd, setPwd] = useState('');
+  const [confirmPwd, setConfirmPwd] = useState('');
+  const [challenge, setChallenge] = useState<{ id: string; destination: string } | null>(null);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -389,11 +415,18 @@ function PasswordModal({
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
-      await staff.changePassword(user.id, pwd);
-      setDone(true);
-      setTimeout(onSuccess, 900);
+      if (!challenge) {
+        const result = await auth.requestPasswordReset(user.email);
+        setChallenge({ id: result.challenge_id, destination: result.destination });
+      } else {
+        if (pwd !== confirmPwd) throw new Error('Passwords do not match');
+        await auth.confirmPasswordReset(challenge.id, code, pwd);
+        setDone(true);
+        setTimeout(onSuccess, 900);
+      }
     } catch (e) {
       setErr((e as Error).message);
+    } finally {
       setBusy(false);
     }
   }
@@ -401,20 +434,37 @@ function PasswordModal({
   return (
     <Modal open onClose={onClose} title={`Reset password — ${user.name}`}>
       <form onSubmit={submit} className="space-y-3">
-        <Field label="New password (≥ 8 chars)">
-          <input type="password" className="input" required minLength={8} value={pwd}
-            onChange={(e) => setPwd(e.target.value)} autoFocus/>
-        </Field>
-        <p className="text-xs text-fg-muted">
-          Tell {user.name.split(' ')[0]} the new password. They can change it themselves from Settings → Account.
-        </p>
+        {!challenge ? (
+          <div className="rounded-lg border border-bg-border bg-bg-raised/40 p-3 text-sm text-fg-muted">
+            Request central approval to reset the password for <span className="font-medium text-fg">{user.email}</span>.
+          </div>
+        ) : (
+          <>
+            <div className="rounded-lg border border-accent-gold/30 bg-accent-gold/10 p-3 text-sm text-accent-gold">
+              Approval code sent to {challenge.destination}
+            </div>
+            <Field label="6-digit approval code">
+              <input className="input text-center text-xl tracking-[0.35em]" required autoFocus
+                inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}"
+                value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}/>
+            </Field>
+            <Field label="New password (at least 10 characters)">
+              <input type="password" className="input" required minLength={10} value={pwd}
+                onChange={(e) => setPwd(e.target.value)}/>
+            </Field>
+            <Field label="Confirm new password">
+              <input type="password" className="input" required minLength={10} value={confirmPwd}
+                onChange={(e) => setConfirmPwd(e.target.value)}/>
+            </Field>
+          </>
+        )}
         {err && <ErrorRow text={err}/>}
         {done && <div className="text-sm text-accent-good">Password updated.</div>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn btn-primary" disabled={busy || done}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <KeyRound size={14}/>}
-            Set password
+            {busy ? 'Please wait…' : challenge ? 'Reset approved password' : 'Send approval code'}
           </button>
         </div>
       </form>

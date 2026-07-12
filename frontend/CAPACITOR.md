@@ -35,9 +35,9 @@ npx cap open ios
 # In Xcode: Product → Archive → Distribute App → App Store Connect / TestFlight
 ```
 
-## App Store review build
+## Private App Store / custom app build
 
-Use the dedicated script for Apple submission:
+Use the dedicated script for the private/custom Apple submission:
 
 ```bash
 cd frontend
@@ -45,7 +45,7 @@ npm run ios:prepare:store
 npm run ios:open
 ```
 
-This builds with `VITE_APP_STORE_REVIEW=true`, which hides hookah/tobacco-related surfaces for App Review while leaving the normal web/VPS build unchanged.
+This builds against the production API and keeps the real private ERP feature set visible for custom app review.
 
 See `../docs/APP_STORE_SUBMISSION.md` for the full App Store checklist.
 

@@ -69,3 +69,5 @@ preview-app/
 download/
 frontend/demo-dist*/
 frontend/live-dist/
+.codex-screens/
+frontend/ios/App/public-review-home.png

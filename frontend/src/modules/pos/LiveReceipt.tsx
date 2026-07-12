@@ -3,9 +3,13 @@
  * as the demo Receipt, but every field is what the backend actually computed
  * and persisted (invoice_no, CGST/SGST split, round-off, place of supply).
  */
-import { COMPANY } from '@/lib/demo-data';
 import { inr, inrInWords } from '@/lib/inr';
 import type { OrderDTO } from '@/lib/erp-api';
+import {
+  formatPlaceOfSupply,
+  receiptDocumentTitle,
+  type ReceiptBusinessDetails,
+} from './receipt-business';
 
 const datestr = (d: Date) =>
   `${String(d.getDate()).padStart(2, '0')}-` +
@@ -14,25 +18,38 @@ const datestr = (d: Date) =>
 const timestr = (d: Date) =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
-export default function LiveReceipt({ order }: { order: OrderDTO }) {
+export default function LiveReceipt({
+  order,
+  business,
+}: {
+  order: OrderDTO;
+  business: ReceiptBusinessDetails;
+}) {
   const now = new Date();
   const isPlatformDelivery = order.type === 'delivery' && !!order.delivery_via && order.delivery_via !== 'inhouse';
+  const documentTitle = receiptDocumentTitle(business, isPlatformDelivery);
+  const isGstDocument = documentTitle === 'Tax Invoice' || documentTitle === 'Bill of Supply';
   return (
     <div className="font-mono text-xs leading-relaxed text-fg print:text-black bg-bg-raised print:bg-white rounded-xl p-5 print:p-0">
       <div className="text-center">
-        <div className="text-base font-bold tracking-wide">{COMPANY.name.toUpperCase()}</div>
-        <div className="text-[10px] text-fg-muted print:text-black/70">{COMPANY.address}</div>
-        <div className="text-[10px] text-fg-muted print:text-black/70 mt-1">
-          GSTIN: {COMPANY.gstin}<br/>
-          FSSAI Lic: {COMPANY.fssai}<br/>
-          Trade Lic: {COMPANY.trade_license}
-        </div>
+        <div className="text-base font-bold tracking-wide">{business.supplierName.toUpperCase()}</div>
+        {business.branchName && business.branchName !== business.supplierName && (
+          <div className="text-[10px] text-fg-muted print:text-black/70">Branch: {business.branchName}</div>
+        )}
+        {business.address && <div className="text-[10px] text-fg-muted print:text-black/70">{business.address}</div>}
+        {(business.gstin || business.fssaiLicenseNo || business.tradeLicenseNo) && (
+          <div className="text-[10px] text-fg-muted print:text-black/70 mt-1">
+            {business.gstin && <>GSTIN: {business.gstin}<br/></>}
+            {business.fssaiLicenseNo && <>FSSAI Lic: {business.fssaiLicenseNo}<br/></>}
+            {business.tradeLicenseNo && <>Trade Lic: {business.tradeLicenseNo}</>}
+          </div>
+        )}
       </div>
 
       <Dashed/>
 
       <div className="flex justify-between gap-2">
-        <div><b>{isPlatformDelivery ? 'Platform Delivery Bill' : 'Tax Invoice'}</b></div>
+        <div><b>{documentTitle}</b></div>
         <div className="text-right">
           <div>No.  {order.invoice_no ?? '—'}</div>
           <div>Date {datestr(now)} {timestr(now)}</div>
@@ -45,6 +62,9 @@ export default function LiveReceipt({ order }: { order: OrderDTO }) {
         </span>
         <span>FY {order.fiscal_year}</span>
       </div>
+      {business.cashierName && (
+        <div className="text-[10px] text-fg-muted print:text-black/70">Cashier: {business.cashierName}</div>
+      )}
       {(order.customer_name || order.customer_phone) && (
         <div className="text-[10px] text-fg-muted print:text-black/70 mt-1">
           Customer: {order.customer_name || '—'}{order.customer_phone ? ` · ${order.customer_phone}` : ''}
@@ -66,7 +86,7 @@ export default function LiveReceipt({ order }: { order: OrderDTO }) {
       <Dashed/>
 
       <div className="space-y-0.5">
-        <Row label="Subtotal (taxable)" v={order.subtotal_minor} />
+        <Row label={isGstDocument ? 'Subtotal (taxable)' : 'Subtotal'} v={order.subtotal_minor} />
         {order.discount_minor > 0 && <Row label="Membership discount" v={-order.discount_minor} />}
         {order.cgst_minor > 0 && <Row label="CGST" v={order.cgst_minor} />}
         {order.sgst_minor > 0 && <Row label="SGST" v={order.sgst_minor} />}
@@ -81,9 +101,9 @@ export default function LiveReceipt({ order }: { order: OrderDTO }) {
       <Dashed/>
 
       <div className="text-[10px] text-fg-muted print:text-black/70 space-y-0.5">
-        <div>Place of supply: {order.place_of_supply_state_code ?? '32'}-{COMPANY.state_name}</div>
+        {isGstDocument && <div>Place of supply: {formatPlaceOfSupply(order.place_of_supply_state_code ?? business.stateCode)}</div>}
         {isPlatformDelivery && <div>GST on restaurant service payable by platform under section 9(5).</div>}
-        <div>Reverse charge: No</div>
+        {isGstDocument && <div>Reverse charge: No</div>}
         <div className="mt-2 break-words">
           Amount in words: {inrInWords(order.total_minor)}
         </div>
@@ -92,8 +112,8 @@ export default function LiveReceipt({ order }: { order: OrderDTO }) {
       <Dashed/>
 
       <div className="text-center text-[10px] text-fg-muted print:text-black/70 mt-2">
-        This is a computer-generated invoice; signature not required.<br/>
-        <span className="text-accent print:text-black">Thank you for visiting D Company.</span>
+        This is a computer-generated document; signature not required.<br/>
+        <span className="text-accent print:text-black">Thank you for visiting {business.brandName}.</span>
       </div>
     </div>
   );

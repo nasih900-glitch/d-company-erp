@@ -22,7 +22,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, cast, delete, false, func, or_, select, text
+from sqlalchemy import String, cast, delete, false, or_, select, text
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -34,6 +34,7 @@ from app.models import (
     AuditLog,
     Asset,
     Attendance,
+    AuthOtpChallenge,
     Batch,
     Branch,
     CapitalEntry,
@@ -263,7 +264,9 @@ async def setup_identity() -> dict[str, Any]:
             name=f"{MARKER} Branch",
             address=MARKER,
             state_code="32",
-            branch_gstin=None,
+            # Isolated test identity; the temporary branch and all its data are
+            # deleted in cleanup. This keeps the real company tax profile untouched.
+            branch_gstin="32TESTE0000E1Z5",
         )
         terminal = Terminal(
             id=uuid4(),
@@ -422,6 +425,16 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
                 _contains(AuditLog.user_agent),
                 cast(AuditLog.before, String).ilike(f"%{MARKER}%"),
                 cast(AuditLog.after, String).ilike(f"%{MARKER}%"),
+            ),
+        )
+        counts["auth_otp_challenges"] = await _delete_count(
+            session,
+            AuthOtpChallenge,
+            or_(
+                _contains(AuthOtpChallenge.target_email),
+                _contains(AuthOtpChallenge.request_user_agent),
+                _eq(AuthOtpChallenge.target_user_id, user_id),
+                _eq(AuthOtpChallenge.requested_by_user_id, user_id),
             ),
         )
         counts["ocr_verifications"] = await _delete_count(
@@ -715,6 +728,7 @@ SCAN_SQL = {
     "ocr_verifications": "select count(*) from ocr_verifications where notes ilike :m",
     "idempotency_keys": "select count(*) from idempotency_keys where key ilike :m",
     "audit_log": "select count(*) from audit_log where action ilike :m or entity_type ilike :m or entity_id::text ilike :m or user_agent ilike :m or before::text ilike :m or after::text ilike :m",
+    "auth_otp_challenges": "select count(*) from auth_otp_challenges where target_email ilike :m or request_user_agent ilike :m",
 }
 
 
@@ -1215,35 +1229,35 @@ async def main() -> int:
             checks,
         )
 
-        child_password = f"Tmp1!{MARKER}"
-        changed_password = f"Tmp2!{MARKER}"
-        child_user = http_json(
+        blocked_email = f"{MARKER.lower()}-cashier@dcompany.local"
+        _, _, blocked_create_raw = http_request(
             "POST",
             "/staff/users",
             token=token,
             payload={
-                "email": f"{MARKER.lower()}-cashier@dcompany.local",
+                "email": blocked_email,
                 "name": f"{MARKER} Cashier",
-                "password": child_password,
+                "password": f"Tmp1!{MARKER}",
                 "phone": f"6{secrets.randbelow(10**9):09d}",
                 "role_code": "cashier",
             },
-        )
-        http_request(
-            "POST",
-            f"/staff/users/{child_user['id']}/password",
-            token=token,
-            payload={"new_password": changed_password},
-            expected=(204,),
-        )
-        child_login = http_json(
-            "POST",
-            "/auth/login",
-            payload={"email": child_user["email"], "password": changed_password},
+            expected=(422,),
         )
         check(
-            isinstance(child_login.get("access_token"), str),
-            "staff-created user logs in after password change",
+            "otp approval" in blocked_create_raw.decode("utf-8", errors="replace").lower(),
+            "legacy direct staff creation is blocked in favor of OTP registration",
+            checks,
+        )
+        _, _, blocked_password_raw = http_request(
+            "POST",
+            f"/staff/users/{identity['user_id']}/password",
+            token=token,
+            payload={"new_password": f"Tmp2!{MARKER}"},
+            expected=(422,),
+        )
+        check(
+            "otp approval" in blocked_password_raw.decode("utf-8", errors="replace").lower(),
+            "legacy direct password change is blocked in favor of OTP reset",
             checks,
         )
         attendance = http_json(
@@ -1533,6 +1547,10 @@ async def main() -> int:
             token=token,
         )
         report_yearly = http_json("GET", f"/reports/yearly?fy={fy}", token=token)
+        report_monthly_default = http_json("GET", "/reports/monthly", token=token)
+        report_quarterly_default = http_json("GET", "/reports/quarterly", token=token)
+        report_yearly_default = http_json("GET", "/reports/yearly", token=token)
+        legacy_pnl_default = http_json("GET", "/finance/pnl", token=token)
         report_range = http_json(
             "GET",
             f"/reports/range?from_date={today}&to_date={today}",
@@ -1555,10 +1573,36 @@ async def main() -> int:
                 f"{label} P&L report computes",
                 checks,
             )
+        daily_payments = report_daily.get("payments_received", {})
+        check(
+            isinstance(report_daily.get("refunds_issued_minor"), int)
+            and report_daily.get("net_payments_received_minor")
+            == daily_payments.get("total_minor", 0)
+            - report_daily.get("refunds_issued_minor", 0),
+            "reports separate gross payments, refunds and net movement",
+            checks,
+        )
         check(
             isinstance(tax_compliance.get("issues"), list)
             and isinstance(tax_compliance.get("checked_orders"), int),
             "GST compliance report computes",
+            checks,
+        )
+        check(
+            all(
+                isinstance(row.get("net_profit_minor"), int)
+                for row in (
+                    report_monthly_default,
+                    report_quarterly_default,
+                    report_yearly_default,
+                )
+            ),
+            "monthly, quarterly, and yearly reports have safe current-period defaults",
+            checks,
+        )
+        check(
+            isinstance(legacy_pnl_default.get("net_profit_minor"), int),
+            "legacy P&L has safe current-month defaults",
             checks,
         )
 
@@ -1740,6 +1784,41 @@ async def main() -> int:
             payload={"counted_minor": total_minor + 1000},
         )
         check(close.get("status") == "closed", "POS shift closes", checks)
+
+        otp_request = http_json(
+            "POST",
+            "/auth/password-reset/request",
+            payload={"email": identity["email"]},
+            expected=(202,),
+        )
+        check(
+            isinstance(otp_request.get("challenge_id"), str)
+            and otp_request.get("destination") == "b***@retrocafe.online",
+            "password-reset OTP is accepted by the configured security mailbox",
+            checks,
+        )
+
+        async with AsyncSessionLocal() as session:
+            user = await session.get(User, UUID(identity["user_id"]))
+            if user is None:
+                raise E2EError("temporary user disappeared before session-revocation check")
+            user.auth_version += 1
+            await session.commit()
+
+        http_request(
+            "GET",
+            "/auth/me",
+            token=token,
+            expected=(401,),
+        )
+        check(True, "security change revokes the existing access token", checks)
+        http_request(
+            "POST",
+            "/auth/refresh",
+            payload={"refresh_token": refreshed["refresh_token"]},
+            expected=(401,),
+        )
+        check(True, "security change revokes the existing refresh token", checks)
 
         status = "PASS"
     except Exception as exc:

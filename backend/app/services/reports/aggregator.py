@@ -38,6 +38,7 @@ from app.models import (
     Order,
     OrderLine,
     Payment,
+    Refund,
 )
 from app.services.pos.pricing import split_tax_from_inclusive_minor
 
@@ -181,6 +182,7 @@ class PnLReport:
     revenue: RevenueBreakdown
     tax_collected: TaxBreakdown
     payments_received: PaymentBreakdown
+    refunds_issued_minor: int = 0
     expenses: list[ExpenseLine] = field(default_factory=list)
     expense_total_minor: int = 0
 
@@ -196,6 +198,11 @@ class PnLReport:
     @property
     def net_profit_minor(self) -> int:
         return self.net_revenue_minor - self.expense_total_minor
+
+    @property
+    def net_payments_received_minor(self) -> int:
+        """Cash-flow view: gross payments received less refunds issued in-period."""
+        return self.payments_received.total_minor - self.refunds_issued_minor
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +377,17 @@ class ReportsAggregator:
             qr_minor=qr, wallet_minor=wallet, other_minor=other_pay,
         )
 
+        refunds_q = (
+            select(func.coalesce(func.sum(Refund.amount_minor), 0))
+            .join(Order, Order.id == Refund.order_id)
+            .where(
+                Order.company_id == company_id,
+                Refund.created_at >= start_at,
+                Refund.created_at <= end_at,
+            )
+        )
+        refunds_issued = int((await self.session.execute(refunds_q)).scalar_one() or 0)
+
         # ---------- Expenses by category ----------
         exp_q = (
             select(
@@ -405,6 +423,7 @@ class ReportsAggregator:
             revenue=revenue,
             tax_collected=tax,
             payments_received=payments,
+            refunds_issued_minor=refunds_issued,
             expenses=expense_lines,
             expense_total_minor=expense_total,
         )

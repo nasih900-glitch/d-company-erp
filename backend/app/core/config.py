@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
+from uuid import UUID
 
 from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,8 +42,8 @@ class Settings(BaseSettings):
 
     # ----- security -----
     jwt_secret: str = Field(
-        default="CHANGE_ME_IN_PROD",
-        min_length=16,
+        default="CHANGE_ME_IN_PROD_AT_LEAST_32_CHARS",
+        min_length=32,
         description="HS256 dev fallback; use RS256 keypair in prod via jwt_private_key.",
     )
     jwt_algorithm: Literal["HS256", "RS256"] = "HS256"
@@ -53,6 +54,11 @@ class Settings(BaseSettings):
     password_min_length: int = 10
     failed_login_lockout_threshold: int = 5
     failed_login_lockout_minutes: int = 15
+    account_security_email: str = "business@retrocafe.online"
+    account_security_company_id: UUID | None = None
+    account_otp_ttl_minutes: int = Field(default=10, ge=5, le=30)
+    account_otp_max_attempts: int = Field(default=5, ge=3, le=10)
+    account_otp_request_limit: int = Field(default=3, ge=1, le=10)
 
     # ----- cors -----
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
@@ -78,6 +84,11 @@ class Settings(BaseSettings):
     def _warn_default_secret(cls, v: str) -> str:
         # In prod, this should be set from a secret manager.
         return v
+
+    @field_validator("account_security_company_id", mode="before")
+    @classmethod
+    def _blank_company_id_is_none(cls, v: object) -> object:
+        return None if v == "" else v
 
 
 @lru_cache(maxsize=1)

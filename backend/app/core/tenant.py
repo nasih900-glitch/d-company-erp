@@ -58,7 +58,8 @@ async def get_tenant_context(
         user_id = UUID(payload["sub"])
         company_id = UUID(payload["company_id"])
         branch_id = UUID(payload["branch_id"]) if payload.get("branch_id") else None
-    except (KeyError, ValueError) as exc:
+        auth_version = int(payload.get("auth_version", 0))
+    except (KeyError, TypeError, ValueError) as exc:
         raise AuthError("malformed token claims") from exc
 
     terminal_id = UUID(x_terminal_id) if x_terminal_id else None
@@ -76,6 +77,8 @@ async def get_tenant_context(
     ).scalar_one_or_none()
     if not user or user.deleted_at or user.status != "active":
         raise AuthError("user not found")
+    if auth_version != user.auth_version:
+        raise AuthError("session expired")
 
     if terminal_id:
         terminal_row = (

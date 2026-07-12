@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -50,6 +50,7 @@ def issue_access_token(
     company_id: UUID,
     roles: list[str],
     branch_id: UUID | None = None,
+    auth_version: int = 0,
     extra: dict[str, Any] | None = None,
 ) -> str:
     s = get_settings()
@@ -59,6 +60,7 @@ def issue_access_token(
         "company_id": str(company_id),
         "branch_id": str(branch_id) if branch_id else None,
         "roles": roles,
+        "auth_version": auth_version,
         "type": "access",
         "iat": now,
         "exp": now + timedelta(minutes=s.access_token_minutes),
@@ -68,12 +70,13 @@ def issue_access_token(
     return jwt.encode(payload, _signing_key(), algorithm=s.jwt_algorithm)
 
 
-def issue_refresh_token(*, user_id: UUID, jti: str) -> str:
+def issue_refresh_token(*, user_id: UUID, jti: str, auth_version: int = 0) -> str:
     s = get_settings()
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "jti": jti,
+        "auth_version": auth_version,
         "type": "refresh",
         "iat": now,
         "exp": now + timedelta(days=s.refresh_token_days),
@@ -115,5 +118,5 @@ def decode_token(token: str) -> dict[str, Any]:
     s = get_settings()
     try:
         return jwt.decode(token, _verifying_key(), algorithms=[s.jwt_algorithm])
-    except JWTError as exc:
+    except jwt.PyJWTError as exc:
         raise ValueError(f"invalid token: {exc}") from exc

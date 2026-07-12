@@ -1,19 +1,4 @@
-/**
- * Kerala GST-compliant receipt.
- *
- * Every Rule-46 mandatory field is here:
- *  - Supplier name, address, GSTIN
- *  - Invoice number (per-branch per-FY series), date
- *  - Place of supply (32-Kerala)
- *  - HSN/SAC per line
- *  - CGST / SGST split (or IGST for inter-state)
- *  - Reverse charge: No
- *  - Round-off line
- *  - FSSAI licence number
- *  - Amount in words
- *  - "Computer-generated invoice" line in place of signature
- */
-import { COMPANY } from '@/lib/demo-data';
+/** Demo-mode receipt. It is intentionally not presented as a statutory invoice. */
 import { inr, inrInWords } from '@/lib/inr';
 import type { ReceiptData } from './POSScreen';
 
@@ -29,20 +14,15 @@ export default function Receipt({ data }: { data: ReceiptData }) {
     <div className="font-mono text-xs leading-relaxed text-fg print:text-black bg-bg-raised print:bg-white rounded-xl p-5 print:p-0">
       {/* Header */}
       <div className="text-center">
-        <div className="text-base font-bold tracking-wide">{COMPANY.name.toUpperCase()}</div>
-        <div className="text-[10px] text-fg-muted print:text-black/70">{COMPANY.address}</div>
-        <div className="text-[10px] text-fg-muted print:text-black/70 mt-1">
-          GSTIN: {COMPANY.gstin}<br/>
-          FSSAI Lic: {COMPANY.fssai}<br/>
-          Trade Lic: {COMPANY.trade_license}
-        </div>
+        <div className="text-base font-bold tracking-wide">D COMPANY DEMO</div>
+        <div className="text-[10px] font-bold text-accent-bad print:text-black">SAMPLE DATA · NOT A TAX DOCUMENT</div>
       </div>
 
       <Dashed/>
 
       {/* Invoice meta */}
       <div className="flex justify-between gap-2">
-        <div><b>Tax Invoice</b></div>
+        <div><b>Demo Receipt</b></div>
         <div className="text-right">
           <div>No.  {data.invoice_no}</div>
           <div>Date {date(data.at)} {time(data.at)}</div>
@@ -52,7 +32,7 @@ export default function Receipt({ data }: { data: ReceiptData }) {
         <span>{data.type === 'dine_in' ? `Table ${data.table} · Dine-in` :
                data.type === 'takeaway' ? 'Takeaway' :
                'Delivery'}</span>
-        <span>Cashier: Anish K.</span>
+        <span>Cashier: Demo Owner</span>
       </div>
 
       <Dashed/>
@@ -85,21 +65,14 @@ export default function Receipt({ data }: { data: ReceiptData }) {
 
       {/* Compliance footer */}
       <div className="text-[10px] text-fg-muted print:text-black/70 space-y-0.5">
-        <div>Place of supply: {COMPANY.state_code}-{COMPANY.state_name}</div>
-        <div>Payment: <b className="text-fg print:text-black uppercase">{data.method}</b>
-          {data.method === 'upi' && '  ·  dcompany@hdfcbank  Ref: 645829137245'}
-          {data.method === 'card' && '  ·  Visa ****1234  Auth: A4F92B'}
-        </div>
-        <div>Reverse charge: No</div>
+        <div>Payment: <b className="text-fg print:text-black uppercase">{data.method}</b></div>
         <div className="mt-2 break-words">Amount in words: {inrInWords(data.totals.total)}</div>
       </div>
 
       <Dashed/>
 
       <div className="text-center text-[10px] text-fg-muted print:text-black/70 mt-2">
-        This is a computer-generated invoice; signature not required.<br/>
-        <span className="text-accent print:text-black">Thank you for visiting D Company.</span><br/>
-        Tips are voluntary.
+        Demo mode only. No sale or tax liability was created.
       </div>
     </div>
   );

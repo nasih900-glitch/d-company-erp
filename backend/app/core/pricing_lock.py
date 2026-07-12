@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from app.core.errors import AuthError, ForbiddenError
+from app.core.errors import AuthError
 from app.core.security import decode_token
 from app.core.tenant import TenantContext
 
 
 def require_pricing_unlock(x_pricing_token: str | None, tenant: TenantContext) -> None:
-    if not tenant.protected_access:
-        raise ForbiddenError("pricing setup is restricted")
     if not x_pricing_token:
         raise AuthError("pricing password unlock required")
     try:

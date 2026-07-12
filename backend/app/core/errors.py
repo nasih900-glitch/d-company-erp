@@ -66,6 +66,16 @@ class BusinessRuleError(AppError):
     code = "business_rule"
 
 
+class RateLimitError(AppError):
+    status_code = 429
+    code = "rate_limited"
+
+
+class ServiceUnavailableError(AppError):
+    status_code = 503
+    code = "service_unavailable"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _handle_app_error(_: Request, exc: AppError) -> JSONResponse:

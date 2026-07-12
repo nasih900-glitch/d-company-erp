@@ -19,7 +19,6 @@ import { STATIONS, type Station as DemoStation } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { gaming, shifts, type StationDTO } from '@/lib/erp-api';
-import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
 const ICON: Record<StationDTO['type'], React.ReactNode> = {
@@ -49,8 +48,7 @@ type LocalSession = {
 };
 
 export default function GamingScreen() {
-  const { me, demo } = useAuth();
-  const canManageStations = Boolean(demo || me?.protected_access);
+  const canManageStations = true;
   const [stations, setStations] = useState<StationDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

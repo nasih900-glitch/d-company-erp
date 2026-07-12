@@ -30,7 +30,7 @@
 		<false/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>D Company ERP uses the camera to scan invoices, bills, and stock documents for OCR.</string>
+	<string>D Company ERP uses the camera only when an authorized user scans a receipt, bill, or business document.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIStatusBarStyle</key>

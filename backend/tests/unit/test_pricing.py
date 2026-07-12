@@ -7,8 +7,12 @@ integration tests because it needs a DB session.
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
+from app.core.errors import BusinessRuleError
 from app.services.pos.pricing import (
     MembershipDiscountRates,
+    _billing_tax_mode,
     _discount_for_item_type,
     _discount_minor,
     _round_to_rupee,
@@ -95,6 +99,51 @@ class TestMembershipDiscounts:
             hookah=Decimal("0.10"),
         )
         assert _discount_for_item_type("event", rates) == Decimal("0")
+
+
+class TestBillingTaxMode:
+    def test_regular_supplier_requires_valid_matching_gstin(self) -> None:
+        assert _billing_tax_mode(
+            registration_type="regular",
+            is_composition=False,
+            supplier_gstin="32ABCDE1234F1Z5",
+            branch_state="32",
+        ) == "regular"
+
+    def test_registered_supplier_without_gstin_is_blocked(self) -> None:
+        with pytest.raises(BusinessRuleError, match="GSTIN is missing or invalid"):
+            _billing_tax_mode(
+                registration_type="regular",
+                is_composition=False,
+                supplier_gstin=None,
+                branch_state="32",
+            )
+
+    def test_unregistered_supplier_does_not_require_gstin(self) -> None:
+        assert _billing_tax_mode(
+            registration_type="unregistered",
+            is_composition=False,
+            supplier_gstin=None,
+            branch_state="32",
+        ) == "unregistered"
+
+    def test_composition_flags_must_agree(self) -> None:
+        with pytest.raises(BusinessRuleError, match="composition settings disagree"):
+            _billing_tax_mode(
+                registration_type="composition",
+                is_composition=False,
+                supplier_gstin="32ABCDE1234F1Z5",
+                branch_state="32",
+            )
+
+    def test_gstin_must_match_branch_state(self) -> None:
+        with pytest.raises(BusinessRuleError, match="does not match"):
+            _billing_tax_mode(
+                registration_type="regular",
+                is_composition=False,
+                supplier_gstin="32ABCDE1234F1Z5",
+                branch_state="29",
+            )
 
 
 class TestFiscalYear:
