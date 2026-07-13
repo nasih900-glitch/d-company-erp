@@ -20,6 +20,7 @@ from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
     Branch,
     Customer,
@@ -31,6 +32,7 @@ from app.models import (
     Payment,
     Refund,
     Shift,
+    Terminal,
 )
 from app.services.inventory.deduction import deduct_for_order
 from app.services.pos.pricing import (
@@ -102,6 +104,9 @@ class OrderRead(BaseModel):
     customer_phone: str | None = None
     customer_gstin: str | None = None
     customer_state_code: str | None = None
+    opened_at: datetime
+    closed_at: datetime | None = None
+    invoice_issued_at: datetime | None = None
     lines: list[OrderLineRead] = []
 
 
@@ -184,7 +189,7 @@ async def _upsert_and_attach_customer(
                 Customer.company_id == company_id,
                 Customer.phone == phone,
                 Customer.deleted_at.is_(None),
-            )
+            ).with_for_update()
         )
     ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
@@ -299,7 +304,13 @@ async def create_order(
     branch = await session.get(Branch, tenant.branch_id)
     if not branch:
         raise NotFoundError("branch not found")
-    shift = await session.get(Shift, payload.shift_id)
+    shift = (
+        await session.execute(
+            select(Shift)
+            .where(Shift.id == payload.shift_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if not shift or shift.company_id != tenant.company_id or shift.branch_id != tenant.branch_id:
         raise NotFoundError("shift not found")
     if shift.status != "open":
@@ -331,13 +342,8 @@ async def create_order(
         ],
     )
 
-    # 2. Allocate the next sequential invoice number for this branch + FY.
-    invoice_no, fy = await InvoiceNumberService(session).allocate(
-        branch_id=tenant.branch_id,
-        branch_code=branch.code or "MN",
-    )
-
-    # 3. Insert the order header.
+    # 2. Insert an unpaid order. Invoice identity, stock consumption, and
+    # loyalty are all finalized atomically when the last payment succeeds.
     order = Order(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -360,8 +366,8 @@ async def create_order(
         round_off_minor=priced.round_off_minor,
         total_minor=priced.total_minor,
         idempotency_key=idempotency_key,
-        invoice_no=invoice_no,
-        fiscal_year=fy,
+        invoice_no=None,
+        fiscal_year=None,
         place_of_supply_state_code=place_of_supply,
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
@@ -373,7 +379,7 @@ async def create_order(
     session.add(order)
     await session.flush()
 
-    # 4. Insert priced order lines.
+    # 3. Insert priced order lines.
     order_lines: list[OrderLine] = []
     for priced_line in priced.lines:
         ol = OrderLine(
@@ -395,35 +401,6 @@ async def create_order(
         session.add(ol)
         order_lines.append(ol)
     await session.flush()
-
-    # 5. Recipe-driven inventory deduction (FIFO, audit-logged).
-    try:
-        await deduct_for_order(
-            session,
-            order_id=order.id,
-            order_lines=order_lines,
-            branch_id=tenant.branch_id,
-            created_by=tenant.user_id,
-        )
-    except Exception as e:
-        # Non-fatal: a missing recipe or batch shouldn't block the sale.
-        # The next inventory audit will surface the discrepancy. We log
-        # the failure to stderr so it shows up in `docker compose logs`.
-        import logging
-        logging.getLogger("pos").warning(
-            "Inventory deduction failed for order %s: %s", order.id, e,
-        )
-
-    # 6. Upsert + attach customer (loyalty foundation, with point multipliers).
-    if payload.customer_phone:
-        await _upsert_and_attach_customer(
-            session,
-            company_id=tenant.company_id,
-            phone=payload.customer_phone,
-            name=payload.customer_name,
-            order=order,
-            order_lines=order_lines,
-        )
 
     await session.flush()
     response = OrderRead(
@@ -447,6 +424,9 @@ async def create_order(
         customer_phone=order.customer_phone,
         customer_gstin=order.customer_gstin,
         customer_state_code=order.customer_state_code,
+        opened_at=order.opened_at,
+        closed_at=order.closed_at,
+        invoice_issued_at=order.invoice_issued_at,
         lines=[
             OrderLineRead(
                 menu_item_id=pl.menu_item_id,
@@ -512,6 +492,9 @@ async def get_order(
         customer_phone=order.customer_phone,
         customer_gstin=order.customer_gstin,
         customer_state_code=order.customer_state_code,
+        opened_at=order.opened_at,
+        closed_at=order.closed_at,
+        invoice_issued_at=order.invoice_issued_at,
         lines=[
             OrderLineRead(
                 menu_item_id=line.menu_item_id,
@@ -553,19 +536,18 @@ async def list_orders(
     limit: int = 200,
 ) -> list[OrderListItem]:
     """List orders, newest first. Defaults to today if no date filter given."""
-    from datetime import time as _time
-    today = datetime.now(timezone.utc).date()
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
     f_d = from_date or today
     t_d = to_date or today
-    f_dt = datetime.combine(f_d, _time.min, tzinfo=timezone.utc)
-    t_dt = datetime.combine(t_d, _time.max, tzinfo=timezone.utc)
+    f_dt, t_dt = local_date_bounds_utc(f_d, t_d, timezone_name)
 
     stmt = (
         select(Order)
         .where(
             Order.company_id == tenant.company_id,
             Order.created_at >= f_dt,
-            Order.created_at <= t_dt,
+            Order.created_at < t_dt,
         )
         .order_by(Order.created_at.desc())
         .limit(min(limit, 500))
@@ -653,12 +635,20 @@ async def record_payment(
     if existing_response:
         return existing_response["body"]
 
-    order = await session.get(Order, order_id)
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not order or order.company_id != tenant.company_id:
         raise NotFoundError("order not found")
     if order.status in {"paid", "void", "refunded"}:
         raise BusinessRuleError(f"cannot pay an order in status={order.status}")
-    shift = await session.get(Shift, order.shift_id)
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not shift or shift.company_id != tenant.company_id:
         raise NotFoundError("shift not found")
     if shift.status != "open":
@@ -696,13 +686,53 @@ async def record_payment(
     session.add(payment)
     if payload.method == "cash":
         shift.expected_minor = int(shift.expected_minor or 0) + payload.amount_minor
-    if already_paid + payload.amount_minor >= order.total_minor:
+    finalized = already_paid + payload.amount_minor >= order.total_minor
+    if finalized:
+        branch = await session.get(Branch, order.branch_id)
+        if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+            raise NotFoundError("branch not found")
+        timezone_name = branch.timezone or await company_timezone(session, tenant.company_id)
+        if not order.invoice_no:
+            order.invoice_no, order.fiscal_year = await InvoiceNumberService(session).allocate(
+                branch_id=order.branch_id,
+                branch_code=branch.code or "MN",
+                at=now,
+                timezone_name=timezone_name,
+            )
         order.status = "paid"
         order.closed_at = now
+        order.invoice_issued_at = now
+
+        order_lines = (
+            await session.execute(
+                select(OrderLine).where(OrderLine.order_id == order.id)
+            )
+        ).scalars().all()
+        await deduct_for_order(
+            session,
+            order_id=order.id,
+            order_lines=list(order_lines),
+            branch_id=order.branch_id,
+            created_by=tenant.user_id,
+        )
+        if order.customer_phone:
+            await _upsert_and_attach_customer(
+                session,
+                company_id=tenant.company_id,
+                phone=order.customer_phone,
+                name=order.customer_name,
+                order=order,
+                order_lines=list(order_lines),
+            )
     response = {
         "id": str(payment.id),
         "amount_minor": payment.amount_minor,
         "order_status": order.status,
+        "invoice_no": order.invoice_no,
+        "fiscal_year": order.fiscal_year,
+        "invoice_issued_at": order.invoice_issued_at.isoformat()
+        if order.invoice_issued_at
+        else None,
     }
     await store_response(
         session,
@@ -732,16 +762,39 @@ async def issue_refund(
     if existing_response:
         return existing_response["body"]
 
-    order = await session.get(Order, order_id)
+    if payload.mode == "credit_note":
+        raise BusinessRuleError(
+            "store-credit refunds are unavailable until a customer credit ledger is enabled"
+        )
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not order or order.company_id != tenant.company_id:
         raise NotFoundError("order not found")
-    paid_total = await _paid_total(session, order_id)
+    if order.status not in {"paid", "refunded"}:
+        raise BusinessRuleError("only paid orders can be refunded")
+    payment_rows = (
+        await session.execute(
+            select(Payment).where(Payment.order_id == order_id).order_by(Payment.paid_at)
+        )
+    ).scalars().all()
+    paid_total = sum(int(row.amount_minor) for row in payment_rows)
     refunded_total = await _refunded_total(session, order_id)
     refundable_minor = paid_total - refunded_total
     if refundable_minor <= 0:
         raise BusinessRuleError("order has no refundable payment balance")
     if payload.amount_minor > refundable_minor:
         raise BusinessRuleError("refund exceeds paid balance")
+    settlement_method = "cash"
+    if payload.mode == "original":
+        methods = {row.method for row in payment_rows}
+        if len(methods) != 1:
+            raise BusinessRuleError(
+                "mixed-payment orders require an explicit cash refund"
+            )
+        settlement_method = next(iter(methods))
     refund = Refund(
         id=uuid4(),
         order_id=order_id,
@@ -750,16 +803,32 @@ async def issue_refund(
         reason_code=payload.reason_code,
         amount_minor=payload.amount_minor,
         mode=payload.mode,
+        settlement_method=settlement_method,
         note=payload.note,
     )
     session.add(refund)
-    if payload.mode == "cash":
-        shift = await session.get(Shift, order.shift_id)
-        if shift and shift.company_id == tenant.company_id and shift.status == "open":
-            shift.expected_minor = int(shift.expected_minor or 0) - payload.amount_minor
+    if settlement_method == "cash":
+        shift_stmt = select(Shift).where(
+            Shift.company_id == tenant.company_id,
+            Shift.branch_id == order.branch_id,
+            Shift.status == "open",
+        )
+        if tenant.terminal_id:
+            shift_stmt = shift_stmt.where(Shift.terminal_id == tenant.terminal_id)
+        open_shifts = (
+            await session.execute(
+                shift_stmt.order_by(Shift.opened_at.desc()).with_for_update()
+            )
+        ).scalars().all()
+        if len(open_shifts) != 1:
+            raise BusinessRuleError(
+                "cash refund requires exactly one open shift for this terminal"
+            )
+        shift = open_shifts[0]
+        shift.expected_minor = int(shift.expected_minor or 0) - payload.amount_minor
     if refunded_total + payload.amount_minor >= paid_total:
         order.status = "refunded"
-    response = {"id": str(refund.id)}
+    response = {"id": str(refund.id), "settlement_method": settlement_method}
     await store_response(
         session,
         key=idempotency_key,
@@ -779,6 +848,11 @@ async def open_shift(
         raise BusinessRuleError("X-Terminal-Id header required to open a shift")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
+    # Serialize shift opening per terminal so two simultaneous clients cannot
+    # create two live shifts for the same drawer.
+    await session.execute(
+        select(Terminal).where(Terminal.id == tenant.terminal_id).with_for_update()
+    )
     existing = (
         await session.execute(
             select(Shift).where(
@@ -812,11 +886,30 @@ async def close_shift(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.shift.close")),
 ) -> dict:
-    shift = await session.get(Shift, shift_id)
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not shift or shift.company_id != tenant.company_id:
         raise NotFoundError("shift not found")
     if shift.status != "open":
         raise BusinessRuleError(f"shift is not open (status={shift.status})")
+    unfinished_orders = int(
+        (
+            await session.execute(
+                select(func.count(Order.id)).where(
+                    Order.shift_id == shift.id,
+                    Order.status.in_(("open", "held")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if unfinished_orders:
+        raise BusinessRuleError(
+            f"cannot close shift with {unfinished_orders} unfinished order(s)"
+        )
     shift.closed_at = datetime.now(timezone.utc)
     shift.counted_minor = payload.counted_minor
     shift.variance_minor = payload.counted_minor - (shift.expected_minor or 0)

@@ -3,15 +3,17 @@ FROM python:3.11-slim AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev \
     && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --upgrade pip==26.1.2
 WORKDIR /app
-COPY backend/requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt
+COPY backend/requirements.lock .
+RUN pip install --prefix=/install -r requirements.lock
 
 # --- runtime ---
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --upgrade pip==26.1.2
 RUN useradd --create-home --uid 1001 erp
 WORKDIR /app
 COPY --from=builder /install /usr/local

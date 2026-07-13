@@ -11,7 +11,7 @@
  *
  * Demo mode still works against in-memory state.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Tv, Plus, Edit2, Trash2, Users,
   Ticket as TicketIcon, MapPin, AlertCircle, Loader2, RefreshCw,
@@ -58,7 +58,7 @@ export default function EventsScreen() {
   const [sellingFor, setSellingFor] = useState<EventDTO | null>(null);
   const [ticketsFor, setTicketsFor] = useState<EventDTO | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       if (LIVE_MODE) {
@@ -69,8 +69,8 @@ export default function EventsScreen() {
     } catch (e) {
       setError((e as Error).message);
     } finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, [includeP]);
+  }, [includeP]);
+  useEffect(() => { void load(); }, [load]);
 
   async function onDelete(ev: EventDTO) {
     if (!confirm(`Delete "${ev.name}"?`)) return;
@@ -460,13 +460,13 @@ function TicketsModal({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true); setErr(null);
     try { setRows(await eventsApi.listTickets(event.id)); }
     catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+  }, [event.id]);
+  useEffect(() => { void load(); }, [load]);
 
   async function checkIn(t: EventTicketDTO) {
     try { await eventsApi.checkIn(event.id, t.id); await load(); onChange(); }

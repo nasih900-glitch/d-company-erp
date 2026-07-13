@@ -25,8 +25,10 @@ from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BusinessRuleError, NotFoundError
@@ -241,7 +243,7 @@ class OrderPricingService:
         if not company:
             raise NotFoundError("company not found")
         branch = await self.session.get(Branch, branch_id)
-        if not branch:
+        if not branch or branch.company_id != company_id or branch.deleted_at:
             raise NotFoundError("branch not found")
 
         branch_state = (branch.state_code or "").strip()
@@ -437,34 +439,35 @@ class InvoiceNumberService:
         prefix: str = "D",
         series: str = "invoice",
         at: datetime | None = None,
+        timezone_name: str = "Asia/Kolkata",
     ) -> tuple[str, str]:
         """Return (invoice_no, fiscal_year)."""
         now = at or datetime.now(timezone.utc)
-        fy = fiscal_year_for(now.date())
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        fy = fiscal_year_for(now.astimezone(ZoneInfo(timezone_name)).date())
 
-        # Get-or-create the counter row, then SELECT … FOR UPDATE on it.
-        existing = (
-            await self.session.execute(
-                select(InvoiceCounter)
-                .where(
-                    InvoiceCounter.branch_id == branch_id,
-                    InvoiceCounter.fiscal_year == fy,
-                    InvoiceCounter.series == series,
+        # One atomic upsert handles both the first invoice and concurrent
+        # allocations on different orders. SELECT-then-INSERT has a race when
+        # the counter row does not exist yet.
+        seq = int(
+            (
+                await self.session.execute(
+                    pg_insert(InvoiceCounter)
+                    .values(
+                        branch_id=branch_id,
+                        fiscal_year=fy,
+                        series=series,
+                        last_seq=1,
+                    )
+                    .on_conflict_do_update(
+                        constraint="uq_inv_counter_branch_fy_series",
+                        set_={"last_seq": InvoiceCounter.last_seq + 1},
+                    )
+                    .returning(InvoiceCounter.last_seq)
                 )
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-
-        if existing is None:
-            counter = InvoiceCounter(
-                branch_id=branch_id, fiscal_year=fy, series=series, last_seq=1
-            )
-            self.session.add(counter)
-            await self.session.flush()
-            seq = 1
-        else:
-            existing.last_seq += 1
-            seq = existing.last_seq
+            ).scalar_one()
+        )
 
         invoice_no = format_invoice_number(
             prefix=prefix,

@@ -90,6 +90,9 @@ export interface OrderDTO {
   customer_phone: string | null;
   customer_gstin: string | null;
   customer_state_code: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  invoice_issued_at: string | null;
   lines: OrderLineDTO[];
 }
 
@@ -149,6 +152,8 @@ export const pos = {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
+  getOrder: (orderId: string) =>
+    api.get<OrderDTO>(`/pos/orders/${orderId}`).then((r) => r.data),
   recordPayment: (
     orderId: string,
     body: {
@@ -160,7 +165,14 @@ export const pos = {
     idempotencyKey: string,
   ) =>
     api
-      .post<{ id: string; amount_minor: number; order_status: string }>(
+      .post<{
+        id: string;
+        amount_minor: number;
+        order_status: string;
+        invoice_no: string | null;
+        fiscal_year: string | null;
+        invoice_issued_at: string | null;
+      }>(
         `/pos/orders/${orderId}/payments`,
         body,
         { headers: { 'Idempotency-Key': idempotencyKey } },
@@ -771,8 +783,10 @@ export interface ReportDataDTO {
   payments_received: ReportPaymentsDTO;
   expenses: ReportExpenseLineDTO[];
   expense_total_minor: number;
+  cogs_minor: number;
   gross_revenue_minor: number;
   net_revenue_minor: number;
+  gross_profit_minor: number;
   net_profit_minor: number;
 }
 

@@ -74,6 +74,8 @@ export default function PricingTab() {
     }
   }
 
+  // Load only when the protected session changes, not while editing draft prices.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (unlocked) load(); }, [unlocked]);
 
   async function unlock(e: React.FormEvent) {

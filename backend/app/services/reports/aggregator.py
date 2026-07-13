@@ -20,8 +20,8 @@ All money is integer minor units (paise). Floats are forbidden.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from datetime import date, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -29,6 +29,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    Batch,
     Branch,
     Event,
     EventTicket,
@@ -39,7 +40,10 @@ from app.models import (
     OrderLine,
     Payment,
     Refund,
+    StockMovement,
 )
+from app.core.errors import BusinessRuleError
+from app.core.timezone import company_timezone, local_date_bounds_utc
 from app.services.pos.pricing import split_tax_from_inclusive_minor
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
@@ -91,8 +95,13 @@ def fy_full_range(fy: str) -> tuple[date, date]:
 
 def month_range(yyyy_mm: str) -> tuple[date, date]:
     """Return (start, end) for a YYYY-MM string."""
-    y, m = map(int, yyyy_mm.split("-"))
-    start = date(y, m, 1)
+    if len(yyyy_mm) != 7 or yyyy_mm[4] != "-":
+        raise BusinessRuleError("yyyy_mm must look like '2026-06'")
+    try:
+        y, m = int(yyyy_mm[:4]), int(yyyy_mm[5:])
+        start = date(y, m, 1)
+    except ValueError as exc:
+        raise BusinessRuleError("yyyy_mm must look like '2026-06'") from exc
     if m == 12:
         end = date(y, 12, 31)
     else:
@@ -183,6 +192,8 @@ class PnLReport:
     tax_collected: TaxBreakdown
     payments_received: PaymentBreakdown
     refunds_issued_minor: int = 0
+    settled_refunds_issued_minor: int = 0
+    cogs_minor: int = 0
     expenses: list[ExpenseLine] = field(default_factory=list)
     expense_total_minor: int = 0
 
@@ -193,16 +204,41 @@ class PnLReport:
     @property
     def net_revenue_minor(self) -> int:
         """Revenue minus GST collected (which belongs to government)."""
-        return self.gross_revenue_minor - self.tax_collected.total_minor
+        return (
+            self.gross_revenue_minor
+            - self.refunds_issued_minor
+            - self.tax_collected.total_minor
+        )
 
     @property
     def net_profit_minor(self) -> int:
-        return self.net_revenue_minor - self.expense_total_minor
+        return self.net_revenue_minor - self.cogs_minor - self.expense_total_minor
+
+    @property
+    def gross_profit_minor(self) -> int:
+        return self.net_revenue_minor - self.cogs_minor
 
     @property
     def net_payments_received_minor(self) -> int:
         """Cash-flow view: gross payments received less refunds issued in-period."""
-        return self.payments_received.total_minor - self.refunds_issued_minor
+        settled_refunds = getattr(
+            self,
+            "settled_refunds_issued_minor",
+            self.refunds_issued_minor,
+        )
+        return self.payments_received.total_minor - settled_refunds
+
+
+def _proportional_cumulative(component: int, refunded: int, total: int) -> int:
+    """Allocate a component over cumulative refunds without rounding drift."""
+    if component <= 0 or refunded <= 0 or total <= 0:
+        return 0
+    bounded = min(refunded, total)
+    return int(
+        (Decimal(component) * Decimal(bounded) / Decimal(total)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +259,11 @@ class ReportsAggregator:
         period: ReportPeriod = "custom",
         label: str | None = None,
     ) -> PnLReport:
-        # Inclusive of period_end (end of day)
-        start_at = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
-        end_at = datetime.combine(period_end, time.max, tzinfo=timezone.utc)
+        timezone_name = await company_timezone(self.session, company_id)
+        start_at, end_at = local_date_bounds_utc(
+            period_start, period_end, timezone_name
+        )
+        sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
 
         # ---------- Orders aggregation ----------
         # Total orders + average ticket
@@ -238,9 +276,9 @@ class ReportsAggregator:
             func.coalesce(func.sum(Order.cess_minor), 0).label("cess"),
         ).where(
             Order.company_id == company_id,
-            Order.opened_at >= start_at,
-            Order.opened_at <= end_at,
-            Order.status == "paid",
+            sale_at >= start_at,
+            sale_at < end_at,
+            Order.status.in_(("paid", "refunded")),
         )
         orders_row = (await self.session.execute(orders_q)).one()
         orders_count = int(orders_row.n)
@@ -259,9 +297,9 @@ class ReportsAggregator:
             func.coalesce(func.sum(Order.total_minor), 0).label("d")
         ).where(
             Order.company_id == company_id,
-            Order.opened_at >= start_at,
-            Order.opened_at <= end_at,
-            Order.status == "paid",
+            sale_at >= start_at,
+            sale_at < end_at,
+            Order.status.in_(("paid", "refunded")),
             Order.delivery_via.isnot(None),
             Order.delivery_via != "inhouse",
         )
@@ -277,9 +315,9 @@ class ReportsAggregator:
             .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
             .where(
                 Order.company_id == company_id,
-                Order.opened_at >= start_at,
-                Order.opened_at <= end_at,
-                Order.status == "paid",
+                sale_at >= start_at,
+                sale_at < end_at,
+                Order.status.in_(("paid", "refunded")),
                 or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
             )
             .group_by(MenuItem.type)
@@ -304,6 +342,7 @@ class ReportsAggregator:
         tickets_q = (
             select(
                 EventTicket.price_paid_minor,
+                EventTicket.order_id,
                 Event.tax_rate,
                 Branch.state_code,
             )
@@ -312,7 +351,7 @@ class ReportsAggregator:
             .where(
                 Event.company_id == company_id,
                 EventTicket.created_at >= start_at,
-                EventTicket.created_at <= end_at,
+                EventTicket.created_at < end_at,
                 EventTicket.status.in_(("sold", "checked_in")),
             )
         )
@@ -321,6 +360,8 @@ class ReportsAggregator:
         tickets_total = 0
         ticket_cgst = ticket_sgst = ticket_igst = 0
         for ticket in ticket_rows:
+            if ticket.order_id is not None:
+                continue
             amount = int(ticket.price_paid_minor or 0)
             tickets_total += amount
             _, cgst, sgst, igst = split_tax_from_inclusive_minor(
@@ -337,6 +378,30 @@ class ReportsAggregator:
             sgst_minor=order_sgst + ticket_sgst,
             igst_minor=order_igst + ticket_igst,
             cess_minor=order_cess,
+        )
+
+        # ---------- Cost of goods sold ----------
+        movement_rows = (
+            await self.session.execute(
+                select(
+                    StockMovement.qty_delta,
+                    StockMovement.cost_per_unit_minor,
+                )
+                .join(Batch, Batch.id == StockMovement.batch_id)
+                .where(
+                    StockMovement.branch_id.in_(
+                        select(Branch.id).where(Branch.company_id == company_id)
+                    ),
+                    StockMovement.type == "sale",
+                    StockMovement.created_at >= start_at,
+                    StockMovement.created_at < end_at,
+                )
+            )
+        ).all()
+        cogs_minor = sum(
+            int(abs(Decimal(str(qty_delta))) * int(cost_per_unit_minor or 0))
+            for qty_delta, cost_per_unit_minor in movement_rows
+            if Decimal(str(qty_delta or 0)) < 0
         )
 
         revenue = RevenueBreakdown(
@@ -358,7 +423,7 @@ class ReportsAggregator:
             .where(
                 Order.company_id == company_id,
                 Payment.paid_at >= start_at,
-                Payment.paid_at <= end_at,
+                Payment.paid_at < end_at,
             )
             .group_by(Payment.method)
         )
@@ -377,16 +442,71 @@ class ReportsAggregator:
             qr_minor=qr, wallet_minor=wallet, other_minor=other_pay,
         )
 
-        refunds_q = (
-            select(func.coalesce(func.sum(Refund.amount_minor), 0))
-            .join(Order, Order.id == Refund.order_id)
-            .where(
-                Order.company_id == company_id,
-                Refund.created_at >= start_at,
-                Refund.created_at <= end_at,
+        refund_rows = (
+            await self.session.execute(
+                select(Refund, Order)
+                .join(Order, Order.id == Refund.order_id)
+                .where(
+                    Order.company_id == company_id,
+                    Refund.created_at >= start_at,
+                    Refund.created_at < end_at,
+                )
+                .order_by(Refund.created_at, Refund.id)
             )
+        ).all()
+        refund_order_ids = {refund.order_id for refund, _ in refund_rows}
+        prior_by_order: dict[UUID, int] = {}
+        if refund_order_ids:
+            prior_rows = (
+                await self.session.execute(
+                    select(
+                        Refund.order_id,
+                        func.coalesce(func.sum(Refund.amount_minor), 0),
+                    )
+                    .where(
+                        Refund.order_id.in_(refund_order_ids),
+                        Refund.created_at < start_at,
+                    )
+                    .group_by(Refund.order_id)
+                )
+            ).all()
+            prior_by_order = {
+                order_id: int(amount or 0) for order_id, amount in prior_rows
+            }
+
+        refunds_issued = 0
+        settled_refunds_issued = 0
+        refund_cgst = refund_sgst = refund_igst = refund_cess = 0
+        running = dict(prior_by_order)
+        for refund, order in refund_rows:
+            amount = int(refund.amount_minor or 0)
+            before = running.get(order.id, 0)
+            after = before + amount
+            total = int(order.total_minor or 0)
+            for component_name in ("cgst", "sgst", "igst", "cess"):
+                component = int(getattr(order, f"{component_name}_minor") or 0)
+                delta = _proportional_cumulative(
+                    component, after, total
+                ) - _proportional_cumulative(component, before, total)
+                if component_name == "cgst":
+                    refund_cgst += delta
+                elif component_name == "sgst":
+                    refund_sgst += delta
+                elif component_name == "igst":
+                    refund_igst += delta
+                else:
+                    refund_cess += delta
+            running[order.id] = after
+            refunds_issued += amount
+            if refund.settlement_method != "store_credit":
+                settled_refunds_issued += amount
+
+        tax = TaxBreakdown(
+            cgst_minor=tax.cgst_minor - refund_cgst,
+            sgst_minor=tax.sgst_minor - refund_sgst,
+            igst_minor=tax.igst_minor - refund_igst,
+            cess_minor=tax.cess_minor - refund_cess,
         )
-        refunds_issued = int((await self.session.execute(refunds_q)).scalar_one() or 0)
 
         # ---------- Expenses by category ----------
         exp_q = (
@@ -398,7 +518,7 @@ class ReportsAggregator:
             .where(
                 Expense.company_id == company_id,
                 Expense.paid_at >= start_at,
-                Expense.paid_at <= end_at,
+                Expense.paid_at < end_at,
                 Expense.deleted_at.is_(None),
             )
             .group_by(ExpenseCategory.name)
@@ -424,6 +544,8 @@ class ReportsAggregator:
             tax_collected=tax,
             payments_received=payments,
             refunds_issued_minor=refunds_issued,
+            settled_refunds_issued_minor=settled_refunds_issued,
+            cogs_minor=cogs_minor,
             expenses=expense_lines,
             expense_total_minor=expense_total,
         )

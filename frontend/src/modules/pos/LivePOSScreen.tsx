@@ -272,7 +272,11 @@ export default function LivePOSScreen() {
         amount_minor: order.total_minor,
         tendered_minor: method === 'cash' ? order.total_minor : undefined,
       }, `payment:${checkoutKey}`);
-      setReceipt({ ...order, status: 'paid' });
+      const paidOrder = await pos.getOrder(order.id);
+      if (!paidOrder.invoice_no || !paidOrder.invoice_issued_at) {
+        throw new Error('Payment saved, but the final invoice could not be loaded. Open Orders and reprint it.');
+      }
+      setReceipt(paidOrder);
       pendingOrderRef.current = null;
       checkoutKeyRef.current = null;
       setShowPay(false);

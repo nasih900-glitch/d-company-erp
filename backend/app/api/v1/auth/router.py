@@ -31,6 +31,7 @@ from app.services.auth.otp import (
     masked_security_email,
     normalize_account_email,
 )
+from app.services.auth.rate_limit import enforce_login_rate_limit
 
 router = APIRouter()
 
@@ -419,7 +420,9 @@ async def confirm_password_reset(
     user.password_hash = hash_password(payload.new_password)
     user.failed_login_count = 0
     user.locked_until = None
-    user.auth_version += 1
+    # Invalidate every existing access/refresh token for this user so a reset
+    # actually evicts a compromised session (both token types carry auth_version).
+    user.auth_version = (user.auth_version or 0) + 1
     session.add(
         AuditLog(
             actor_user_id=challenge.requested_by_user_id,
@@ -440,9 +443,11 @@ async def confirm_password_reset(
 async def login(payload: LoginRequest, request: Request, session: SessionDep) -> TokenPair:
     settings = get_settings()
     email = payload.email.strip().lower()
-    user = (
+    await enforce_login_rate_limit(request, email)
+    users = (
         await session.execute(select(User).where(User.email == email))
-    ).scalar_one_or_none()
+    ).scalars().all()
+    user = users[0] if len(users) == 1 else None
     if not user or user.deleted_at:
         company_id = await _fallback_company_id(session)
         _audit_auth_event(
@@ -451,7 +456,10 @@ async def login(payload: LoginRequest, request: Request, session: SessionDep) ->
             action="login_failed",
             email=email,
             company_id=company_id,
-            details={"reason": "unknown_user"},
+            details={
+                "reason": "ambiguous_or_unknown_user",
+                "matches": min(len(users), 2),
+            },
         )
         await session.commit()
         raise AuthError("invalid credentials")

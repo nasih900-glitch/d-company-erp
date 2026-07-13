@@ -13,7 +13,7 @@ State machine on Order.kitchen_state:
 
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -25,6 +25,7 @@ from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import MenuItem, Order, OrderLine
 
 router = APIRouter()
@@ -71,10 +72,12 @@ async def kitchen_queue(
     Skips orders that contain no food, drink, or dessert lines so gaming,
     hookah, and event-only orders do not clutter the kitchen iPad.
     """
-    today_start = datetime.combine(
-        datetime.now(timezone.utc).date(),
-        time.min,
-        tzinfo=timezone.utc,
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
+    today_start, tomorrow_start = local_date_bounds_utc(
+        today,
+        today,
+        timezone_name,
     )
 
     stmt = (
@@ -82,6 +85,7 @@ async def kitchen_queue(
         .where(
             Order.company_id == tenant.company_id,
             Order.opened_at >= today_start,
+            Order.opened_at < tomorrow_start,
             Order.status.in_(("paid", "open")),
         )
         .order_by(Order.opened_at)

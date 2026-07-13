@@ -11,12 +11,20 @@ import {
   type ReceiptBusinessDetails,
 } from './receipt-business';
 
-const datestr = (d: Date) =>
-  `${String(d.getDate()).padStart(2, '0')}-` +
-  ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()] +
-  `-${d.getFullYear()}`;
-const timestr = (d: Date) =>
-  `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+const invoiceDateTime = (iso: string, timezone: string) => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  return `${value('day')}-${value('month')}-${value('year')} ${value('hour')}:${value('minute')}`;
+};
 
 export default function LiveReceipt({
   order,
@@ -25,7 +33,7 @@ export default function LiveReceipt({
   order: OrderDTO;
   business: ReceiptBusinessDetails;
 }) {
-  const now = new Date();
+  const issuedAt = order.invoice_issued_at ?? order.closed_at;
   const isPlatformDelivery = order.type === 'delivery' && !!order.delivery_via && order.delivery_via !== 'inhouse';
   const documentTitle = receiptDocumentTitle(business, isPlatformDelivery);
   const isGstDocument = documentTitle === 'Tax Invoice' || documentTitle === 'Bill of Supply';
@@ -52,7 +60,7 @@ export default function LiveReceipt({
         <div><b>{documentTitle}</b></div>
         <div className="text-right">
           <div>No.  {order.invoice_no ?? '—'}</div>
-          <div>Date {datestr(now)} {timestr(now)}</div>
+          <div>Date {issuedAt ? invoiceDateTime(issuedAt, business.timezone) : 'Pending'}</div>
         </div>
       </div>
       <div className="flex justify-between text-[10px] text-fg-muted print:text-black/70">

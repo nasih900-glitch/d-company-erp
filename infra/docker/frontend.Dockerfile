@@ -1,5 +1,5 @@
 # --- builder ---
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 ARG VITE_API_URL=/api/v1
 ARG VITE_APP_VERSION=dev
 ENV VITE_API_URL=${VITE_API_URL} VITE_APP_VERSION=${VITE_APP_VERSION}

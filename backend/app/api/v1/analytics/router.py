@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date as _date, datetime, timezone
+from datetime import date as _date
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from app.core.db import SessionDep
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_today
 from app.models import GamingSession, Ingredient
 from app.services.reports import ReportsAggregator
 
@@ -52,7 +53,8 @@ async def dashboard(
     numbers always agree with what /reports/daily and the Finance Overview
     tab display.
     """
-    target_date = on_date or datetime.now(timezone.utc).date()
+    timezone_name = await company_timezone(session, tenant.company_id)
+    target_date = on_date or local_today(timezone_name)
     agg = ReportsAggregator(session)
     report = await agg.aggregate_daily(company_id=tenant.company_id, d=target_date)
 

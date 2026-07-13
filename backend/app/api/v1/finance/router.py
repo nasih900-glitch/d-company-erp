@@ -20,10 +20,12 @@ from app.core.db import SessionDep
 from app.core.errors import NotFoundError, BusinessRuleError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
     Asset, Branch, CapitalEntry, Expense, ExpenseCategory, OcrExtraction,
     OcrUpload, Partner, Supplier, User,
 )
+from app.services.reports import ReportsAggregator
 
 router = APIRouter()
 
@@ -182,11 +184,13 @@ async def list_expenses(
         Expense.company_id == tenant.company_id,
         Expense.deleted_at.is_(None),
     )
+    timezone_name = await company_timezone(session, tenant.company_id)
     if from_date:
-        stmt = stmt.where(Expense.paid_at >= datetime(from_date.year, from_date.month, from_date.day, tzinfo=timezone.utc))
+        from_at, _ = local_date_bounds_utc(from_date, from_date, timezone_name)
+        stmt = stmt.where(Expense.paid_at >= from_at)
     if to_date:
-        from datetime import time
-        stmt = stmt.where(Expense.paid_at <= datetime.combine(to_date, time.max, tzinfo=timezone.utc))
+        _, to_exclusive = local_date_bounds_utc(to_date, to_date, timezone_name)
+        stmt = stmt.where(Expense.paid_at < to_exclusive)
     stmt = stmt.order_by(Expense.paid_at.desc())
     rows = (await session.execute(stmt)).scalars().all()
     return [
@@ -206,6 +210,8 @@ async def create_expense(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseRead:
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
     await _validate_expense_references(
         session,
         company_id=tenant.company_id,
@@ -445,6 +451,8 @@ async def create_asset(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> AssetRead:
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
     branch = await session.get(Branch, payload.branch_id)
     if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
         raise NotFoundError("branch not found")
@@ -474,14 +482,26 @@ async def profit_loss(
     period_end: date | None = None,
     tenant: TenantContext = Depends(requires("finance.read")),
 ) -> PLReport:
-    """Returns the legacy P&L stub, defaulting to the current month."""
-    today = date.today()
+    """Return the same operational P&L used by Reports and Analytics."""
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
     period_start = period_start or today.replace(day=1)
     period_end = period_end or today
     if period_end < period_start:
         raise BusinessRuleError("period_end must be on or after period_start")
+    report = await ReportsAggregator(session).aggregate(
+        company_id=tenant.company_id,
+        period_start=period_start,
+        period_end=period_end,
+        period="custom",
+        label=f"{period_start.isoformat()} to {period_end.isoformat()}",
+    )
     return PLReport(
-        period_start=period_start, period_end=period_end,
-        revenue_minor=0, cogs_minor=0, gross_profit_minor=0,
-        expenses_minor=0, net_profit_minor=0,
+        period_start=period_start,
+        period_end=period_end,
+        revenue_minor=report.net_revenue_minor,
+        cogs_minor=report.cogs_minor,
+        gross_profit_minor=report.gross_profit_minor,
+        expenses_minor=report.expense_total_minor,
+        net_profit_minor=report.net_profit_minor,
     )

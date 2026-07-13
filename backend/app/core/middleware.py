@@ -11,11 +11,79 @@ import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.logging import get_logger
 from app.services.audit.recorder import clear_actor
 
 log = get_logger(__name__)
+
+
+class _RequestBodyTooLarge(Exception):
+    pass
+
+
+class RequestBodyLimitMiddleware:
+    """Reject oversized HTTP bodies before parsers or idempotency buffering."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        raw_length = headers.get(b"content-length")
+        if raw_length:
+            try:
+                if int(raw_length) > self.max_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                await self._reject(scope, receive, send, code="invalid_content_length")
+                return
+
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise _RequestBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestBodyTooLarge:
+            await self._reject(scope, receive, send)
+
+    async def _reject(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        code: str = "request_too_large",
+    ) -> None:
+        response = JSONResponse(
+            status_code=413 if code == "request_too_large" else 400,
+            content={
+                "error": {
+                    "code": code,
+                    "message": (
+                        f"Request body must be {self.max_bytes} bytes or fewer"
+                        if code == "request_too_large"
+                        else "Content-Length header is invalid"
+                    ),
+                }
+            },
+        )
+        await response(scope, receive, send)
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):

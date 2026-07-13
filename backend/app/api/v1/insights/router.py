@@ -8,7 +8,7 @@ materialized view layer later if Postgres struggles.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone, timedelta
+from datetime import date, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -16,14 +16,26 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.core.db import SessionDep
+from app.core.errors import BusinessRuleError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
     Batch, Branch, Ingredient, MenuItem, Order, OrderLine,
     Recipe, RecipeLine, StockMovement,
 )
 
 router = APIRouter()
+
+
+def _validated_date_range(
+    start: date,
+    end: date,
+    timezone_name: str,
+):
+    if end < start:
+        raise BusinessRuleError("to_date must be on or after from_date")
+    return local_date_bounds_utc(start, end, timezone_name)
 
 
 # ---------------------------------------------------------------- DTOs
@@ -136,8 +148,9 @@ async def inventory_valuation(
             reorder_threshold=float(r.reorder_threshold or 0),
             is_low_stock=is_low,
         ))
+    timezone_name = await company_timezone(session, tenant.company_id)
     return InventoryValuationDTO(
-        as_of=date.today(), lines=lines,
+        as_of=local_today(timezone_name), lines=lines,
         total_valuation_minor=total, low_stock_count=low,
     )
 
@@ -218,7 +231,11 @@ def _date_range_for_period(period: str, today: date) -> tuple[tuple[date, date],
     if period == "yoy":
         cur_start = today.replace(month=1, day=1)
         prev_start = cur_start.replace(year=cur_start.year - 1)
-        prev_end = today.replace(year=today.year - 1)
+        try:
+            prev_end = today.replace(year=today.year - 1)
+        except ValueError:
+            # today is 29-Feb and the prior year is not a leap year.
+            prev_end = today.replace(year=today.year - 1, day=28)
         return (
             (cur_start, today),
             (prev_start, prev_end),
@@ -237,9 +254,15 @@ def _date_range_for_period(period: str, today: date) -> tuple[tuple[date, date],
     )
 
 
-async def _period_stats(session, company_id: UUID, d_from: date, d_to: date) -> GrowthPeriodDTO:
-    f_dt = datetime.combine(d_from, time.min, tzinfo=timezone.utc)
-    t_dt = datetime.combine(d_to, time.max, tzinfo=timezone.utc)
+async def _period_stats(
+    session,
+    company_id: UUID,
+    d_from: date,
+    d_to: date,
+    timezone_name: str,
+) -> GrowthPeriodDTO:
+    f_dt, t_dt = local_date_bounds_utc(d_from, d_to, timezone_name)
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     row = (
         await session.execute(
             select(
@@ -247,8 +270,8 @@ async def _period_stats(session, company_id: UUID, d_from: date, d_to: date) -> 
                 func.count(Order.id).label("n"),
             ).where(
                 Order.company_id == company_id,
-                Order.opened_at >= f_dt, Order.opened_at <= t_dt,
-                Order.status == "paid",
+                sale_at >= f_dt, sale_at < t_dt,
+                Order.status.in_(("paid", "refunded")),
             )
         )
     ).one()
@@ -264,10 +287,11 @@ async def growth(
     tenant: TenantContext = Depends(requires("analytics.read")),
     period: str = "mom",  # mom|yoy|wow
 ) -> GrowthDTO:
-    today = date.today()
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
     (c_s, c_e), (p_s, p_e), c_label, p_label = _date_range_for_period(period, today)
-    cur = await _period_stats(session, tenant.company_id, c_s, c_e)
-    prev = await _period_stats(session, tenant.company_id, p_s, p_e)
+    cur = await _period_stats(session, tenant.company_id, c_s, c_e, timezone_name)
+    prev = await _period_stats(session, tenant.company_id, p_s, p_e, timezone_name)
     cur.label = c_label
     prev.label = p_label
     rev_delta = ((cur.revenue_minor - prev.revenue_minor) / prev.revenue_minor * 100) if prev.revenue_minor > 0 else 0.0
@@ -284,10 +308,12 @@ async def top_items(
     to_date: date | None = None,
     limit: int = 20,
 ) -> list[TopItemDTO]:
-    from_date = from_date or date.today().replace(day=1)
-    to_date = to_date or date.today()
-    f_dt = datetime.combine(from_date, time.min, tzinfo=timezone.utc)
-    t_dt = datetime.combine(to_date, time.max, tzinfo=timezone.utc)
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
+    from_date = from_date or today.replace(day=1)
+    to_date = to_date or today
+    f_dt, t_dt = _validated_date_range(from_date, to_date, timezone_name)
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     rows = (
         await session.execute(
             select(
@@ -299,8 +325,8 @@ async def top_items(
             .join(Order, Order.id == OrderLine.order_id)
             .where(
                 Order.company_id == tenant.company_id,
-                Order.opened_at >= f_dt, Order.opened_at <= t_dt,
-                Order.status == "paid",
+                sale_at >= f_dt, sale_at < t_dt,
+                Order.status.in_(("paid", "refunded")),
             )
             .group_by(MenuItem.id, MenuItem.name, MenuItem.type)
             .order_by(func.sum(OrderLine.line_total_minor).desc())
@@ -324,22 +350,25 @@ async def heatmap(
     to_date: date | None = None,
 ) -> list[HeatmapCellDTO]:
     """Day-of-week × hour-of-day revenue grid. Helps staff scheduling."""
-    from_date = from_date or (date.today() - timedelta(days=30))
-    to_date = to_date or date.today()
-    f_dt = datetime.combine(from_date, time.min, tzinfo=timezone.utc)
-    t_dt = datetime.combine(to_date, time.max, tzinfo=timezone.utc)
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
+    from_date = from_date or (today - timedelta(days=30))
+    to_date = to_date or today
+    f_dt, t_dt = _validated_date_range(from_date, to_date, timezone_name)
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
+    local_sale_at = func.timezone(timezone_name, sale_at)
     rows = (
         await session.execute(
             select(
-                func.extract("dow", Order.opened_at).label("dow"),
-                func.extract("hour", Order.opened_at).label("hour"),
+                func.extract("dow", local_sale_at).label("dow"),
+                func.extract("hour", local_sale_at).label("hour"),
                 func.coalesce(func.sum(Order.total_minor), 0).label("rev"),
                 func.count(Order.id).label("n"),
             )
             .where(
                 Order.company_id == tenant.company_id,
-                Order.opened_at >= f_dt, Order.opened_at <= t_dt,
-                Order.status == "paid",
+                sale_at >= f_dt, sale_at < t_dt,
+                Order.status.in_(("paid", "refunded")),
             )
             .group_by("dow", "hour")
         )
@@ -367,10 +396,11 @@ async def losses(
     to_date: date | None = None,
 ) -> LossesDTO:
     """Aggregate waste + damage + negative-stock movements over a period."""
-    from_date = from_date or (date.today() - timedelta(days=30))
-    to_date = to_date or date.today()
-    f_dt = datetime.combine(from_date, time.min, tzinfo=timezone.utc)
-    t_dt = datetime.combine(to_date, time.max, tzinfo=timezone.utc)
+    timezone_name = await company_timezone(session, tenant.company_id)
+    today = local_today(timezone_name)
+    from_date = from_date or (today - timedelta(days=30))
+    to_date = to_date or today
+    f_dt, t_dt = _validated_date_range(from_date, to_date, timezone_name)
 
     # Pull waste/damage/adjustment movements joined to ingredient via batch
     rows = (
@@ -386,7 +416,7 @@ async def losses(
             .where(
                 Ingredient.company_id == tenant.company_id,
                 StockMovement.created_at >= f_dt,
-                StockMovement.created_at <= t_dt,
+                StockMovement.created_at < t_dt,
                 StockMovement.type.in_(("waste", "damage", "adjustment")),
             )
         )

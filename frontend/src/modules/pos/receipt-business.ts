@@ -12,6 +12,7 @@ export interface ReceiptBusinessDetails {
   tradeLicenseNo: string | null;
   stateCode: string | null;
   cashierName: string | null;
+  timezone: string;
 }
 
 const clean = (value: string | null | undefined): string | null => {
@@ -36,6 +37,7 @@ export function buildReceiptBusinessDetails(
     tradeLicenseNo: clean(branch?.trade_license_no),
     stateCode: clean(branch?.state_code),
     cashierName: clean(cashierName),
+    timezone: clean(branch?.timezone) ?? company.timezone,
   };
 }
 

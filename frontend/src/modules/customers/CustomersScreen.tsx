@@ -7,7 +7,7 @@
  *  - Edit name / email / birthday / notes
  *  - See visit count, total spent, loyalty points
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   UserPlus, Edit2, Search, Loader2, AlertCircle, RefreshCw,
   Phone, Award, ShoppingBag,
@@ -25,15 +25,15 @@ export default function CustomersScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<CustomerDTO | null>(null);
 
-  async function load() {
+  const load = useCallback(async (search = '') => {
     setLoading(true); setErr(null);
-    try { setRows(await customers.list(q.trim() || undefined)); }
+    try { setRows(await customers.list(search.trim() || undefined)); }
     catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
 
-  const onSearch = (e: React.FormEvent) => { e.preventDefault(); load(); };
+  const onSearch = (e: React.FormEvent) => { e.preventDefault(); void load(q); };
 
   const totals = {
     customers: rows.length,
@@ -52,7 +52,7 @@ export default function CustomersScreen() {
           </p>
         </div>
         <div className="flex w-full gap-2 sm:w-auto">
-          <button className="btn btn-ghost shrink-0" onClick={load}><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost shrink-0" onClick={() => load(q)}><RefreshCw size={14}/></button>
           <button className="btn btn-primary flex-1 sm:flex-none" onClick={() => setAddOpen(true)}>
             <UserPlus size={14}/> Add customer
           </button>

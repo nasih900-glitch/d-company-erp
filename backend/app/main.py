@@ -21,6 +21,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.middleware import (
     IdempotencyMiddleware,
     RequestContextMiddleware,
+    RequestBodyLimitMiddleware,
     TimingMiddleware,
 )
 from app.services.audit.recorder import install_audit_listeners
@@ -66,6 +67,10 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(TimingMiddleware)
     app.add_middleware(IdempotencyMiddleware)
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=settings.max_request_body_bytes,
+    )
 
     register_exception_handlers(app)
 

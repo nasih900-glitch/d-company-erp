@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     account_otp_ttl_minutes: int = Field(default=10, ge=5, le=30)
     account_otp_max_attempts: int = Field(default=5, ge=3, le=10)
     account_otp_request_limit: int = Field(default=3, ge=1, le=10)
+    login_ip_limit_per_minute: int = Field(default=30, ge=5, le=300)
+    login_identity_limit_per_15_minutes: int = Field(default=10, ge=5, le=100)
+    max_request_body_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        ge=1024,
+        le=100 * 1024 * 1024,
+    )
 
     # ----- cors -----
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
@@ -84,6 +91,18 @@ class Settings(BaseSettings):
     def _warn_default_secret(cls, v: str) -> str:
         # In prod, this should be set from a secret manager.
         return v
+
+    @model_validator(mode="after")
+    def _enforce_prod_secret(self) -> "Settings":
+        # Fail closed: a prod/staging boot must never fall back to the public
+        # default HS256 secret, or tokens become forgeable by anyone.
+        if self.env in {"prod", "staging"} and self.jwt_algorithm == "HS256":
+            if self.jwt_secret.startswith("CHANGE_ME") or len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "JWT_SECRET must be set to a strong non-default value "
+                    "(>=32 chars) when ENV is prod or staging"
+                )
+        return self
 
     @field_validator("account_security_company_id", mode="before")
     @classmethod

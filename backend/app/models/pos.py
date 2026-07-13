@@ -76,6 +76,11 @@ class Order(Base, TimestampMixin, TenantMixin):
     total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Authoritative tax-invoice issue time. Unlike opened_at, this is populated
+    # only when final payment succeeds and the invoice number is allocated.
+    invoice_issued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True, index=True)
     # ----- Invoice numbering (per branch, per FY, no gaps) -----
     invoice_no: Mapped[str | None] = mapped_column(String(20), unique=True, index=True)
@@ -172,4 +177,6 @@ class Refund(Base, TimestampMixin):
     reason_code: Mapped[str] = mapped_column(String(50), nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     mode: Mapped[str] = mapped_column(String(20), nullable=False)  # cash|original|credit_note
+    # Actual settlement rail, snapshotted for cash movement and accounting.
+    settlement_method: Mapped[str | None] = mapped_column(String(20))
     note: Mapped[str | None] = mapped_column(String(500))

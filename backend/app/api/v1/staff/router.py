@@ -28,7 +28,7 @@ router = APIRouter()
 class UserCreate(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     name: str = Field(min_length=1, max_length=200)
-    password: str = Field(min_length=10)
+    password: str = Field(min_length=10, max_length=256)
     phone: str | None = Field(default=None, max_length=20)
     # owner|partner|manager|cashier|kitchen|gaming_supervisor|auditor
     role_code: str = Field(default="cashier", min_length=1, max_length=50)
@@ -42,7 +42,7 @@ class UserUpdate(BaseModel):
 
 
 class PasswordChange(BaseModel):
-    new_password: str = Field(min_length=10)
+    new_password: str = Field(min_length=10, max_length=256)
 
 
 class UserRead(BaseModel):
@@ -248,8 +248,8 @@ async def list_roles(
 
 # ---------------------------------------------------------------- own password
 class MyPasswordChange(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=10)
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=10, max_length=256)
 
 
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
@@ -16,6 +16,7 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import (
     Batch,
+    Branch,
     GRN,
     GRNLine,
     Ingredient,
@@ -26,6 +27,27 @@ from app.models import (
 )
 
 router = APIRouter()
+
+
+async def _require_writable_branch(
+    session: SessionDep,
+    tenant: TenantContext,
+    branch_id: UUID,
+) -> Branch:
+    branch = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not branch or not tenant.in_branch(branch_id):
+        raise NotFoundError("branch not found")
+    return branch
 
 
 # ---------------------------------------------------------------- DTOs
@@ -303,6 +325,7 @@ async def post_grn(
         raise BusinessRuleError("at least one line required")
     if payload.supplier_id is None:
         raise BusinessRuleError("supplier_id is required to record a GRN")
+    await _require_writable_branch(session, tenant, payload.branch_id)
     supplier = await session.get(Supplier, payload.supplier_id)
     if not supplier or supplier.company_id != tenant.company_id or supplier.deleted_at:
         raise NotFoundError("supplier not found")
@@ -339,7 +362,13 @@ async def post_grn(
     line_ids: list[str] = []
 
     for ln in payload.lines:
-        ing = await session.get(Ingredient, ln.ingredient_id)
+        ing = (
+            await session.execute(
+                select(Ingredient)
+                .where(Ingredient.id == ln.ingredient_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
             raise NotFoundError(f"ingredient {ln.ingredient_id} not found")
 
@@ -434,7 +463,15 @@ async def post_adjustment(
     if payload.qty_delta == 0:
         raise BusinessRuleError("qty_delta must be non-zero")
 
-    ing = await session.get(Ingredient, payload.ingredient_id)
+    await _require_writable_branch(session, tenant, payload.branch_id)
+
+    ing = (
+        await session.execute(
+            select(Ingredient)
+            .where(Ingredient.id == payload.ingredient_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
         raise NotFoundError("ingredient not found")
 
@@ -450,6 +487,7 @@ async def post_adjustment(
                 )
                 .order_by(Batch.received_at)
                 .limit(1)
+                .with_for_update()
             )
         ).scalar_one_or_none()
         if not batch:
@@ -468,6 +506,7 @@ async def post_adjustment(
                 )
                 .order_by(Batch.received_at.desc())
                 .limit(1)
+                .with_for_update()
             )
         ).scalar_one_or_none()
         if not batch:

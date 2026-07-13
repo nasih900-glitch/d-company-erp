@@ -62,7 +62,10 @@ async def get_tenant_context(
     except (KeyError, TypeError, ValueError) as exc:
         raise AuthError("malformed token claims") from exc
 
-    terminal_id = UUID(x_terminal_id) if x_terminal_id else None
+    try:
+        terminal_id = UUID(x_terminal_id) if x_terminal_id else None
+    except (TypeError, ValueError) as exc:
+        raise AuthError("malformed terminal id") from exc
     raw_roles = list(payload.get("roles", []))
     protected_access = bool(payload.get("protected_access")) or has_protected_owner_access(raw_roles)
     roles = tuple(public_roles(raw_roles))

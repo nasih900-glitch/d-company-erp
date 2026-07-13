@@ -7,7 +7,7 @@
  *    Accounting  — Chart of Accounts, Trial Balance, Balance Sheet, GL
  *    Losses      — waste/damage/negative-stock in ₹
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   TrendingUp, Boxes, Calculator, AlertTriangle,
   Loader2, ArrowUp, ArrowDown,
@@ -68,7 +68,7 @@ function GrowthTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
       const [g, t, h] = await Promise.all([
@@ -79,8 +79,8 @@ function GrowthTab() {
       setGrowth(g); setTop(t); setHeatmap(h);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, [period]);
+  }, [period]);
+  useEffect(() => { void load(); }, [load]);
 
   if (loading) return <LoadingCard/>;
   if (err) return <ErrorCard text={err}/>;

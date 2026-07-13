@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date, datetime, time, timezone
-from decimal import Decimal
+from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 import re
 from typing import Literal
 from uuid import UUID
@@ -23,7 +23,17 @@ from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import Branch, Company, Event, EventTicket, MenuItem, Order, OrderLine
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
+from app.models import (
+    Branch,
+    Company,
+    Event,
+    EventTicket,
+    MenuItem,
+    Order,
+    OrderLine,
+    Refund,
+)
 from app.services.pos.pricing import split_tax_from_inclusive_minor
 from app.services.reports import (
     PnLReport,
@@ -93,9 +103,11 @@ class ReportDTO(BaseModel):
     net_payments_received_minor: int
     expenses: list[ExpenseLineDTO] = Field(default_factory=list)
     expense_total_minor: int
+    cogs_minor: int
 
     gross_revenue_minor: int
     net_revenue_minor: int
+    gross_profit_minor: int
     net_profit_minor: int
 
 
@@ -167,8 +179,10 @@ def _to_dto(r: PnLReport) -> ReportDTO:
             for e in r.expenses
         ],
         expense_total_minor=r.expense_total_minor,
+        cogs_minor=r.cogs_minor,
         gross_revenue_minor=r.gross_revenue_minor,
         net_revenue_minor=r.net_revenue_minor,
+        gross_profit_minor=r.gross_profit_minor,
         net_profit_minor=r.net_profit_minor,
     )
 
@@ -181,7 +195,8 @@ async def daily_report(
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
     """P&L for a single day. Defaults to today if on_date is omitted."""
-    d = on_date or date.today()
+    timezone_name = await company_timezone(session, tenant.company_id)
+    d = on_date or local_today(timezone_name)
     agg = ReportsAggregator(session)
     rep = await agg.aggregate_daily(company_id=tenant.company_id, d=d)
     return _to_dto(rep)
@@ -194,7 +209,8 @@ async def monthly_report(
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
     """P&L for a calendar month. Defaults to the current month."""
-    yyyy_mm = yyyy_mm or date.today().strftime("%Y-%m")
+    timezone_name = await company_timezone(session, tenant.company_id)
+    yyyy_mm = yyyy_mm or local_today(timezone_name).strftime("%Y-%m")
     if len(yyyy_mm) != 7 or yyyy_mm[4] != "-":
         raise BusinessRuleError("yyyy_mm must look like '2026-06'")
     agg = ReportsAggregator(session)
@@ -210,7 +226,10 @@ async def quarterly_report(
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
     """P&L for one Indian fiscal quarter. Defaults to the current quarter."""
-    current_fy, current_q = _current_indian_fiscal_period(date.today())
+    timezone_name = await company_timezone(session, tenant.company_id)
+    current_fy, current_q = _current_indian_fiscal_period(
+        local_today(timezone_name)
+    )
     fy = fy or current_fy
     q = q or current_q
     if q not in (1, 2, 3, 4):
@@ -229,7 +248,8 @@ async def yearly_report(
     tenant: TenantContext = Depends(requires("analytics.read")),
 ) -> ReportDTO:
     """P&L for an Indian fiscal year. Defaults to the current fiscal year."""
-    fy = fy or _current_indian_fiscal_period(date.today())[0]
+    timezone_name = await company_timezone(session, tenant.company_id)
+    fy = fy or _current_indian_fiscal_period(local_today(timezone_name))[0]
     if len(fy) != 7 or fy[4] != "-":
         raise BusinessRuleError("fy must look like '2026-27'")
     agg = ReportsAggregator(session)
@@ -312,14 +332,17 @@ async def tax_compliance(
     This does not file a return. It highlights configuration and data problems
     before the accountant exports GSTR data.
     """
-    period_end = to_date or datetime.now(timezone.utc).date()
+    timezone_name = await company_timezone(session, tenant.company_id)
+    period_end = to_date or local_today(timezone_name)
     period_start = from_date or period_end.replace(day=1)
 
     if period_end < period_start:
         raise BusinessRuleError("to_date must be on or after from_date")
 
-    start_dt = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
-    end_dt = datetime.combine(period_end, time.max, tzinfo=timezone.utc)
+    start_dt, end_dt = local_date_bounds_utc(
+        period_start, period_end, timezone_name
+    )
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     company = await session.get(Company, tenant.company_id)
     branches = (
         await session.execute(
@@ -335,9 +358,9 @@ async def tax_compliance(
         await session.execute(
             select(Order).where(
                 Order.company_id == tenant.company_id,
-                Order.opened_at >= start_dt,
-                Order.opened_at <= end_dt,
-                Order.status == "paid",
+                sale_at >= start_dt,
+                sale_at < end_dt,
+                Order.status.in_(("paid", "refunded")),
             )
         )
     ).scalars().all()
@@ -380,8 +403,9 @@ async def tax_compliance(
             .join(Event, Event.id == EventTicket.event_id)
             .where(
                 Event.company_id == tenant.company_id,
+                EventTicket.order_id.is_(None),
                 EventTicket.created_at >= start_dt,
-                EventTicket.created_at <= end_dt,
+                EventTicket.created_at < end_dt,
                 EventTicket.status.in_(("sold", "checked_in")),
             )
         )
@@ -705,6 +729,90 @@ def _add_tax_bucket(
     slot["cess"] += cess
 
 
+def _allocated_component(component: int, cumulative: int, total: int) -> int:
+    """Allocate a refund component cumulatively without final rounding drift."""
+    if component <= 0 or cumulative <= 0 or total <= 0:
+        return 0
+    return int(
+        (Decimal(component) * Decimal(min(cumulative, total)) / Decimal(total)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+
+
+async def _refund_adjustments_by_rate(
+    session: SessionDep,
+    *,
+    company_id: UUID,
+    start_at: datetime,
+    end_exclusive: datetime,
+    eco: bool,
+) -> dict[float, dict[str, int]]:
+    """Return positive tax/value amounts to subtract for refunds in the period."""
+    delivery_filter = (
+        (Order.delivery_via.isnot(None), Order.delivery_via != "inhouse")
+        if eco
+        else (or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),)
+    )
+    refund_rows = (
+        await session.execute(
+            select(Refund, Order)
+            .join(Order, Order.id == Refund.order_id)
+            .where(
+                Order.company_id == company_id,
+                Refund.created_at < end_exclusive,
+                *delivery_filter,
+            )
+            .order_by(Refund.order_id, Refund.created_at, Refund.id)
+        )
+    ).all()
+    order_ids = {order.id for _, order in refund_rows}
+    if not order_ids:
+        return {}
+
+    line_rows = (
+        await session.execute(
+            select(OrderLine).where(OrderLine.order_id.in_(order_ids))
+        )
+    ).scalars().all()
+    components: dict[UUID, dict[float, dict[str, int]]] = {}
+    for line in line_rows:
+        by_rate = components.setdefault(line.order_id, {})
+        rate = float(line.tax_rate or 0)
+        slot = by_rate.setdefault(
+            rate,
+            {"taxable": 0, "cgst": 0, "sgst": 0, "igst": 0, "cess": 0},
+        )
+        slot["taxable"] += int(
+            line.line_total_minor if eco else line.taxable_value_minor or 0
+        )
+        if not eco:
+            slot["cgst"] += int(line.cgst_minor or 0)
+            slot["sgst"] += int(line.sgst_minor or 0)
+            slot["igst"] += int(line.igst_minor or 0)
+            slot["cess"] += int(line.cess_minor or 0)
+
+    adjustments: dict[float, dict[str, int]] = {}
+    running: dict[UUID, int] = {}
+    for refund, order in refund_rows:
+        before = running.get(order.id, 0)
+        after = before + int(refund.amount_minor or 0)
+        running[order.id] = after
+        if refund.created_at < start_at:
+            continue
+        total = int(order.total_minor or 0)
+        for rate, values in components.get(order.id, {}).items():
+            slot = adjustments.setdefault(
+                rate,
+                {"taxable": 0, "cgst": 0, "sgst": 0, "igst": 0, "cess": 0},
+            )
+            for component, amount in values.items():
+                slot[component] += _allocated_component(
+                    amount, after, total
+                ) - _allocated_component(amount, before, total)
+    return adjustments
+
+
 @router.get("/gstr1.csv")
 async def gstr1_csv(
     yyyy_mm: str,
@@ -721,8 +829,9 @@ async def gstr1_csv(
       Type, Place of Supply, Rate, Taxable Value, IGST, CGST, SGST, Cess
     """
     start, end = month_range(yyyy_mm)
-    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
-    end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
+    timezone_name = await company_timezone(session, tenant.company_id)
+    start_dt, end_dt = local_date_bounds_utc(start, end, timezone_name)
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
 
     company = await session.get(Company, tenant.company_id)
     branch = (
@@ -748,9 +857,9 @@ async def gstr1_csv(
             .join(Order, Order.id == OrderLine.order_id)
             .where(
                 Order.company_id == tenant.company_id,
-                Order.opened_at >= start_dt,
-                Order.opened_at <= end_dt,
-                Order.status == "paid",
+                sale_at >= start_dt,
+                sale_at < end_dt,
+                Order.status.in_(("paid", "refunded")),
                 or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
             )
         )
@@ -768,14 +877,33 @@ async def gstr1_csv(
             cess=int(r.cess_minor or 0),
         )
 
+    refund_adjustments = await _refund_adjustments_by_rate(
+        session,
+        company_id=tenant.company_id,
+        start_at=start_dt,
+        end_exclusive=end_dt,
+        eco=False,
+    )
+    for rate, vals in refund_adjustments.items():
+        _add_tax_bucket(
+            by_rate,
+            rate=rate,
+            taxable=-vals["taxable"],
+            cgst=-vals["cgst"],
+            sgst=-vals["sgst"],
+            igst=-vals["igst"],
+            cess=-vals["cess"],
+        )
+
     event_rows = (
         await session.execute(
             select(EventTicket.price_paid_minor, Event.tax_rate)
             .join(Event, Event.id == EventTicket.event_id)
             .where(
                 Event.company_id == tenant.company_id,
+                EventTicket.order_id.is_(None),
                 EventTicket.created_at >= start_dt,
-                EventTicket.created_at <= end_dt,
+                EventTicket.created_at < end_dt,
                 EventTicket.status.in_(("sold", "checked_in")),
             )
         )
@@ -804,15 +932,27 @@ async def gstr1_csv(
             .join(Order, Order.id == OrderLine.order_id)
             .where(
                 Order.company_id == tenant.company_id,
-                Order.opened_at >= start_dt,
-                Order.opened_at <= end_dt,
-                Order.status == "paid",
+                sale_at >= start_dt,
+                sale_at < end_dt,
+                Order.status.in_(("paid", "refunded")),
                 Order.delivery_via.isnot(None),
                 Order.delivery_via != "inhouse",
             )
             .group_by(OrderLine.tax_rate)
         )
     ).all()
+    eco_by_rate = {
+        float(row.tax_rate): int(row.value or 0) for row in eco_rows
+    }
+    eco_refund_adjustments = await _refund_adjustments_by_rate(
+        session,
+        company_id=tenant.company_id,
+        start_at=start_dt,
+        end_exclusive=end_dt,
+        eco=True,
+    )
+    for rate, vals in eco_refund_adjustments.items():
+        eco_by_rate[rate] = eco_by_rate.get(rate, 0) - vals["taxable"]
 
     out: list[list] = [
         ["GSTR-1 B2C-Small Summary — accountant review"],
@@ -826,6 +966,8 @@ async def gstr1_csv(
          "IGST ₹", "CGST ₹", "SGST ₹", "Cess ₹"],
     ]
     for rate, vals in sorted(by_rate.items()):
+        if not any(vals.values()):
+            continue
         out.append([
             "OE",  # B2CS Others
             f"{pos_code}-{state_name}",
@@ -836,18 +978,20 @@ async def gstr1_csv(
             f"{vals['sgst'] / 100:.2f}",
             f"{vals['cess'] / 100:.2f}",
         ])
-    if eco_rows:
+    if any(eco_by_rate.values()):
         out.extend([
             [],
             ["Restaurant services through ECO under CGST section 9(5)"],
             ["Delivery platform", "Place of Supply", "Rate %", "Supply Value ₹", "D Company GST ₹"],
         ])
-        for row in eco_rows:
+        for rate, value in sorted(eco_by_rate.items()):
+            if not value:
+                continue
             out.append([
                 "ECO",
                 f"{pos_code}-{state_name}",
-                f"{float(row.tax_rate) * 100:.2f}",
-                f"{int(row.value or 0) / 100:.2f}",
+                f"{rate * 100:.2f}",
+                f"{value / 100:.2f}",
                 "0.00",
             ])
     return _csv_response(out, filename=f"GSTR1-{yyyy_mm}.csv")
@@ -865,8 +1009,9 @@ async def gstr3b_csv(
     restaurant delivery separated because the platform pays GST.
     """
     start, end = month_range(yyyy_mm)
-    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
-    end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
+    timezone_name = await company_timezone(session, tenant.company_id)
+    start_dt, end_dt = local_date_bounds_utc(start, end, timezone_name)
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     agg = ReportsAggregator(session)
     rep = await agg.aggregate_monthly(company_id=tenant.company_id, yyyy_mm=yyyy_mm)
     company = await session.get(Company, tenant.company_id)
@@ -878,14 +1023,24 @@ async def gstr3b_csv(
                 .join(Order, Order.id == OrderLine.order_id)
                 .where(
                     Order.company_id == tenant.company_id,
-                    Order.opened_at >= start_dt,
-                    Order.opened_at <= end_dt,
-                    Order.status == "paid",
+                    sale_at >= start_dt,
+                    sale_at < end_dt,
+                    Order.status.in_(("paid", "refunded")),
                     or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
                 )
             )
         ).scalar_one()
         or 0
+    )
+    normal_refund_adjustments = await _refund_adjustments_by_rate(
+        session,
+        company_id=tenant.company_id,
+        start_at=start_dt,
+        end_exclusive=end_dt,
+        eco=False,
+    )
+    normal_taxable_minor -= sum(
+        values["taxable"] for values in normal_refund_adjustments.values()
     )
     eco_supply_minor = int(
         (
@@ -894,15 +1049,25 @@ async def gstr3b_csv(
                 .join(Order, Order.id == OrderLine.order_id)
                 .where(
                     Order.company_id == tenant.company_id,
-                    Order.opened_at >= start_dt,
-                    Order.opened_at <= end_dt,
-                    Order.status == "paid",
+                    sale_at >= start_dt,
+                    sale_at < end_dt,
+                    Order.status.in_(("paid", "refunded")),
                     Order.delivery_via.isnot(None),
                     Order.delivery_via != "inhouse",
                 )
             )
         ).scalar_one()
         or 0
+    )
+    eco_refund_adjustments = await _refund_adjustments_by_rate(
+        session,
+        company_id=tenant.company_id,
+        start_at=start_dt,
+        end_exclusive=end_dt,
+        eco=True,
+    )
+    eco_supply_minor -= sum(
+        values["taxable"] for values in eco_refund_adjustments.values()
     )
     event_taxable_minor = 0
     event_rows = (
@@ -911,8 +1076,9 @@ async def gstr3b_csv(
             .join(Event, Event.id == EventTicket.event_id)
             .where(
                 Event.company_id == tenant.company_id,
+                EventTicket.order_id.is_(None),
                 EventTicket.created_at >= start_dt,
-                EventTicket.created_at <= end_dt,
+                EventTicket.created_at < end_dt,
                 EventTicket.status.in_(("sold", "checked_in")),
             )
         )

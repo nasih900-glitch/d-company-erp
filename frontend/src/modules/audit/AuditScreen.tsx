@@ -116,6 +116,8 @@ export default function AuditScreen() {
     }
     finally { setLoading(false); }
   }
+  // Unlocking loads once; search filters are intentionally submitted by the form.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auditToken) load(auditToken); }, [auditToken]);
 
   const onSearch = (e: React.FormEvent) => { e.preventDefault(); load(); };

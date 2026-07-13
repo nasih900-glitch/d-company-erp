@@ -8,7 +8,7 @@
  * Also "Push to Google Sheets" button — fires this report into the ERP Entries
  * tab in your sheet.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Calendar, FileSpreadsheet, Loader2, Printer, ShieldCheck } from 'lucide-react';
 
 import { api } from '@/lib/api';
@@ -69,8 +69,10 @@ interface ReportData {
   net_payments_received_minor: number;
   expenses: Array<{ category: string; amount_minor: number }>;
   expense_total_minor: number;
+  cogs_minor: number;
   gross_revenue_minor: number;
   net_revenue_minor: number;
+  gross_profit_minor: number;
   net_profit_minor: number;
 }
 
@@ -121,22 +123,7 @@ export default function ReportsScreen() {
   const [quarter, setQuarter] = useState<number>(currentFiscalQuarter(new Date()));
   const [halfYear, setHalfYear] = useState<HalfYear>(currentFiscalHalf(new Date()));
 
-  useEffect(() => { load(); }, [period, onDate, weekDate, month, year, quarter, halfYear]);
-
-  useEffect(() => {
-    if (!LIVE_MODE) return;
-    Promise.all([settings.getCompany(), settings.listBranches()])
-      .then(([companyData, branches]) => {
-        setCompany(companyData);
-        setBranch(branches[0] ?? null);
-      })
-      .catch(() => {
-        setCompany(null);
-        setBranch(null);
-      });
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     setTaxError(null);
@@ -154,7 +141,22 @@ export default function ReportsScreen() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [halfYear, month, onDate, period, quarter, weekDate, year]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!LIVE_MODE) return;
+    Promise.all([settings.getCompany(), settings.listBranches()])
+      .then(([companyData, branches]) => {
+        setCompany(companyData);
+        setBranch(branches[0] ?? null);
+      })
+      .catch(() => {
+        setCompany(null);
+        setBranch(null);
+      });
+  }, []);
 
   async function pushToSheets() {
     if (!report) return;
@@ -330,9 +332,15 @@ export default function ReportsScreen() {
                 <Row label="Other"                          v={report.revenue.other_minor}/>}
               <Divider/>
               <Row label="Gross revenue" v={report.revenue.total_minor} bold/>
+              {report.refunds_issued_minor > 0 && (
+                <Row label="Less: refunds" v={-report.refunds_issued_minor}/>
+              )}
               <Row label="Less: GST collected" v={-report.tax_collected.total_minor}/>
               <Divider/>
               <Row label="Net revenue (after GST)" v={report.net_revenue_minor} bold/>
+              <Row label="Less: cost of goods sold" v={-report.cogs_minor}/>
+              <Divider/>
+              <Row label="Gross profit" v={report.gross_profit_minor} bold/>
             </section>
 
             {/* GST collected */}
@@ -347,8 +355,8 @@ export default function ReportsScreen() {
               <Divider/>
               <Row label="Total GST" v={report.tax_collected.total_minor} bold/>
               <p className="text-[10px] text-fg-muted print:text-black/60 mt-2">
-                Owed to govt at month-end via GSTR-3B (CGST+SGST) and GSTR-1
-                (invoice-level). Net of input tax credit.
+                Collected GST for accountant review and return preparation.
+                Input tax credit is not applied by this report.
               </p>
             </section>
 
@@ -404,10 +412,10 @@ export default function ReportsScreen() {
               </div>
               <div>
                 <div className="text-xs text-fg-muted print:text-black/60 uppercase tracking-wider">
-                  Expenses
+                  COGS + expenses
                 </div>
                 <div className="text-2xl font-bold mt-1">
-                  {inr(report.expense_total_minor)}
+                  {inr(report.cogs_minor + report.expense_total_minor)}
                 </div>
               </div>
               <div>
@@ -567,7 +575,7 @@ function demoReport(
   const rent  = Math.round((5_00_000 / 30) * scale);
   const utility = Math.round((1_80_000 / 30) * scale);
   const other = Math.round(25_000 * scale);
-  const expense_total = cogs + wages + rent + utility + other;
+  const expense_total = wages + rent + utility + other;
 
   const label =
     p === 'daily' ? new Date(opts.onDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) :
@@ -615,16 +623,17 @@ function demoReport(
     refunds_issued_minor: 0,
     net_payments_received_minor: gross,
     expenses: [
-      { category: 'COGS (Food)',      amount_minor: cogs },
       { category: 'Wages',            amount_minor: wages },
       { category: 'Rent',             amount_minor: rent },
       { category: 'Utilities',        amount_minor: utility },
       { category: 'Other',            amount_minor: other },
     ],
     expense_total_minor: expense_total,
+    cogs_minor: cogs,
     gross_revenue_minor: gross,
     net_revenue_minor: net_revenue,
-    net_profit_minor: net_revenue - expense_total,
+    gross_profit_minor: net_revenue - cogs,
+    net_profit_minor: net_revenue - cogs - expense_total,
   };
 
   // Use the unused import to avoid TS noUnusedLocals

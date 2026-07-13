@@ -119,6 +119,7 @@ async def _deduct_ingredient(
                 Batch.qty_on_hand > 0,
             )
             .order_by(Batch.received_at)
+            .with_for_update()
         )
     ).scalars().all()
 
@@ -163,6 +164,10 @@ async def _deduct_ingredient(
         )
 
     # Update rolling current_qty
-    ing = await session.get(Ingredient, ingredient_id)
+    ing = (
+        await session.execute(
+            select(Ingredient).where(Ingredient.id == ingredient_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if ing:
         ing.current_qty = float(ing.current_qty or 0) - qty_needed
