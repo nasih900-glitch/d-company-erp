@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BranchDTO, CompanyDTO } from '@/lib/erp-api';
 import {
   buildReceiptBusinessDetails,
+  buildUpiPayLink,
   formatPlaceOfSupply,
   receiptConfigurationIssue,
   receiptDocumentTitle,
@@ -22,6 +23,10 @@ const company: CompanyDTO = {
   e_invoicing_enabled: false,
   fiscal_year_start_month: 4,
   google_sheets_webhook_url: null,
+  upi_vpa: null,
+  payment_provider: null,
+  payment_key_id: null,
+  payment_secret_set: false,
 };
 
 const branch: BranchDTO = {
@@ -37,6 +42,24 @@ const branch: BranchDTO = {
   trade_license_no: null,
   branch_gstin: null,
 };
+
+describe('upi pay link', () => {
+  it('returns null when no VPA is configured', () => {
+    const details = buildReceiptBusinessDetails(company, branch, 'Nasih');
+    expect(buildUpiPayLink(details, 18000)).toBeNull();
+  });
+
+  it('builds an amount-locked upi link with the merchant VPA left literal', () => {
+    const details = buildReceiptBusinessDetails(
+      { ...company, upi_vpa: 'Q530001220@ybl' },
+      branch,
+    );
+    const link = buildUpiPayLink(details, 18000, 'D Company');
+    expect(link).toBe(
+      'upi://pay?pa=Q530001220@ybl&pn=D%20Company%20Private%20Limited&am=180.00&cu=INR&tn=D%20Company',
+    );
+  });
+});
 
 describe('receipt business details', () => {
   it('uses live legal and branch fields without inventing missing licences', () => {

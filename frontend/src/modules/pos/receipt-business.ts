@@ -13,6 +13,7 @@ export interface ReceiptBusinessDetails {
   stateCode: string | null;
   cashierName: string | null;
   timezone: string;
+  upiVpa: string | null;
 }
 
 const clean = (value: string | null | undefined): string | null => {
@@ -38,6 +39,7 @@ export function buildReceiptBusinessDetails(
     stateCode: clean(branch?.state_code),
     cashierName: clean(cashierName),
     timezone: clean(branch?.timezone) ?? company.timezone,
+    upiVpa: clean(company.upi_vpa),
   };
 }
 
@@ -78,6 +80,29 @@ export function receiptConfigurationIssue(business: ReceiptBusinessDetails): str
     return 'GST composition settings disagree. Correct the registration type in Settings before charging an order.';
   }
   return null;
+}
+
+/**
+ * Build a standard UPI deep link (upi://pay?...) for a dynamic, amount-locked
+ * pay QR. Returns null when no merchant VPA is configured. The VPA is left
+ * literal (contains only [A-Za-z0-9.\-_]@[A-Za-z]); other fields are encoded.
+ */
+export function buildUpiPayLink(
+  business: ReceiptBusinessDetails,
+  amountMinor: number,
+  note?: string | null,
+): string | null {
+  if (!business.upiVpa) return null;
+  const amount = (amountMinor / 100).toFixed(2);
+  const parts = [
+    `pa=${business.upiVpa}`,
+    `pn=${encodeURIComponent(business.supplierName || business.brandName)}`,
+    `am=${amount}`,
+    'cu=INR',
+  ];
+  const cleanNote = note?.trim();
+  if (cleanNote) parts.push(`tn=${encodeURIComponent(cleanNote)}`);
+  return `upi://pay?${parts.join('&')}`;
 }
 
 export function formatPlaceOfSupply(stateCode: string | null | undefined): string {

@@ -31,6 +31,7 @@ export default function CompanyTab() {
         gst_registration_type: data.gst_registration_type,
         is_composition: data.is_composition,
         e_invoicing_enabled: data.e_invoicing_enabled,
+        upi_vpa: data.upi_vpa?.trim() || null,
       });
       setData(updated); setDone(true);
       setTimeout(() => setDone(false), 2000);
@@ -98,6 +99,20 @@ export default function CompanyTab() {
           <Toggle label="E-invoicing enabled" checked={data.e_invoicing_enabled}
             onChange={(v) => setData({ ...data, e_invoicing_enabled: v })}/>
         </div>
+      </div>
+
+      <div className="card">
+        <h3 className="font-bold mb-3">Payments</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="UPI ID / VPA (for QR payments)">
+            <input className="input font-mono" placeholder="name@bank" maxLength={255}
+              value={data.upi_vpa ?? ''}
+              onChange={(e) => setData({ ...data, upi_vpa: e.target.value.trim() })}/>
+          </Field>
+        </div>
+        <p className="text-xs text-fg-muted mt-2">
+          Shown as a scannable UPI QR at checkout so customers can pay with PhonePe, GPay, Paytm or any UPI app.
+        </p>
       </div>
 
       {err && <ErrorRow text={err}/>}
