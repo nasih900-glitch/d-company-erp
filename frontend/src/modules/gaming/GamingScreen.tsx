@@ -5,20 +5,24 @@
  *  - Add station (admin)
  *  - Edit / disable / delete station (admin)
  *  - Start session (live mode hits backend; demo runs a JS timer)
- *  - Stop session (computes elapsed × rate, prints bill)
- *  - Pause session (demo only — backend doesn't have pause yet)
+ *  - Stop session (records elapsed × rate; payment remains an explicit POS step)
+ *  - Pause session (demo only — hidden in live mode until the backend supports it)
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Square, Pause, PlayCircle, Gamepad2, Glasses, CarFront, Tv,
   Plus, Edit2, Trash2, Loader2, AlertCircle, RefreshCw, Settings, Flame,
+  Timer, TimerOff, X, BellRing, BellOff, Bell, Send,
 } from 'lucide-react';
 
+import { ALARM_REPEAT_MS, fmtClock, notifyBrowser, playAlarmTone } from '@/lib/alarm';
 import { LIVE_MODE } from '@/lib/demo';
 import { STATIONS, type Station as DemoStation } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { gaming, shifts, type StationDTO } from '@/lib/erp-api';
+import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
 const ICON: Record<StationDTO['type'], React.ReactNode> = {
@@ -41,19 +45,57 @@ const TYPE_LABEL: Record<StationDTO['type'], string> = {
 type LocalSession = {
   station_id: string;
   start_at: number;
-  status: 'active' | 'paused';
+  status: 'active' | 'paused' | 'ended';
   pausedMs: number;
   pause_started_at?: number;
   backend_session_id?: string;
+  timer_minutes?: number | null;
+  timer_ends_at?: number | null;
+  ended_minutes?: number;
+  ended_amount_minor?: number;
 };
 
+const DURATION_PRESETS = [
+  { label: 'No timer', minutes: null },
+  { label: '30m', minutes: 30 },
+  { label: '1h', minutes: 60 },
+  { label: '2h', minutes: 120 },
+] as const;
+
+function notifyTimerExpired(stationName: string) {
+  notifyBrowser(
+    `⏰ ${stationName} — time's up`,
+    'The session timer has ended. Stop the session or extend the timer.',
+    `dcompany-timer-${stationName}`,
+  );
+}
+
 export default function GamingScreen() {
+  const { me, terminalId, terminalReady } = useAuth();
   const canManageStations = true;
   const [stations, setStations] = useState<StationDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, LocalSession>>({});
-  const [, setTick] = useState(0); // forces re-render every second
+  const [, setTick] = useState(0); // force overtime/countdown recompute every second
+  const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
+  const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
+  const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
+  const [sendingToPos, setSendingToPos] = useState<string | null>(null);
+  const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  );
+
+  // Refs so the 1s alarm-check interval (subscribed once) always sees fresh data
+  // without re-subscribing every render.
+  const sessionsRef = useRef(sessions);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
+  const stationsRef = useRef(stations);
+  useEffect(() => { stationsRef.current = stations; }, [stations]);
+  const mutedRef = useRef(mutedStations);
+  useEffect(() => { mutedRef.current = mutedStations; }, [mutedStations]);
+  const lastAlarmAtRef = useRef<Record<string, number>>({});
 
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<StationDTO | null>(null);
@@ -62,42 +104,115 @@ export default function GamingScreen() {
   async function load() {
     setLoading(true); setError(null);
     try {
-      if (LIVE_MODE) setStations((await gaming.listStations()).filter((station) => isAppStoreAllowedType(station.type)));
-      else setStations(STATIONS.map(demoToDTO).filter((station) => isAppStoreAllowedType(station.type)));
+      if (LIVE_MODE) {
+        const [stationRows, activeSessions, endedSessions] = await Promise.all([
+          gaming.listStations(),
+          gaming.listSessions('active').catch(() => []),
+          gaming.listSessions('ended').catch(() => []),
+        ]);
+        setStations(stationRows.filter((station) => isAppStoreAllowedType(station.type)));
+        // Rehydrate running sessions, AND any stopped-but-not-yet-sent session,
+        // so a page refresh never silently drops an unbilled amount from view.
+        setSessions((prev) => {
+          const next: Record<string, LocalSession> = {};
+          for (const gs of activeSessions) {
+            next[gs.station_id] = prev[gs.station_id]?.backend_session_id === gs.id
+              ? prev[gs.station_id]
+              : {
+                  station_id: gs.station_id,
+                  start_at: new Date(gs.start_at).getTime(),
+                  status: 'active',
+                  pausedMs: 0,
+                  backend_session_id: gs.id,
+                  timer_minutes: gs.timer_minutes,
+                  timer_ends_at: gs.timer_ends_at ? new Date(gs.timer_ends_at).getTime() : null,
+                };
+          }
+          for (const gs of endedSessions) {
+            if (gs.order_id || next[gs.station_id]) continue;
+            next[gs.station_id] = {
+              station_id: gs.station_id,
+              start_at: new Date(gs.start_at).getTime(),
+              status: 'ended',
+              pausedMs: 0,
+              backend_session_id: gs.id,
+              ended_minutes: gs.billable_minutes ?? 0,
+              ended_amount_minor: gs.amount_minor ?? 0,
+            };
+          }
+          return next;
+        });
+      } else {
+        setStations(STATIONS.map(demoToDTO).filter((station) => isAppStoreAllowedType(station.type)));
+      }
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
-  // Live ticking timer
+  // Live ticking timer + alarm check. One interval drives both the countdown
+  // re-render and the "has any timer just expired" scan, using refs so it
+  // always reads current data without resubscribing every render.
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    const id = setInterval(() => {
+      setTick((n) => n + 1);
+      const now = Date.now();
+      for (const s of Object.values(sessionsRef.current)) {
+        if (!s.timer_ends_at || now < s.timer_ends_at) continue;
+        if (mutedRef.current[s.station_id]) continue;
+        const last = lastAlarmAtRef.current[s.station_id];
+        if (last && now - last < ALARM_REPEAT_MS) continue;
+        lastAlarmAtRef.current[s.station_id] = now;
+        playAlarmTone();
+        const station = stationsRef.current.find((st) => st.id === s.station_id);
+        notifyTimerExpired(station?.name ?? 'A station');
+      }
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 
-  async function ensureShiftId() {
-    const stored = localStorage.getItem('shift_id');
-    if (stored) return stored;
+  function enableAlarmNotifications() {
+    if (typeof Notification === 'undefined') return;
+    Notification.requestPermission().then((perm) => setNotifPermission(perm));
+  }
 
-    const openShifts = await shifts.list(true);
-    const openShift = openShifts[0] ?? await shifts.open(0);
-    localStorage.setItem('shift_id', openShift.id);
-    return openShift.id;
+  function toggleMute(stationId: string) {
+    setMutedStations((m) => ({ ...m, [stationId]: !m[stationId] }));
+  }
+
+  async function ensureShiftId(station: StationDTO) {
+    const companyId = me?.company_id;
+    const branchId = me?.branch_id;
+    if (!companyId || !branchId) {
+      throw new Error('This account has no branch assigned. Assign one before starting a session.');
+    }
+    if (!terminalReady || !terminalId) {
+      throw new Error('Select the POS terminal used by this device before starting a session.');
+    }
+    return resolveRequiredOpenShift({
+      scope: { companyId, branchId, terminalId },
+      stationBranchId: station.branch_id,
+      listOpenShifts: () => shifts.list(true),
+    });
   }
 
   async function startSession(st: StationDTO, customer = '') {
+    const timerMinutes = pendingDuration[st.id] ?? null;
     let backendId: string | undefined;
+    let timerEndsAt: number | null = timerMinutes ? Date.now() + timerMinutes * 60000 : null;
     if (LIVE_MODE) {
       try {
-        const shiftId = await ensureShiftId();
+        const shiftId = await ensureShiftId(st);
         const r = await gaming.startSession({
           station_id: st.id,
           shift_id: shiftId,
           customer_name: customer || undefined,
+          timer_minutes: timerMinutes ?? undefined,
         });
         backendId = r.id;
+        timerEndsAt = r.timer_ends_at ? new Date(r.timer_ends_at).getTime() : null;
       } catch (e) {
-        alert(`Cannot start session: ${(e as Error).message}\n\nOpen a POS shift or check this terminal before starting a session.`);
+        alert(`Cannot start session: ${(e as Error).message}`);
         return;
       }
     }
@@ -109,8 +224,37 @@ export default function GamingScreen() {
         status: 'active',
         pausedMs: 0,
         backend_session_id: backendId,
+        timer_minutes: timerMinutes,
+        timer_ends_at: timerEndsAt,
       },
     }));
+    setPendingDuration((p) => ({ ...p, [st.id]: null }));
+    setCustomDurationFor(null);
+  }
+
+  async function setStationTimer(st: StationDTO, minutes: number | null) {
+    const s = sessions[st.id];
+    if (!s) return;
+    const timerEndsAt = minutes ? s.start_at + minutes * 60000 : null;
+    if (LIVE_MODE && s.backend_session_id) {
+      try { await gaming.setSessionTimer(s.backend_session_id, minutes); }
+      catch (e) { alert(`Could not update timer: ${(e as Error).message}`); return; }
+    }
+    setSessions((map) => ({
+      ...map,
+      [st.id]: { ...s, timer_minutes: minutes, timer_ends_at: timerEndsAt },
+    }));
+    // Re-arm: a changed timer should alarm fresh next time it expires, not immediately.
+    delete lastAlarmAtRef.current[st.id];
+    setMutedStations((m) => (m[st.id] ? { ...m, [st.id]: false } : m));
+  }
+
+  function extendTimer(st: StationDTO, addMinutes: number) {
+    const s = sessions[st.id];
+    if (!s) return;
+    const elapsedMinutesNow = Math.max(0, Math.ceil((Date.now() - s.start_at) / 60000));
+    const baseMinutes = s.timer_minutes ?? elapsedMinutesNow;
+    setStationTimer(st, Math.min(1440, baseMinutes + addMinutes));
   }
 
   function pauseSession(st: StationDTO) {
@@ -137,21 +281,58 @@ export default function GamingScreen() {
     const s = sessions[st.id];
     if (!s) return;
     const elapsedMs = Date.now() - s.start_at - s.pausedMs;
-    const elapsedMin = Math.max(1, Math.ceil(elapsedMs / 60000));
-    const amount = Math.ceil((elapsedMin / 60) * st.rate_per_hour_minor);
+    let elapsedMin = Math.max(1, Math.ceil(elapsedMs / 60000));
+    let amount = Math.ceil((elapsedMin / 60) * st.rate_per_hour_minor);
     if (LIVE_MODE && s.backend_session_id) {
-      try { await gaming.stopSession(s.backend_session_id); }
+      try {
+        const ended = await gaming.stopSession(s.backend_session_id);
+        elapsedMin = ended.billable_minutes ?? elapsedMin;
+        amount = ended.amount_minor ?? amount;
+      }
       catch (e) { alert(`Stop failed: ${(e as Error).message}`); return; }
+      delete lastAlarmAtRef.current[st.id];
+      setMutedStations((m) => (st.id in m ? { ...m, [st.id]: false } : m));
+      // Keep the tile visible in a "stopped" state — staff must explicitly
+      // send it to POS, same accountability rule as shift opening.
+      setSessions((map) => ({
+        ...map,
+        [st.id]: { ...s, status: 'ended', ended_minutes: elapsedMin, ended_amount_minor: amount },
+      }));
+      return;
     }
-    alert(
-      `Session ended\n\nStation: ${st.name}\nDuration: ${elapsedMin} min\nAmount: ${inr(amount)}\n\n` +
-      `Charge the customer ${inr(amount)} via POS.`
-    );
+    // Demo mode has no real backend order to send to — keep the old flow.
+    alert(`Session ended\n\nStation: ${st.name}\nDuration: ${elapsedMin} min\nSession estimate: ${inr(amount)}`);
     setSessions((map) => {
       const next = { ...map };
       delete next[st.id];
       return next;
     });
+    delete lastAlarmAtRef.current[st.id];
+    setMutedStations((m) => (st.id in m ? { ...m, [st.id]: false } : m));
+  }
+
+  async function sendToPos(st: StationDTO) {
+    const s = sessions[st.id];
+    if (!s?.backend_session_id) return;
+    setSendingToPos(st.id);
+    setSendErrors((errs) => {
+      if (!(st.id in errs)) return errs;
+      const next = { ...errs };
+      delete next[st.id];
+      return next;
+    });
+    try {
+      await gaming.sendToPos(s.backend_session_id);
+      setSessions((map) => {
+        const next = { ...map };
+        delete next[st.id];
+        return next;
+      });
+    } catch (e) {
+      setSendErrors((errs) => ({ ...errs, [st.id]: (e as Error).message }));
+    } finally {
+      setSendingToPos(null);
+    }
   }
 
   async function deleteStation(st: StationDTO) {
@@ -164,6 +345,12 @@ export default function GamingScreen() {
     () => Object.values(sessions).filter((s) => s.status === 'active').length,
     [sessions],
   );
+  const overtimeStations = (() => {
+    const now = Date.now();
+    return Object.values(sessions)
+      .filter((s) => s.timer_ends_at && now >= s.timer_ends_at)
+      .map((s) => stations.find((st) => st.id === s.station_id)?.name ?? 'Unknown station');
+  })();
 
   return (
     <div>
@@ -193,6 +380,20 @@ export default function GamingScreen() {
       {error && (
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
           <AlertCircle size={14}/> {error}
+        </div>
+      )}
+
+      {overtimeStations.length > 0 && (
+        <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2 font-bold">
+          <BellRing size={16} className="animate-pulse"/>
+          {overtimeStations.length} station{overtimeStations.length === 1 ? '' : 's'} timed out: {overtimeStations.join(', ')}
+        </div>
+      )}
+
+      {notifPermission === 'default' && (
+        <div className="card mb-4 border-accent/40 bg-accent/10 text-sm flex items-center justify-between gap-3 flex-wrap">
+          <span className="flex items-center gap-2"><Bell size={14}/> Turn on browser alerts so staff get notified the moment a session's timer ends.</span>
+          <button className="btn btn-ghost !py-1.5" onClick={enableAlarmNotifications}>Enable notifications</button>
         </div>
       )}
 
@@ -247,7 +448,33 @@ export default function GamingScreen() {
                   )}
                 </div>
 
-                {session ? (
+                {session?.status === 'ended' ? (
+                  <>
+                    <div className="bg-bg-raised rounded-lg p-3 mb-3">
+                      <div className="text-xs text-fg-muted">Session ended</div>
+                      <div className="flex justify-between items-baseline mt-1">
+                        <div className="text-xl font-bold font-mono">
+                          {session.ended_minutes ?? 0} min
+                        </div>
+                        <div className="text-2xl font-bold font-mono text-accent">
+                          {inr(session.ended_amount_minor ?? 0)}
+                        </div>
+                      </div>
+                      {sendErrors[st.id] && (
+                        <div className="mt-2 pt-2 border-t border-bg-border text-xs text-accent-bad flex items-center gap-1.5">
+                          <AlertCircle size={12}/> {sendErrors[st.id]}
+                        </div>
+                      )}
+                    </div>
+                    <button className="btn btn-primary w-full"
+                      disabled={sendingToPos === st.id}
+                      onClick={() => sendToPos(st)}>
+                      {sendingToPos === st.id
+                        ? <Loader2 className="animate-spin" size={14}/>
+                        : <Send size={14}/>} Send to POS
+                    </button>
+                  </>
+                ) : session ? (
                   <>
                     <div className="bg-bg-raised rounded-lg p-3 mb-3">
                       <div className="flex justify-between items-baseline">
@@ -269,9 +496,54 @@ export default function GamingScreen() {
                           <Pause size={11}/> Paused
                         </div>
                       )}
+
+                      {session.timer_ends_at ? (() => {
+                        const remainingMs = session.timer_ends_at! - Date.now();
+                        const overtime = remainingMs <= 0;
+                        const lowTime = !overtime && remainingMs <= 5 * 60000;
+                        const clock = fmtClock(Math.abs(Math.round(remainingMs / 1000)));
+                        return (
+                          <div className={`mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 ${
+                            overtime ? 'text-accent-bad' : lowTime ? 'text-accent-gold' : 'text-fg-muted'
+                          }`}>
+                            <div className="flex items-center gap-1.5 text-sm font-mono font-bold">
+                              <Timer size={13}/> {overtime ? `+${clock} over` : `${clock} left`}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {overtime && (
+                                <button className="text-fg-muted hover:text-accent p-0.5"
+                                  onClick={() => toggleMute(st.id)}
+                                  title={mutedStations[st.id] ? 'Unmute alarm' : 'Mute alarm for this station'}>
+                                  {mutedStations[st.id] ? <BellOff size={13}/> : <Bell size={13}/>}
+                                </button>
+                              )}
+                              <button className="chip text-[10px] hover:border-accent"
+                                onClick={() => extendTimer(st, 15)} title="Add 15 minutes">
+                                +15m
+                              </button>
+                              <button className="text-fg-muted hover:text-accent-bad p-0.5"
+                                onClick={() => setStationTimer(st, null)} title="Clear timer">
+                                <X size={13}/>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div className="mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 text-xs text-fg-muted">
+                          <span className="flex items-center gap-1"><TimerOff size={12}/> No timer</span>
+                          <div className="flex gap-1">
+                            {[30, 60, 120].map((m) => (
+                              <button key={m} className="chip text-[10px] hover:border-accent"
+                                onClick={() => setStationTimer(st, m)}>
+                                +{m >= 60 ? `${m / 60}h` : `${m}m`}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div className="flex gap-2">
-                      {session.status === 'active' ? (
+                      {!LIVE_MODE && (session.status === 'active' ? (
                         <button className="btn btn-ghost flex-1" onClick={() => pauseSession(st)}>
                           <Pause size={14}/> Pause
                         </button>
@@ -279,18 +551,46 @@ export default function GamingScreen() {
                         <button className="btn btn-ghost flex-1" onClick={() => resumeSession(st)}>
                           <PlayCircle size={14}/> Resume
                         </button>
-                      )}
+                      ))}
                       <button className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
                         onClick={() => stopSession(st)}>
-                        <Square size={14}/> Stop &amp; bill
+                        <Square size={14}/> End session
                       </button>
                     </div>
                   </>
                 ) : (
-                  <button className="btn btn-primary w-full" onClick={() => startSession(st)}
-                    disabled={!st.is_active}>
-                    <Play size={14}/> Start session
-                  </button>
+                  <>
+                    <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                      {DURATION_PRESETS.map((p) => (
+                        <button key={p.label}
+                          className={`chip text-[11px] ${(pendingDuration[st.id] ?? null) === p.minutes && customDurationFor !== st.id ? '!border-accent !text-accent' : 'hover:border-accent'}`}
+                          onClick={() => { setPendingDuration((s) => ({ ...s, [st.id]: p.minutes })); setCustomDurationFor(null); }}>
+                          {p.label}
+                        </button>
+                      ))}
+                      <button
+                        className={`chip text-[11px] ${customDurationFor === st.id ? '!border-accent !text-accent' : 'hover:border-accent'}`}
+                        onClick={() => setCustomDurationFor(customDurationFor === st.id ? null : st.id)}>
+                        Custom
+                      </button>
+                    </div>
+                    {customDurationFor === st.id && (
+                      <div className="flex items-center gap-2 mb-2">
+                        <input type="number" min={1} max={1440} placeholder="minutes"
+                          className="input !py-1.5 text-sm flex-1"
+                          value={pendingDuration[st.id] ?? ''}
+                          onChange={(e) => setPendingDuration((s) => ({
+                            ...s, [st.id]: e.target.value ? Math.max(1, Math.min(1440, Number(e.target.value))) : null,
+                          }))}/>
+                        <span className="text-xs text-fg-muted">min</span>
+                      </div>
+                    )}
+                    <button className="btn btn-primary w-full" onClick={() => startSession(st)}
+                      disabled={!st.is_active}>
+                      <Play size={14}/> Start session
+                      {pendingDuration[st.id] ? ` · ${pendingDuration[st.id]}m` : ''}
+                    </button>
+                  </>
                 )}
               </div>
             );
@@ -415,7 +715,7 @@ function ErrorRow({ text }: { text: string }) {
 }
 function demoToDTO(s: DemoStation): StationDTO {
   return {
-    id: s.id, code: s.code, name: s.name,
+    id: s.id, branch_id: 'demo-branch', code: s.code, name: s.name,
     type: s.type as StationDTO['type'],
     rate_per_hour_minor: 20000, is_active: true,
   };
