@@ -53,6 +53,10 @@ miniodata/
 *.sqlite
 *.sqlite3
 *.db
+backups/
+secrets/
+ops/venv/
+*.dump
 
 # Private operational/company documents kept locally, not in the public repo
 HANDOFF.md
