@@ -126,6 +126,17 @@ class PricedOrder:
 
 
 @dataclass(frozen=True, slots=True)
+class TimeBasedPricing:
+    """GST split for a single non-catalog, time-based service line
+    (a gaming/hookah session amount instead of a MenuItem × qty)."""
+    total_minor: int
+    taxable_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+
+
+@dataclass(frozen=True, slots=True)
 class MembershipDiscountRates:
     food: Decimal = Decimal("0")
     gaming: Decimal = Decimal("0")
@@ -352,6 +363,57 @@ class OrderPricingService:
             discount_minor=sub_discount,
             round_off_minor=round_off,
             total_minor=rounded,
+        )
+
+    async def price_time_based_line(
+        self,
+        *,
+        company_id: UUID,
+        branch_id: UUID,
+        amount_minor: int,
+        tax_rate: Decimal,
+        rate_includes_tax: bool,
+    ) -> TimeBasedPricing:
+        """GST-split a gaming/hookah session amount under the same
+        registration-mode rules as price_order (composition and
+        unregistered suppliers collect zero GST on the customer document).
+        Always intra-state: a station has no delivery/customer state.
+        """
+        company = await self.session.get(Company, company_id)
+        if not company:
+            raise NotFoundError("company not found")
+        branch = await self.session.get(Branch, branch_id)
+        if not branch or branch.company_id != company_id or branch.deleted_at:
+            raise NotFoundError("branch not found")
+
+        branch_state = (branch.state_code or "").strip()
+        supplier_gstin = branch.branch_gstin or company.gstin
+        tax_mode = _billing_tax_mode(
+            registration_type=company.gst_registration_type,
+            is_composition=bool(company.is_composition),
+            supplier_gstin=supplier_gstin,
+            branch_state=branch_state,
+        )
+
+        if tax_mode in ("composition", "unregistered"):
+            return TimeBasedPricing(
+                total_minor=amount_minor, taxable_minor=amount_minor,
+                cgst_minor=0, sgst_minor=0, igst_minor=0,
+            )
+        if rate_includes_tax:
+            taxable, cgst, sgst, igst = _split_tax_from_inclusive(
+                amount_minor, tax_rate, True
+            )
+            return TimeBasedPricing(
+                total_minor=amount_minor, taxable_minor=taxable,
+                cgst_minor=cgst, sgst_minor=sgst, igst_minor=igst,
+            )
+        taxable, cgst, sgst, igst = _split_tax_from_exclusive(
+            amount_minor, tax_rate, True
+        )
+        return TimeBasedPricing(
+            total_minor=taxable + cgst + sgst + igst, taxable_minor=taxable,
+            cgst_minor=cgst, sgst_minor=sgst, igst_minor=igst,
         )
 
     async def _membership_discount_rates(

@@ -10,7 +10,7 @@
  *   2. Count the cash drawer
  *   3. Close the shift — variance is recorded
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Receipt, Loader2, AlertCircle, RefreshCw, Eye, Lock, ShieldCheck,
   ClipboardList, X,
@@ -18,11 +18,13 @@ import {
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
 import {
   orders, shifts,
   type OrderListItemDTO, type ShiftDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import { useAuth } from '@/modules/auth/AuthContext';
 
 type Tab = 'orders' | 'shifts';
 
@@ -61,14 +63,14 @@ function OrdersTab() {
   const [err, setErr] = useState<string | null>(null);
   const [view, setView] = useState<OrderListItemDTO | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!LIVE_MODE) { setLoading(false); return; }
     setLoading(true); setErr(null);
     try { setRows(await orders.list()); }
     catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Order history is live-mode only.</div>;
   if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
@@ -207,25 +209,41 @@ function OrderViewModal({ order, onClose }: { order: OrderListItemDTO; onClose: 
 // Shifts
 // ============================================================================
 function ShiftsTab() {
+  const { me, terminalId, terminalReady } = useAuth();
   const [rows, setRows] = useState<ShiftDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [closing, setClosing] = useState<ShiftDTO | null>(null);
   const [opening, setOpening] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!LIVE_MODE) { setLoading(false); return; }
+    if (!terminalReady || !terminalId) {
+      setRows([]);
+      setErr('Select the POS terminal used by this device before managing shifts.');
+      setLoading(false);
+      return;
+    }
     setLoading(true); setErr(null);
     try { setRows(await shifts.list()); }
     catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+  }, [terminalId, terminalReady]);
+  useEffect(() => { void load(); }, [load]);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Shift management is live-mode only.</div>;
   if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
 
-  const openShift = rows.find((s) => s.status === 'open');
+  const openResolution = resolveOpenShift({
+    storedShiftId: null,
+    branchId: me?.branch_id ?? null,
+    terminalId,
+    openShifts: rows,
+  });
+  const openShift = openResolution.kind === 'ready' ? openResolution.shift : undefined;
+  const scopeError = openResolution.kind === 'ambiguous_open_shifts'
+    ? shiftResolutionMessage(openResolution)
+    : null;
 
   return (
     <div>
@@ -238,7 +256,7 @@ function ShiftsTab() {
         </p>
         <div className="flex gap-2">
           <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
-          {!openShift && (
+          {!openShift && !scopeError && (
             <button className="btn btn-primary" onClick={() => setOpening(true)}>
               <ShieldCheck size={14}/> Open shift
             </button>
@@ -248,6 +266,9 @@ function ShiftsTab() {
 
       {err && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
         <AlertCircle size={14}/> {err}
+      </div>}
+      {scopeError && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
+        <AlertCircle size={14}/> {scopeError}
       </div>}
 
       {!rows.length ? (
@@ -265,6 +286,9 @@ function ShiftsTab() {
                       ? <span className="chip border-accent-good/40 text-accent-good">Open</span>
                       : <span className="chip border-fg-muted/40 text-fg-muted">Closed</span>}
                     {new Date(s.opened_at).toLocaleString('en-IN')}
+                  </div>
+                  <div className="text-xs text-fg-muted">
+                    Opened by <span className="text-fg font-medium">{s.opened_by_name ?? s.opened_by_email ?? 'Unknown'}</span>
                   </div>
                   {s.closed_at && (
                     <div className="text-xs text-fg-muted">

@@ -122,7 +122,7 @@ TRACKED: set[type] = {
 
 
 # Fields we redact from the audit record (sensitive)
-_REDACT = {"password_hash", "mfa_secret"}
+_REDACT = {"password_hash", "mfa_secret", "payment_key_secret"}
 
 
 def _serialize(obj: Any) -> dict | None:

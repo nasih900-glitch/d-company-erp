@@ -106,6 +106,10 @@ class Order(Base, TimestampMixin, TenantMixin):
     # ----- Kitchen Display System -----
     kitchen_state: Mapped[str | None] = mapped_column(String(20))  # received|preparing|ready|served
     kitchen_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set the moment status transitions to "held" (sent to POS, awaiting
+    # billing). Drives the POS held-order aging alarm — distinct from
+    # opened_at, which for a Tables order predates being sent over.
+    held_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OrderLine(Base, TimestampMixin):

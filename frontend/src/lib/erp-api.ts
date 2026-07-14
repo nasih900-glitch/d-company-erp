@@ -16,6 +16,7 @@ export interface MeResponse {
   protected_access: boolean;
   company_id: string;
   branch_id: string | null;
+  accessible_modules: string[];
 }
 
 export interface TokenPair {
@@ -75,6 +76,8 @@ export interface OrderDTO {
   fiscal_year: string | null;
   status: string;
   type: string;
+  table_id: string | null;
+  source_label: string | null;
   subtotal_minor: number;
   discount_minor: number;
   cgst_minor: number;
@@ -93,11 +96,12 @@ export interface OrderDTO {
   opened_at: string;
   closed_at: string | null;
   invoice_issued_at: string | null;
+  held_at: string | null;
   lines: OrderLineDTO[];
 }
 
 export interface CreateOrderRequest {
-  type: 'dine_in' | 'takeaway' | 'delivery';
+  type: 'dine_in' | 'takeaway' | 'delivery' | 'session';
   shift_id: string;
   table_id?: string;
   lines: Array<{ menu_item_id: string; qty: number }>;
@@ -154,6 +158,20 @@ export const pos = {
       .then((r) => r.data),
   getOrder: (orderId: string) =>
     api.get<OrderDTO>(`/pos/orders/${orderId}`).then((r) => r.data),
+  addLines: (
+    orderId: string,
+    lines: Array<{ menu_item_id: string; qty: number }>,
+    idempotencyKey: string,
+  ) =>
+    api
+      .post<OrderDTO>(`/pos/orders/${orderId}/lines`, { lines }, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      })
+      .then((r) => r.data),
+  sendToPos: (orderId: string) =>
+    api.patch<OrderDTO>(`/pos/orders/${orderId}/send-to-pos`).then((r) => r.data),
+  voidOrder: (orderId: string, reason: string) =>
+    api.delete(`/pos/orders/${orderId}`, { data: { reason } }).then(() => undefined),
   recordPayment: (
     orderId: string,
     body: {
@@ -177,11 +195,6 @@ export const pos = {
         body,
         { headers: { 'Idempotency-Key': idempotencyKey } },
       )
-      .then((r) => r.data),
-
-  openShift: (opening_float_minor = 0) =>
-    api
-      .post<{ id: string; status: string }>('/pos/shifts/open', { opening_float_minor })
       .then((r) => r.data),
 };
 
@@ -390,6 +403,10 @@ export interface CompanyDTO {
   e_invoicing_enabled: boolean;
   fiscal_year_start_month: number;
   google_sheets_webhook_url: string | null;
+  upi_vpa: string | null;
+  payment_provider: string | null;
+  payment_key_id: string | null;
+  payment_secret_set: boolean;
 }
 
 export interface BranchDTO {
@@ -468,6 +485,27 @@ export const audit = {
       .get<AuditFacetsDTO>('/admin/audit/facets', {
         headers: auditToken ? { 'X-Audit-Token': auditToken } : undefined,
       })
+      .then((r) => r.data),
+};
+
+export interface AccessCellDTO {
+  role_code: string;
+  module: string;
+  default_allowed: boolean;
+  override: boolean | null;
+  allowed: boolean;
+}
+
+export interface AccessControlDTO {
+  roles: Record<string, string>;
+  modules: string[];
+  cells: AccessCellDTO[];
+}
+
+export const accessControl = {
+  get: () => api.get<AccessControlDTO>('/admin/access-control').then((r) => r.data),
+  update: (role_code: string, module: string, allowed: boolean | null) =>
+    api.patch<AccessCellDTO>('/admin/access-control', { role_code, module, allowed })
       .then((r) => r.data),
 };
 
@@ -833,14 +871,19 @@ export interface OrderListItemDTO {
   invoice_no: string | null;
   type: string;
   status: string;
+  table_id: string | null;
+  source_label: string | null;
   total_minor: number;
   items_count: number;
   customer_name: string | null;
   created_at: string;
+  held_at: string | null;
 }
 
 export interface ShiftDTO {
   id: string;
+  branch_id: string;
+  terminal_id: string | null;
   status: 'open' | 'closed';
   opened_at: string;
   closed_at: string | null;
@@ -848,12 +891,17 @@ export interface ShiftDTO {
   expected_minor: number | null;
   counted_minor: number | null;
   variance_minor: number | null;
+  opened_by_name: string | null;
+  opened_by_email: string | null;
 }
 
 export const orders = {
-  list: (params?: { from_date?: string; to_date?: string; limit?: number }) =>
+  list: (params?: {
+    from_date?: string; to_date?: string; limit?: number;
+    status?: Array<'open' | 'held' | 'paid' | 'void' | 'refunded'>; table_id?: string;
+  }) =>
     api.get<OrderListItemDTO[]>('/pos/orders', { params }).then((r) => r.data),
-  get: (id: string) => api.get(`/pos/orders/${id}`).then((r) => r.data),
+  get: (id: string) => api.get<OrderDTO>(`/pos/orders/${id}`).then((r) => r.data),
 };
 
 export const shifts = {
@@ -909,6 +957,7 @@ export const tables = {
 // =============================================================================
 export interface StationDTO {
   id: string;
+  branch_id: string;
   code: string;
   name: string;
   type: 'ps5' | 'vr' | 'simulator' | 'projector' | 'hookah' | 'streaming';
@@ -922,8 +971,11 @@ export interface GameSessionDTO {
   status: 'active' | 'paused' | 'ended';
   start_at: string;
   end_at: string | null;
+  timer_minutes: number | null;
+  timer_ends_at: string | null;
   billable_minutes: number | null;
   amount_minor: number | null;
+  order_id: string | null;
 }
 
 export const gaming = {
@@ -938,10 +990,19 @@ export const gaming = {
   }>) => api.patch<StationDTO>(`/gaming/stations/${id}`, body).then((r) => r.data),
   deleteStation: (id: string) => api.delete(`/gaming/stations/${id}`),
 
-  startSession: (body: { station_id: string; shift_id: string; customer_name?: string; customer_phone?: string }) =>
-    api.post<GameSessionDTO>('/gaming/sessions/start', body).then((r) => r.data),
+  listSessions: (status?: 'active' | 'paused' | 'ended') =>
+    api.get<GameSessionDTO[]>('/gaming/sessions', { params: status ? { status } : undefined }).then((r) => r.data),
+  startSession: (body: {
+    station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
+    timer_minutes?: number;
+  }) => api.post<GameSessionDTO>('/gaming/sessions/start', body).then((r) => r.data),
+  setSessionTimer: (id: string, timer_minutes: number | null) =>
+    api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
   stopSession: (id: string) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`).then((r) => r.data),
+  sendToPos: (id: string) =>
+    api.post<{ order_id: string; amount_minor: number }>(`/gaming/sessions/${id}/send-to-pos`)
+      .then((r) => r.data),
 };
 
 // =============================================================================

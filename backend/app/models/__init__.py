@@ -44,6 +44,7 @@ from app.models.india import (
     SacCode,
     StateCode,
 )
+from app.models.access_control import RolePermissionOverride
 
 __all__ = [
     "Account",
@@ -95,6 +96,7 @@ __all__ = [
     "Refund",
     "Reservation",
     "Role",
+    "RolePermissionOverride",
     "SacCode",
     "Shift",
     "SoftDeleteMixin",

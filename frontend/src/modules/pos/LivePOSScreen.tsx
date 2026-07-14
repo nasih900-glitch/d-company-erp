@@ -8,33 +8,45 @@
  *      invoice number, CGST/SGST split, and round-off are exactly what
  *      will land in GSTR-1.
  *
- * Auto-opens a shift if one isn't already in localStorage.
+ * Requires an already-open shift for this terminal (validated against the
+ * server, not just localStorage). Never opens one itself — opening a shift
+ * is a deliberate action taken from the Shifts tab, and the person who opens
+ * it is liable for that shift's cash and payment closing.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
   Banknote, CreditCard, Smartphone, QrCode, X, Check, Loader2,
-  Search, UserRound, Crown, AlertCircle,
+  Search, UserRound, Crown, AlertCircle, Inbox, XCircle, BellOff, Bell,
 } from 'lucide-react';
 
+import { ALARM_REPEAT_MS, notifyBrowser, playAlarmTone } from '@/lib/alarm';
+import { clearDraft, loadDraft, saveDraft } from '@/lib/draft-storage';
 import { inr } from '@/lib/inr';
 import {
   customers,
   memberships,
   menu,
+  orders,
   pos,
   settings,
+  shifts,
   type CustomerDTO,
   type MembershipTierDTO,
   type MenuItemDTO,
   type OrderDTO,
+  type OrderListItemDTO,
   type SubscriptionDTO,
 } from '@/lib/erp-api';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
+import { resolveRequiredOpenShift } from '@/lib/operational-context';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { QRCodeSVG } from 'qrcode.react';
+
 import LiveReceipt from './LiveReceipt';
 import {
   buildReceiptBusinessDetails,
+  buildUpiPayLink,
   receiptConfigurationIssue,
   type ReceiptBusinessDetails,
 } from './receipt-business';
@@ -50,10 +62,31 @@ const CATEGORY_FROM_TYPE: Record<string, string> = {
   hookah: 'Shisha', streaming: 'Streaming',
 };
 
+// A held order sitting this long unbilled starts alarming — orders should be
+// billed or cleared, not forgotten about.
+const HELD_ORDER_ALARM_MINUTES = 15;
+const HELD_ORDERS_POLL_MS = 30_000;
+
+// In-progress work (cart being built, or an order being resumed) survives a
+// refresh — cleared only once it's actually paid, or the cashier clears it.
+function posDraftKey(terminalId: string) {
+  return `pos-draft:${terminalId}`;
+}
+interface PosDraft {
+  resumingOrderId?: string;
+  cart: Array<{ itemId: string; qty: number }>;
+  orderType: OrderType;
+  deliveryVia: DeliveryVia;
+  deliveryStateCode: string;
+  customerName: string;
+  customerPhone: string;
+}
+
 export default function LivePOSScreen() {
-  const { me } = useAuth();
+  const { me, terminalId, terminalReady } = useAuth();
   const [items, setItems] = useState<MenuItemDTO[]>([]);
-  const [shiftId, setShiftId] = useState<string | null>(() => localStorage.getItem('shift_id'));
+  const [shiftId, setShiftId] = useState<string | null>(null);
+  const [shiftError, setShiftError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,35 +106,158 @@ export default function LivePOSScreen() {
   const [showCart, setShowCart] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [paying, setPaying] = useState(false);
+  // Two-step settle: pick a method, then the cashier confirms payment was received.
+  const [awaitingConfirm, setAwaitingConfirm] = useState<PayMethod | null>(null);
   const [receipt, setReceipt] = useState<OrderDTO | null>(null);
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
   const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
   const pendingOrderRef = useRef<OrderDTO | null>(null);
   const checkoutKeyRef = useRef<string | null>(null);
 
+  // Held orders — sent over from Tables/Gaming, waiting to be found and billed here.
+  const [heldOrders, setHeldOrders] = useState<OrderListItemDTO[]>([]);
+  const [heldLoading, setHeldLoading] = useState(false);
+  const [heldError, setHeldError] = useState<string | null>(null);
+  const [showHeldPicker, setShowHeldPicker] = useState(false);
+  const [heldSearch, setHeldSearch] = useState('');
+  const [resumingOrder, setResumingOrder] = useState<OrderDTO | null>(null);
+  const [heldAlarmMuted, setHeldAlarmMuted] = useState(false);
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [, setAlarmTick] = useState(0);
+  const lastHeldAlarmAtRef = useRef(0);
+
   // Load menu items + ensure a shift is open
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setLoading(true);
+      setShiftId(null);
+      setShiftError(null);
       try {
-        const storedShiftId = localStorage.getItem('shift_id');
-        const all = await menu.items();
-        if (!cancelled) setItems(all.filter((i) => i.is_available && isAppStoreAllowedType(i.type)));
-        if (storedShiftId) {
-          if (!cancelled) setShiftId(storedShiftId);
-          return;
+        const branchId = me?.branch_id;
+        const companyId = me?.company_id;
+        if (!companyId || !branchId) {
+          throw new Error('This account has no branch assigned. Assign a branch before using POS.');
         }
-        const openedShift = await pos.openShift(0);
-        localStorage.setItem('shift_id', openedShift.id);
-        if (!cancelled) setShiftId(openedShift.id);
+        if (!terminalReady || !terminalId) {
+          throw new Error('Select the POS terminal used by this device before opening a shift.');
+        }
+        const [all, resolvedShiftId] = await Promise.all([
+          menu.items(),
+          resolveRequiredOpenShift({
+            scope: { companyId, branchId, terminalId },
+            listOpenShifts: () => shifts.list(true),
+          }),
+        ]);
+        if (cancelled) return;
+        const available = all.filter((i) => i.is_available && isAppStoreAllowedType(i.type));
+        setItems(available);
+        setShiftId(resolvedShiftId);
+
+        const draft = loadDraft<PosDraft>(posDraftKey(terminalId));
+        if (draft) {
+          const restoredCart = draft.cart
+            .map((d) => {
+              const item = available.find((i) => i.id === d.itemId);
+              return item ? { item, qty: d.qty } : null;
+            })
+            .filter((l): l is CartLine => l !== null);
+          if (restoredCart.length) setCart(restoredCart);
+          setOrderType(draft.orderType);
+          setDeliveryVia(draft.deliveryVia);
+          setDeliveryStateCode(draft.deliveryStateCode);
+          setCustomerName(draft.customerName);
+          setCustomerPhone(draft.customerPhone);
+          if (draft.resumingOrderId) {
+            try {
+              setResumingOrder(await orders.get(draft.resumingOrderId));
+            } catch {
+              // The held order may have been paid/cleared elsewhere since — drop the stale draft.
+              clearDraft(posDraftKey(terminalId));
+            }
+          }
+        }
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) setShiftError((e as Error).message);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [me?.branch_id, me?.company_id, terminalId, terminalReady]);
+
+  async function loadHeldOrders(silent = false) {
+    if (!silent) { setHeldLoading(true); setHeldError(null); }
+    try {
+      setHeldOrders(await orders.list({ status: ['held'] }));
+    } catch (e) { if (!silent) setHeldError((e as Error).message); }
+    finally { if (!silent) setHeldLoading(false); }
+  }
+  useEffect(() => {
+    if (!shiftId) return;
+    loadHeldOrders();
+    const id = setInterval(() => loadHeldOrders(true), HELD_ORDERS_POLL_MS);
+    return () => clearInterval(id);
+  }, [shiftId]);
+
+  // Age-based alarm: a held order sitting too long should nag, not vanish
+  // from mind. The interval below re-renders every second (via setAlarmTick),
+  // so this plain computation — not memoized — stays fresh without it.
+  const overdueHeldOrders = heldOrders.filter((o) => {
+    const heldSince = o.held_at ?? o.created_at;
+    return Date.now() - new Date(heldSince).getTime() >= HELD_ORDER_ALARM_MINUTES * 60_000;
+  });
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAlarmTick((n) => n + 1);
+      if (heldAlarmMuted) return;
+      const now = Date.now();
+      const anyOverdue = heldOrders.some((o) => {
+        const heldSince = o.held_at ?? o.created_at;
+        return now - new Date(heldSince).getTime() >= HELD_ORDER_ALARM_MINUTES * 60_000;
+      });
+      if (!anyOverdue) return;
+      if (now - lastHeldAlarmAtRef.current < ALARM_REPEAT_MS) return;
+      lastHeldAlarmAtRef.current = now;
+      playAlarmTone();
+      notifyBrowser(
+        '⏰ Held orders waiting',
+        'One or more held orders have been unbilled for a while. Bill them or clear them.',
+        'dcompany-held-orders',
+      );
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldOrders, heldAlarmMuted]);
+
+  async function resumeOrder(row: OrderListItemDTO) {
+    setShowHeldPicker(false);
+    setError(null);
+    try {
+      const full = await orders.get(row.id);
+      setResumingOrder(full);
+      setCart([]);
+      pendingOrderRef.current = null;
+      checkoutKeyRef.current = null;
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  async function voidOrder(row: OrderListItemDTO) {
+    const reason = prompt(`Why are you clearing ${row.source_label || 'this order'}?`);
+    if (!reason || !reason.trim()) return;
+    setVoidingId(row.id);
+    try {
+      await pos.voidOrder(row.id, reason.trim());
+      await loadHeldOrders(true);
+    } catch (e) { setHeldError((e as Error).message); }
+    finally { setVoidingId(null); }
+  }
+  function cancelResume() {
+    setResumingOrder(null);
+    setCart([]);
+    pendingOrderRef.current = null;
+    checkoutKeyRef.current = null;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -172,7 +328,8 @@ export default function LivePOSScreen() {
       return sum + Math.round(line.item.base_price_minor * line.qty * rate);
     }, 0);
   }, [cart, membershipTier]);
-  const estimatedPayable = Math.max(0, preview - estimatedMembershipDiscount);
+  const newItemsEstimate = Math.max(0, preview - estimatedMembershipDiscount);
+  const estimatedPayable = resumingOrder ? resumingOrder.total_minor + newItemsEstimate : newItemsEstimate;
 
   useEffect(() => {
     pendingOrderRef.current = null;
@@ -182,6 +339,23 @@ export default function LivePOSScreen() {
   useEffect(() => {
     if (!cart.length) setShowCart(false);
   }, [cart.length]);
+
+  useEffect(() => {
+    if (!terminalId) return;
+    const key = posDraftKey(terminalId);
+    if (!cart.length && !resumingOrder) {
+      clearDraft(key);
+      return;
+    }
+    saveDraft<PosDraft>(key, {
+      resumingOrderId: resumingOrder?.id,
+      cart: cart.map((l) => ({ itemId: l.item.id, qty: l.qty })),
+      orderType, deliveryVia, deliveryStateCode, customerName, customerPhone,
+    });
+  }, [
+    terminalId, cart, resumingOrder, orderType, deliveryVia,
+    deliveryStateCode, customerName, customerPhone,
+  ]);
 
   async function lookupCustomer() {
     const phone = customerPhone.trim();
@@ -240,10 +414,12 @@ export default function LivePOSScreen() {
   }
 
   async function pay(method: PayMethod) {
-    if (!cart.length || !shiftId || !receiptBusiness || receiptSettingsError) {
+    if (!shiftId || !receiptBusiness || receiptSettingsError) {
       if (receiptSettingsError) setError(receiptSettingsError);
+      else if (!shiftId) setError(shiftError || 'No validated shift is available for this terminal.');
       return;
     }
+    if (!resumingOrder && !cart.length) return;
     setPaying(true);
     setError(null);
     try {
@@ -252,19 +428,29 @@ export default function LivePOSScreen() {
       checkoutKeyRef.current = checkoutKey;
       let order = pendingOrderRef.current;
       if (!order) {
-        order = await pos.createOrder(
-          {
-            type: orderType,
-            shift_id: shiftId,
-            lines: cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
-            delivery_via: orderType === 'delivery' ? deliveryVia : undefined,
-            customer_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
-            place_of_supply_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
-            customer_name: customerName.trim() || undefined,
-            customer_phone: customerPhone.trim() || undefined,
-          },
-          `order:${checkoutKey}`,
-        );
+        if (resumingOrder) {
+          order = cart.length
+            ? await pos.addLines(
+                resumingOrder.id,
+                cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
+                `resume-lines:${checkoutKey}`,
+              )
+            : resumingOrder;
+        } else {
+          order = await pos.createOrder(
+            {
+              type: orderType,
+              shift_id: shiftId,
+              lines: cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
+              delivery_via: orderType === 'delivery' ? deliveryVia : undefined,
+              customer_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
+              place_of_supply_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
+              customer_name: customerName.trim() || undefined,
+              customer_phone: customerPhone.trim() || undefined,
+            },
+            `order:${checkoutKey}`,
+          );
+        }
         pendingOrderRef.current = order;
       }
       await pos.recordPayment(order.id, {
@@ -280,8 +466,11 @@ export default function LivePOSScreen() {
       pendingOrderRef.current = null;
       checkoutKeyRef.current = null;
       setShowPay(false);
+      setAwaitingConfirm(null);
       setCart([]);
+      setResumingOrder(null);
       clearCustomer();
+      loadHeldOrders();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -316,22 +505,46 @@ export default function LivePOSScreen() {
           <div>
             <h2 className="text-2xl font-bold">POS · Live</h2>
             <p className="text-fg-muted text-sm">
-              Shift open · {items.length} items · backend live
+              {shiftId ? 'Shift open' : 'Shift unavailable'} · {items.length} items · backend live
             </p>
           </div>
-          <div className="scroll-strip flex max-w-full gap-1 rounded-xl border border-bg-border bg-bg-surface p-1">
-            {(['dine_in', 'takeaway', 'delivery'] as OrderType[]).map((t) => (
-              <button key={t}
-                onClick={() => setOrderType(t)}
-                className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                  orderType === t ? 'bg-accent text-bg' : 'text-fg-muted hover:text-fg'
-                }`}
-              >{t.replace('_', ' ')}</button>
-            ))}
+          <div className="flex items-center gap-2">
+            <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }}>
+              <Inbox size={14}/> Held orders
+              {heldOrders.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-bg text-[10px] font-bold flex items-center justify-center">
+                  {heldOrders.length}
+                </span>
+              )}
+            </button>
+            {!resumingOrder && (
+              <div className="scroll-strip flex max-w-full gap-1 rounded-xl border border-bg-border bg-bg-surface p-1">
+                {(['dine_in', 'takeaway', 'delivery'] as OrderType[]).map((t) => (
+                  <button key={t}
+                    onClick={() => setOrderType(t)}
+                    className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                      orderType === t ? 'bg-accent text-bg' : 'text-fg-muted hover:text-fg'
+                    }`}
+                  >{t.replace('_', ' ')}</button>
+                ))}
+              </div>
+            )}
           </div>
         </header>
 
-        {orderType === 'delivery' && (
+        {resumingOrder && (
+          <div className="card !p-3 mb-4 max-w-3xl flex items-center justify-between gap-3 border-accent/40">
+            <div className="text-sm">
+              <span className="font-semibold">Resuming</span>{' '}
+              {resumingOrder.source_label || `order ${resumingOrder.id.slice(0, 8)}`} · already {inr(resumingOrder.total_minor)}
+            </div>
+            <button className="btn btn-ghost !py-1.5 text-xs" onClick={cancelResume}>
+              <XCircle size={13}/> Cancel
+            </button>
+          </div>
+        )}
+
+        {!resumingOrder && orderType === 'delivery' && (
           <section className="card !p-3 mb-4 max-w-3xl">
             <div className="grid grid-cols-1 md:grid-cols-[1fr_140px] gap-2">
               <select
@@ -369,27 +582,58 @@ export default function LivePOSScreen() {
           </div>
         )}
 
-        <CustomerAttachPanel
-          phone={customerPhone}
-          name={customerName}
-          customer={customer}
-          subscription={subscription}
-          tier={membershipTier}
-          lookupState={customerLookupState}
-          message={customerMessage}
-          busy={customerBusy}
-          onPhoneChange={(value) => {
-            setCustomerPhone(value);
-            setCustomer(null);
-            setSubscription(null);
-            setMembershipTier(null);
-            setCustomerLookupState(value.trim() ? 'idle' : 'idle');
-            setCustomerMessage(null);
-          }}
-          onNameChange={setCustomerName}
-          onLookup={lookupCustomer}
-          onClear={clearCustomer}
-        />
+        {shiftError && (
+          <div className="mb-4 flex max-w-3xl items-start gap-2 rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-sm text-accent-bad">
+            <AlertCircle size={16} className="mt-0.5 shrink-0"/>
+            <span>{shiftError}</span>
+          </div>
+        )}
+
+        {overdueHeldOrders.length > 0 && (
+          <div className="mb-4 flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-sm text-accent-bad">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={16} className="shrink-0"/>
+              <span>
+                {overdueHeldOrders.length} held order{overdueHeldOrders.length === 1 ? '' : 's'} unbilled
+                for {HELD_ORDER_ALARM_MINUTES}+ min — bill or clear{overdueHeldOrders.length === 1 ? ' it' : ' them'}.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button className="btn btn-ghost !py-1 text-xs" onClick={() => setShowHeldPicker(true)}>
+                View
+              </button>
+              <button className="text-accent-bad hover:opacity-70 p-1"
+                onClick={() => setHeldAlarmMuted((m) => !m)}
+                title={heldAlarmMuted ? 'Unmute alarm' : 'Mute alarm'}>
+                {heldAlarmMuted ? <BellOff size={14}/> : <Bell size={14}/>}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!resumingOrder && (
+          <CustomerAttachPanel
+            phone={customerPhone}
+            name={customerName}
+            customer={customer}
+            subscription={subscription}
+            tier={membershipTier}
+            lookupState={customerLookupState}
+            message={customerMessage}
+            busy={customerBusy}
+            onPhoneChange={(value) => {
+              setCustomerPhone(value);
+              setCustomer(null);
+              setSubscription(null);
+              setMembershipTier(null);
+              setCustomerLookupState(value.trim() ? 'idle' : 'idle');
+              setCustomerMessage(null);
+            }}
+            onNameChange={setCustomerName}
+            onLookup={lookupCustomer}
+            onClear={clearCustomer}
+          />
+        )}
 
         <div className="relative mb-4 max-w-xl">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
@@ -437,7 +681,22 @@ export default function LivePOSScreen() {
         </header>
 
         <div className="flex-1 space-y-2 overflow-auto min-h-[120px]">
-          {!cart.length && <p className="text-fg-muted text-sm text-center py-8">Tap items to build the order.</p>}
+          {resumingOrder && (
+            <div className="mb-2 pb-2 border-b border-bg-border">
+              <div className="text-xs text-fg-muted mb-1">Already sent</div>
+              {resumingOrder.lines.map((l, i) => (
+                <div key={i} className="flex justify-between text-sm text-fg-muted py-0.5">
+                  <span>{l.qty} × {l.name}</span>
+                  <span>{inr(l.line_total_minor)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!cart.length && (
+            <p className="text-fg-muted text-sm text-center py-8">
+              {resumingOrder ? 'Tap items to add more before billing.' : 'Tap items to build the order.'}
+            </p>
+          )}
           {cart.map((l) => (
             <div key={l.item.id} className="flex items-center gap-2 py-1">
               <div className="flex-1 min-w-0">
@@ -482,7 +741,8 @@ export default function LivePOSScreen() {
           <p className="text-xs text-fg-muted mt-1">Final GST split &amp; round-off computed by backend on charge.</p>
         </div>
 
-        <button onClick={() => setShowPay(true)} disabled={!cart.length || paying || !receiptBusiness || !!receiptSettingsError}
+        <button onClick={() => setShowPay(true)}
+          disabled={(!cart.length && !resumingOrder) || !shiftId || paying || !receiptBusiness || !!receiptSettingsError}
           className="btn btn-primary mt-3 disabled:opacity-40 disabled:cursor-not-allowed">
           <ReceiptIcon size={16} /> Charge {inr(estimatedPayable)}
         </button>
@@ -490,16 +750,18 @@ export default function LivePOSScreen() {
       </aside>
 
       {/* Mobile sticky charge bar (live mode) */}
-      {cart.length > 0 && (
+      {(cart.length > 0 || resumingOrder) && (
         <button
-          onClick={() => setShowCart(true)}
+          onClick={() => (cart.length ? setShowCart(true) : setShowPay(true))}
           className="xl:hidden fixed left-3 right-3 bottom-3 z-30 btn btn-primary !min-h-[60px] min-w-0 text-sm font-bold shadow-2xl sm:text-base"
           style={{ bottom: 'max(0.75rem, calc(env(safe-area-inset-bottom) + 0.5rem))' }}
         >
           <ShoppingCart size={18}/>
           <span className="shrink-0">{cartQty} items</span>
           <span className="opacity-80">·</span>
-          <span className="min-w-0 truncate">Review cart · {inr(estimatedPayable)}</span>
+          <span className="min-w-0 truncate">
+            {cart.length ? 'Review cart' : 'Charge'} · {inr(estimatedPayable)}
+          </span>
         </button>
       )}
 
@@ -559,7 +821,7 @@ export default function LivePOSScreen() {
               setShowCart(false);
               setShowPay(true);
             }}
-            disabled={!receiptBusiness || !!receiptSettingsError}
+            disabled={!shiftId || !receiptBusiness || !!receiptSettingsError}
             className="btn btn-primary mt-4 w-full disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ReceiptIcon size={16}/> Continue to payment · {inr(estimatedPayable)}
@@ -568,21 +830,52 @@ export default function LivePOSScreen() {
       )}
 
       {showPay && (
-        <Modal title={`Charge ${inr(estimatedPayable)}`} onClose={() => !paying && setShowPay(false)}>
+        <Modal title={`Charge ${inr(estimatedPayable)}`} onClose={() => { if (!paying) { setShowPay(false); setAwaitingConfirm(null); } }}>
           {estimatedMembershipDiscount > 0 && (
             <div className="mb-3 rounded-xl border border-accent-good/30 bg-accent-good/10 px-3 py-2 text-xs text-accent-good">
               Estimated membership discount: {inr(estimatedMembershipDiscount)}. Backend will compute the final bill.
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
-            <PayButton icon={<Banknote size={28}/>}   label="Cash" sub="Drawer opens"    disabled={paying} onClick={() => pay('cash')} />
-            <PayButton icon={<Smartphone size={28}/>} label="UPI"  sub="GPay / PhonePe"   disabled={paying} onClick={() => pay('upi')} />
-            <PayButton icon={<CreditCard size={28}/>} label="Card" sub="Visa / RuPay"     disabled={paying} onClick={() => pay('card')} />
-            <PayButton icon={<QrCode size={28}/>}     label="QR"   sub="Print dynamic QR" disabled={paying} onClick={() => pay('qr')} />
-          </div>
-          {paying && (
-            <div className="mt-4 flex items-center justify-center gap-2 text-fg-muted text-sm">
-              <Loader2 size={14} className="animate-spin" /> Saving order…
+          {awaitingConfirm ? (() => {
+            const scanMethod = awaitingConfirm === 'upi' || awaitingConfirm === 'qr';
+            const upiLink = scanMethod && receiptBusiness
+              ? buildUpiPayLink(receiptBusiness, estimatedPayable, receiptBusiness.brandName)
+              : null;
+            const methodLabel = { cash: 'Cash', upi: 'UPI', card: 'Card', qr: 'QR' }[awaitingConfirm];
+            return (
+              <div className="flex flex-col items-center gap-3">
+                {scanMethod && (upiLink ? (
+                  <>
+                    <div className="text-xs text-fg-muted">Ask the customer to scan &amp; pay {inr(estimatedPayable)}</div>
+                    <div className="rounded-lg bg-white p-2">
+                      <QRCodeSVG value={upiLink} size={192} marginSize={2} level="M" />
+                    </div>
+                    <div className="font-mono text-[10px] text-fg-muted">{receiptBusiness?.upiVpa}</div>
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
+                    No UPI ID configured. Add it in Settings → Company to show a scannable QR.
+                  </div>
+                ))}
+                <div className="text-center text-sm text-fg-muted">
+                  Confirm once the {methodLabel} payment of <b className="text-fg">{inr(estimatedPayable)}</b> has been received.
+                </div>
+                <div className="grid w-full grid-cols-2 gap-3">
+                  <button onClick={() => setAwaitingConfirm(null)} disabled={paying}
+                    className="btn btn-ghost disabled:opacity-40">Back</button>
+                  <button onClick={() => pay(awaitingConfirm)} disabled={paying}
+                    className="btn btn-primary disabled:opacity-40">
+                    {paying ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Payment received
+                  </button>
+                </div>
+              </div>
+            );
+          })() : (
+            <div className="grid grid-cols-2 gap-3">
+              <PayButton icon={<Banknote size={28}/>}   label="Cash" sub="Confirm on receipt" disabled={paying} onClick={() => setAwaitingConfirm('cash')} />
+              <PayButton icon={<Smartphone size={28}/>} label="UPI"  sub="Scan & confirm"     disabled={paying} onClick={() => setAwaitingConfirm('upi')} />
+              <PayButton icon={<CreditCard size={28}/>} label="Card" sub="Confirm on receipt" disabled={paying} onClick={() => setAwaitingConfirm('card')} />
+              <PayButton icon={<QrCode size={28}/>}     label="QR"   sub="Scan & confirm"     disabled={paying} onClick={() => setAwaitingConfirm('qr')} />
             </div>
           )}
         </Modal>
@@ -595,6 +888,69 @@ export default function LivePOSScreen() {
             <button onClick={() => window.print()} className="btn btn-primary flex-1"><ReceiptIcon size={16}/> Print</button>
             <button onClick={() => setReceipt(null)} className="btn btn-ghost"><Check size={16}/> Done</button>
           </div>
+        </Modal>
+      )}
+
+      {showHeldPicker && (
+        <Modal title="Held orders" onClose={() => setShowHeldPicker(false)} wide>
+          <div className="relative mb-3">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
+            <input
+              className="input !pl-9 !min-h-[42px] !py-2"
+              value={heldSearch}
+              onChange={(e) => setHeldSearch(e.target.value)}
+              placeholder="Search table or station"
+              autoFocus
+            />
+          </div>
+          {heldError && <p className="text-accent-bad text-xs mb-2">{heldError}</p>}
+          {heldLoading ? (
+            <div className="flex items-center gap-2 text-fg-muted text-sm py-6 justify-center">
+              <Loader2 className="animate-spin" size={16}/> Loading…
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+              {heldOrders
+                .filter((o) => {
+                  const q = heldSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  return [o.source_label, o.customer_name, o.invoice_no]
+                    .some((v) => v?.toLowerCase().includes(q));
+                })
+                .map((o) => {
+                  const heldSince = o.held_at ?? o.created_at;
+                  const ageMin = Math.floor((Date.now() - new Date(heldSince).getTime()) / 60_000);
+                  const overdue = ageMin >= HELD_ORDER_ALARM_MINUTES;
+                  return (
+                    <div key={o.id} className="card flex items-center gap-3">
+                      <button onClick={() => resumeOrder(o)} className="flex-1 min-w-0 text-left">
+                        <div className="font-semibold text-sm truncate">
+                          {o.source_label || `Order ${o.id.slice(0, 8)}`}
+                        </div>
+                        <div className={`text-xs ${overdue ? 'text-accent-bad' : 'text-fg-muted'}`}>
+                          {o.items_count} item{o.items_count === 1 ? '' : 's'}
+                          {o.customer_name ? ` · ${o.customer_name}` : ''}
+                          {' · '}{ageMin} min ago
+                        </div>
+                      </button>
+                      <div className="font-mono font-bold shrink-0">{inr(o.total_minor)}</div>
+                      <button
+                        className="btn btn-ghost !p-2 text-accent-bad shrink-0"
+                        disabled={voidingId === o.id}
+                        onClick={() => voidOrder(o)}
+                        title="Clear this held order">
+                        {voidingId === o.id ? <Loader2 className="animate-spin" size={14}/> : <Trash2 size={14}/>}
+                      </button>
+                    </div>
+                  );
+                })}
+              {!heldOrders.length && (
+                <p className="text-fg-muted text-sm text-center py-6">
+                  Nothing waiting — sent orders from Tables and Gaming will show up here.
+                </p>
+              )}
+            </div>
+          )}
         </Modal>
       )}
     </div>

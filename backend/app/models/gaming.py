@@ -56,11 +56,20 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     paused_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rate_per_hour_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     package_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    # Planned duration in minutes from start_at (e.g. a 60-minute PS5 slot).
+    # NULL = open-ended, billed by actual elapsed time as before.
+    timer_minutes: Mapped[int | None] = mapped_column(Integer)
     billable_minutes: Mapped[int | None] = mapped_column(Integer)
     amount_minor: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|paused|ended|cancelled
     customer_name: Mapped[str | None] = mapped_column(String(200))
     customer_phone: Mapped[str | None] = mapped_column(String(20))
+    # Snapshotted from Station at start_at so a later station rate/tax edit
+    # never rewrites an already-running or historical session's GST split.
+    # Nullable: sessions started before this column existed have neither.
+    tax_rate: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    sac_code: Mapped[str | None] = mapped_column(String(8))
+    rate_includes_tax: Mapped[bool | None] = mapped_column()
 
 
 class GamingBooking(Base, TimestampMixin):

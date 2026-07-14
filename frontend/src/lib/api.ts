@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
+import { clearStoredTerminal, readStoredTerminalId } from './operational-context';
 
 /**
  * Base URL resolution order (most specific wins):
@@ -27,6 +28,13 @@ export const api = axios.create({
   baseURL: BASE_URL,
   timeout: API_TIMEOUT_MS,
   headers: { 'Content-Type': 'application/json' },
+  // FastAPI's `list[str] | None = Query(alias=...)` expects repeated plain
+  // keys ("status=a&status=b"). Axios's default array serializer emits
+  // bracketed keys ("status[]=a") instead, which FastAPI silently ignores —
+  // this previously made status-filtered queries fall back to their
+  // unfiltered default instead of erroring, which is exactly the kind of
+  // silent-wrong-data bug that's hard to notice.
+  paramsSerializer: { indexes: null },
 });
 
 export { BASE_URL };
@@ -36,7 +44,11 @@ export { BASE_URL };
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
-  const terminalId = localStorage.getItem('terminal_id');
+  const url = String(config.url || '');
+  // These two routes validate identity/terminal state. Sending an unvalidated
+  // cached terminal here would prevent the app from repairing stale storage.
+  const validatesContext = url.includes('/auth/') || url.includes('/settings/terminals');
+  const terminalId = validatesContext ? null : readStoredTerminalId();
   if (terminalId) config.headers['X-Terminal-Id'] = terminalId;
   const pricingToken = localStorage.getItem('pricing_token');
   const pricingExpiresAt = Number(localStorage.getItem('pricing_token_expires_at') || '0');
@@ -103,7 +115,7 @@ api.interceptors.response.use(
         // Refresh failed — wipe creds and let the original 401 bubble up.
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
-        localStorage.removeItem('terminal_id');
+        clearStoredTerminal();
         localStorage.removeItem('pricing_token');
         localStorage.removeItem('pricing_token_expires_at');
         if (typeof window !== 'undefined' && !window.location.hash.includes('/login')) {

@@ -26,7 +26,7 @@ from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
-from app.models import MenuItem, Order, OrderLine
+from app.models import MenuItem, Order, OrderLine, Table
 
 router = APIRouter()
 
@@ -120,6 +120,13 @@ async def kitchen_queue(
             )
         )
 
+    table_ids = [o.table_id for o in orders if o.table_id]
+    codes_by_table = dict(
+        (
+            await session.execute(select(Table.id, Table.code).where(Table.id.in_(table_ids)))
+        ).all()
+    ) if table_ids else {}
+
     now = datetime.now(timezone.utc)
     out: list[KitchenOrderDTO] = []
     for o in orders:
@@ -132,7 +139,7 @@ async def kitchen_queue(
             id=o.id,
             invoice_no=o.invoice_no,
             type=o.type,
-            table_code=None,  # filled in next iteration when we join Table
+            table_code=codes_by_table.get(o.table_id) if o.table_id else None,
             customer_name=o.customer_name,
             opened_at=o.opened_at,
             kitchen_state=state,
@@ -174,9 +181,13 @@ async def set_kitchen_state(
         )
     ).all()
     now = datetime.now(timezone.utc)
+    table_code = None
+    if order.table_id is not None:
+        table = await session.get(Table, order.table_id)
+        table_code = table.code if table else None
     return KitchenOrderDTO(
         id=order.id, invoice_no=order.invoice_no, type=order.type,
-        table_code=None, customer_name=order.customer_name,
+        table_code=table_code, customer_name=order.customer_name,
         opened_at=order.opened_at, kitchen_state=order.kitchen_state,
         minutes_waiting=max(0, int((now - order.opened_at).total_seconds() // 60)),
         lines=[

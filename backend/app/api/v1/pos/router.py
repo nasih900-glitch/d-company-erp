@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
@@ -25,6 +25,8 @@ from app.models import (
     Branch,
     Customer,
     CustomerMembership,
+    Floor,
+    GamingSession,
     MembershipTier,
     MenuItem,
     Order,
@@ -32,14 +34,19 @@ from app.models import (
     Payment,
     Refund,
     Shift,
+    Station,
+    Table,
     Terminal,
+    User,
 )
 from app.services.inventory.deduction import deduct_for_order
 from app.services.pos.pricing import (
     InvoiceNumberService,
     LineRequest,
     OrderPricingService,
+    _round_to_rupee,
 )
+from app.services.pos.shift_validation import require_open_operational_shift, require_shift_opener
 
 router = APIRouter()
 
@@ -54,7 +61,7 @@ class OrderLineCreate(BaseModel):
 
 
 class OrderCreate(BaseModel):
-    type: Literal["dine_in", "takeaway", "delivery"]
+    type: Literal["dine_in", "takeaway", "delivery", "session"]
     table_id: UUID | None = None
     shift_id: UUID
     lines: list[OrderLineCreate] = Field(min_length=1, max_length=100)
@@ -89,6 +96,8 @@ class OrderRead(BaseModel):
     fiscal_year: str | None = None
     status: str
     type: str
+    table_id: UUID | None = None
+    source_label: str | None = None
     subtotal_minor: int
     discount_minor: int
     cgst_minor: int = 0
@@ -107,6 +116,7 @@ class OrderRead(BaseModel):
     opened_at: datetime
     closed_at: datetime | None = None
     invoice_issued_at: datetime | None = None
+    held_at: datetime | None = None
     lines: list[OrderLineRead] = []
 
 
@@ -270,6 +280,79 @@ async def _refunded_total(session, order_id: UUID) -> int:
     )
 
 
+async def _source_label(session, order: Order) -> str | None:
+    """Human label for where an order came from: its table, or (for a
+    gaming/hookah session sent to POS) the station that billed it."""
+    if order.table_id is not None:
+        table = await session.get(Table, order.table_id)
+        return f"Table {table.code}" if table else None
+    row = (
+        await session.execute(
+            select(Station.name)
+            .join(GamingSession, GamingSession.station_id == Station.id)
+            .where(GamingSession.order_id == order.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row
+
+
+async def _build_order_read(session, order: Order) -> OrderRead:
+    line_rows = (
+        await session.execute(
+            select(OrderLine, MenuItem)
+            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+            .where(OrderLine.order_id == order.id)
+            .order_by(OrderLine.created_at, OrderLine.id)
+        )
+    ).all()
+    return OrderRead(
+        id=order.id,
+        invoice_no=order.invoice_no,
+        fiscal_year=order.fiscal_year,
+        status=order.status,
+        type=order.type,
+        table_id=order.table_id,
+        source_label=await _source_label(session, order),
+        subtotal_minor=order.subtotal_minor,
+        discount_minor=order.discount_minor,
+        cgst_minor=order.cgst_minor,
+        sgst_minor=order.sgst_minor,
+        igst_minor=order.igst_minor,
+        cess_minor=order.cess_minor,
+        tax_minor=order.tax_minor,
+        round_off_minor=order.round_off_minor,
+        total_minor=order.total_minor,
+        delivery_via=order.delivery_via,
+        place_of_supply_state_code=order.place_of_supply_state_code,
+        customer_name=order.customer_name,
+        customer_phone=order.customer_phone,
+        customer_gstin=order.customer_gstin,
+        customer_state_code=order.customer_state_code,
+        opened_at=order.opened_at,
+        closed_at=order.closed_at,
+        invoice_issued_at=order.invoice_issued_at,
+        held_at=order.held_at,
+        lines=[
+            OrderLineRead(
+                menu_item_id=line.menu_item_id,
+                name=item.name,
+                sku=item.sku,
+                hsn_or_sac=line.hsn_or_sac or item.hsn_code or "",
+                qty=float(line.qty),
+                unit_price_minor=int(line.unit_price_minor),
+                line_total_minor=int(line.line_total_minor),
+                taxable_value_minor=int(line.taxable_value_minor),
+                tax_rate=float(line.tax_rate),
+                cgst_minor=int(line.cgst_minor),
+                sgst_minor=int(line.sgst_minor),
+                igst_minor=int(line.igst_minor),
+            )
+            for line, item in line_rows
+        ],
+    )
+
+
 # ----------- endpoints -----------
 @router.post(
     "/orders",
@@ -304,6 +387,13 @@ async def create_order(
     branch = await session.get(Branch, tenant.branch_id)
     if not branch:
         raise NotFoundError("branch not found")
+    if payload.table_id is not None:
+        table = await session.get(Table, payload.table_id)
+        if not table:
+            raise NotFoundError("table not found")
+        floor = await session.get(Floor, table.floor_id)
+        if not floor or floor.branch_id != tenant.branch_id:
+            raise NotFoundError("table not found")
     shift = (
         await session.execute(
             select(Shift)
@@ -311,12 +401,13 @@ async def create_order(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if not shift or shift.company_id != tenant.company_id or shift.branch_id != tenant.branch_id:
-        raise NotFoundError("shift not found")
-    if shift.status != "open":
-        raise BusinessRuleError(f"shift is not open (status={shift.status})")
-    if shift.terminal_id != tenant.terminal_id:
-        raise BusinessRuleError("order shift belongs to a different terminal")
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="creating an order",
+    )
 
     branch_state = branch.state_code or "32"
     delivery_via = payload.delivery_via if payload.type == "delivery" else None
@@ -400,51 +491,14 @@ async def create_order(
         )
         session.add(ol)
         order_lines.append(ol)
-    await session.flush()
+
+    if order.table_id is not None:
+        table = await session.get(Table, order.table_id)
+        if table and table.status == "available":
+            table.status = "occupied"
 
     await session.flush()
-    response = OrderRead(
-        id=order.id,
-        invoice_no=order.invoice_no,
-        fiscal_year=order.fiscal_year,
-        status=order.status,
-        type=order.type,
-        subtotal_minor=order.subtotal_minor,
-        discount_minor=order.discount_minor,
-        cgst_minor=order.cgst_minor,
-        sgst_minor=order.sgst_minor,
-        igst_minor=order.igst_minor,
-        cess_minor=order.cess_minor,
-        tax_minor=order.tax_minor,
-        round_off_minor=order.round_off_minor,
-        total_minor=order.total_minor,
-        delivery_via=order.delivery_via,
-        place_of_supply_state_code=order.place_of_supply_state_code,
-        customer_name=order.customer_name,
-        customer_phone=order.customer_phone,
-        customer_gstin=order.customer_gstin,
-        customer_state_code=order.customer_state_code,
-        opened_at=order.opened_at,
-        closed_at=order.closed_at,
-        invoice_issued_at=order.invoice_issued_at,
-        lines=[
-            OrderLineRead(
-                menu_item_id=pl.menu_item_id,
-                name=pl.name,
-                sku=pl.sku,
-                hsn_or_sac=pl.hsn_or_sac,
-                qty=pl.qty,
-                unit_price_minor=pl.unit_inclusive_minor,
-                line_total_minor=pl.line_inclusive_minor,
-                taxable_value_minor=pl.taxable_value_minor,
-                tax_rate=float(pl.tax_rate),
-                cgst_minor=pl.cgst_minor,
-                sgst_minor=pl.sgst_minor,
-                igst_minor=pl.igst_minor,
-            )
-            for pl in priced.lines
-        ],
-    )
+    response = await _build_order_read(session, order)
     await store_response(
         session,
         key=idempotency_key,
@@ -452,6 +506,191 @@ async def create_order(
         body=response.model_dump(mode="json"),
     )
     return response
+
+
+class OrderLinesAppend(BaseModel):
+    lines: list[OrderLineCreate] = Field(min_length=1, max_length=100)
+
+
+@router.post("/orders/{order_id}/lines", response_model=OrderRead)
+async def add_order_lines(
+    order_id: UUID,
+    payload: OrderLinesAppend,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Append lines to an order that hasn't been paid yet.
+
+    Used by Tables while building or adding to a dine-in order (status
+    stays 'open'), and by POS to add items to an order a Tables/Gaming
+    screen already sent over (status 'held', found via search).
+    """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return OrderRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not order or order.company_id != tenant.company_id:
+        raise NotFoundError("order not found")
+    if order.status not in ("open", "held"):
+        raise BusinessRuleError(f"cannot add lines to an order in status={order.status}")
+
+    pricing = OrderPricingService(session)
+    priced = await pricing.price_order(
+        company_id=tenant.company_id,
+        branch_id=order.branch_id,
+        customer_phone=order.customer_phone,
+        place_of_supply_state_code=order.place_of_supply_state_code,
+        delivery_via=order.delivery_via,
+        line_requests=[
+            LineRequest(menu_item_id=line.menu_item_id, qty=int(line.qty))
+            for line in payload.lines
+        ],
+    )
+    for priced_line in priced.lines:
+        session.add(OrderLine(
+            id=uuid4(),
+            order_id=order.id,
+            menu_item_id=priced_line.menu_item_id,
+            qty=priced_line.qty,
+            unit_price_minor=priced_line.unit_inclusive_minor,
+            line_total_minor=priced_line.line_inclusive_minor,
+            discount_minor=priced_line.discount_minor,
+            hsn_or_sac=priced_line.hsn_or_sac,
+            tax_rate=float(priced_line.tax_rate),
+            taxable_value_minor=priced_line.taxable_value_minor,
+            cgst_minor=priced_line.cgst_minor,
+            sgst_minor=priced_line.sgst_minor,
+            igst_minor=priced_line.igst_minor,
+            cess_minor=priced_line.cess_minor,
+        ))
+    await session.flush()
+
+    # Re-aggregate the WHOLE order (existing + new lines) and re-round once,
+    # the same way price_order rounds a freshly created order.
+    all_lines = (
+        await session.execute(select(OrderLine).where(OrderLine.order_id == order.id))
+    ).scalars().all()
+    sub_inclusive = sum(int(l.line_total_minor) for l in all_lines)
+    rounded, round_off = _round_to_rupee(sub_inclusive)
+    order.subtotal_minor = sum(int(l.taxable_value_minor) for l in all_lines)
+    order.cgst_minor = sum(int(l.cgst_minor) for l in all_lines)
+    order.sgst_minor = sum(int(l.sgst_minor) for l in all_lines)
+    order.igst_minor = sum(int(l.igst_minor) for l in all_lines)
+    order.discount_minor = sum(int(l.discount_minor) for l in all_lines)
+    order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor
+    order.round_off_minor = round_off
+    order.total_minor = rounded
+
+    if order.table_id is not None:
+        table = await session.get(Table, order.table_id)
+        if table and table.status == "available":
+            table.status = "occupied"
+
+    await session.flush()
+    response = await _build_order_read(session, order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.patch("/orders/{order_id}/send-to-pos", response_model=OrderRead)
+async def send_order_to_pos(
+    order_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Mark a Tables order as ready to bill — it now appears in POS's
+    held-orders queue. One-way: once held, more items are added by finding
+    it in POS (add_order_lines above), not by going back through Tables.
+    """
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not order or order.company_id != tenant.company_id:
+        raise NotFoundError("order not found")
+    if order.status != "open":
+        raise BusinessRuleError(f"cannot send an order in status={order.status} to POS")
+    has_lines = (
+        await session.execute(
+            select(func.count()).select_from(OrderLine).where(OrderLine.order_id == order.id)
+        )
+    ).scalar_one()
+    if not has_lines:
+        raise BusinessRuleError("order has no items")
+    order.status = "held"
+    order.held_at = datetime.now(timezone.utc)
+    await session.flush()
+    return await _build_order_read(session, order)
+
+
+class VoidOrderRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@router.delete("/orders/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def void_held_order(
+    order_id: UUID,
+    payload: VoidOrderRequest,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.void")),
+) -> None:
+    """Clear a held order that shouldn't be billed (mistake, duplicate,
+    customer walked out). Only the shift's opener or a protected owner may
+    do this — same accountability rule as billing it.
+    """
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not order or order.company_id != tenant.company_id:
+        raise NotFoundError("order not found")
+    if order.status != "held":
+        raise BusinessRuleError(f"cannot clear an order in status={order.status}")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="clearing a held order",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="clear an order on this shift",
+    )
+    order.status = "void"
+    order.notes = f"{order.notes + ' — ' if order.notes else ''}Voided: {payload.reason}"[:500]
+    if order.table_id is not None:
+        table = await session.get(Table, order.table_id)
+        if table and table.status == "occupied":
+            table.status = "available"
+    await session.flush()
 
 
 @router.get("/orders/{order_id}", response_model=OrderRead)
@@ -463,56 +702,7 @@ async def get_order(
     order = await session.get(Order, order_id)
     if not order or order.company_id != tenant.company_id:
         raise NotFoundError("order not found")
-    line_rows = (
-        await session.execute(
-            select(OrderLine, MenuItem)
-            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
-            .where(OrderLine.order_id == order.id)
-            .order_by(OrderLine.created_at, OrderLine.id)
-        )
-    ).all()
-    return OrderRead(
-        id=order.id,
-        invoice_no=order.invoice_no,
-        fiscal_year=order.fiscal_year,
-        status=order.status,
-        type=order.type,
-        subtotal_minor=order.subtotal_minor,
-        discount_minor=order.discount_minor,
-        cgst_minor=order.cgst_minor,
-        sgst_minor=order.sgst_minor,
-        igst_minor=order.igst_minor,
-        cess_minor=order.cess_minor,
-        tax_minor=order.tax_minor,
-        round_off_minor=order.round_off_minor,
-        total_minor=order.total_minor,
-        delivery_via=order.delivery_via,
-        place_of_supply_state_code=order.place_of_supply_state_code,
-        customer_name=order.customer_name,
-        customer_phone=order.customer_phone,
-        customer_gstin=order.customer_gstin,
-        customer_state_code=order.customer_state_code,
-        opened_at=order.opened_at,
-        closed_at=order.closed_at,
-        invoice_issued_at=order.invoice_issued_at,
-        lines=[
-            OrderLineRead(
-                menu_item_id=line.menu_item_id,
-                name=item.name,
-                sku=item.sku,
-                hsn_or_sac=line.hsn_or_sac or item.hsn_code or "",
-                qty=float(line.qty),
-                unit_price_minor=int(line.unit_price_minor),
-                line_total_minor=int(line.line_total_minor),
-                taxable_value_minor=int(line.taxable_value_minor),
-                tax_rate=float(line.tax_rate),
-                cgst_minor=int(line.cgst_minor),
-                sgst_minor=int(line.sgst_minor),
-                igst_minor=int(line.igst_minor),
-            )
-            for line, item in line_rows
-        ],
-    )
+    return await _build_order_read(session, order)
 
 
 class OrderListItem(BaseModel):
@@ -521,10 +711,13 @@ class OrderListItem(BaseModel):
     invoice_no: str | None
     type: str
     status: str
+    table_id: UUID | None = None
+    source_label: str | None = None
     total_minor: int
     items_count: int
     customer_name: str | None
     created_at: datetime
+    held_at: datetime | None = None
 
 
 @router.get("/orders", response_model=list[OrderListItem])
@@ -533,42 +726,76 @@ async def list_orders(
     tenant: TenantContext = Depends(requires("pos.read")),
     from_date: date | None = None,
     to_date: date | None = None,
+    status_filter: list[str] | None = Query(default=None, alias="status"),
+    table_id: UUID | None = None,
     limit: int = 200,
 ) -> list[OrderListItem]:
-    """List orders, newest first. Defaults to today if no date filter given."""
-    timezone_name = await company_timezone(session, tenant.company_id)
-    today = local_today(timezone_name)
-    f_d = from_date or today
-    t_d = to_date or today
-    f_dt, t_dt = local_date_bounds_utc(f_d, t_d, timezone_name)
+    """List orders, newest first.
 
-    stmt = (
-        select(Order)
-        .where(
-            Order.company_id == tenant.company_id,
-            Order.created_at >= f_dt,
-            Order.created_at < t_dt,
-        )
-        .order_by(Order.created_at.desc())
-        .limit(min(limit, 500))
-    )
+    Defaults to today if no date filter given. When `status` is passed
+    (e.g. the POS held-orders queue), the date window is skipped entirely —
+    a held order shouldn't vanish from the queue just because it crossed
+    local midnight.
+    """
+    stmt = select(Order).where(Order.company_id == tenant.company_id)
+    if status_filter:
+        stmt = stmt.where(Order.status.in_(status_filter))
+    else:
+        timezone_name = await company_timezone(session, tenant.company_id)
+        today = local_today(timezone_name)
+        f_d = from_date or today
+        t_d = to_date or today
+        f_dt, t_dt = local_date_bounds_utc(f_d, t_d, timezone_name)
+        stmt = stmt.where(Order.created_at >= f_dt, Order.created_at < t_dt)
+    if table_id is not None:
+        stmt = stmt.where(Order.table_id == table_id)
+    stmt = stmt.order_by(Order.created_at.desc()).limit(min(limit, 500))
+
     rows = (await session.execute(stmt)).scalars().all()
+    if not rows:
+        return []
+
+    order_ids = [o.id for o in rows]
+    counts_by_order = dict(
+        (
+            await session.execute(
+                select(OrderLine.order_id, func.count())
+                .where(OrderLine.order_id.in_(order_ids))
+                .group_by(OrderLine.order_id)
+            )
+        ).all()
+    )
+    table_ids = [o.table_id for o in rows if o.table_id is not None]
+    codes_by_table = dict(
+        (
+            await session.execute(select(Table.id, Table.code).where(Table.id.in_(table_ids)))
+        ).all()
+    ) if table_ids else {}
+    station_by_order = dict(
+        (
+            await session.execute(
+                select(GamingSession.order_id, Station.name)
+                .join(Station, Station.id == GamingSession.station_id)
+                .where(GamingSession.order_id.in_(order_ids))
+            )
+        ).all()
+    )
+
     out: list[OrderListItem] = []
     for o in rows:
-        items_count = (
-            await session.execute(
-                select(func.count())
-                .select_from(OrderLine)
-                .where(OrderLine.order_id == o.id)
-            )
-        ).scalar_one()
+        if o.table_id is not None and o.table_id in codes_by_table:
+            label = f"Table {codes_by_table[o.table_id]}"
+        else:
+            label = station_by_order.get(o.id)
         out.append(OrderListItem(
             id=o.id,
             invoice_no=o.invoice_no,
             type=o.type,
             status=o.status,
+            table_id=o.table_id,
+            source_label=label,
             total_minor=o.total_minor,
-            items_count=int(items_count or 0),
+            items_count=int(counts_by_order.get(o.id, 0)),
             customer_name=o.customer_name,
             created_at=o.created_at,
         ))
@@ -577,6 +804,7 @@ async def list_orders(
 
 class ShiftRead(BaseModel):
     id: UUID
+    branch_id: UUID
     terminal_id: UUID | None = None
     status: str
     opened_at: datetime
@@ -585,6 +813,8 @@ class ShiftRead(BaseModel):
     expected_minor: int | None
     counted_minor: int | None
     variance_minor: int | None
+    opened_by_name: str | None = None
+    opened_by_email: str | None = None
 
 
 @router.get("/shifts", response_model=list[ShiftRead])
@@ -595,24 +825,31 @@ async def list_shifts(
     limit: int = 50,
 ) -> list[ShiftRead]:
     stmt = (
-        select(Shift)
+        select(Shift, User.name, User.email)
+        .outerjoin(User, User.id == Shift.opened_by)
         .where(Shift.company_id == tenant.company_id)
         .order_by(Shift.opened_at.desc())
         .limit(min(limit, 200))
     )
+    if tenant.branch_id is not None:
+        stmt = stmt.where(Shift.branch_id == tenant.branch_id)
+    if tenant.terminal_id is not None:
+        stmt = stmt.where(Shift.terminal_id == tenant.terminal_id)
     if only_open:
         stmt = stmt.where(Shift.status == "open")
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = (await session.execute(stmt)).all()
     return [
         ShiftRead(
-            id=s.id, terminal_id=s.terminal_id, status=s.status,
+            id=s.id, branch_id=s.branch_id, terminal_id=s.terminal_id, status=s.status,
             opened_at=s.opened_at, closed_at=s.closed_at,
             opening_float_minor=int(s.opening_float_minor or 0),
             expected_minor=int(s.expected_minor) if s.expected_minor is not None else None,
             counted_minor=int(s.counted_minor) if s.counted_minor is not None else None,
             variance_minor=int(s.variance_minor) if s.variance_minor is not None else None,
+            opened_by_name=opener_name,
+            opened_by_email=opener_email,
         )
-        for s in rows
+        for s, opener_name, opener_email in rows
     ]
 
 
@@ -624,6 +861,10 @@ async def record_payment(
     request: Request,
     tenant: TenantContext = Depends(requires("pos.write")),
 ) -> dict:
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required for POS writes")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("token has no branch_id")
     idempotency_key, request_hash = _require_idempotency(request)
     existing_response = await check_or_reserve(
         session,
@@ -649,10 +890,21 @@ async def record_payment(
             select(Shift).where(Shift.id == order.shift_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not shift or shift.company_id != tenant.company_id:
-        raise NotFoundError("shift not found")
-    if shift.status != "open":
-        raise BusinessRuleError(f"shift is not open (status={shift.status})")
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="recording a payment",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="bill an order on this shift",
+    )
+    if order.branch_id != shift.branch_id or order.terminal_id != shift.terminal_id:
+        raise BusinessRuleError("Order branch or terminal does not match its shift.")
 
     already_paid = await _paid_total(session, order_id)
     due_minor = max(0, int(order.total_minor or 0) - already_paid)
@@ -702,6 +954,10 @@ async def record_payment(
         order.status = "paid"
         order.closed_at = now
         order.invoice_issued_at = now
+        if order.table_id is not None:
+            table = await session.get(Table, order.table_id)
+            if table and table.status == "occupied":
+                table.status = "available"
 
         order_lines = (
             await session.execute(
@@ -891,10 +1147,13 @@ async def close_shift(
             select(Shift).where(Shift.id == shift_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not shift or shift.company_id != tenant.company_id:
-        raise NotFoundError("shift not found")
-    if shift.status != "open":
-        raise BusinessRuleError(f"shift is not open (status={shift.status})")
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="closing a shift",
+    )
     unfinished_orders = int(
         (
             await session.execute(
@@ -909,6 +1168,21 @@ async def close_shift(
     if unfinished_orders:
         raise BusinessRuleError(
             f"cannot close shift with {unfinished_orders} unfinished order(s)"
+        )
+    running_sessions = int(
+        (
+            await session.execute(
+                select(func.count(GamingSession.id)).where(
+                    GamingSession.shift_id == shift.id,
+                    GamingSession.status.in_(("active", "paused")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if running_sessions:
+        raise BusinessRuleError(
+            f"cannot close shift with {running_sessions} running gaming session(s)"
         )
     shift.closed_at = datetime.now(timezone.utc)
     shift.counted_minor = payload.counted_minor
