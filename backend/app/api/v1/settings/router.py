@@ -38,6 +38,11 @@ class CompanyRead(BaseModel):
     e_invoicing_enabled: bool
     fiscal_year_start_month: int
     google_sheets_webhook_url: str | None
+    upi_vpa: str | None
+    payment_provider: str | None
+    payment_key_id: str | None
+    # Never expose the secret itself — only whether one is stored.
+    payment_secret_set: bool
 
 
 class CompanyUpdate(BaseModel):
@@ -52,6 +57,12 @@ class CompanyUpdate(BaseModel):
     is_composition: bool | None = None
     e_invoicing_enabled: bool | None = None
     google_sheets_webhook_url: str | None = Field(default=None, max_length=500)
+    # UPI VPA like "name@bank"; allow clearing with "".
+    upi_vpa: str | None = Field(
+        default=None,
+        max_length=255,
+        pattern=r"^$|^[A-Za-z0-9.\-_]{2,256}@[A-Za-z]{2,64}$",
+    )
 
 
 class BranchRead(BaseModel):
@@ -137,6 +148,10 @@ async def get_company(
         e_invoicing_enabled=c.e_invoicing_enabled,
         fiscal_year_start_month=c.fiscal_year_start_month,
         google_sheets_webhook_url=c.google_sheets_webhook_url,
+        upi_vpa=c.upi_vpa,
+        payment_provider=c.payment_provider,
+        payment_key_id=c.payment_key_id,
+        payment_secret_set=bool(c.payment_key_secret),
     )
 
 
@@ -151,7 +166,7 @@ async def update_company(
         raise NotFoundError("company not found")
     for f in ("name", "legal_name", "timezone", "gstin", "pan",
               "gst_registration_type", "is_composition",
-              "e_invoicing_enabled", "google_sheets_webhook_url"):
+              "e_invoicing_enabled", "google_sheets_webhook_url", "upi_vpa"):
         v = getattr(payload, f)
         if v is not None:
             setattr(c, f, v)
@@ -163,6 +178,10 @@ async def update_company(
         e_invoicing_enabled=c.e_invoicing_enabled,
         fiscal_year_start_month=c.fiscal_year_start_month,
         google_sheets_webhook_url=c.google_sheets_webhook_url,
+        upi_vpa=c.upi_vpa,
+        payment_provider=c.payment_provider,
+        payment_key_id=c.payment_key_id,
+        payment_secret_set=bool(c.payment_key_secret),
     )
 
 

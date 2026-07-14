@@ -72,6 +72,7 @@ DEFAULT_ROLES: list[tuple[str, str]] = [
     ("kitchen", "Kitchen team title — all standard modules"),
     ("gaming_supervisor", "Gaming team title — all standard modules"),
     ("auditor", "Audit staff title — all standard modules"),
+    ("staff", "General staff — no Inventory or Insights/Reports access by default"),
 ]
 
 

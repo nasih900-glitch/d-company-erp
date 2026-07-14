@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel
 from sqlalchemy import String, cast, distinct, or_, select
 
 from app.core.db import SessionDep
-from app.core.errors import AuthError
-from app.core.permissions import requires
+from app.core.errors import AuthError, BusinessRuleError, NotFoundError
+from app.core.permissions import (
+    MODULE_PERMISSIONS,
+    ROLE_DESCRIPTIONS,
+    ROLE_PERMISSIONS,
+    requires,
+)
+from app.core.roles import PROTECTED_OWNER_ROLE
 from app.core.security import decode_token, issue_audit_token, issue_pricing_token, verify_password
 from app.core.tenant import TenantContext
-from app.models import AuditLog, User
+from app.models import AuditLog, RolePermissionOverride, User
 
 router = APIRouter()
 
@@ -313,4 +319,112 @@ async def audit_facets(
     return AuditFacetsDTO(
         entity_types=sorted([t for t in types if t]),
         actions=sorted([a for a in actions if a]),
+    )
+
+
+class AccessCell(BaseModel):
+    role_code: str
+    module: str
+    default_allowed: bool
+    override: bool | None
+    allowed: bool
+
+
+class AccessControlDTO(BaseModel):
+    roles: dict[str, str]  # role_code -> description
+    modules: list[str]
+    cells: list[AccessCell]
+
+
+class AccessControlUpdate(BaseModel):
+    role_code: str
+    module: str
+    allowed: bool | None  # null clears the override, reverting to the role default
+
+
+@router.get("/access-control", response_model=AccessControlDTO)
+async def get_access_control(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("admin.audit.read")),
+) -> AccessControlDTO:
+    """Protected-owner-only: every role's effective access per feature
+    module, so it can be toggled without a code deploy."""
+    overrides = (
+        await session.execute(
+            select(RolePermissionOverride).where(
+                RolePermissionOverride.company_id == tenant.company_id
+            )
+        )
+    ).scalars().all()
+    override_by_key = {(o.role_code, o.module): o.allowed for o in overrides}
+
+    role_codes = [r for r in ROLE_PERMISSIONS if r != PROTECTED_OWNER_ROLE]
+    modules = sorted(MODULE_PERMISSIONS)
+    cells: list[AccessCell] = []
+    for role_code in role_codes:
+        role_perms = ROLE_PERMISSIONS.get(role_code, set())
+        for module in modules:
+            default_allowed = bool(MODULE_PERMISSIONS[module] & role_perms)
+            override = override_by_key.get((role_code, module))
+            cells.append(AccessCell(
+                role_code=role_code,
+                module=module,
+                default_allowed=default_allowed,
+                override=override,
+                allowed=default_allowed if override is None else override,
+            ))
+    return AccessControlDTO(
+        roles={r: ROLE_DESCRIPTIONS.get(r, r) for r in role_codes},
+        modules=modules,
+        cells=cells,
+    )
+
+
+@router.patch("/access-control", response_model=AccessCell)
+async def update_access_control(
+    payload: AccessControlUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("admin.audit.read")),
+) -> AccessCell:
+    if payload.role_code == PROTECTED_OWNER_ROLE:
+        raise BusinessRuleError("the protected owner role cannot be restricted")
+    if payload.role_code not in ROLE_PERMISSIONS:
+        raise NotFoundError(f"unknown role: {payload.role_code}")
+    if payload.module not in MODULE_PERMISSIONS:
+        raise NotFoundError(f"unknown module: {payload.module}")
+
+    existing = (
+        await session.execute(
+            select(RolePermissionOverride).where(
+                RolePermissionOverride.company_id == tenant.company_id,
+                RolePermissionOverride.role_code == payload.role_code,
+                RolePermissionOverride.module == payload.module,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if payload.allowed is None:
+        if existing:
+            await session.delete(existing)
+    elif existing:
+        existing.allowed = payload.allowed
+    else:
+        session.add(RolePermissionOverride(
+            id=uuid4(),
+            company_id=tenant.company_id,
+            role_code=payload.role_code,
+            module=payload.module,
+            allowed=payload.allowed,
+        ))
+    await session.flush()
+
+    default_allowed = bool(
+        MODULE_PERMISSIONS[payload.module] & ROLE_PERMISSIONS.get(payload.role_code, set())
+    )
+    return AccessCell(
+        role_code=payload.role_code,
+        module=payload.module,
+        default_allowed=default_allowed,
+        override=payload.allowed,
+        allowed=default_allowed if payload.allowed is None else payload.allowed,
     )

@@ -134,7 +134,7 @@ export default function KitchenScreen() {
                 <div className="flex justify-between items-start mb-3">
                   <div>
                     <div className="font-bold text-lg">
-                      {o.invoice_no || `Order #${o.id.slice(0, 6)}`}
+                      {o.table_code ? `Table ${o.table_code}` : (o.invoice_no || `Order #${o.id.slice(0, 6)}`)}
                     </div>
                     <div className="text-xs text-fg-muted">
                       {o.type} · {o.customer_name || 'Walk-in'}

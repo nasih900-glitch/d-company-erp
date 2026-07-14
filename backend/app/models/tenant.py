@@ -42,6 +42,17 @@ class Company(Base, TimestampMixin, SoftDeleteMixin):
     # See docs/GOOGLE_SHEETS.md and integrations/google-sheets/Code.gs.
     google_sheets_webhook_url: Mapped[str | None] = mapped_column(String(500))
 
+    # Merchant UPI VPA (e.g. "Q530001220@ybl") used to build the dynamic
+    # UPI pay QR shown at checkout. Public payment address, not a secret.
+    upi_vpa: Mapped[str | None] = mapped_column(String(255))
+
+    # Reserved for a future verified gateway integration. The current release
+    # does not expose an API write path for these fields: secrets must not be
+    # accepted until encrypted storage and provider-side verification exist.
+    payment_provider: Mapped[str | None] = mapped_column(String(50))
+    payment_key_id: Mapped[str | None] = mapped_column(String(255))
+    payment_key_secret: Mapped[str | None] = mapped_column(String(512))
+
     branches: Mapped[list["Branch"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )

@@ -41,6 +41,7 @@ ROLES = {
     "kitchen",
     "gaming_supervisor",
     "auditor",
+    "staff",
 }
 
 

@@ -8,6 +8,7 @@ export function roleLabel(role: string): string {
     kitchen: 'Kitchen',
     gaming_supervisor: 'Gaming Supervisor',
     auditor: 'Auditor',
+    staff: 'Staff',
   };
   return labels[role] ?? role;
 }

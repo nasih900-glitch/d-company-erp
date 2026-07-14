@@ -1390,9 +1390,8 @@ async def main() -> int:
             checks,
         )
         check(
-            isinstance(order.get("invoice_no"), str)
-            and 1 <= len(order["invoice_no"]) <= 20,
-            "POS invoice number satisfies production column contract",
+            order.get("invoice_no") is None,
+            "POS defers the invoice number until payment (no gaps for unpaid orders)",
             checks,
         )
 
@@ -1414,10 +1413,11 @@ async def main() -> int:
         persisted_order = http_json("GET", f"/pos/orders/{order['id']}", token=token)
         check(
             persisted_order.get("status") == "paid"
-            and persisted_order.get("invoice_no") == order.get("invoice_no")
-            and persisted_order.get("fiscal_year") == order.get("fiscal_year")
+            and isinstance(persisted_order.get("invoice_no"), str)
+            and 1 <= len(persisted_order["invoice_no"]) <= 20
+            and bool(persisted_order.get("fiscal_year"))
             and len(persisted_order.get("lines", [])) == 5,
-            "POS paid order reads back with invoice and complete lines",
+            "POS paid order reads back with an issued invoice and complete lines",
             checks,
         )
 
@@ -1468,26 +1468,298 @@ async def main() -> int:
         )
         check(bool(refund.get("id")), "POS partial refund records", checks)
 
+        # --- Tables -> Send to Kitchen -> Send to POS -> bill lifecycle ---
+        tables_before = http_json("GET", "/tables", token=token)
+        table_row_before = next((r for r in tables_before if r["id"] == table["id"]), None)
+        check(
+            table_row_before is not None and table_row_before["status"] == "available",
+            "table starts available before the new order lifecycle",
+            checks,
+        )
+        table_order = http_json(
+            "POST",
+            "/pos/orders",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-table-order-1",
+            payload={
+                "type": "dine_in",
+                "table_id": table["id"],
+                "shift_id": shift_id,
+                "notes": MARKER,
+                "lines": [{"menu_item_id": items["coffee"], "qty": 1}],
+            },
+        )
+        check(table_order.get("status") == "open", "table order creates in open status", checks)
+        tables_after_create = http_json("GET", "/tables", token=token)
+        table_row_after_create = next((r for r in tables_after_create if r["id"] == table["id"]), None)
+        check(
+            table_row_after_create is not None and table_row_after_create["status"] == "occupied",
+            "table auto-flips to occupied once an order is sent to the kitchen",
+            checks,
+        )
+
+        add_lines_key = f"{RUN_ID}-table-order-1-lines-1"
+        appended = http_json(
+            "POST",
+            f"/pos/orders/{table_order['id']}/lines",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=add_lines_key,
+            payload={"lines": [{"menu_item_id": items["snack"], "qty": 1}]},
+        )
+        check(
+            len(appended.get("lines", [])) == 2
+            and appended["total_minor"] > table_order["total_minor"],
+            "add-lines appends to the open table order and recomputes the total",
+            checks,
+        )
+        replayed = http_json(
+            "POST",
+            f"/pos/orders/{table_order['id']}/lines",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=add_lines_key,
+            payload={"lines": [{"menu_item_id": items["snack"], "qty": 1}]},
+        )
+        check(
+            len(replayed.get("lines", [])) == 2 and replayed["total_minor"] == appended["total_minor"],
+            "add-lines is idempotent — replaying the same key does not double the lines",
+            checks,
+        )
+
+        held = http_json(
+            "PATCH",
+            f"/pos/orders/{table_order['id']}/send-to-pos",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={},
+        )
+        check(held.get("status") == "held", "sending a table order to POS marks it held", checks)
+
+        _, _, resend_raw = http_request(
+            "PATCH",
+            f"/pos/orders/{table_order['id']}/send-to-pos",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={},
+            expected=(422,),
+        )
+        check(
+            b"cannot send" in resend_raw.lower(),
+            "sending an already-held order to POS again is rejected",
+            checks,
+        )
+
+        held_queue = http_json("GET", "/pos/orders", token=token, terminal_id=identity["terminal_id"])
+        # Note: default list_orders call has no status filter above; fetch the held-only view explicitly.
+        held_queue_only = http_json(
+            "GET", "/pos/orders?status=held", token=token, terminal_id=identity["terminal_id"]
+        )
+        held_row = next((r for r in held_queue_only if r["id"] == table_order["id"]), None)
+        check(
+            held_row is not None and held_row.get("source_label") == f"Table {table['code']}",
+            "held-orders queue labels a table order by its table code",
+            checks,
+        )
+
+        add_after_held = http_json(
+            "POST",
+            f"/pos/orders/{table_order['id']}/lines",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-table-order-1-lines-2",
+            payload={"lines": [{"menu_item_id": items["coffee"], "qty": 1}]},
+        )
+        check(
+            len(add_after_held.get("lines", [])) == 3,
+            "POS can still add lines to a held order found via search",
+            checks,
+        )
+
+        table_payment = http_json(
+            "POST",
+            f"/pos/orders/{table_order['id']}/payments",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-table-order-1-pay",
+            payload={
+                "method": "cash",
+                "amount_minor": add_after_held["total_minor"],
+                "tendered_minor": add_after_held["total_minor"],
+                "ref_external": MARKER,
+            },
+        )
+        check(table_payment.get("order_status") == "paid", "held table order pays and closes", checks)
+
+        tables_after_pay = http_json("GET", "/tables", token=token)
+        table_row_after_pay = next((r for r in tables_after_pay if r["id"] == table["id"]), None)
+        check(
+            table_row_after_pay is not None and table_row_after_pay["status"] == "available",
+            "table auto-flips back to available once its order is paid",
+            checks,
+        )
+
+        _, _, add_after_paid_raw = http_request(
+            "POST",
+            f"/pos/orders/{table_order['id']}/lines",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-table-order-1-lines-3",
+            payload={"lines": [{"menu_item_id": items["coffee"], "qty": 1}]},
+            expected=(422,),
+        )
+        check(
+            b"cannot add lines" in add_after_paid_raw.lower(),
+            "add-lines rejects a paid order",
+            checks,
+        )
+        check(isinstance(held_queue, list), "unfiltered orders list still reads", checks)
+
+        _, _, missing_terminal_raw = http_request(
+            "POST",
+            "/gaming/sessions/start",
+            token=token,
+            payload={
+                "station_id": stations["ps5"],
+                "shift_id": shift_id,
+                "customer_name": MARKER,
+                "timer_minutes": 60,
+            },
+            expected=(422,),
+        )
+        check(
+            "x-terminal-id" in missing_terminal_raw.decode("utf-8", errors="replace").lower(),
+            "gaming start rejects a missing terminal before creating a session",
+            checks,
+        )
+
         for station_type, station_id in stations.items():
             session_started = http_json(
                 "POST",
                 "/gaming/sessions/start",
                 token=token,
+                terminal_id=identity["terminal_id"],
                 payload={
                     "station_id": station_id,
                     "shift_id": shift_id,
                     "customer_name": MARKER,
                     "customer_phone": f"7{secrets.randbelow(10**9):09d}",
+                    "timer_minutes": 60,
                 },
+            )
+            check(
+                session_started.get("timer_minutes") == 60
+                and bool(session_started.get("timer_ends_at")),
+                f"gaming {station_type} session starts with a 60-minute timer",
+                checks,
+            )
+            extended = http_json(
+                "PATCH",
+                f"/gaming/sessions/{session_started['id']}/timer",
+                token=token,
+                terminal_id=identity["terminal_id"],
+                payload={"timer_minutes": 90},
+            )
+            check(
+                extended.get("timer_minutes") == 90,
+                f"gaming {station_type} session timer extends",
+                checks,
             )
             time.sleep(0.05)
             stopped = http_json(
                 "POST",
                 f"/gaming/sessions/{session_started['id']}/stop",
                 token=token,
+                terminal_id=identity["terminal_id"],
                 payload={},
             )
-            check(stopped.get("status") == "ended", f"gaming {station_type} session starts and stops", checks)
+            check(
+                stopped.get("status") == "ended",
+                f"gaming {station_type} session starts and stops",
+                checks,
+            )
+
+            sent = http_json(
+                "POST",
+                f"/gaming/sessions/{session_started['id']}/send-to-pos",
+                token=token,
+                terminal_id=identity["terminal_id"],
+                payload={},
+            )
+            check(
+                bool(sent.get("order_id")) and sent.get("amount_minor") == stopped.get("amount_minor"),
+                f"gaming {station_type} session sends to POS and matches the stopped amount",
+                checks,
+            )
+            session_order = http_json("GET", f"/pos/orders/{sent['order_id']}", token=token)
+            check(
+                session_order.get("status") == "held"
+                and session_order.get("type") == "session"
+                and len(session_order.get("lines", [])) == 1
+                and session_order["lines"][0]["taxable_value_minor"]
+                + session_order["lines"][0]["cgst_minor"]
+                + session_order["lines"][0]["sgst_minor"]
+                + session_order["lines"][0]["igst_minor"]
+                == session_order["total_minor"],
+                f"gaming {station_type} session order is held with one internally-consistent GST line",
+                checks,
+            )
+            _, _, resend_session_raw = http_request(
+                "POST",
+                f"/gaming/sessions/{session_started['id']}/send-to-pos",
+                token=token,
+                terminal_id=identity["terminal_id"],
+                payload={},
+                expected=(422,),
+            )
+            check(
+                b"already" in resend_session_raw.lower(),
+                f"gaming {station_type} session cannot be sent to POS twice",
+                checks,
+            )
+            session_after_send = http_json(
+                "GET", "/gaming/sessions?status=ended", token=token,
+            )
+            check(
+                any(
+                    row["id"] == session_started["id"] and row.get("order_id") == sent["order_id"]
+                    for row in session_after_send
+                ),
+                f"gaming {station_type} session records its order_id after send-to-pos",
+                checks,
+            )
+            held_session_queue = http_json(
+                "GET", "/pos/orders?status=held", token=token, terminal_id=identity["terminal_id"]
+            )
+            held_session_row = next(
+                (r for r in held_session_queue if r["id"] == sent["order_id"]), None
+            )
+            check(
+                held_session_row is not None and bool(held_session_row.get("source_label")),
+                f"gaming {station_type} session order carries a station source_label in the held queue",
+                checks,
+            )
+            # Pay off every station's session order — an unpaid held order
+            # would otherwise block closing the temp shift at the end of this run.
+            session_payment = http_json(
+                "POST",
+                f"/pos/orders/{sent['order_id']}/payments",
+                token=token,
+                terminal_id=identity["terminal_id"],
+                idem=f"{RUN_ID}-session-order-pay-{station_type}",
+                payload={
+                    "method": "cash",
+                    "amount_minor": session_order["total_minor"],
+                    "tendered_minor": session_order["total_minor"],
+                    "ref_external": MARKER,
+                },
+            )
+            check(
+                session_payment.get("order_status") == "paid",
+                f"gaming {station_type} session order pays and closes end to end",
+                checks,
+            )
 
         booking = http_json(
             "POST",

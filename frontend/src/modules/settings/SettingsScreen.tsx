@@ -9,18 +9,22 @@
  *   - Sheets      (existing Google Sheets integration wizard)
  */
 import { useState } from 'react';
-import { User, Building2, Sheet, Store, Crown, IndianRupee } from 'lucide-react';
+import { User, Building2, Sheet, Store, Crown, IndianRupee, ShieldCheck } from 'lucide-react';
 
+import { useAuth } from '@/modules/auth/AuthContext';
 import AccountTab from './tabs/AccountTab';
 import CompanyTab from './tabs/CompanyTab';
 import BranchesTab from './tabs/BranchesTab';
 import SheetsTab from './tabs/SheetsTab';
 import MembershipsTab from './tabs/MembershipsTab';
 import PricingTab from './tabs/PricingTab';
+import AccessControlTab from './tabs/AccessControlTab';
 
-type Tab = 'account' | 'company' | 'branches' | 'pricing' | 'sheets' | 'memberships';
+type Tab = 'account' | 'company' | 'branches' | 'pricing' | 'sheets' | 'memberships' | 'access';
 
 export default function SettingsScreen() {
+  const { me, demo } = useAuth();
+  const isProtectedOwner = Boolean(demo || me?.protected_access);
   const [tab, setTab] = useState<Tab>('account');
 
   return (
@@ -51,6 +55,11 @@ export default function SettingsScreen() {
         <TabBtn active={tab === 'sheets'}   onClick={() => setTab('sheets')}>
           <Sheet size={14}/> Google Sheets
         </TabBtn>
+        {isProtectedOwner && (
+          <TabBtn active={tab === 'access'} onClick={() => setTab('access')}>
+            <ShieldCheck size={14}/> Access Control
+          </TabBtn>
+        )}
       </div>
 
       {tab === 'account'     && <AccountTab/>}
@@ -59,6 +68,7 @@ export default function SettingsScreen() {
       {tab === 'pricing'     && <PricingTab/>}
       {tab === 'memberships' && <MembershipsTab/>}
       {tab === 'sheets'      && <SheetsTab/>}
+      {tab === 'access' && isProtectedOwner && <AccessControlTab/>}
     </div>
   );
 }

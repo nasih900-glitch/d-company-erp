@@ -3,40 +3,53 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
   Wallet, ScanLine, Users, BarChart3, LogOut, Tv, Settings, Menu, X, FileText,
-  ClipboardList, UserCircle, Sparkles, ShieldCheck,
+  ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat,
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
 import { rolesLabel } from '@/lib/roles';
 import InstallButton from './InstallButton';
 
+// `module` matches a key in the backend's MODULE_PERMISSIONS — used to hide
+// a tab when the caller's role/company access-control override says no.
+// Tabs without a `module` are visible to everyone, same as before this existed.
 const NAV = [
   { to: '/pos',       label: 'POS',        Icon: Calculator },
   { to: '/operations',label: 'Operations', Icon: ClipboardList },
   { to: '/tables',    label: 'Tables',     Icon: LayoutGrid },
+  { to: '/kitchen',   label: 'Kitchen',    Icon: ChefHat },
   { to: '/menu',      label: 'Menu',       Icon: BookOpen },
-  { to: '/inventory', label: 'Inventory',  Icon: Boxes },
+  { to: '/inventory', label: 'Inventory',  Icon: Boxes, module: 'inventory' },
   { to: '/gaming',    label: 'Gaming',     Icon: Gamepad2 },
   { to: '/events',    label: 'Events',     Icon: Tv },
   { to: '/finance',   label: 'Finance',    Icon: Wallet },
   { to: '/ocr',       label: 'OCR',        Icon: ScanLine },
   { to: '/staff',     label: 'Staff',      Icon: Users },
   { to: '/customers', label: 'Customers',  Icon: UserCircle },
-  { to: '/analytics', label: 'Analytics',  Icon: BarChart3 },
-  { to: '/insights',  label: 'Insights',   Icon: Sparkles },
-  { to: '/reports',   label: 'Reports',    Icon: FileText },
+  { to: '/analytics', label: 'Analytics',  Icon: BarChart3, module: 'insights_reports' },
+  { to: '/insights',  label: 'Insights',   Icon: Sparkles, module: 'insights_reports' },
+  { to: '/reports',   label: 'Reports',    Icon: FileText, module: 'insights_reports' },
   { to: '/audit',     label: 'Audit Log',  Icon: ShieldCheck, protectedOnly: true },
   { to: '/settings',  label: 'Settings',   Icon: Settings },
 ];
 
 export default function AppShell({ children }: { children?: ReactNode }) {
-  const { me, logout, demo } = useAuth();
+  const {
+    me, logout, demo, terminalReady, terminalOptions, terminalIssue, selectTerminal,
+  } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const loc = useLocation();
   const isSuperOwner = Boolean(demo || me?.protected_access);
+  const accessibleModules = me?.accessible_modules;
   const navItems = useMemo(
-    () => NAV.filter((item) => !('protectedOnly' in item) || isSuperOwner),
-    [isSuperOwner],
+    () => NAV.filter((item) => {
+      if ('protectedOnly' in item && !isSuperOwner) return false;
+      if (item.module && !isSuperOwner && accessibleModules && !accessibleModules.includes(item.module)) {
+        return false;
+      }
+      return true;
+    }),
+    [isSuperOwner, accessibleModules],
   );
 
   const current = useMemo(
@@ -196,6 +209,25 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         className="app-scroll route-frame px-3 py-4 md:p-6 min-w-0"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >
+        {!terminalReady && terminalIssue && (
+          <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
+            <div className="font-semibold text-accent-gold">Terminal setup required</div>
+            <p className="mt-1 text-fg-muted">{terminalIssue}</p>
+            {terminalOptions.length > 1 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {terminalOptions.map((terminal) => (
+                  <button
+                    key={terminal.id}
+                    className="btn btn-ghost"
+                    onClick={() => selectTerminal(terminal.id)}
+                  >
+                    Use {terminal.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {children ?? <Outlet />}
       </main>
     </div>

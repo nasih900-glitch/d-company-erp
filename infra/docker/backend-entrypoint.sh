@@ -4,8 +4,8 @@
 # 1. Wait for Postgres to accept connections (compose healthcheck also enforces this,
 #    but a belt-and-braces wait inside the container survives slow disk on macOS).
 # 2. Apply Alembic migrations.
-# 3. Run scripts/seed.py + scripts/seed_india.py — both are idempotent and skip
-#    if data already exists.
+# 3. Run scripts/seed.py + scripts/seed_india.py + scripts/ensure_roles.py —
+#    all idempotent, only inserting rows that don't already exist.
 # 4. Hand off to uvicorn.
 
 set -e
@@ -39,6 +39,9 @@ python -m scripts.seed || echo "  (seed already applied)"
 
 echo "Seeding Kerala/India reference data…"
 python -m scripts.seed_india || echo "  (seed already applied)"
+
+echo "Ensuring role catalog is up to date…"
+python -m scripts.ensure_roles || echo "  (roles already up to date)"
 
 echo "============================================================"
 echo "  Backend ready at http://localhost:8000"

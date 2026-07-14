@@ -33,6 +33,7 @@ const ROLE_COLOR: Record<string, string> = {
   kitchen: 'border-fg-muted/40 text-fg-muted',
   gaming_supervisor: 'border-fg-muted/40 text-fg-muted',
   auditor: 'border-fg-muted/40 text-fg-muted',
+  staff: 'border-fg-muted/40 text-fg-muted',
 };
 
 const DEFAULT_ROLES: RoleDTO[] = [
@@ -43,6 +44,7 @@ const DEFAULT_ROLES: RoleDTO[] = [
   { code: 'kitchen', name: 'Kitchen', description: 'Kitchen team title' },
   { code: 'gaming_supervisor', name: 'Gaming Supervisor', description: 'Gaming team title' },
   { code: 'auditor', name: 'Auditor', description: 'Audit staff title' },
+  { code: 'staff', name: 'Staff', description: 'General staff — no Inventory or Insights/Reports access by default' },
 ];
 
 const ROLE_DESCRIPTIONS = new Map(DEFAULT_ROLES.map((role) => [role.code, role.description]));

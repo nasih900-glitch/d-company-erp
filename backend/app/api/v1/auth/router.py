@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.core.db import SessionDep
 from app.core.errors import AuthError, BusinessRuleError, ConflictError, ServiceUnavailableError
+from app.core.permissions import SELF_SERVICE_SIGNUP_ROLE, accessible_modules
 from app.core.roles import has_protected_owner_access, public_roles
 from app.core.security import (
     decode_token,
@@ -64,6 +65,7 @@ class MeResponse(BaseModel):
     protected_access: bool = False
     company_id: str
     branch_id: str | None
+    accessible_modules: list[str] = []
 
 
 class OtpChallengeResponse(BaseModel):
@@ -259,7 +261,7 @@ async def request_registration(
         requested_by_user_id=requester.id if requester else None,
         pending_name=name,
         pending_phone=(payload.phone.strip() or None) if payload.phone else None,
-        pending_role_code="owner",
+        pending_role_code=SELF_SERVICE_SIGNUP_ROLE,
         pending_password_hash=hash_password(payload.password),
     )
     return OtpChallengeResponse(
@@ -297,7 +299,7 @@ async def confirm_registration(
     ).scalar_one_or_none()
     if existing:
         raise ConflictError("a login with this email already exists")
-    role_code = challenge.pending_role_code or "owner"
+    role_code = challenge.pending_role_code or SELF_SERVICE_SIGNUP_ROLE
     role = (
         await session.execute(
             select(Role).where(
@@ -606,6 +608,7 @@ async def me(tenant: TenantDep, session: SessionDep) -> MeResponse:
         protected_access=tenant.protected_access,
         company_id=str(tenant.company_id),
         branch_id=str(tenant.branch_id) if tenant.branch_id else None,
+        accessible_modules=await accessible_modules(session, tenant),
     )
 
 

@@ -46,6 +46,9 @@ async def seed_owner(session: AsyncSession) -> dict:
     branch = Branch(id=uuid4(), company_id=company.id, name="Main")
     terminal = Terminal(id=uuid4(), branch_id=branch.id, name="POS-T1", device_id=f"t-{uuid4()}")
     owner_role = Role(id=uuid4(), company_id=company.id, code="owner", name="Owner", permissions=[])
+    # Self-registration assigns "staff" (see SELF_SERVICE_SIGNUP_ROLE) — needs
+    # to exist for any test that exercises /auth/register/*.
+    staff_role = Role(id=uuid4(), company_id=company.id, code="staff", name="Staff", permissions=[])
     owner = User(
         id=uuid4(),
         company_id=company.id,
@@ -54,7 +57,7 @@ async def seed_owner(session: AsyncSession) -> dict:
         password_hash=hash_password("password1234"),
         status="active",
     )
-    session.add_all([company, branch, terminal, owner_role, owner])
+    session.add_all([company, branch, terminal, owner_role, staff_role, owner])
     await session.flush()
     session.add(UserRole(id=uuid4(), user_id=owner.id, role_id=owner_role.id))
     await session.commit()
