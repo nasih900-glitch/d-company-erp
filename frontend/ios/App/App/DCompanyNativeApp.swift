@@ -4,6 +4,8 @@ import UIKit
 import Network
 import Vision
 import VisionKit
+import AudioToolbox
+import CoreImage
 
 private enum Brand {
     static let background = Color(red: 0.018, green: 0.016, blue: 0.011)
@@ -136,6 +138,21 @@ private struct APIClient {
         return try await send(request)
     }
 
+    // DELETE /pos/orders/{id} (void) returns 204 No Content — there is
+    // nothing to decode, unlike every other endpoint here.
+    func delete<B: Encodable>(
+        _ path: String,
+        body: B,
+        token: String? = nil,
+        headers: [String: String] = [:]
+    ) async throws {
+        var request = try makeRequest(path: path, token: token, headers: headers)
+        request.httpMethod = "DELETE"
+        request.httpBody = try JSONEncoder().encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        try await sendNoContent(request)
+    }
+
     private func makeRequest(
         path: String,
         token: String?,
@@ -170,6 +187,16 @@ private struct APIClient {
         }
 
         return request
+    }
+
+    private func sendNoContent(_ request: URLRequest) async throws {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DCompanyAPIError.badStatus(0, "No response from server.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw DCompanyAPIError.badStatus(http.statusCode, errorMessage(from: data, fallback: "Server error \(http.statusCode)."))
+        }
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
@@ -241,14 +268,23 @@ private struct APIClient {
     private func errorMessage(from data: Data, fallback: String) -> String {
         guard !data.isEmpty else { return fallback }
 
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let detail = json["detail"] {
-            if let text = detail as? String {
-                return text
-            }
-            if let dict = detail as? [String: Any],
-               let message = dict["message"] as? String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // This backend's real error envelope: {"error": {"code", "message", "details"}}
+            // (app/core/errors.py register_exception_handlers) — not FastAPI's default
+            // {"detail": ...}. Check the real shape first, fall back to "detail" in case
+            // any endpoint ever differs (e.g. a raw FastAPI validation error).
+            if let errorObj = json["error"] as? [String: Any],
+               let message = errorObj["message"] as? String {
                 return message
+            }
+            if let detail = json["detail"] {
+                if let text = detail as? String {
+                    return text
+                }
+                if let dict = detail as? [String: Any],
+                   let message = dict["message"] as? String {
+                    return message
+                }
             }
         }
 
@@ -377,6 +413,7 @@ private struct MeResponse: Decodable {
     let protected_access: Bool
     let company_id: String
     let branch_id: String?
+    let accessible_modules: [String]
 }
 
 private struct MenuCategoryDTO: Codable, Identifiable, Hashable {
@@ -654,6 +691,7 @@ private struct CheckoutDraft: Identifiable {
 
 private struct ShiftDTO: Decodable, Identifiable {
     let id: String
+    let branch_id: String?
     let terminal_id: String?
     let status: String
     let opened_at: Date
@@ -662,6 +700,8 @@ private struct ShiftDTO: Decodable, Identifiable {
     let expected_minor: Int?
     let counted_minor: Int?
     let variance_minor: Int?
+    let opened_by_name: String?
+    let opened_by_email: String?
 }
 
 private struct TerminalDTO: Decodable, Identifiable {
@@ -863,6 +903,14 @@ private struct GamingSessionStartRequest: Encodable {
     let shift_id: String
     let customer_name: String?
     let customer_phone: String?
+    let timer_minutes: Int?
+}
+
+// Sends the new absolute timer length (minutes from start_at); nil clears
+// the timer back to open-ended. There is no separate "extend" endpoint on
+// the backend — setting a new value both sets and extends it.
+private struct SessionTimerUpdateRequest: Encodable {
+    let timer_minutes: Int?
 }
 
 private struct GamingSessionDTO: Decodable, Identifiable, Hashable {
@@ -871,11 +919,20 @@ private struct GamingSessionDTO: Decodable, Identifiable, Hashable {
     let status: String
     let start_at: Date
     let end_at: Date?
+    let timer_minutes: Int?
+    let timer_ends_at: Date?
     let billable_minutes: Int?
     let amount_minor: Int?
     let customer_name: String?
     let customer_phone: String?
     let rate_per_hour_minor: Int?
+    let order_id: String?
+}
+
+// POST /gaming/sessions/{id}/send-to-pos returns a raw dict, not SessionRead.
+private struct SendToPosResponseDTO: Decodable {
+    let order_id: String
+    let amount_minor: Int
 }
 
 private struct GamingSessionDraft: Identifiable {
@@ -884,20 +941,54 @@ private struct GamingSessionDraft: Identifiable {
     var customerName = ""
     var customerPhone = ""
     var partySize = 2
+    var timerMinutes: Int?
 
     var participantSummary: String {
         "\(partySize) \(station.kind.participantLabel.lowercased())"
     }
 }
 
+private enum TimerPreset: CaseIterable, Identifiable {
+    case none, thirty, sixty, twoHours
+
+    var id: Self { self }
+
+    var minutes: Int? {
+        switch self {
+        case .none: return nil
+        case .thirty: return 30
+        case .sixty: return 60
+        case .twoHours: return 120
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .none: return "No timer"
+        case .thirty: return "30m"
+        case .sixty: return "1h"
+        case .twoHours: return "2h"
+        }
+    }
+}
+
 private struct OrderListItemDTO: Decodable, Identifiable {
     let id: String
     let invoice_no: String?
+    let type: String?
     let status: String
+    let table_id: String?
+    let source_label: String?
     let total_minor: Int
     let items_count: Int
     let customer_name: String?
     let created_at: Date
+    // Backend note: `held_at` is declared on OrderListItem but is not
+    // actually populated by GET /pos/orders — always nil there even for
+    // genuinely held orders. Don't rely on it in the queue list; it's only
+    // meaningful on the single-order OrderReadDTO fetched via GET
+    // /pos/orders/{id}.
+    let held_at: Date?
 }
 
 private struct OrderLineReadDTO: Decodable, Identifiable {
@@ -923,6 +1014,8 @@ private struct OrderReadDTO: Decodable, Identifiable {
     let fiscal_year: String?
     let status: String
     let type: String
+    let table_id: String?
+    let source_label: String?
     let subtotal_minor: Int
     let discount_minor: Int
     let cgst_minor: Int
@@ -938,7 +1031,21 @@ private struct OrderReadDTO: Decodable, Identifiable {
     let customer_phone: String?
     let customer_gstin: String?
     let customer_state_code: String?
+    let held_at: Date?
     let lines: [OrderLineReadDTO]
+}
+
+// POST /pos/orders/{id}/lines — append more lines to an open/held order
+// (this is how items get added to a Tables order that's already been sent
+// to POS, per the backend's "one-way" send-to-pos design).
+private struct OrderLinesAppendRequest: Encodable {
+    let lines: [OrderLineCreateRequest]
+}
+
+// DELETE /pos/orders/{id} — void a held order. Requires the shift's opener
+// (or a protected owner); server enforces this, this is just the payload.
+private struct VoidOrderRequest: Encodable {
+    let reason: String
 }
 
 private struct OrderLineCreateRequest: Encodable {
@@ -1013,6 +1120,103 @@ private struct CompanyDTO: Decodable, Identifiable {
     let is_composition: Bool
     let e_invoicing_enabled: Bool
     let fiscal_year_start_month: Int
+    let upi_vpa: String?
+}
+
+// Tables module (backend/app/models/tables.py, backend/app/api/v1/tables/router.py)
+private struct TableFloorDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+}
+
+private struct TableDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let floor_id: String
+    let code: String
+    let seats: Int
+    let shape: String
+    let status: String
+    // available | occupied | reserved | cleaning | merged
+}
+
+private struct TableStatusUpdateRequest: Encodable {
+    let status: String
+}
+
+// Kitchen / KDS (backend/app/api/v1/kitchen/router.py)
+private struct KitchenLineDTO: Decodable, Identifiable, Hashable {
+    let menu_item_id: String
+    let name: String
+    let type: String
+    let qty: Double
+    let notes: String?
+
+    var id: String { menu_item_id }
+}
+
+private struct KitchenOrderDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let invoice_no: String?
+    let type: String
+    let table_code: String?
+    let customer_name: String?
+    let opened_at: Date
+    let kitchen_state: String
+    let minutes_waiting: Int
+    let lines: [KitchenLineDTO]
+
+    static func == (lhs: KitchenOrderDTO, rhs: KitchenOrderDTO) -> Bool {
+        lhs.id == rhs.id && lhs.kitchen_state == rhs.kitchen_state && lhs.minutes_waiting == rhs.minutes_waiting
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(kitchen_state)
+    }
+}
+
+private struct KitchenStateUpdateRequest: Encodable {
+    let state: String
+}
+
+// Access Control panel (backend/app/api/v1/admin/router.py, protected-owner only)
+private struct AccessCellDTO: Decodable, Identifiable, Hashable {
+    let role_code: String
+    let module: String
+    let default_allowed: Bool
+    let override: Bool?
+    let allowed: Bool
+
+    var id: String { "\(role_code):\(module)" }
+}
+
+private struct AccessControlDTO: Decodable {
+    let roles: [String: String]
+    let modules: [String]
+    let cells: [AccessCellDTO]
+}
+
+private struct AccessControlUpdateRequest: Encodable {
+    let role_code: String
+    let module: String
+    let allowed: Bool?
+
+    // Swift's auto-synthesized Encodable OMITS a nil Optional key entirely
+    // (encodeIfPresent), but the backend's AccessControlUpdate.allowed field
+    // is required-but-nullable — omitting the key gets a 422, not the
+    // "revert to default" behavior. Explicitly encode null instead.
+    enum CodingKeys: String, CodingKey { case role_code, module, allowed }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role_code, forKey: .role_code)
+        try container.encode(module, forKey: .module)
+        if let allowed {
+            try container.encode(allowed, forKey: .allowed)
+        } else {
+            try container.encodeNil(forKey: .allowed)
+        }
+    }
 }
 
 private struct BranchDTO: Decodable, Identifiable {
@@ -1083,6 +1287,65 @@ private final class OfflineSnapshotStore {
         await Task.detached(priority: .utility) {
             try? FileManager.default.removeItem(at: url)
         }.value
+    }
+}
+
+// Mirrors frontend/src/modules/pos/receipt-business.ts buildUpiPayLink() —
+// same upi://pay?pa=...&pn=...&am=...&cu=INR&tn=... link, generated
+// client-side (there is no backend endpoint for this).
+private func buildUpiPayLink(upiVpa: String?, businessName: String, amountMinor: Int, note: String? = nil) -> String? {
+    guard let upiVpa, !upiVpa.isEmpty else { return nil }
+    let amount = String(format: "%.2f", Double(amountMinor) / 100.0)
+    var parts = [
+        "pa=\(upiVpa)",
+        "pn=\(businessName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? businessName)",
+        "am=\(amount)",
+        "cu=INR"
+    ]
+    if let note = note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+        parts.append("tn=\(note.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? note)")
+    }
+    return "upi://pay?\(parts.joined(separator: "&"))"
+}
+
+private func generateQRImage(from string: String) -> UIImage? {
+    guard let data = string.data(using: .utf8),
+          let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+    filter.setValue(data, forKey: "inputMessage")
+    filter.setValue("M", forKey: "inputCorrectionLevel")
+    guard let outputImage = filter.outputImage else { return nil }
+    let scale = 8.0
+    let transformed = outputImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    let context = CIContext()
+    guard let cgImage = context.createCGImage(transformed, from: transformed.extent) else { return nil }
+    return UIImage(cgImage: cgImage)
+}
+
+private struct UpiQRView: View {
+    let upiVpa: String?
+    let businessName: String
+    let amountMinor: Int
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let link = buildUpiPayLink(upiVpa: upiVpa, businessName: businessName, amountMinor: amountMinor),
+               let image = generateQRImage(from: link) {
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 180, height: 180)
+                    .padding(10)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Text("Scan to pay \(inr(amountMinor)) via UPI")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(Brand.muted)
+            } else {
+                InlineEmptyRow(icon: "qrcode", title: "No UPI ID configured", subtitle: "Add a UPI VPA in Settings to accept scan-to-pay.")
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 }
 
@@ -1221,6 +1484,12 @@ private final class AppSession: ObservableObject {
     @Published var status: Status = .restoring
     @Published var me: MeResponse?
     @Published var lastError: String?
+    // Separate from `status`: signing in must NOT flip NativeERPAppView's
+    // top-level switch away from LoginView (that switch treats .restoring as
+    // "show the full-screen launch splash", which was tearing the login form
+    // down — including the button's own inline spinner — the instant Sign In
+    // was tapped. That is what "the Sign-In button has no response" was.
+    @Published var isAuthenticating = false
 
     private var accessToken: String?
     private var refreshToken: String?
@@ -1230,6 +1499,9 @@ private final class AppSession: ObservableObject {
     }
 
     var canSeeAudit: Bool {
+        // admin.audit.read has no MODULE_PERMISSIONS entry — it's not one of
+        // the protected-owner's live-togglable modules, it's hardcoded
+        // protected-owner-only on the backend.
         hasProtectedOwnerAccess
     }
 
@@ -1237,8 +1509,34 @@ private final class AppSession: ObservableObject {
         me?.protected_access == true
     }
 
-    var canSeeInventory: Bool {
-        hasProtectedOwnerAccess
+    // The real gate: /auth/me's accessible_modules, computed server-side
+    // from the account's role (see backend/app/core/permissions.py
+    // MODULE_PERMISSIONS). A protected owner always sees everything
+    // regardless of this list. Module keys: pos, tables, menu, inventory,
+    // gaming, finance, ocr, staff, insights_reports.
+    var accessibleModules: Set<String> {
+        Set(me?.accessible_modules ?? [])
+    }
+
+    func hasModule(_ module: String) -> Bool {
+        hasProtectedOwnerAccess || accessibleModules.contains(module)
+    }
+
+    var canSeeInventory: Bool { hasModule("inventory") }
+    var canSeeInsights: Bool { hasModule("insights_reports") }
+    var canSeeTables: Bool { hasModule("tables") }
+    var canSeeGaming: Bool { hasModule("gaming") }
+    var canSeeFinance: Bool { hasModule("finance") }
+    var canSeeStaffModule: Bool { hasModule("staff") }
+
+    // Best-effort client-side mirror of require_shift_opener() — the
+    // backend is the real enforcement point (a 403 here always means the
+    // server rejected it), this only avoids offering an action that will
+    // just bounce, and shows a clearer reason up front. Compared by email
+    // since ShiftRead exposes opened_by_email/opened_by_name, not the raw
+    // opened_by user id.
+    func isShiftOpener(_ shift: ShiftDTO) -> Bool {
+        hasProtectedOwnerAccess || (shift.opened_by_email != nil && shift.opened_by_email == me?.email)
     }
 
     func restore() async {
@@ -1263,7 +1561,8 @@ private final class AppSession: ObservableObject {
 
     func login(email: String, password: String) async {
         lastError = nil
-        status = .restoring
+        isAuthenticating = true
+        defer { isAuthenticating = false }
         do {
             let token: TokenPair = try await APIClient.shared.post("auth/login", body: LoginRequest(email: email, password: password))
             save(token)
@@ -1931,7 +2230,7 @@ private struct LoginView: View {
                         Task { await signIn() }
                     } label: {
                         HStack {
-                            if session.status == .restoring {
+                            if session.isAuthenticating {
                                 ProgressView()
                                     .tint(.black)
                             }
@@ -1945,7 +2244,7 @@ private struct LoginView: View {
                     .background(Brand.gold)
                     .foregroundColor(.black)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .disabled(email.isEmpty || password.isEmpty || session.status == .restoring)
+                    .disabled(email.isEmpty || password.isEmpty || session.isAuthenticating)
                     .opacity(email.isEmpty || password.isEmpty ? 0.6 : 1)
                 }
                 .padding(20)
@@ -2090,6 +2389,18 @@ private struct DashboardNativeView: View {
                                 .foregroundColor(.white)
                                 .padding(.bottom, 4)
 
+                            if session.canSeeTables {
+                                NavigationLink {
+                                    TablesNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Tables", subtitle: "Build dine-in orders, send to kitchen and POS", icon: "table.furniture")
+                                }
+                            }
+                            NavigationLink {
+                                KitchenNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Kitchen", subtitle: "Live order queue, received to served", icon: "flame")
+                            }
                             NavigationLink {
                                 MenuCatalogNativeView()
                             } label: {
@@ -2133,6 +2444,11 @@ private struct DashboardNativeView: View {
                                     AuditNativeView()
                                 } label: {
                                     WorkspaceLinkRow(title: "Audit Log", subtitle: "Protected login and system activity", icon: "shield.checkered")
+                                }
+                                NavigationLink {
+                                    AccessControlNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Access Control", subtitle: "Per-role module access overrides", icon: "lock.shield")
                                 }
                             }
                         }
@@ -2266,6 +2582,18 @@ private struct WorkspaceNativeView: View {
                                 WorkspaceLinkRow(title: "Cafe Sessions", subtitle: "Start and stop PS5, VR, simulator, shisha, and streaming", icon: "gamecontroller")
                             }
                             .buttonStyle(.plain)
+                            if session.canSeeTables {
+                                NavigationLink {
+                                    TablesNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Tables", subtitle: "Build dine-in orders, send to kitchen and POS", icon: "table.furniture")
+                                }
+                            }
+                            NavigationLink {
+                                KitchenNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Kitchen", subtitle: "Live order queue, received to served", icon: "flame")
+                            }
                             NavigationLink {
                                 MenuCatalogNativeView()
                             } label: {
@@ -2340,6 +2668,11 @@ private struct WorkspaceNativeView: View {
                                 } label: {
                                     WorkspaceLinkRow(title: "Audit Log", subtitle: "Protected owner activity trail", icon: "shield.checkered")
                                 }
+                                NavigationLink {
+                                    AccessControlNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Access Control", subtitle: "Per-role module access overrides", icon: "lock.shield")
+                                }
                             }
                         }
                     }
@@ -2356,6 +2689,665 @@ private struct WorkspaceNativeView: View {
     }
 
     private func refresh() async {}
+}
+
+// Table order-builder: pick a table, add items (Send to Kitchen creates or
+// appends to that table's order), then Send to POS to move it into the
+// held-orders queue for billing. One-way past that point, same as web —
+// more items after Send to POS go through POS's own search, not back
+// through here.
+private struct TablesNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @State private var tables: [TableDTO] = []
+    @State private var isLoading = true
+    @State private var error: String?
+    @State private var selectedTable: TableDTO?
+
+    var body: some View {
+        AppNavigation {
+            RefreshableScrollView(refresh: load) {
+                VStack(spacing: 16) {
+                    HeaderBlock(title: "Tables", subtitle: "\(tables.count) tables", icon: "table.furniture")
+
+                    if let error {
+                        ErrorBanner(message: error)
+                    }
+
+                    if isLoading && tables.isEmpty {
+                        LoadingBlock(title: "Loading tables")
+                    } else if tables.isEmpty {
+                        BrandedCard {
+                            InlineEmptyRow(icon: "table.furniture", title: "No tables set up", subtitle: "Add tables from the web app to start building dine-in orders here.")
+                        }
+                    } else {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                            ForEach(tables) { table in
+                                Button {
+                                    Haptics.selection()
+                                    selectedTable = table
+                                } label: {
+                                    TableTile(table: table)
+                                }
+                                .buttonStyle(PressableButtonStyle())
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Tables")
+            .background(Brand.background)
+            .sheet(item: $selectedTable) { table in
+                TableOrderSheet(table: table) {
+                    Task { await load() }
+                }
+            }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        isLoading = tables.isEmpty
+        defer { isLoading = false }
+        error = nil
+        do {
+            tables = try await session.authorized { token in
+                try await APIClient.shared.get("tables", token: token)
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+}
+
+private struct TableTile: View {
+    let table: TableDTO
+
+    private var statusColor: Color {
+        switch table.status {
+        case "available": return Brand.success
+        case "occupied": return Brand.gold
+        case "reserved": return .blue
+        case "cleaning": return Brand.muted
+        default: return Brand.danger
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(table.code)
+                .font(.headline.weight(.bold))
+                .foregroundColor(.white)
+            Text(table.status.capitalized)
+                .font(.caption2.weight(.bold))
+                .foregroundColor(statusColor)
+            Text("\(table.seats) seats")
+                .font(.caption2)
+                .foregroundColor(Brand.muted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .background(Brand.elevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(statusColor.opacity(0.6), lineWidth: 1.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private struct TableOrderSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let table: TableDTO
+    let onFinished: () -> Void
+
+    @State private var categories: [MenuCategoryDTO] = []
+    @State private var items: [MenuItemDTO] = []
+    @State private var shifts: [ShiftDTO] = []
+    @State private var terminals: [TerminalDTO] = []
+    @State private var cart: [String: Int] = [:]
+    @State private var order: OrderReadDTO?
+    @State private var isLoading = true
+    @State private var isSubmitting = false
+    @State private var error: String?
+    @State private var selectedCategory: String?
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                VStack(spacing: 0) {
+                    if let error {
+                        ErrorBanner(message: error).padding(16)
+                    }
+
+                    if let order {
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text(order.status == "held" ? "Sent to POS" : "Open order")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundColor(order.status == "held" ? Brand.success : Brand.softGold)
+                                    Spacer()
+                                    Text(inr(order.total_minor))
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                }
+                                if order.status == "held" {
+                                    Text("Bill this from the POS held-orders queue. More items go through POS search from here on.")
+                                        .font(.caption)
+                                        .foregroundColor(Brand.muted)
+                                }
+                            }
+                        }
+                        .padding(16)
+                    }
+
+                    List {
+                        ForEach(filteredItems) { item in
+                            MenuItemRow(item: item, quantity: cart[item.id] ?? 0) {
+                                cart[item.id, default: 0] += 1
+                            } decrement: {
+                                let next = max((cart[item.id] ?? 0) - 1, 0)
+                                cart[item.id] = next == 0 ? nil : next
+                            }
+                            .listRowBackground(Brand.background)
+                            .listRowSeparatorTint(Brand.hairline)
+                            .disabled(order?.status == "held")
+                        }
+                    }
+                    .listStyle(.plain)
+                    .disabled(isLoading)
+                }
+            }
+            .navigationTitle("Table \(table.code)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if order?.status != "held" {
+                    VStack(spacing: 8) {
+                        Button {
+                            Haptics.selection()
+                            Task { await sendToKitchen() }
+                        } label: {
+                            HStack {
+                                if isSubmitting { ProgressView().tint(.black) }
+                                Text("Send to Kitchen")
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.black)
+                        .background(canSendToKitchen ? Brand.gold : Brand.muted.opacity(0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .disabled(!canSendToKitchen)
+
+                        if let order {
+                            Button {
+                                Haptics.selection()
+                                Task { await sendToPos(order) }
+                            } label: {
+                                Text("Send to POS")
+                                    .font(.subheadline.weight(.bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(Brand.softGold)
+                            .background(Brand.elevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .disabled(isSubmitting || order.lines.isEmpty)
+                        }
+                    }
+                    .padding(16)
+                    .background(.ultraThinMaterial)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .task { await load() }
+    }
+
+    private var filteredItems: [MenuItemDTO] {
+        items.filter { $0.type == "food" || $0.type == "drink" || $0.type == "dessert" }
+    }
+
+    private var canSendToKitchen: Bool {
+        !isSubmitting && !cart.isEmpty && activeShift != nil && order?.status != "held"
+    }
+
+    private var activeShift: ShiftDTO? {
+        shifts.first { $0.status == "open" }
+    }
+
+    private var activeTerminal: TerminalDTO? {
+        terminals.first
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedCategories: [MenuCategoryDTO] = session.authorized { token in
+                try await APIClient.shared.get("menu/categories", token: token)
+            }
+            async let loadedItems: [MenuItemDTO] = session.authorized { token in
+                try await APIClient.shared.get("menu/items", token: token)
+            }
+            async let loadedShifts: [ShiftDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "pos/shifts", token: token,
+                    queryItems: [URLQueryItem(name: "only_open", value: "true"), URLQueryItem(name: "limit", value: "10")]
+                )
+            }
+            async let loadedTerminals: [TerminalDTO] = session.authorized { token in
+                try await APIClient.shared.get("settings/terminals", token: token)
+            }
+            async let loadedOrders: [OrderListItemDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "pos/orders", token: token,
+                    queryItems: [URLQueryItem(name: "table_id", value: table.id), URLQueryItem(name: "limit", value: "5")]
+                )
+            }
+            let (freshCategories, freshItems, freshShifts, freshTerminals, freshOrders) = try await (
+                loadedCategories, loadedItems, loadedShifts, loadedTerminals, loadedOrders
+            )
+            categories = freshCategories
+            items = freshItems.filter(\.is_available)
+            shifts = freshShifts
+            terminals = freshTerminals
+            if let existing = freshOrders.first(where: { $0.status == "open" || $0.status == "held" }) {
+                let full: OrderReadDTO = try await session.authorized { token in
+                    try await APIClient.shared.get("pos/orders/\(existing.id)", token: token)
+                }
+                order = full
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func sendToKitchen() async {
+        guard let shift = activeShift else {
+            error = "Open a POS shift before sending an order to the kitchen."
+            return
+        }
+        guard let terminal = activeTerminal else {
+            error = "No registered POS terminal is available."
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+
+        let lines = cart.compactMap { itemID, qty -> OrderLineCreateRequest? in
+            guard qty > 0 else { return nil }
+            return OrderLineCreateRequest(menu_item_id: itemID, variant_id: nil, qty: Double(qty), modifiers: nil, note: nil)
+        }
+        guard !lines.isEmpty else { return }
+
+        do {
+            if let existing = order {
+                let updated: OrderReadDTO = try await session.authorized { token in
+                    try await APIClient.shared.post(
+                        "pos/orders/\(existing.id)/lines",
+                        body: OrderLinesAppendRequest(lines: lines),
+                        token: token
+                    )
+                }
+                order = updated
+            } else {
+                let request = OrderCreateRequest(
+                    type: "dine_in",
+                    table_id: table.id,
+                    shift_id: shift.id,
+                    lines: lines,
+                    delivery_via: nil,
+                    customer_name: nil,
+                    customer_phone: nil,
+                    customer_gstin: nil,
+                    customer_address: nil,
+                    customer_state_code: nil,
+                    place_of_supply_state_code: nil,
+                    notes: nil
+                )
+                let headers = ["Idempotency-Key": UUID().uuidString, "X-Terminal-Id": terminal.id]
+                let created: OrderReadDTO = try await session.authorized { token in
+                    try await APIClient.shared.post("pos/orders", body: request, token: token, headers: headers)
+                }
+                order = created
+            }
+            cart.removeAll()
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func sendToPos(_ order: OrderReadDTO) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        do {
+            let updated: OrderReadDTO = try await session.authorized { token in
+                try await APIClient.shared.patch("pos/orders/\(order.id)/send-to-pos", body: EmptyRequest(), token: token)
+            }
+            self.order = updated
+            Haptics.success()
+            onFinished()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+}
+
+// Forward-only KDS: received -> preparing -> ready -> served. Auto-polls
+// every 3s like the web KitchenScreen, since this is a kiosk-style display
+// meant to stay open, not a screen someone actively refreshes.
+private struct KitchenNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @State private var orders: [KitchenOrderDTO] = []
+    @State private var isLoading = true
+    @State private var error: String?
+
+    private static let stages = ["received", "preparing", "ready", "served"]
+
+    var body: some View {
+        AppNavigation {
+            ScrollView {
+                VStack(spacing: 16) {
+                    HeaderBlock(title: "Kitchen", subtitle: "\(orders.count) active orders", icon: "flame")
+
+                    if let error {
+                        ErrorBanner(message: error)
+                    }
+
+                    if isLoading && orders.isEmpty {
+                        LoadingBlock(title: "Loading kitchen queue")
+                    } else if orders.isEmpty {
+                        BrandedCard {
+                            InlineEmptyRow(icon: "checkmark.circle", title: "Queue is clear", subtitle: "No food, drink, or dessert lines waiting.")
+                        }
+                    } else {
+                        ForEach(orders) { order in
+                            KitchenOrderCard(order: order) { next in
+                                Task { await advance(order, to: next) }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Kitchen")
+            .background(Brand.background)
+        }
+        .task { await pollLoop() }
+    }
+
+    private func nextStage(after stage: String) -> String? {
+        guard let index = Self.stages.firstIndex(of: stage), index + 1 < Self.stages.count else { return nil }
+        return Self.stages[index + 1]
+    }
+
+    private func load() async {
+        error = nil
+        do {
+            orders = try await session.authorized { token in
+                try await APIClient.shared.get("kitchen/queue", token: token)
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func pollLoop() async {
+        isLoading = true
+        await load()
+        isLoading = false
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await load()
+        }
+    }
+
+    private func advance(_ order: KitchenOrderDTO, to nextState: String) async {
+        do {
+            let updated: KitchenOrderDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "kitchen/orders/\(order.id)/state",
+                    body: KitchenStateUpdateRequest(state: nextState),
+                    token: token
+                )
+            }
+            if let index = orders.firstIndex(where: { $0.id == updated.id }) {
+                if updated.kitchen_state == "served" {
+                    orders.remove(at: index)
+                } else {
+                    orders[index] = updated
+                }
+            }
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+}
+
+private struct KitchenOrderCard: View {
+    let order: KitchenOrderDTO
+    let onAdvance: (String) -> Void
+
+    private static let stages = ["received", "preparing", "ready", "served"]
+
+    private var nextStage: String? {
+        guard let index = Self.stages.firstIndex(of: order.kitchen_state), index + 1 < Self.stages.count else { return nil }
+        return Self.stages[index + 1]
+    }
+
+    private var isOverdue: Bool {
+        order.minutes_waiting > 15 && order.kitchen_state != "served"
+    }
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(order.table_code ?? (order.invoice_no ?? "Order \(order.id.prefix(8))"))
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        if let customer = order.customer_name, !customer.isEmpty {
+                            Text(customer)
+                                .font(.caption)
+                                .foregroundColor(Brand.muted)
+                        }
+                    }
+                    Spacer()
+                    Text("\(order.minutes_waiting)m")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(isOverdue ? Brand.danger : Brand.muted)
+                }
+
+                ForEach(order.lines) { line in
+                    HStack {
+                        Text("\(Int(line.qty))x \(line.name)")
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                        Spacer()
+                        if let notes = line.notes, !notes.isEmpty {
+                            Text(notes)
+                                .font(.caption2)
+                                .foregroundColor(Brand.muted)
+                        }
+                    }
+                }
+
+                HStack {
+                    Text(order.kitchen_state.capitalized)
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Brand.gold.opacity(0.14))
+                        .foregroundColor(Brand.softGold)
+                        .clipShape(Capsule())
+                    Spacer()
+                    if let nextStage {
+                        Button {
+                            Haptics.selection()
+                            onAdvance(nextStage)
+                        } label: {
+                            Text("Mark \(nextStage.capitalized)")
+                                .font(.caption.weight(.bold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .foregroundColor(.black)
+                        .background(Brand.gold)
+                        .clipShape(Capsule())
+                    }
+                }
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(isOverdue ? Brand.danger.opacity(0.6) : Color.clear, lineWidth: 1.5)
+        )
+    }
+}
+
+private struct AccessControlNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @State private var data: AccessControlDTO?
+    @State private var isLoading = true
+    @State private var error: String?
+    @State private var pendingCellID: String?
+
+    var body: some View {
+        AppNavigation {
+            ScrollView {
+                VStack(spacing: 16) {
+                    HeaderBlock(title: "Access Control", subtitle: "Per-role module access", icon: "lock.shield")
+
+                    if let error {
+                        ErrorBanner(message: error)
+                    }
+
+                    if isLoading && data == nil {
+                        LoadingBlock(title: "Loading access control")
+                    } else if let data {
+                        ForEach(data.modules, id: \.self) { module in
+                            BrandedCard {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(module.replacingOccurrences(of: "_", with: " ").capitalized)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    ForEach(cells(for: module, in: data)) { cell in
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(data.roles[cell.role_code] ?? cell.role_code)
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundColor(.white)
+                                                if cell.override != nil {
+                                                    Text("Overridden from default (\(cell.default_allowed ? "on" : "off"))")
+                                                        .font(.caption2)
+                                                        .foregroundColor(Brand.gold)
+                                                }
+                                            }
+                                            Spacer()
+                                            if pendingCellID == cell.id {
+                                                ProgressView().tint(Brand.gold)
+                                            } else {
+                                                Toggle("", isOn: Binding(
+                                                    get: { cell.allowed },
+                                                    set: { newValue in Task { await setOverride(role: cell.role_code, module: module, allowed: newValue) } }
+                                                ))
+                                                .labelsHidden()
+                                                .toggleStyle(SwitchToggleStyle(tint: Brand.gold))
+                                                if cell.override != nil {
+                                                    Button {
+                                                        Task { await clearOverride(role: cell.role_code, module: module) }
+                                                    } label: {
+                                                        Image(systemName: "arrow.uturn.backward.circle")
+                                                            .foregroundColor(Brand.muted)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Access Control")
+            .background(Brand.background)
+        }
+        .task { await load() }
+    }
+
+    private func cells(for module: String, in data: AccessControlDTO) -> [AccessCellDTO] {
+        data.cells.filter { $0.module == module }.sorted { ($0.role_code) < ($1.role_code) }
+    }
+
+    private func load() async {
+        isLoading = data == nil
+        defer { isLoading = false }
+        error = nil
+        do {
+            data = try await session.authorized { token in
+                try await APIClient.shared.get("admin/access-control", token: token)
+            }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func setOverride(role: String, module: String, allowed: Bool) async {
+        await applyUpdate(AccessControlUpdateRequest(role_code: role, module: module, allowed: allowed))
+    }
+
+    private func clearOverride(role: String, module: String) async {
+        await applyUpdate(AccessControlUpdateRequest(role_code: role, module: module, allowed: nil))
+    }
+
+    private func applyUpdate(_ request: AccessControlUpdateRequest) async {
+        let cellID = "\(request.role_code):\(request.module)"
+        pendingCellID = cellID
+        defer { pendingCellID = nil }
+        error = nil
+        do {
+            let updatedCell: AccessCellDTO = try await session.authorized { token in
+                try await APIClient.shared.patch("admin/access-control", body: request, token: token)
+            }
+            if let data, let index = data.cells.firstIndex(where: { $0.id == updatedCell.id }) {
+                var updatedCells = data.cells
+                updatedCells[index] = updatedCell
+                self.data = AccessControlDTO(roles: data.roles, modules: data.modules, cells: updatedCells)
+            }
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
 }
 
 private struct MenuCatalogNativeView: View {
@@ -2483,9 +3475,18 @@ private struct GamingNativeView: View {
     @State private var shifts: [ShiftDTO] = []
     @State private var sessionDraft: GamingSessionDraft?
     @State private var finishedSession: GamingSessionDTO?
+    @State private var sentSession: SendToPosResponseDTO?
     @State private var isLoading = true
     @State private var isSubmitting = false
     @State private var error: String?
+    @State private var alarmedSessionIDs: Set<String> = []
+
+    private var overtimeSessions: [GamingSessionDTO] {
+        activeSessions.filter { gs in
+            guard let endsAt = gs.timer_ends_at else { return false }
+            return Date() >= endsAt
+        }
+    }
 
     var body: some View {
         AppNavigation {
@@ -2505,8 +3506,40 @@ private struct GamingNativeView: View {
                         ErrorBanner(message: error)
                     }
 
+                    if !overtimeSessions.isEmpty {
+                        ErrorBanner(message: "\(overtimeSessions.count) session(s) over their timer: \(overtimeSessions.map { stationName(for: $0.station_id) }.joined(separator: ", "))")
+                    }
+
                     if let finishedSession {
-                        SuccessBanner(message: "Session closed. Amount \(inr(finishedSession.amount_minor ?? 0)).")
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Session closed. Amount \(inr(finishedSession.amount_minor ?? 0)).")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(Brand.success)
+                                if let sentSession {
+                                    Text("Sent to POS - held order ready to bill (\(inr(sentSession.amount_minor))).")
+                                        .font(.caption)
+                                        .foregroundColor(Brand.muted)
+                                } else {
+                                    Button {
+                                        Task { await sendToPos(finishedSession) }
+                                    } label: {
+                                        HStack {
+                                            if isSubmitting { ProgressView().tint(.black) }
+                                            Text("Send to POS")
+                                                .font(.subheadline.weight(.bold))
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 11)
+                                        .background(Brand.gold)
+                                        .foregroundColor(.black)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(isSubmitting)
+                                }
+                            }
+                        }
                     }
 
                     ServiceControlCard(canUseProtectedControls: session.hasProtectedOwnerAccess) {
@@ -2540,10 +3573,11 @@ private struct GamingNativeView: View {
                                     GamingSessionCard(
                                         session: gamingSession,
                                         stationName: stationName(for: gamingSession.station_id),
-                                        isSubmitting: isSubmitting
-                                    ) {
-                                        Task { await stop(gamingSession) }
-                                    }
+                                        isSubmitting: isSubmitting,
+                                        onStop: { Task { await stop(gamingSession) } },
+                                        onExtend: { Task { await extendTimer(gamingSession) } },
+                                        onClearTimer: { Task { await clearTimer(gamingSession) } }
+                                    )
                                 }
                             }
                         }
@@ -2611,6 +3645,7 @@ private struct GamingNativeView: View {
             }
         }
         .task { await load() }
+        .task { await watchForOvertime() }
     }
 
     private var twoColumns: [GridItem] {
@@ -2692,7 +3727,8 @@ private struct GamingNativeView: View {
             station_id: draft.station.id,
             shift_id: shift.id,
             customer_name: displayName,
-            customer_phone: draft.customerPhone.nilIfBlank
+            customer_phone: draft.customerPhone.nilIfBlank,
+            timer_minutes: draft.timerMinutes
         )
 
         do {
@@ -2719,11 +3755,92 @@ private struct GamingNativeView: View {
                 try await APIClient.shared.post("gaming/sessions/\(gamingSession.id)/stop", body: EmptyRequest(), token: token)
             }
             finishedSession = ended
+            sentSession = nil
             Haptics.success()
             await load()
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
+        }
+    }
+
+    private func extendTimer(_ gamingSession: GamingSessionDTO) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        // Absolute minutes-from-start_at, not "add 15 to whatever's left" — the
+        // backend has no separate extend endpoint, only "set the new total".
+        let elapsedSinceStart = Int(Date().timeIntervalSince(gamingSession.start_at) / 60)
+        let currentTarget = gamingSession.timer_minutes ?? max(elapsedSinceStart, 0)
+        let request = SessionTimerUpdateRequest(timer_minutes: currentTarget + 15)
+        do {
+            let updated: GamingSessionDTO = try await session.authorized { token in
+                try await APIClient.shared.patch("gaming/sessions/\(gamingSession.id)/timer", body: request, token: token)
+            }
+            if let index = activeSessions.firstIndex(where: { $0.id == updated.id }) {
+                activeSessions[index] = updated
+            }
+            alarmedSessionIDs.remove(updated.id)
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func clearTimer(_ gamingSession: GamingSessionDTO) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        let request = SessionTimerUpdateRequest(timer_minutes: nil)
+        do {
+            let updated: GamingSessionDTO = try await session.authorized { token in
+                try await APIClient.shared.patch("gaming/sessions/\(gamingSession.id)/timer", body: request, token: token)
+            }
+            if let index = activeSessions.firstIndex(where: { $0.id == updated.id }) {
+                activeSessions[index] = updated
+            }
+            alarmedSessionIDs.remove(updated.id)
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func sendToPos(_ gamingSession: GamingSessionDTO) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        do {
+            let result: SendToPosResponseDTO = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "gaming/sessions/\(gamingSession.id)/send-to-pos",
+                    body: EmptyRequest(),
+                    token: token
+                )
+            }
+            sentSession = result
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    // Lightweight overtime alarm: no separate notification-permission flow
+    // (unlike the web version's browser Notification API) — plays a system
+    // sound + haptic once per session the moment it first crosses into
+    // overtime, and again if it's cleared then re-extended. The persistent
+    // banner above (overtimeSessions) is what nags continuously; this is
+    // just the "you should look at this now" chime.
+    private func watchForOvertime() async {
+        while !Task.isCancelled {
+            for gamingSession in overtimeSessions where !alarmedSessionIDs.contains(gamingSession.id) {
+                alarmedSessionIDs.insert(gamingSession.id)
+                AudioServicesPlaySystemSound(1005)
+                Haptics.selection()
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
     }
 }
@@ -2762,6 +3879,10 @@ private struct POSNativeView: View {
     @State private var terminals: [TerminalDTO] = []
     @State private var stations: [GamingStationDTO] = []
     @State private var activeSessions: [GamingSessionDTO] = []
+    @State private var heldOrders: [OrderListItemDTO] = []
+    @State private var company: CompanyDTO?
+    @State private var resumeOrder: OrderReadDTO?
+    @State private var voidReason = ""
     @State private var selectedCategory: String?
     @State private var search = ""
     @State private var cart: [String: Int] = [:]
@@ -2879,6 +4000,22 @@ private struct POSNativeView: View {
                 }
 
                 List {
+                    if !heldOrders.isEmpty {
+                        Section(header: sectionHeader("Held Orders")) {
+                            ForEach(heldOrders) { held in
+                                Button {
+                                    Haptics.selection()
+                                    Task { await openHeldOrder(held) }
+                                } label: {
+                                    OrderHistoryRow(order: held)
+                                }
+                                .buttonStyle(.plain)
+                                .listRowBackground(Brand.background)
+                                .listRowSeparatorTint(Brand.hairline)
+                            }
+                        }
+                    }
+
                     if posMode.showsSessions && (!stations.isEmpty || !activeSessions.isEmpty) {
                         Section(header: sectionHeader("Sessions")) {
                             if activeServiceStations.isEmpty {
@@ -2973,7 +4110,9 @@ private struct POSNativeView: View {
                     shift: activeShift,
                     terminal: activeTerminal,
                     totalMinor: cartTotal,
-                    isSubmitting: isSubmitting
+                    isSubmitting: isSubmitting,
+                    upiVpa: company?.upi_vpa,
+                    businessName: company?.name ?? "D Company"
                 ) { updatedDraft in
                     Task { await submitCheckout(updatedDraft) }
                 }
@@ -2982,6 +4121,22 @@ private struct POSNativeView: View {
                 GamingSessionSheet(draft: draft, activeShift: activeShift, isSubmitting: isSubmitting) { updatedDraft in
                     Task { await start(updatedDraft) }
                 }
+            }
+            .sheet(item: $resumeOrder) { order in
+                HeldOrderBillSheet(
+                    order: order,
+                    terminal: activeTerminal,
+                    isSubmitting: isSubmitting,
+                    canVoid: session.hasProtectedOwnerAccess || activeShift.map(session.isShiftOpener) ?? false,
+                    upiVpa: company?.upi_vpa,
+                    businessName: company?.name ?? "D Company",
+                    onBill: { method, tenderedMinor in
+                        Task { await billHeldOrder(order, method: method, tenderedMinor: tenderedMinor) }
+                    },
+                    onVoid: { reason in
+                        Task { await voidHeldOrder(order, reason: reason) }
+                    }
+                )
             }
         }
         .task { await load() }
@@ -3166,14 +4321,29 @@ private struct POSNativeView: View {
                     ]
                 )
             }
+            async let loadedHeldOrders: [OrderListItemDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "pos/orders",
+                    token: token,
+                    queryItems: [
+                        URLQueryItem(name: "status", value: "held"),
+                        URLQueryItem(name: "limit", value: "50")
+                    ]
+                )
+            }
+            async let loadedCompany: CompanyDTO = session.authorized { token in
+                try await APIClient.shared.get("settings/company", token: token)
+            }
 
-            let (freshCategories, freshItems, freshShifts, freshTerminals, freshStations, freshSessions) = try await (
+            let (freshCategories, freshItems, freshShifts, freshTerminals, freshStations, freshSessions, freshHeldOrders, freshCompany) = try await (
                 loadedCategories,
                 loadedItems,
                 loadedShifts,
                 loadedTerminals,
                 loadedStations,
-                loadedSessions
+                loadedSessions,
+                loadedHeldOrders,
+                loadedCompany
             )
 
             withAnimation(.easeOut(duration: 0.18)) {
@@ -3185,8 +4355,70 @@ private struct POSNativeView: View {
                 terminals = freshTerminals
                 stations = freshStations
                 activeSessions = freshSessions
+                heldOrders = freshHeldOrders
+                company = freshCompany
             }
             await cache.markSynced()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func openHeldOrder(_ item: OrderListItemDTO) async {
+        error = nil
+        do {
+            let full: OrderReadDTO = try await session.authorized { token in
+                try await APIClient.shared.get("pos/orders/\(item.id)", token: token)
+            }
+            resumeOrder = full
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func billHeldOrder(_ order: OrderReadDTO, method: PaymentMethod, tenderedMinor: Int?) async {
+        guard let terminal = activeTerminal else {
+            error = "No registered POS terminal is available for this shift."
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        let paymentRequest = PaymentCreateRequest(
+            method: method.rawValue,
+            amount_minor: order.total_minor,
+            tendered_minor: tenderedMinor,
+            ref_external: nil
+        )
+        let headers = ["Idempotency-Key": UUID().uuidString, "X-Terminal-Id": terminal.id]
+        do {
+            let _: PaymentResponseDTO = try await session.authorized { token in
+                try await APIClient.shared.post("pos/orders/\(order.id)/payments", body: paymentRequest, token: token, headers: headers)
+            }
+            resumeOrder = nil
+            createdInvoice = order.invoice_no ?? "Order \(order.id.prefix(8))"
+            lastChargedOrder = order
+            Haptics.success()
+            await load()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func voidHeldOrder(_ order: OrderReadDTO, reason: String) async {
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        do {
+            try await session.authorized { token -> Void in
+                try await APIClient.shared.delete("pos/orders/\(order.id)", body: VoidOrderRequest(reason: reason), token: token)
+            }
+            resumeOrder = nil
+            Haptics.success()
+            await load()
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
@@ -3254,7 +4486,8 @@ private struct POSNativeView: View {
             station_id: draft.station.id,
             shift_id: shift.id,
             customer_name: displayName,
-            customer_phone: draft.customerPhone.nilIfBlank
+            customer_phone: draft.customerPhone.nilIfBlank,
+            timer_minutes: draft.timerMinutes
         )
 
         do {
@@ -5615,6 +6848,8 @@ private struct CheckoutSheet: View {
     let terminal: TerminalDTO?
     let totalMinor: Int
     let isSubmitting: Bool
+    let upiVpa: String?
+    let businessName: String
     let onCharge: (CheckoutDraft) -> Void
 
     init(
@@ -5624,6 +6859,8 @@ private struct CheckoutSheet: View {
         terminal: TerminalDTO?,
         totalMinor: Int,
         isSubmitting: Bool,
+        upiVpa: String? = nil,
+        businessName: String = "D Company",
         onCharge: @escaping (CheckoutDraft) -> Void
     ) {
         self._draft = State(initialValue: draft)
@@ -5632,6 +6869,8 @@ private struct CheckoutSheet: View {
         self.terminal = terminal
         self.totalMinor = totalMinor
         self.isSubmitting = isSubmitting
+        self.upiVpa = upiVpa
+        self.businessName = businessName
         self.onCharge = onCharge
     }
 
@@ -5696,6 +6935,9 @@ private struct CheckoutSheet: View {
                                 PaymentTerminalNotice(method: draft.paymentMethod)
                                 if draft.paymentMethod == .cash {
                                     CashTenderPad(totalMinor: totalMinor, tenderedMinor: $draft.cashTenderedMinor)
+                                }
+                                if draft.paymentMethod == .upi || draft.paymentMethod == .qr {
+                                    UpiQRView(upiVpa: upiVpa, businessName: businessName, amountMinor: totalMinor)
                                 }
                                 Toggle(isOn: $draft.printReceiptAfterCharge) {
                                     Label("Print receipt after charge", systemImage: "printer")
@@ -5779,6 +7021,170 @@ private struct CheckoutSheet: View {
 
     private var canCharge: Bool {
         !isSubmitting && shift != nil && terminal != nil && !cartRows.isEmpty && draft.isCashTenderReady(totalMinor: totalMinor)
+    }
+}
+
+// Bills (or voids) an order that already exists server-side — created via
+// Tables "Send to POS" or Gaming "Send to POS", not built from a local
+// cart. Skips POST /pos/orders entirely and goes straight to payment
+// against the existing order id. Matches the web app's held-orders queue
+// "resume and bill" flow (LivePOSScreen.tsx), minus "add more items" —
+// that's still done by finding the order again from POS search on web too,
+// this native screen just doesn't yet expose adding lines to an order
+// that's already held.
+private struct HeldOrderBillSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var paymentMethod: PaymentMethod = .cash
+    @State private var cashTenderedMinor: Int?
+    @State private var showVoidConfirm = false
+    @State private var voidReason = ""
+
+    let order: OrderReadDTO
+    let terminal: TerminalDTO?
+    let isSubmitting: Bool
+    let canVoid: Bool
+    let upiVpa: String?
+    let businessName: String
+    let onBill: (PaymentMethod, Int?) -> Void
+    let onVoid: (String) -> Void
+
+    private func isCashTenderReady() -> Bool {
+        paymentMethod != .cash || (cashTenderedMinor ?? order.total_minor) >= order.total_minor
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack {
+                                    Text(order.invoice_no ?? "Held order")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    if let source = order.source_label {
+                                        Text(source)
+                                            .font(.caption.weight(.bold))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Brand.gold.opacity(0.14))
+                                            .foregroundColor(Brand.softGold)
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                                ForEach(order.lines) { line in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(line.name)
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundColor(.white)
+                                            Text("Qty \(line.qty.formatted())")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.muted)
+                                        }
+                                        Spacer()
+                                        Text(inr(line.line_total_minor))
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundColor(Brand.softGold)
+                                    }
+                                }
+                                Divider().background(Brand.gold.opacity(0.35))
+                                HStack {
+                                    Text("Total")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Text(inr(order.total_minor))
+                                        .font(.title3.weight(.bold))
+                                        .foregroundColor(Brand.softGold)
+                                }
+                            }
+                        }
+
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Payment")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                    ForEach(PaymentMethod.allCases) { method in
+                                        PaymentMethodButton(method: method, isSelected: paymentMethod == method) {
+                                            Haptics.selection()
+                                            paymentMethod = method
+                                        }
+                                    }
+                                }
+                                PaymentTerminalNotice(method: paymentMethod)
+                                if paymentMethod == .cash {
+                                    CashTenderPad(totalMinor: order.total_minor, tenderedMinor: $cashTenderedMinor)
+                                }
+                                if paymentMethod == .upi || paymentMethod == .qr {
+                                    UpiQRView(upiVpa: upiVpa, businessName: businessName, amountMinor: order.total_minor)
+                                }
+                            }
+                        }
+
+                        if canVoid {
+                            BrandedCard {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Void this order")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundColor(Brand.danger)
+                                    TextField("Reason (required)", text: $voidReason)
+                                        .nativeField()
+                                    Button(role: .destructive) {
+                                        onVoid(voidReason)
+                                    } label: {
+                                        Text("Void order")
+                                            .font(.subheadline.weight(.bold))
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 11)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundColor(Brand.danger)
+                                    .background(Brand.danger.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .disabled(voidReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
+                                }
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Bill order")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    Haptics.selection()
+                    onBill(paymentMethod, paymentMethod == .cash ? cashTenderedMinor : nil)
+                } label: {
+                    HStack {
+                        if isSubmitting { ProgressView().tint(.black) }
+                        Text(isCashTenderReady() ? "Bill \(inr(order.total_minor))" : "Enter cash received")
+                            .font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.black)
+                .background((terminal != nil && isCashTenderReady() && !isSubmitting) ? Brand.gold : Brand.muted.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(16)
+                .background(.ultraThinMaterial)
+                .disabled(terminal == nil || !isCashTenderReady() || isSubmitting)
+            }
+        }
+        .navigationViewStyle(.stack)
     }
 }
 
@@ -7446,6 +8852,8 @@ private struct GamingSessionCard: View {
     let stationName: String
     let isSubmitting: Bool
     let onStop: () -> Void
+    let onExtend: () -> Void
+    let onClearTimer: () -> Void
 
     private var elapsedMinutes: Int {
         max(1, Int(Date().timeIntervalSince(session.start_at) / 60))
@@ -7464,47 +8872,99 @@ private struct GamingSessionCard: View {
         return trimmed.isEmpty ? "Walk-in" : trimmed
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "timer.circle.fill")
-                    .font(.title3)
-                    .foregroundColor(Brand.gold)
-                    .frame(width: 34)
+    var isOvertime: Bool {
+        guard let endsAt = session.timer_ends_at else { return false }
+        return Date() >= endsAt
+    }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(stationName)
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    Text(customerLabel)
-                        .font(.caption)
-                        .foregroundColor(Brand.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                Button(action: onStop) {
-                    Text("Stop")
-                        .font(.caption.weight(.bold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Brand.danger.opacity(0.18))
-                        .foregroundColor(Brand.danger)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(PressableButtonStyle())
-                .disabled(isSubmitting)
-            }
-
-            HStack(spacing: 10) {
-                TenderSummaryTile(title: "Elapsed", value: "\(elapsedMinutes)m", isAlert: false)
-                TenderSummaryTile(title: "Estimate", value: inr(estimateMinor), isAlert: false)
-            }
+    private func timerLabel(now: Date) -> (text: String, color: Color)? {
+        guard let endsAt = session.timer_ends_at else { return nil }
+        let remaining = endsAt.timeIntervalSince(now)
+        if remaining <= 0 {
+            let over = Int((-remaining / 60).rounded(.up))
+            return ("+\(over)m over", Brand.danger)
         }
-        .padding(12)
-        .background(Brand.elevated)
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        let mins = Int((remaining / 60).rounded(.up))
+        let color: Color = remaining < 5 * 60 ? Brand.danger : (remaining < 15 * 60 ? .orange : Brand.success)
+        return ("\(mins)m left", color)
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: isOvertime ? "exclamationmark.triangle.fill" : "timer.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(isOvertime ? Brand.danger : Brand.gold)
+                        .frame(width: 34)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(stationName)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(customerLabel)
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    Button(action: onStop) {
+                        Text("Stop")
+                            .font(.caption.weight(.bold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Brand.danger.opacity(0.18))
+                            .foregroundColor(Brand.danger)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .disabled(isSubmitting)
+                }
+
+                HStack(spacing: 10) {
+                    TenderSummaryTile(title: "Elapsed", value: "\(elapsedMinutes)m", isAlert: false)
+                    TenderSummaryTile(title: "Estimate", value: inr(estimateMinor), isAlert: false)
+                    if let label = timerLabel(now: context.date) {
+                        TenderSummaryTile(title: "Timer", value: label.text, isAlert: isOvertime)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    if session.timer_minutes != nil {
+                        Button(action: onExtend) {
+                            Label("+15m", systemImage: "plus.circle")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(isSubmitting)
+
+                        Button(action: onClearTimer) {
+                            Label("Clear timer", systemImage: "timer.square")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(isSubmitting)
+                    } else {
+                        Button(action: onExtend) {
+                            Label("Set 30m timer", systemImage: "timer")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(isSubmitting)
+                    }
+                }
+                .foregroundColor(Brand.softGold)
+            }
+            .padding(12)
+            .background(Brand.elevated)
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(isOvertime ? Brand.danger.opacity(0.6) : Color.clear, lineWidth: 1.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
     }
 }
 
@@ -7580,6 +9040,32 @@ private struct GamingSessionSheet: View {
                                 TextField("Phone optional", text: $draft.customerPhone)
                                     .keyboardType(.phonePad)
                                     .nativeField()
+                            }
+                        }
+
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Timer")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                HStack(spacing: 8) {
+                                    ForEach(TimerPreset.allCases) { preset in
+                                        let isSelected = draft.timerMinutes == preset.minutes
+                                        Button {
+                                            Haptics.selection()
+                                            draft.timerMinutes = preset.minutes
+                                        } label: {
+                                            Text(preset.title)
+                                                .font(.caption.weight(.bold))
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, 10)
+                                                .background(isSelected ? Brand.gold : Brand.surface)
+                                                .foregroundColor(isSelected ? .black : Brand.muted)
+                                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
                             }
                         }
 
