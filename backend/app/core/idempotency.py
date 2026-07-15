@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import IdempotencyConflict
+from app.core.errors import IdempotencyConflict, IdempotencyInProgress
 
 
 async def check_or_reserve(
@@ -48,7 +48,7 @@ async def check_or_reserve(
                 details={"key": key},
             )
         if existing.response_status is None or existing.response_body is None:
-            raise IdempotencyConflict(
+            raise IdempotencyInProgress(
                 "Idempotency-Key is already reserved but has no stored response",
                 details={"key": key},
             )
@@ -68,7 +68,7 @@ async def check_or_reserve(
     try:
         await session.flush()
     except IntegrityError as exc:
-        raise IdempotencyConflict(
+        raise IdempotencyInProgress(
             "Idempotency-Key is already being processed",
             details={"key": key},
         ) from exc

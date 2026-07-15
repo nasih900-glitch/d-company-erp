@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.api.v1.gaming.router import SessionStart, session_read
+from app.api.v1.gaming.router import SessionStart, session_amount_minor, session_read
 from app.models import GamingSession
 
 
@@ -58,3 +58,19 @@ def test_session_read_echoes_order_id_once_sent_to_pos():
 def test_session_read_order_id_is_none_before_send_to_pos():
     gs = _session(status="ended")
     assert session_read(gs).order_id is None
+
+
+@pytest.mark.parametrize(
+    ("minutes", "rate", "expected"),
+    [
+        (0, 15000, 0),
+        (1, 15000, 250),
+        (31, 15000, 7750),
+        (23, 18000, 6900),
+        (33, 25000, 13750),
+        (60, 20000, 20000),
+        (61, 20000, 20334),
+    ],
+)
+def test_session_billing_uses_exact_integer_ceiling(minutes, rate, expected):
+    assert session_amount_minor(minutes, rate) == expected

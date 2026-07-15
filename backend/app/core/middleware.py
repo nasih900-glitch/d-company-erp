@@ -19,6 +19,14 @@ from app.services.audit.recorder import clear_actor
 log = get_logger(__name__)
 
 
+def idempotency_request_hash(
+    *, method: str, path: str, query: str, key: str, body: bytes
+) -> str:
+    """Bind an idempotency key to one exact HTTP operation and payload."""
+    operation = f"{method.upper()}\n{path}\n{query}\n{key}\n".encode()
+    return hashlib.sha256(operation + body).hexdigest()
+
+
 class _RequestBodyTooLarge(Exception):
     pass
 
@@ -161,9 +169,16 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     )
                 body = await request.body()
                 request.state.idempotency_key = key
-                request.state.idempotency_request_hash = hashlib.sha256(
-                    key.encode() + b":" + body
-                ).hexdigest()
+                # The operation identity is part of the hash. A key reused for
+                # the same JSON body on a different order/payment URL must
+                # conflict, never replay a response from the first endpoint.
+                request.state.idempotency_request_hash = idempotency_request_hash(
+                    method=request.method,
+                    path=request.url.path,
+                    query=request.url.query,
+                    key=key,
+                    body=body,
+                )
                 # Re-attach the body so downstream handlers can re-read it.
                 async def receive() -> dict:  # type: ignore[type-arg]
                     return {"type": "http.request", "body": body, "more_body": False}

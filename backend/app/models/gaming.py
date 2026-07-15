@@ -62,6 +62,11 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     billable_minutes: Mapped[int | None] = mapped_column(Integer)
     amount_minor: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|paused|ended|cancelled
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    cancel_reason: Mapped[str | None] = mapped_column(String(500))
     customer_name: Mapped[str | None] = mapped_column(String(200))
     customer_phone: Mapped[str | None] = mapped_column(String(20))
     # Snapshotted from Station at start_at so a later station rate/tax edit

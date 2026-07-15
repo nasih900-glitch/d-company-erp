@@ -57,6 +57,8 @@ export interface MenuCategoryDTO {
 
 export interface OrderLineDTO {
   menu_item_id: string;
+  variant_id: string | null;
+  modifiers: Array<Record<string, unknown>> | null;
   name: string;
   sku: string;
   hsn_or_sac: string;
@@ -68,6 +70,7 @@ export interface OrderLineDTO {
   cgst_minor: number;
   sgst_minor: number;
   igst_minor: number;
+  note: string | null;
 }
 
 export interface OrderDTO {
@@ -87,6 +90,10 @@ export interface OrderDTO {
   tax_minor: number;
   round_off_minor: number;
   total_minor: number;
+  paid_minor: number;
+  due_minor: number;
+  free_gaming_minutes_applied: number;
+  free_hookah_count_applied: number;
   delivery_via: string | null;
   place_of_supply_state_code: string | null;
   customer_name: string | null;
@@ -104,7 +111,11 @@ export interface CreateOrderRequest {
   type: 'dine_in' | 'takeaway' | 'delivery' | 'session';
   shift_id: string;
   table_id?: string;
-  lines: Array<{ menu_item_id: string; qty: number }>;
+  lines: Array<{
+    menu_item_id: string;
+    qty: number;
+    note?: string;
+  }>;
   delivery_via?: 'inhouse' | 'zomato' | 'swiggy' | 'ubereats' | 'other_aggregator';
   customer_name?: string;
   customer_phone?: string;
@@ -160,11 +171,21 @@ export const pos = {
     api.get<OrderDTO>(`/pos/orders/${orderId}`).then((r) => r.data),
   addLines: (
     orderId: string,
-    lines: Array<{ menu_item_id: string; qty: number }>,
+    lines: Array<{ menu_item_id: string; qty: number; note?: string }>,
     idempotencyKey: string,
   ) =>
     api
       .post<OrderDTO>(`/pos/orders/${orderId}/lines`, { lines }, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      })
+      .then((r) => r.data),
+  attachCustomer: (
+    orderId: string,
+    body: { customer_name?: string; customer_phone?: string },
+    idempotencyKey: string,
+  ) =>
+    api
+      .patch<OrderDTO>(`/pos/orders/${orderId}/customer`, body, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
@@ -179,6 +200,8 @@ export const pos = {
       amount_minor: number;
       tendered_minor?: number;
       ref_external?: string;
+      expected_order_total_minor?: number;
+      expected_due_minor?: number;
     },
     idempotencyKey: string,
   ) =>
@@ -193,6 +216,21 @@ export const pos = {
       }>(
         `/pos/orders/${orderId}/payments`,
         body,
+        { headers: { 'Idempotency-Key': idempotencyKey } },
+      )
+      .then((r) => r.data),
+  finalizeZero: (orderId: string, idempotencyKey: string) =>
+    api
+      .post<{
+        order_id: string;
+        amount_minor: 0;
+        order_status: string;
+        invoice_no: string | null;
+        fiscal_year: string | null;
+        invoice_issued_at: string | null;
+      }>(
+        `/pos/orders/${orderId}/finalize-zero`,
+        undefined,
         { headers: { 'Idempotency-Key': idempotencyKey } },
       )
       .then((r) => r.data),
@@ -891,6 +929,7 @@ export interface ShiftDTO {
   expected_minor: number | null;
   counted_minor: number | null;
   variance_minor: number | null;
+  opened_by: string;
   opened_by_name: string | null;
   opened_by_email: string | null;
 }
@@ -968,7 +1007,7 @@ export interface StationDTO {
 export interface GameSessionDTO {
   id: string;
   station_id: string;
-  status: 'active' | 'paused' | 'ended';
+  status: 'active' | 'paused' | 'ended' | 'cancelled';
   start_at: string;
   end_at: string | null;
   timer_minutes: number | null;
@@ -976,6 +1015,7 @@ export interface GameSessionDTO {
   billable_minutes: number | null;
   amount_minor: number | null;
   order_id: string | null;
+  cancel_reason: string | null;
 }
 
 export const gaming = {
@@ -990,8 +1030,16 @@ export const gaming = {
   }>) => api.patch<StationDTO>(`/gaming/stations/${id}`, body).then((r) => r.data),
   deleteStation: (id: string) => api.delete(`/gaming/stations/${id}`),
 
-  listSessions: (status?: 'active' | 'paused' | 'ended') =>
-    api.get<GameSessionDTO[]>('/gaming/sessions', { params: status ? { status } : undefined }).then((r) => r.data),
+  listSessions: (
+    status?: 'active' | 'paused' | 'ended',
+    options?: { unbilledOnly?: boolean; limit?: number },
+  ) => api.get<GameSessionDTO[]>('/gaming/sessions', {
+    params: {
+      ...(status ? { status } : {}),
+      ...(options?.unbilledOnly ? { unbilled_only: true } : {}),
+      ...(options?.limit ? { limit: options.limit } : {}),
+    },
+  }).then((r) => r.data),
   startSession: (body: {
     station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
     timer_minutes?: number;
@@ -1000,6 +1048,8 @@ export const gaming = {
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
   stopSession: (id: string) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`).then((r) => r.data),
+  cancelSession: (id: string, reason: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/cancel`, { reason }).then((r) => r.data),
   sendToPos: (id: string) =>
     api.post<{ order_id: string; amount_minor: number }>(`/gaming/sessions/${id}/send-to-pos`)
       .then((r) => r.data),

@@ -152,14 +152,21 @@ export default function KitchenScreen() {
 
                 <div className="space-y-1.5 mb-3">
                   {o.lines.map((ln, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm">
-                      <span className="text-fg-muted shrink-0">
-                        {TYPE_ICON[ln.type] ?? <Utensils size={14}/>}
-                      </span>
-                      <span className="font-mono text-fg-muted text-xs shrink-0 w-8 text-right">
-                        {ln.qty}×
-                      </span>
-                      <span className="flex-1 truncate">{ln.name}</span>
+                    <div key={i} className="text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-fg-muted shrink-0">
+                          {TYPE_ICON[ln.type] ?? <Utensils size={14}/>}
+                        </span>
+                        <span className="font-mono text-fg-muted text-xs shrink-0 w-8 text-right">
+                          {ln.qty}×
+                        </span>
+                        <span className="flex-1 truncate">{ln.name}</span>
+                      </div>
+                      {ln.notes && (
+                        <div className="ml-16 mt-0.5 text-xs font-semibold text-accent-gold">
+                          Note: {ln.notes}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

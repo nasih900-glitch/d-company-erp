@@ -9,7 +9,11 @@ import pytest
 
 from app.core.errors import BusinessRuleError, NotFoundError
 from app.models import Shift
-from app.services.pos.shift_validation import require_open_operational_shift, require_shift_opener
+from app.services.pos.shift_validation import (
+    require_open_operational_shift,
+    require_operational_shift_scope,
+    require_shift_opener,
+)
 
 
 def _shift(**overrides) -> Shift:
@@ -42,6 +46,17 @@ def _validate(shift: Shift | None, **overrides) -> Shift:
 def test_exact_company_branch_terminal_open_shift_is_accepted() -> None:
     shift = _shift()
     assert _validate(shift) is shift
+
+
+def test_exact_scope_validator_can_replay_a_closed_shift() -> None:
+    shift = _shift(status="closed")
+    assert require_operational_shift_scope(
+        shift,
+        company_id=shift.company_id,
+        branch_id=shift.branch_id,
+        terminal_id=shift.terminal_id,
+        operation="replaying shift close",
+    ) is shift
 
 
 def test_missing_and_cross_company_shifts_do_not_leak_tenant_data() -> None:

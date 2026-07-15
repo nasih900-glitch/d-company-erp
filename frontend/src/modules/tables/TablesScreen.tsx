@@ -24,6 +24,17 @@ import {
 } from '@/lib/erp-api';
 import { clearDraft, loadDraft, saveDraft } from '@/lib/draft-storage';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import {
+  beginTableRetryOperation,
+  clearTableRetryOperation,
+  hasLockedTableRetryOperation,
+  isAmbiguousApiError,
+  isTableDraftHydratedForKey,
+  normalizeTableCartDraft,
+  replaceTableDraftLines,
+  tableIdempotencyKey,
+  type TableCartDraft,
+} from '@/lib/retry-drafts';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
@@ -36,8 +47,14 @@ const TABLE_ORDERABLE_TYPES = new Set(['food', 'drink', 'dessert']);
 
 // Not-yet-sent items survive a refresh — only cleared once they're actually
 // saved to the backend via "Send to Kitchen".
-function tableCartDraftKey(tableId: string) {
-  return `table-cart-draft:${tableId}`;
+function scopedTableCartDraftKey(
+  companyId: string,
+  branchId: string,
+  userId: string,
+  terminalId: string,
+  tableId: string,
+) {
+  return `table-cart-draft:${companyId}:${branchId}:${userId}:${terminalId}:${tableId}`;
 }
 
 const STATUS_COLOR: Record<TableDTO['status'], string> = {
@@ -165,22 +182,42 @@ export default function TablesScreen() {
   );
 }
 
-type CartLine = { item: MenuItemDTO; qty: number };
+type CartLine = { item: MenuItemDTO; qty: number; note: string };
 
 function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => void }) {
   const { me, terminalId, terminalReady } = useAuth();
+  const draftKey = me?.company_id && me.branch_id && me.user_id && terminalId
+    ? scopedTableCartDraftKey(
+        me.company_id,
+        me.branch_id,
+        me.user_id,
+        terminalId,
+        table.id,
+      )
+    : null;
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [order, setOrder] = useState<OrderDTO | null>(null);
   const [shiftId, setShiftId] = useState<string | null>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [cartDraft, setCartDraft] = useState<TableCartDraft | null>(null);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
+  const draftHydrated = isTableDraftHydratedForKey(draftKey, hydratedDraftKey);
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendingToPos, setSendingToPos] = useState(false);
+  const [cancellingOrder, setCancellingOrder] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    const storedDraft = draftKey
+      ? normalizeTableCartDraft(loadDraft<unknown>(draftKey))
+      : null;
+    setHydratedDraftKey(null);
+    setCart([]);
+    setCartDraft(storedDraft);
+    setOrder(null);
     (async () => {
       setLoading(true); setError(null);
       try {
@@ -201,32 +238,60 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
           orders.list({ table_id: table.id, status: ['open', 'held'] }),
         ]);
         if (cancelled) return;
-        const available = menuItems.filter((i) =>
-          i.is_available && TABLE_ORDERABLE_TYPES.has(i.type) && isAppStoreAllowedType(i.type));
+        const orderable = menuItems.filter((i) =>
+          TABLE_ORDERABLE_TYPES.has(i.type) && isAppStoreAllowedType(i.type));
+        const available = orderable.filter((i) => i.is_available);
         setItems(available);
         setShiftId(resolvedShiftId);
         if (existingOrders.length) {
           const full = await orders.get(existingOrders[0].id);
           if (!cancelled) setOrder(full);
         }
-        const draft = loadDraft<Array<{ itemId: string; qty: number }>>(tableCartDraftKey(table.id));
-        if (draft?.length) {
-          const restored = draft
+        if (storedDraft) {
+          if (!storedDraft.operation && storedDraft.shiftId && storedDraft.shiftId !== resolvedShiftId) {
+            if (draftKey) clearDraft(draftKey);
+            setCart([]);
+            setCartDraft(null);
+            setError(
+              'A saved table cart belonged to a different shift and was not restored.',
+            );
+            return;
+          }
+          const restored = storedDraft.lines
             .map((d) => {
-              const item = available.find((i) => i.id === d.itemId);
-              return item ? { item, qty: d.qty } : null;
+              // Keep unavailable items in an interrupted operation so an exact
+              // idempotent replay still sends the original request body.
+              const item = orderable.find((i) => i.id === d.itemId);
+              return item ? { item, qty: d.qty, note: d.note ?? '' } : null;
             })
             .filter((l): l is CartLine => l !== null);
-          if (restored.length) setCart(restored);
+          const restoredDraft = replaceTableDraftLines(
+            storedDraft,
+            restored.map((line) => ({
+              itemId: line.item.id,
+              qty: line.qty,
+              note: line.note || undefined,
+            })),
+          );
+          setCart(restored);
+          setCartDraft(storedDraft.operation ? storedDraft : restoredDraft);
+          if (storedDraft.operation && restored.length !== storedDraft.lines.length) {
+            setError(
+              'An item in the interrupted request is no longer visible in the menu. The original request remains locked and will retry with the exact saved item IDs.',
+            );
+          }
         }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setHydratedDraftKey(draftKey);
+          setLoading(false);
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [me?.branch_id, me?.company_id, table.id, terminalId, terminalReady]);
+  }, [draftKey, me?.branch_id, me?.company_id, table.id, terminalId, terminalReady]);
 
   const categories = useMemo(() => {
     const groups = new Map<string, MenuItemDTO[]>();
@@ -243,26 +308,48 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
 
   // Not-yet-sent items survive a refresh — cleared once sendToKitchen saves them.
   useEffect(() => {
-    const key = tableCartDraftKey(table.id);
-    if (cart.length) {
-      saveDraft(key, cart.map((l) => ({ itemId: l.item.id, qty: l.qty })));
+    if (!draftHydrated) return;
+    if (!draftKey) return;
+    const key = draftKey;
+    if (cartDraft) {
+      saveDraft(key, cartDraft);
     } else {
       clearDraft(key);
     }
-  }, [cart, table.id]);
+  }, [cartDraft, draftHydrated, draftKey]);
 
-  function add(item: MenuItemDTO) {
-    setCart((c) => {
-      const ex = c.find((l) => l.item.id === item.id);
-      return ex
-        ? c.map((l) => (l.item.id === item.id ? { ...l, qty: l.qty + 1 } : l))
-        : [...c, { item, qty: 1 }];
+  function updateCart(next: CartLine[]) {
+    if (cartDraft?.operation) return;
+    setCart(next);
+    setCartDraft((current) => {
+      const updated = replaceTableDraftLines(
+        current,
+        next.map((line) => ({
+          itemId: line.item.id,
+          qty: line.qty,
+          note: line.note || undefined,
+        })),
+      );
+      return updated ? { ...updated, shiftId: shiftId ?? undefined } : null;
     });
   }
+
+  function add(item: MenuItemDTO) {
+    const ex = cart.find((line) => line.item.id === item.id);
+    updateCart(ex
+      ? cart.map((line) => line.item.id === item.id ? { ...line, qty: line.qty + 1 } : line)
+      : [...cart, { item, qty: 1, note: '' }]);
+  }
   function adjust(id: string, delta: number) {
-    setCart((c) => c
-      .map((l) => (l.item.id === id ? { ...l, qty: Math.max(0, l.qty + delta) } : l))
-      .filter((l) => l.qty > 0));
+    updateCart(cart
+      .map((line) => line.item.id === id
+        ? { ...line, qty: Math.max(0, line.qty + delta) }
+        : line)
+      .filter((line) => line.qty > 0));
+  }
+
+  function updateNote(id: string, note: string) {
+    updateCart(cart.map((line) => line.item.id === id ? { ...line, note } : line));
   }
 
   const cartPreview = useMemo(
@@ -271,33 +358,110 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
   );
 
   const canEdit = !order || order.status === 'open';
-  const canSendToKitchen = canEdit && cart.length > 0 && !!shiftId;
-  const canSendToPos = !!order && order.status === 'open' && order.lines.length > 0 && cart.length === 0;
+  const hasLockedRetryOperation = hasLockedTableRetryOperation(cartDraft);
+  const canSendToKitchen = canEdit
+    && (cart.length > 0 || hasLockedRetryOperation)
+    && (!!shiftId || hasLockedRetryOperation);
+  const canSendToPos = !!order
+    && order.status === 'open'
+    && order.lines.length > 0
+    && cart.length === 0
+    && !hasLockedRetryOperation;
 
   async function sendToKitchen() {
-    if (!shiftId || !cart.length) return;
+    if ((!cart.length && !hasLockedRetryOperation) || (!shiftId && !hasLockedRetryOperation)) return;
+    const baseDraft = cartDraft ?? replaceTableDraftLines(
+      null,
+      cart.map((line) => ({
+        itemId: line.item.id,
+        qty: line.qty,
+        note: line.note || undefined,
+      })),
+    );
+    if (!baseDraft) return;
+    const retryDraft = beginTableRetryOperation(
+      baseDraft,
+      order
+        ? { kind: 'append', orderId: order.id }
+        : { kind: 'create', shiftId: shiftId! },
+    );
+    setCartDraft(retryDraft);
+    // Persist before the request. If the response is lost, refresh can replay
+    // this exact endpoint/body/key instead of creating or appending again.
+    if (!draftKey || !saveDraft(draftKey, retryDraft)) {
+      const editableDraft = clearTableRetryOperation(retryDraft);
+      setCartDraft(editableDraft);
+      setError(
+        'Browser recovery storage is unavailable. Nothing was sent; enable storage before retrying.',
+      );
+      return;
+    }
     setSending(true); setError(null);
     try {
-      const lines = cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty }));
-      const updated = order
-        ? await pos.addLines(order.id, lines, `table-lines:${order.id}:${Date.now()}`)
+      const lines = retryDraft.lines.map((line) => ({
+        menu_item_id: line.itemId,
+        qty: line.qty,
+        note: line.note,
+      }));
+      const updated = retryDraft.operation?.kind === 'append'
+        ? await pos.addLines(
+            retryDraft.operation.orderId,
+            lines,
+            tableIdempotencyKey(table.id, retryDraft),
+          )
         : await pos.createOrder(
-            { type: 'dine_in', table_id: table.id, shift_id: shiftId, lines },
-            `table:${table.id}:${Date.now()}`,
+            {
+              type: 'dine_in',
+              table_id: table.id,
+              shift_id: retryDraft.operation?.kind === 'create'
+                ? retryDraft.operation.shiftId
+                : shiftId!,
+              lines,
+            },
+            tableIdempotencyKey(table.id, retryDraft),
           );
       setOrder(updated);
       setCart([]);
-    } catch (e) { setError((e as Error).message); }
+      setCartDraft(null);
+      if (draftKey) clearDraft(draftKey);
+    } catch (e) {
+      if (isAmbiguousApiError(e)) {
+        setError(`${(e as Error).message} The result is unknown; use Retry Send to Kitchen to resume safely.`);
+      } else {
+        const editableDraft = clearTableRetryOperation(retryDraft);
+        setCartDraft(editableDraft);
+        if (draftKey) saveDraft(draftKey, editableDraft);
+        setError((e as Error).message);
+      }
+    }
     finally { setSending(false); }
   }
 
   async function sendToPos() {
-    if (!order) return;
+    if (!order || hasLockedRetryOperation) return;
     setSendingToPos(true); setError(null);
     try {
       setOrder(await pos.sendToPos(order.id));
     } catch (e) { setError((e as Error).message); }
     finally { setSendingToPos(false); }
+  }
+
+  async function cancelOrder() {
+    if (!order || hasLockedRetryOperation) return;
+    const reason = prompt(
+      `Why are you cancelling the open order for Table ${table.code}?\n\n`
+      + 'The reason will remain in the audit trail.',
+    );
+    if (!reason?.trim()) return;
+    setCancellingOrder(true); setError(null);
+    try {
+      await pos.voidOrder(order.id, reason.trim());
+      setOrder(null);
+      setCart([]);
+      setCartDraft(null);
+      if (draftKey) clearDraft(draftKey);
+    } catch (e) { setError((e as Error).message); }
+    finally { setCancellingOrder(false); }
   }
 
   return (
@@ -309,6 +473,12 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
       ) : (
         <div className="space-y-3">
           {error && <ErrorRow text={error}/>}
+
+          {cartDraft?.operation && !sending && (
+            <div className="rounded-lg border border-accent-gold/40 bg-accent-gold/10 p-2.5 text-sm text-accent-gold">
+              The previous response was not confirmed. This cart is locked until the same request is retried safely.
+            </div>
+          )}
 
           {order && (
             <div className="card bg-bg-raised">
@@ -324,9 +494,14 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
               </div>
               <div className="space-y-1 text-sm">
                 {order.lines.map((l, i) => (
-                  <div key={i} className="flex justify-between text-fg-muted">
-                    <span>{l.qty} × {l.name}</span>
-                    <span>{inr(l.line_total_minor)}</span>
+                  <div key={i} className="text-fg-muted">
+                    <div className="flex justify-between">
+                      <span>{l.qty} × {l.name}</span>
+                      <span>{inr(l.line_total_minor)}</span>
+                    </div>
+                    {l.note && (
+                      <div className="text-xs text-accent-gold mt-0.5">Note: {l.note}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -352,6 +527,7 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-64 overflow-y-auto">
                 {(categories.find(([c]) => c === activeCat)?.[1] ?? []).map((item) => (
                   <button key={item.id} className="card !p-2.5 text-left hover:border-accent"
+                    disabled={!!cartDraft?.operation || sending}
                     onClick={() => add(item)}>
                     <div className="text-sm font-medium truncate">{item.name}</div>
                     <div className="text-xs text-fg-muted">{inr(item.base_price_minor)}</div>
@@ -369,18 +545,30 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
                   <div className="text-xs text-fg-muted mb-2">Adding now</div>
                   <div className="space-y-2">
                     {cart.map((l) => (
-                      <div key={l.item.id} className="flex items-center justify-between gap-2">
-                        <span className="text-sm truncate flex-1">{l.item.name}</span>
-                        <div className="flex items-center gap-1.5">
-                          <button className="btn btn-ghost !p-1" onClick={() => adjust(l.item.id, -1)}>
-                            <Minus size={12}/>
-                          </button>
-                          <span className="w-5 text-center text-sm">{l.qty}</span>
-                          <button className="btn btn-ghost !p-1" onClick={() => adjust(l.item.id, 1)}>
-                            <Plus size={12}/>
-                          </button>
+                      <div key={l.item.id} className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm truncate flex-1">{l.item.name}</span>
+                          <div className="flex items-center gap-1.5">
+                            <button className="btn btn-ghost !p-1" disabled={!!cartDraft?.operation || sending}
+                              onClick={() => adjust(l.item.id, -1)}>
+                              <Minus size={12}/>
+                            </button>
+                            <span className="w-5 text-center text-sm">{l.qty}</span>
+                            <button className="btn btn-ghost !p-1" disabled={!!cartDraft?.operation || sending}
+                              onClick={() => adjust(l.item.id, 1)}>
+                              <Plus size={12}/>
+                            </button>
+                          </div>
+                          <span className="text-sm w-16 text-right">{inr(l.item.base_price_minor * l.qty)}</span>
                         </div>
-                        <span className="text-sm w-16 text-right">{inr(l.item.base_price_minor * l.qty)}</span>
+                        <input
+                          className="input !min-h-[34px] !py-1.5 text-xs"
+                          maxLength={500}
+                          disabled={!!cartDraft?.operation || sending}
+                          placeholder="Preparation note (e.g. no sugar, less spicy)"
+                          value={l.note}
+                          onChange={(event) => updateNote(l.item.id, event.target.value)}
+                        />
                       </div>
                     ))}
                   </div>
@@ -394,9 +582,19 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
           )}
 
           <div className="flex gap-2 pt-2">
+            {order?.status === 'open' && cart.length === 0 && !hasLockedRetryOperation && (
+              <button className="btn btn-ghost text-accent-bad"
+                disabled={cancellingOrder || sendingToPos}
+                onClick={cancelOrder}>
+                {cancellingOrder
+                  ? <Loader2 className="animate-spin" size={14}/>
+                  : <Trash2 size={14}/>} Cancel order
+              </button>
+            )}
             {canSendToKitchen && (
               <button className="btn btn-primary flex-1" disabled={sending} onClick={sendToKitchen}>
-                {sending ? <Loader2 className="animate-spin" size={14}/> : <ChefHat size={14}/>} Send to Kitchen
+                {sending ? <Loader2 className="animate-spin" size={14}/> : <ChefHat size={14}/>}
+                {cartDraft?.operation ? 'Retry Send to Kitchen' : 'Send to Kitchen'}
               </button>
             )}
             {canSendToPos && (

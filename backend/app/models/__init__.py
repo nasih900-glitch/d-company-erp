@@ -33,7 +33,11 @@ from app.models.ocr import OcrUpload, OcrExtraction, OcrVerification
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
 from app.models.customer import Customer
-from app.models.membership import MembershipTier, CustomerMembership
+from app.models.membership import (
+    CustomerMembership,
+    MembershipBenefitReservation,
+    MembershipTier,
+)
 from app.models.events import Event, EventTicket
 from app.models.idempotency_key import IdempotencyKey
 from app.models.india import (
@@ -77,6 +81,7 @@ __all__ = [
     "JournalEntry",
     "JournalLine",
     "MembershipTier",
+    "MembershipBenefitReservation",
     "MenuCategory",
     "MenuItem",
     "MenuModifier",

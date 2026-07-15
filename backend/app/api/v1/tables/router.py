@@ -13,7 +13,7 @@ Endpoints:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -22,10 +22,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.db import SessionDep
-from app.core.errors import NotFoundError, BusinessRuleError, ConflictError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import Branch, Floor, Reservation, Table
+from app.models import Branch, Floor, Order, Reservation, Table
 
 router = APIRouter()
 
@@ -39,7 +39,7 @@ class FloorRead(BaseModel):
 
 class FloorCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    branch_id: UUID | None = None  # falls back to default branch
+    branch_id: UUID | None = None  # must match the current operational branch
 
 
 class TableRead(BaseModel):
@@ -85,46 +85,61 @@ class ReservationCreate(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
-async def _default_branch_id(session, company_id: UUID) -> UUID | None:
-    return (
-        await session.execute(
-            select(Branch.id)
-            .where(Branch.company_id == company_id, Branch.deleted_at.is_(None))
-            .order_by(Branch.created_at)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+def _current_branch_id(tenant: TenantContext) -> UUID:
+    if tenant.branch_id is None:
+        raise BusinessRuleError("select a branch or terminal before managing tables")
+    return tenant.branch_id
+
+
+def _requested_branch_id(tenant: TenantContext, requested_branch_id: UUID | None) -> UUID:
+    branch_id = _current_branch_id(tenant)
+    if requested_branch_id is not None and requested_branch_id != branch_id:
+        # Do not allow a caller to use an arbitrary branch UUID to escape the
+        # branch selected by their token / terminal context.
+        raise NotFoundError("branch not found")
+    return branch_id
 
 
 async def _ensure_default_floor(session, tenant: TenantContext) -> UUID:
-    """Return the first floor for the company, creating one if needed."""
+    """Return the first floor for the current branch, creating one if needed."""
+    branch_id = _current_branch_id(tenant)
+    branch = await session.get(Branch, branch_id)
+    if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
     floor_id = (
         await session.execute(
             select(Floor.id)
             .join(Branch, Branch.id == Floor.branch_id)
-            .where(Branch.company_id == tenant.company_id)
+            .where(
+                Branch.company_id == tenant.company_id,
+                Branch.id == branch_id,
+                Branch.deleted_at.is_(None),
+            )
             .order_by(Floor.created_at)
             .limit(1)
         )
     ).scalar_one_or_none()
     if floor_id:
         return floor_id
-    branch_id = tenant.branch_id or await _default_branch_id(session, tenant.company_id)
-    if not branch_id:
-        raise BusinessRuleError("create a branch in Settings → Branches first")
     floor = Floor(id=uuid4(), branch_id=branch_id, name="Main Floor")
     session.add(floor)
     await session.flush()
     return floor.id
 
 
-async def _tenant_floor(session, company_id: UUID, floor_id: UUID) -> Floor | None:
+async def _tenant_floor(
+    session,
+    company_id: UUID,
+    branch_id: UUID,
+    floor_id: UUID,
+) -> Floor | None:
     return (
         await session.execute(
             select(Floor)
             .join(Branch, Branch.id == Floor.branch_id)
             .where(
                 Floor.id == floor_id,
+                Floor.branch_id == branch_id,
                 Branch.company_id == company_id,
                 Branch.deleted_at.is_(None),
             )
@@ -132,19 +147,118 @@ async def _tenant_floor(session, company_id: UUID, floor_id: UUID) -> Floor | No
     ).scalar_one_or_none()
 
 
-async def _tenant_table(session, company_id: UUID, table_id: UUID) -> Table | None:
-    return (
+async def _tenant_table(
+    session,
+    company_id: UUID,
+    branch_id: UUID,
+    table_id: UUID,
+    *,
+    for_update: bool = False,
+) -> Table | None:
+    stmt = (
+        select(Table)
+        .join(Floor, Floor.id == Table.floor_id)
+        .join(Branch, Branch.id == Floor.branch_id)
+        .where(
+            Table.id == table_id,
+            Floor.branch_id == branch_id,
+            Branch.company_id == company_id,
+            Branch.deleted_at.is_(None),
+        )
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _table_has_unfinished_order(
+    session,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    table_id: UUID,
+) -> bool:
+    order_id = (
         await session.execute(
-            select(Table)
+            select(Order.id)
+            .where(
+                Order.company_id == company_id,
+                Order.branch_id == branch_id,
+                Order.table_id == table_id,
+                Order.status.in_(("open", "held")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return order_id is not None
+
+
+async def _table_has_active_or_future_reservation(
+    session,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    table_id: UUID,
+    now: datetime | None = None,
+) -> bool:
+    reservation_id = (
+        await session.execute(
+            select(Reservation.id)
+            .join(Table, Table.id == Reservation.table_id)
             .join(Floor, Floor.id == Table.floor_id)
             .join(Branch, Branch.id == Floor.branch_id)
             .where(
-                Table.id == table_id,
+                Reservation.table_id == table_id,
+                Reservation.status.in_(("held", "seated")),
+                Reservation.ends_at > (now or datetime.now(UTC)),
+                Floor.branch_id == branch_id,
                 Branch.company_id == company_id,
                 Branch.deleted_at.is_(None),
             )
+            .limit(1)
         )
     ).scalar_one_or_none()
+    return reservation_id is not None
+
+
+async def _table_has_source_history(
+    session,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    table_id: UUID,
+) -> bool:
+    """Keep the table label attached to every historical order/reservation."""
+    order_id = (
+        await session.execute(
+            select(Order.id)
+            .where(
+                Order.company_id == company_id,
+                Order.branch_id == branch_id,
+                Order.table_id == table_id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if order_id is not None:
+        return True
+
+    reservation_id = (
+        await session.execute(
+            select(Reservation.id)
+            .join(Table, Table.id == Reservation.table_id)
+            .join(Floor, Floor.id == Table.floor_id)
+            .join(Branch, Branch.id == Floor.branch_id)
+            .where(
+                Reservation.table_id == table_id,
+                Floor.branch_id == branch_id,
+                Branch.company_id == company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return reservation_id is not None
 
 
 # ---------------------------------------------------------------- FLOORS
@@ -153,11 +267,16 @@ async def list_floors(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.read")),
 ) -> list[FloorRead]:
+    branch_id = _current_branch_id(tenant)
     rows = (
         await session.execute(
             select(Floor)
             .join(Branch, Branch.id == Floor.branch_id)
-            .where(Branch.company_id == tenant.company_id)
+            .where(
+                Branch.company_id == tenant.company_id,
+                Branch.id == branch_id,
+                Branch.deleted_at.is_(None),
+            )
         )
     ).scalars().all()
     return [FloorRead(id=r.id, branch_id=r.branch_id, name=r.name) for r in rows]
@@ -169,9 +288,7 @@ async def create_floor(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> FloorRead:
-    branch_id = payload.branch_id or tenant.branch_id or await _default_branch_id(session, tenant.company_id)
-    if not branch_id:
-        raise BusinessRuleError("no branch exists — create one in Settings → Branches first")
+    branch_id = _requested_branch_id(tenant, payload.branch_id)
     branch = await session.get(Branch, branch_id)
     if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
         raise NotFoundError("branch not found")
@@ -189,11 +306,16 @@ async def list_tables(
     tenant: TenantContext = Depends(requires("tables.read")),
     floor_id: UUID | None = None,
 ) -> list[TableRead]:
+    branch_id = _current_branch_id(tenant)
     stmt = (
         select(Table)
         .join(Floor, Floor.id == Table.floor_id)
         .join(Branch, Branch.id == Floor.branch_id)
-        .where(Branch.company_id == tenant.company_id)
+        .where(
+            Branch.company_id == tenant.company_id,
+            Branch.id == branch_id,
+            Branch.deleted_at.is_(None),
+        )
     )
     if floor_id:
         stmt = stmt.where(Table.floor_id == floor_id)
@@ -213,8 +335,9 @@ async def create_table(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> TableRead:
+    branch_id = _current_branch_id(tenant)
     floor_id = payload.floor_id or await _ensure_default_floor(session, tenant)
-    if not await _tenant_floor(session, tenant.company_id, floor_id):
+    if not await _tenant_floor(session, tenant.company_id, branch_id, floor_id):
         raise NotFoundError("floor not found")
     existing = (
         await session.execute(
@@ -247,7 +370,14 @@ async def update_table(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> TableRead:
-    t = await _tenant_table(session, tenant.company_id, table_id)
+    branch_id = _current_branch_id(tenant)
+    t = await _tenant_table(
+        session,
+        tenant.company_id,
+        branch_id,
+        table_id,
+        for_update=True,
+    )
     if not t:
         raise NotFoundError("table not found")
     for f, v in payload.model_dump(exclude_unset=True).items():
@@ -266,9 +396,25 @@ async def update_status(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ) -> TableRead:
-    t = await _tenant_table(session, tenant.company_id, table_id)
+    branch_id = _current_branch_id(tenant)
+    t = await _tenant_table(
+        session,
+        tenant.company_id,
+        branch_id,
+        table_id,
+        for_update=True,
+    )
     if not t:
         raise NotFoundError("table not found")
+    if payload.status == "available" and await _table_has_unfinished_order(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        table_id=table_id,
+    ):
+        raise ConflictError(
+            "table has an open or held order; finish or void it before marking the table available"
+        )
     t.status = payload.status
     await session.flush()
     return TableRead(
@@ -283,9 +429,45 @@ async def delete_table(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("tables.write")),
 ):
-    t = await _tenant_table(session, tenant.company_id, table_id)
+    branch_id = _current_branch_id(tenant)
+    t = await _tenant_table(
+        session,
+        tenant.company_id,
+        branch_id,
+        table_id,
+        for_update=True,
+    )
     if not t:
         raise NotFoundError("table not found")
+    if await _table_has_unfinished_order(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        table_id=table_id,
+    ):
+        raise ConflictError(
+            "table has an open or held order; finish or void it before deleting the table"
+        )
+    if await _table_has_active_or_future_reservation(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        table_id=table_id,
+    ):
+        raise ConflictError(
+            "table has an active or future reservation; cancel or complete it before "
+            "deleting the table"
+        )
+    if await _table_has_source_history(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        table_id=table_id,
+    ):
+        raise ConflictError(
+            "table has order or reservation history and cannot be deleted because its source label "
+            "must remain auditable; rename the table instead"
+        )
     await session.delete(t)
     await session.flush()
 
@@ -299,7 +481,14 @@ async def create_reservation(
 ) -> dict:
     if payload.ends_at <= payload.starts_at:
         raise BusinessRuleError("ends_at must be after starts_at")
-    table = await _tenant_table(session, tenant.company_id, payload.table_id)
+    branch_id = _current_branch_id(tenant)
+    table = await _tenant_table(
+        session,
+        tenant.company_id,
+        branch_id,
+        payload.table_id,
+        for_update=True,
+    )
     if not table:
         raise NotFoundError("table not found")
     r = Reservation(

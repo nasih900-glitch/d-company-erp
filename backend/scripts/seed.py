@@ -246,6 +246,12 @@ async def seed() -> None:
                 hsn_code="999692",
             ),
         ]
+        # Timed gaming, streaming, and shisha services are created from the
+        # Gaming screen after a session ends.  Keep these legacy manual blocks
+        # for historical references, but never expose them as normal POS items
+        # where staff could accidentally bill the same session twice.
+        for service_item in service_items:
+            service_item.is_available = False
         s.add_all([cappuccino, *service_items])
 
         # Ingredients + recipe

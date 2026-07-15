@@ -54,6 +54,13 @@ class IdempotencyConflict(AppError):
     code = "idempotency_conflict"
 
 
+class IdempotencyInProgress(AppError):
+    """The same request may still be committing; retry with the same key."""
+
+    status_code = 409
+    code = "idempotency_in_progress"
+
+
 class TenantViolation(AppError):
     status_code = 403
     code = "tenant_violation"

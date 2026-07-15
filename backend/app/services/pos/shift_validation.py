@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from app.models import Shift
 
 
-def require_open_operational_shift(
+def require_operational_shift_scope(
     shift: Shift | None,
     *,
     company_id: UUID,
@@ -22,7 +22,7 @@ def require_open_operational_shift(
     resource_branch_id: UUID | None = None,
     resource_name: str = "resource",
 ) -> Shift:
-    """Return an exact-scope open shift or raise a user-actionable error."""
+    """Return an exact company/branch/terminal shift regardless of status."""
     if branch_id is None:
         raise BusinessRuleError(
             f"This account has no branch assigned. Assign one before {operation}."
@@ -34,10 +34,6 @@ def require_open_operational_shift(
     # Do not disclose whether a UUID belongs to another tenant.
     if shift is None or shift.company_id != company_id:
         raise NotFoundError("Shift not found for this company.")
-    if shift.status != "open":
-        raise BusinessRuleError(
-            f"Shift is {shift.status}. Open a shift for this terminal before {operation}."
-        )
     if resource_branch_id is not None and shift.branch_id != resource_branch_id:
         raise BusinessRuleError(
             f"Shift branch does not match the {resource_name} branch."
@@ -49,6 +45,33 @@ def require_open_operational_shift(
     return shift
 
 
+def require_open_operational_shift(
+    shift: Shift | None,
+    *,
+    company_id: UUID,
+    branch_id: UUID | None,
+    terminal_id: UUID | None,
+    operation: str,
+    resource_branch_id: UUID | None = None,
+    resource_name: str = "resource",
+) -> Shift:
+    """Return an exact-scope open shift or raise a user-actionable error."""
+    shift = require_operational_shift_scope(
+        shift,
+        company_id=company_id,
+        branch_id=branch_id,
+        terminal_id=terminal_id,
+        operation=operation,
+        resource_branch_id=resource_branch_id,
+        resource_name=resource_name,
+    )
+    if shift.status != "open":
+        raise BusinessRuleError(
+            f"Shift is {shift.status}. Open a shift for this terminal before {operation}."
+        )
+    return shift
+
+
 def require_shift_opener(
     shift: Shift,
     *,
@@ -57,8 +80,8 @@ def require_shift_opener(
     operation: str,
 ) -> None:
     """Only the person who opened this shift may do certain high-trust
-    actions on it (starting a gaming session, billing/clearing a held
-    order) — they're the one accountable for its cash and payment closing.
+    money actions on it (direct cashier bills, payment, refund, void, close)
+    — they're the one accountable for its cash and payment closing.
     A protected owner can always override this.
     """
     if protected_access:

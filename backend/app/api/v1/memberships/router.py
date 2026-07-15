@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, NotFoundError
+from app.core.errors import BusinessRuleError, ForbiddenError, NotFoundError
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -181,7 +181,8 @@ async def _subscription_to_read(session, sub: CustomerMembership) -> Subscriptio
         starts_at=sub.starts_at, expires_at=sub.expires_at,
         cancelled_at=sub.cancelled_at, auto_renew=sub.auto_renew,
         amount_paid_minor=sub.amount_paid_minor,
-        is_active=sub.cancelled_at is None and sub.expires_at > now,
+        # cancelled_at stops auto-renew; the already-paid term remains valid.
+        is_active=sub.starts_at <= now < sub.expires_at,
     )
 
 
@@ -189,15 +190,48 @@ async def _subscription_to_read(session, sub: CustomerMembership) -> Subscriptio
 async def subscribe(
     payload: SubscribeRequest,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.write")),
+    tenant: TenantContext = Depends(requires("admin.system")),
 ) -> SubscriptionRead:
-    customer = await session.get(Customer, payload.customer_id)
+    if not tenant.protected_access:
+        raise ForbiddenError(
+            "Only a protected owner may create a manual membership entitlement."
+        )
+    # Serialize subscriptions per customer. Two concurrent owner requests then
+    # cannot both pass the overlap check and mint duplicate allowances.
+    customer = (
+        await session.execute(
+            select(Customer).where(Customer.id == payload.customer_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not customer or customer.company_id != tenant.company_id:
         raise NotFoundError("customer not found")
-    tier = await session.get(MembershipTier, payload.tier_id)
+    now = datetime.now(timezone.utc)
+    overlapping = (
+        await session.execute(
+            select(CustomerMembership)
+            .where(
+                CustomerMembership.customer_id == customer.id,
+                CustomerMembership.expires_at > now,
+            )
+            .order_by(CustomerMembership.expires_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if overlapping is not None:
+        raise BusinessRuleError(
+            "Customer already has a membership term that has not expired. "
+            f"It ends at {overlapping.expires_at.isoformat()}."
+        )
+    tier = (
+        await session.execute(
+            select(MembershipTier)
+            .where(MembershipTier.id == payload.tier_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if not tier or tier.company_id != tenant.company_id or tier.deleted_at:
         raise NotFoundError("tier not found")
-
     price = (
         tier.annual_price_minor or (tier.monthly_price_minor * 12)
         if payload.billing_cycle == "annual"
@@ -205,9 +239,11 @@ async def subscribe(
     )
     if not price:
         raise BusinessRuleError("tier has no price for the requested billing cycle")
-
-    now = datetime.now(timezone.utc)
-    expires = now + (timedelta(days=365) if payload.billing_cycle == "annual" else timedelta(days=30))
+    expires = now + (
+        timedelta(days=365)
+        if payload.billing_cycle == "annual"
+        else timedelta(days=30)
+    )
 
     sub = CustomerMembership(
         id=uuid4(),
@@ -216,8 +252,13 @@ async def subscribe(
         billing_cycle=payload.billing_cycle,
         starts_at=now,
         expires_at=expires,
-        auto_renew=True,
+        # No recurring provider is wired yet; never claim automatic renewal.
+        auto_renew=False,
         amount_paid_minor=price,
+        notes=(
+            "Manual entitlement created by protected owner; "
+            f"declared payment rail={payload.paid_via}"
+        ),
     )
     session.add(sub)
     await session.flush()
@@ -240,7 +281,7 @@ async def get_customer_subscription(
             select(CustomerMembership)
             .where(
                 CustomerMembership.customer_id == customer_id,
-                CustomerMembership.cancelled_at.is_(None),
+                CustomerMembership.starts_at <= now,
                 CustomerMembership.expires_at > now,
             )
             .order_by(CustomerMembership.starts_at.desc())
@@ -254,9 +295,19 @@ async def get_customer_subscription(
 async def cancel_subscription(
     subscription_id: UUID,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.write")),
+    tenant: TenantContext = Depends(requires("admin.system")),
 ) -> SubscriptionRead:
-    sub = await session.get(CustomerMembership, subscription_id)
+    if not tenant.protected_access:
+        raise ForbiddenError(
+            "Only a protected owner may cancel membership auto-renewal."
+        )
+    sub = (
+        await session.execute(
+            select(CustomerMembership)
+            .where(CustomerMembership.id == subscription_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if not sub:
         raise NotFoundError("subscription not found")
     customer = await session.get(Customer, sub.customer_id)

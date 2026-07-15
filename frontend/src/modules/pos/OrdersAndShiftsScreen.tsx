@@ -288,7 +288,10 @@ function ShiftsTab() {
                     {new Date(s.opened_at).toLocaleString('en-IN')}
                   </div>
                   <div className="text-xs text-fg-muted">
-                    Opened by <span className="text-fg font-medium">{s.opened_by_name ?? s.opened_by_email ?? 'Unknown'}</span>
+                    Opened by <span className="text-fg font-medium">
+                      {s.opened_by_name ?? 'Unknown'}
+                      {s.opened_by_email ? ` · ${s.opened_by_email}` : ''}
+                    </span>
                   </div>
                   {s.closed_at && (
                     <div className="text-xs text-fg-muted">
@@ -296,10 +299,15 @@ function ShiftsTab() {
                     </div>
                   )}
                 </div>
-                {s.status === 'open' && (
+                {s.status === 'open' && (s.opened_by === me?.user_id || me?.protected_access) && (
                   <button className="btn btn-primary" onClick={() => setClosing(s)}>
                     <Lock size={14}/> Close shift
                   </button>
+                )}
+                {s.status === 'open' && s.opened_by !== me?.user_id && !me?.protected_access && (
+                  <div className="max-w-xs text-right text-xs text-fg-muted">
+                    Only the opener shown here, or a protected owner, can count and close this shift.
+                  </div>
                 )}
               </div>
 

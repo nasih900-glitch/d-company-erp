@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Guarded live E2E smoke test for the D Company ERP backend.
+"""Destructive E2E smoke test for a dedicated staging database only.
 
-This intentionally touches production only when LIVE_E2E_ALLOW_PRODUCTION is
-set to the exact confirmation token below. It creates isolated test data,
-exercises the public API, and then removes every row it created.
+The cleanup physically removes invoices, payments, audit rows, and counters.
+It must never run against the live D Company hostname. Production verification
+uses traceable browser transactions that remain voided/cancelled in history.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
@@ -85,6 +86,7 @@ ALLOW = os.environ.get("LIVE_E2E_ALLOW_PRODUCTION")
 RUN_ID = os.environ.get("LIVE_E2E_RUN_ID") or f"LIVE_E2E_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{secrets.token_hex(3)}"
 MARKER = f"E2E{int(time.time()):x}{secrets.token_hex(2)}"[:18]
 TIMEOUT = 25
+PRODUCTION_HOSTS = {"dcompany.duckdns.org", "www.dcompany.duckdns.org"}
 
 
 class E2EError(RuntimeError):
@@ -753,6 +755,16 @@ def check(condition: bool, label: str, checks: list[str]) -> None:
 
 
 async def main() -> int:
+    if (urlparse(BASE_URL).hostname or "").lower() in PRODUCTION_HOSTS:
+        print(json.dumps({
+            "status": "BLOCKED",
+            "reason": (
+                "This destructive script is staging-only and refuses the live D Company hostname. "
+                "Use traceable browser verification in production."
+            ),
+            "run_id": RUN_ID,
+        }, indent=2))
+        return 2
     if ALLOW != CONFIRMATION:
         print(json.dumps({
             "status": "BLOCKED",
@@ -1405,12 +1417,19 @@ async def main() -> int:
                 "method": "cash",
                 "amount_minor": total_minor,
                 "tendered_minor": total_minor,
+                "expected_order_total_minor": total_minor,
+                "expected_due_minor": total_minor,
                 "ref_external": MARKER,
             },
         )
         check(payment.get("order_status") == "paid", "POS payment marks order paid", checks)
 
-        persisted_order = http_json("GET", f"/pos/orders/{order['id']}", token=token)
+        persisted_order = http_json(
+            "GET",
+            f"/pos/orders/{order['id']}",
+            token=token,
+            terminal_id=identity["terminal_id"],
+        )
         check(
             persisted_order.get("status") == "paid"
             and isinstance(persisted_order.get("invoice_no"), str)
@@ -1487,10 +1506,22 @@ async def main() -> int:
                 "table_id": table["id"],
                 "shift_id": shift_id,
                 "notes": MARKER,
-                "lines": [{"menu_item_id": items["coffee"], "qty": 1}],
+                "lines": [
+                    {
+                        "menu_item_id": items["coffee"],
+                        "qty": 1,
+                        "note": "No sugar — guarded verification",
+                    }
+                ],
             },
         )
-        check(table_order.get("status") == "open", "table order creates in open status", checks)
+        check(
+            table_order.get("status") == "open"
+            and table_order.get("lines", [{}])[0].get("note")
+            == "No sugar — guarded verification",
+            "table order creates in open status and preserves its preparation note",
+            checks,
+        )
         tables_after_create = http_json("GET", "/tables", token=token)
         table_row_after_create = next((r for r in tables_after_create if r["id"] == table["id"]), None)
         check(
@@ -1537,17 +1568,17 @@ async def main() -> int:
         )
         check(held.get("status") == "held", "sending a table order to POS marks it held", checks)
 
-        _, _, resend_raw = http_request(
+        held_replay = http_json(
             "PATCH",
             f"/pos/orders/{table_order['id']}/send-to-pos",
             token=token,
             terminal_id=identity["terminal_id"],
             payload={},
-            expected=(422,),
         )
         check(
-            b"cannot send" in resend_raw.lower(),
-            "sending an already-held order to POS again is rejected",
+            held_replay.get("id") == held.get("id")
+            and held_replay.get("status") == "held",
+            "sending an already-held order to POS safely replays the same result",
             checks,
         )
 
@@ -1558,8 +1589,10 @@ async def main() -> int:
         )
         held_row = next((r for r in held_queue_only if r["id"] == table_order["id"]), None)
         check(
-            held_row is not None and held_row.get("source_label") == f"Table {table['code']}",
-            "held-orders queue labels a table order by its table code",
+            held_row is not None
+            and held_row.get("source_label") == f"Table {table['code']}"
+            and bool(held_row.get("held_at")),
+            "held-orders queue labels the table and returns its true held timestamp",
             checks,
         )
 
@@ -1587,6 +1620,8 @@ async def main() -> int:
                 "method": "cash",
                 "amount_minor": add_after_held["total_minor"],
                 "tendered_minor": add_after_held["total_minor"],
+                "expected_order_total_minor": add_after_held["total_minor"],
+                "expected_due_minor": add_after_held["total_minor"],
                 "ref_external": MARKER,
             },
         )
@@ -1679,6 +1714,19 @@ async def main() -> int:
                 f"gaming {station_type} session starts and stops",
                 checks,
             )
+            stopped_replay = http_json(
+                "POST",
+                f"/gaming/sessions/{session_started['id']}/stop",
+                token=token,
+                terminal_id=identity["terminal_id"],
+                payload={},
+            )
+            check(
+                stopped_replay.get("id") == stopped.get("id")
+                and stopped_replay.get("amount_minor") == stopped.get("amount_minor"),
+                f"gaming {station_type} stop safely replays the computed amount",
+                checks,
+            )
 
             sent = http_json(
                 "POST",
@@ -1692,7 +1740,12 @@ async def main() -> int:
                 f"gaming {station_type} session sends to POS and matches the stopped amount",
                 checks,
             )
-            session_order = http_json("GET", f"/pos/orders/{sent['order_id']}", token=token)
+            session_order = http_json(
+                "GET",
+                f"/pos/orders/{sent['order_id']}",
+                token=token,
+                terminal_id=identity["terminal_id"],
+            )
             check(
                 session_order.get("status") == "held"
                 and session_order.get("type") == "session"
@@ -1705,17 +1758,17 @@ async def main() -> int:
                 f"gaming {station_type} session order is held with one internally-consistent GST line",
                 checks,
             )
-            _, _, resend_session_raw = http_request(
+            resent_session = http_json(
                 "POST",
                 f"/gaming/sessions/{session_started['id']}/send-to-pos",
                 token=token,
                 terminal_id=identity["terminal_id"],
                 payload={},
-                expected=(422,),
             )
             check(
-                b"already" in resend_session_raw.lower(),
-                f"gaming {station_type} session cannot be sent to POS twice",
+                resent_session.get("order_id") == sent.get("order_id")
+                and resent_session.get("amount_minor") == sent.get("amount_minor"),
+                f"gaming {station_type} send-to-POS safely replays the same order",
                 checks,
             )
             session_after_send = http_json(
@@ -1752,6 +1805,8 @@ async def main() -> int:
                     "method": "cash",
                     "amount_minor": session_order["total_minor"],
                     "tendered_minor": session_order["total_minor"],
+                    "expected_order_total_minor": session_order["total_minor"],
+                    "expected_due_minor": session_order["total_minor"],
                     "ref_external": MARKER,
                 },
             )
@@ -1778,7 +1833,12 @@ async def main() -> int:
         check(bool(booking.get("id")), "gaming booking creates for future slot", checks)
 
         sessions_list = http_json("GET", "/gaming/sessions", token=token)
-        orders_list = http_json("GET", "/pos/orders", token=token)
+        orders_list = http_json(
+            "GET",
+            "/pos/orders",
+            token=token,
+            terminal_id=identity["terminal_id"],
+        )
         audit_rows = http_json("GET", "/admin/audit", token=token, audit_token=audit_token)
         audit_facets = http_json("GET", "/admin/audit/facets", token=token, audit_token=audit_token)
         check(isinstance(sessions_list, list), "gaming sessions list reads", checks)
@@ -2045,6 +2105,52 @@ async def main() -> int:
         check(
             isinstance(normalized_login.get("access_token"), str),
             "correct credentials recover immediately after failed attempt",
+            checks,
+        )
+
+        unsent_session = http_json(
+            "POST",
+            "/gaming/sessions/start",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={
+                "station_id": stations["ps5"],
+                "shift_id": shift_id,
+                "customer_name": f"{MARKER} close blocker",
+            },
+        )
+        stopped_unsent = http_json(
+            "POST",
+            f"/gaming/sessions/{unsent_session['id']}/stop",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={},
+        )
+        _, _, blocked_close_raw = http_request(
+            "POST",
+            f"/pos/shifts/{shift_id}/close",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={"counted_minor": total_minor + 1000},
+            expected=(422,),
+        )
+        check(
+            stopped_unsent.get("status") == "ended"
+            and b"not yet sent to pos" in blocked_close_raw.lower(),
+            "shift close is blocked while a stopped session remains unbilled",
+            checks,
+        )
+        cancelled_unsent = http_json(
+            "POST",
+            f"/gaming/sessions/{unsent_session['id']}/cancel",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={"reason": f"{MARKER} deliberate close-blocker verification"},
+        )
+        check(
+            cancelled_unsent.get("status") == "cancelled"
+            and bool(cancelled_unsent.get("cancel_reason")),
+            "a stopped zero-value/test session can be cancelled with an audit reason",
             checks,
         )
 

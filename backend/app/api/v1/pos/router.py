@@ -8,11 +8,12 @@ the POS deep build.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
 from app.core.db import SessionDep
@@ -40,22 +41,40 @@ from app.models import (
     User,
 )
 from app.services.inventory.deduction import deduct_for_order
+from app.services.pos.membership_benefits import (
+    applied_benefits_for_order,
+    consume_membership_benefits,
+    reserve_membership_benefits,
+)
+from app.services.pos.order_validation import require_operational_order
 from app.services.pos.pricing import (
     InvoiceNumberService,
     LineRequest,
     OrderPricingService,
     _round_to_rupee,
+    gaming_minutes_allowance_minor,
 )
-from app.services.pos.shift_validation import require_open_operational_shift, require_shift_opener
+from app.services.pos.shift_validation import (
+    require_open_operational_shift,
+    require_operational_shift_scope,
+    require_shift_opener,
+)
 
 router = APIRouter()
+_KITCHEN_ITEM_TYPES = {"food", "drink", "dessert"}
+_KITCHEN_LINE_STATUS_BY_ORDER_STATE = {
+    "received": "queued",
+    "preparing": "cooking",
+    "ready": "ready",
+    "served": "served",
+}
 
 
 # ----------- schemas -----------
 class OrderLineCreate(BaseModel):
     menu_item_id: UUID
     variant_id: UUID | None = None
-    qty: float = Field(gt=0)
+    qty: int = Field(gt=0)
     modifiers: list[dict] | None = None
     note: str | None = Field(default=None, max_length=500)
 
@@ -74,9 +93,17 @@ class OrderCreate(BaseModel):
     place_of_supply_state_code: str | None = Field(default=None, pattern=r"^\d{2}$")
     notes: str | None = Field(default=None, max_length=500)
 
+    @field_validator("customer_name", "customer_phone")
+    @classmethod
+    def normalize_optional_customer_identity(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        return normalized or None
+
 
 class OrderLineRead(BaseModel):
     menu_item_id: UUID
+    variant_id: UUID | None = None
+    modifiers: list[dict] | None = None
     name: str
     sku: str
     hsn_or_sac: str
@@ -88,6 +115,7 @@ class OrderLineRead(BaseModel):
     cgst_minor: int
     sgst_minor: int
     igst_minor: int
+    note: str | None = None
 
 
 class OrderRead(BaseModel):
@@ -107,6 +135,10 @@ class OrderRead(BaseModel):
     tax_minor: int
     round_off_minor: int = 0
     total_minor: int
+    paid_minor: int = 0
+    due_minor: int = 0
+    free_gaming_minutes_applied: int = 0
+    free_hookah_count_applied: int = 0
     delivery_via: str | None = None
     place_of_supply_state_code: str | None = None
     customer_name: str | None = None
@@ -117,7 +149,7 @@ class OrderRead(BaseModel):
     closed_at: datetime | None = None
     invoice_issued_at: datetime | None = None
     held_at: datetime | None = None
-    lines: list[OrderLineRead] = []
+    lines: list[OrderLineRead] = Field(default_factory=list)
 
 
 class PaymentCreate(BaseModel):
@@ -125,6 +157,19 @@ class PaymentCreate(BaseModel):
     amount_minor: int = Field(gt=0)
     tendered_minor: int | None = None
     ref_external: str | None = Field(default=None, max_length=200)
+    expected_order_total_minor: int | None = Field(default=None, ge=0)
+    expected_due_minor: int | None = Field(default=None, ge=0)
+
+
+class OrderCustomerUpdate(BaseModel):
+    customer_name: str | None = Field(default=None, max_length=200)
+    customer_phone: str | None = Field(default=None, max_length=20)
+
+    @field_validator("customer_name", "customer_phone")
+    @classmethod
+    def normalize_optional_customer_identity(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        return normalized or None
 
 
 class RefundCreate(BaseModel):
@@ -213,7 +258,7 @@ async def _upsert_and_attach_customer(
                 .join(MembershipTier, MembershipTier.id == CustomerMembership.tier_id)
                 .where(
                     CustomerMembership.customer_id == existing.id,
-                    CustomerMembership.cancelled_at.is_(None),
+                    CustomerMembership.starts_at <= now,
                     CustomerMembership.expires_at > now,
                 )
                 .limit(1)
@@ -280,6 +325,176 @@ async def _refunded_total(session, order_id: UUID) -> int:
     )
 
 
+def _validate_confirmed_payment_balance(
+    payload: PaymentCreate,
+    *,
+    order_total_minor: int,
+    due_minor: int,
+) -> None:
+    """Protect a cashier-confirmed full settlement from stale bill state."""
+    if (
+        payload.expected_order_total_minor is not None
+        and payload.expected_order_total_minor != order_total_minor
+    ):
+        raise BusinessRuleError(
+            "Order total changed before payment. Reload the exact bill before collecting money."
+        )
+    if payload.expected_due_minor is not None and payload.expected_due_minor != due_minor:
+        raise BusinessRuleError(
+            "Order balance changed before payment. Reload the exact amount due before collecting money."
+        )
+    if due_minor > 0 and payload.amount_minor != due_minor:
+        raise BusinessRuleError(
+            "Split payments are not enabled. Payment must equal the exact amount due."
+        )
+
+
+def _stored_line_gross_amount(line: OrderLine, *, price_includes_tax: bool) -> int:
+    """Recover the snapshotted pre-membership amount without current menu prices."""
+    discount = int(line.discount_minor or 0)
+    if price_includes_tax:
+        return max(0, int(line.line_total_minor or 0) + discount)
+    return max(0, int(line.taxable_value_minor or 0) + discount)
+
+
+async def _reprice_unpaid_order_for_customer(
+    session,
+    *,
+    order: Order,
+    company_id: UUID,
+) -> None:
+    """Apply the attached customer's current membership to stored gross lines.
+
+    Repricing uses each order line's existing gross snapshot, not today's menu
+    price. A session line uses its GamingSession tax/price-mode snapshot, so a
+    later station or catalog edit cannot rewrite the service already consumed.
+    """
+    lines = (
+        await session.execute(
+            select(OrderLine).where(OrderLine.order_id == order.id).with_for_update()
+        )
+    ).scalars().all()
+    if not lines:
+        raise BusinessRuleError("order has no lines to price")
+
+    item_ids = {line.menu_item_id for line in lines}
+    items = (
+        await session.execute(
+            select(MenuItem).where(
+                MenuItem.company_id == company_id,
+                MenuItem.id.in_(item_ids),
+            )
+        )
+    ).scalars().all()
+    items_by_id = {item.id: item for item in items}
+    if len(items_by_id) != len(item_ids):
+        raise BusinessRuleError(
+            "An order item is missing from the catalog. Ask a protected owner to reconcile it."
+        )
+
+    session_row = (
+        await session.execute(
+            select(GamingSession, Station)
+            .join(Station, Station.id == GamingSession.station_id)
+            .where(GamingSession.order_id == order.id)
+            .limit(1)
+        )
+    ).first()
+    gaming_session = session_row[0] if session_row else None
+    station = session_row[1] if session_row else None
+    requested_gaming_minutes = (
+        max(0, int(gaming_session.billable_minutes or 0))
+        if gaming_session and station and station.type == "ps5"
+        else 0
+    )
+    requested_hookah_count = (
+        1 if gaming_session and station and station.type == "hookah" else 0
+    )
+    benefits = await reserve_membership_benefits(
+        session,
+        order=order,
+        company_id=company_id,
+        requested_gaming_minutes=requested_gaming_minutes,
+        requested_hookah_count=requested_hookah_count,
+    )
+
+    pricing = OrderPricingService(session)
+    for line in lines:
+        item = items_by_id[line.menu_item_id]
+        is_session_line = bool(gaming_session and item.sku.startswith("SESSION-"))
+        price_includes_tax = bool(item.price_includes_tax)
+        item_type = item.type
+        gross_amount = _stored_line_gross_amount(
+            line,
+            price_includes_tax=price_includes_tax,
+        )
+        tax_rate = Decimal(str(line.tax_rate or 0))
+        if is_session_line:
+            if gaming_session.rate_includes_tax is not None:
+                price_includes_tax = bool(gaming_session.rate_includes_tax)
+            gross_amount = int(gaming_session.amount_minor or gross_amount)
+            tax_rate = Decimal(str(gaming_session.tax_rate or line.tax_rate or 0))
+            item_type = (
+                "hookah"
+                if station and station.type == "hookah"
+                else "streaming"
+                if station and station.type == "streaming"
+                else "gaming"
+            )
+
+        allowance_minor = 0
+        if is_session_line and gaming_session and station:
+            if station.type == "ps5" and benefits.gaming_minutes:
+                allowance_minor = gaming_minutes_allowance_minor(
+                    gross_amount_minor=gross_amount,
+                    billable_minutes=int(gaming_session.billable_minutes or 0),
+                    reserved_minutes=benefits.gaming_minutes,
+                    rate_per_hour_minor=int(gaming_session.rate_per_hour_minor or 0),
+                )
+            elif station.type == "hookah" and benefits.hookah_count:
+                # A hookah allowance is a whole-session benefit.  Use the
+                # snapshotted session gross, never today's station rate.
+                allowance_minor = gross_amount
+
+        priced = await pricing.price_time_based_line(
+            company_id=company_id,
+            branch_id=order.branch_id,
+            amount_minor=gross_amount,
+            tax_rate=tax_rate,
+            rate_includes_tax=price_includes_tax,
+            customer_phone=order.customer_phone,
+            item_type=item_type,
+            place_of_supply_state_code=order.place_of_supply_state_code,
+            delivery_via=order.delivery_via,
+            allowance_minor=allowance_minor,
+        )
+        qty = max(1, int(line.qty))
+        line.unit_price_minor = int(
+            (Decimal(priced.total_minor) / Decimal(qty)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            )
+        )
+        line.line_total_minor = priced.total_minor
+        line.discount_minor = priced.discount_minor
+        line.taxable_value_minor = priced.taxable_minor
+        line.cgst_minor = priced.cgst_minor
+        line.sgst_minor = priced.sgst_minor
+        line.igst_minor = priced.igst_minor
+        line.cess_minor = 0
+
+    raw_total = sum(int(line.line_total_minor or 0) for line in lines)
+    rounded_total, round_off = _round_to_rupee(raw_total)
+    order.subtotal_minor = sum(int(line.taxable_value_minor or 0) for line in lines)
+    order.discount_minor = sum(int(line.discount_minor or 0) for line in lines)
+    order.cgst_minor = sum(int(line.cgst_minor or 0) for line in lines)
+    order.sgst_minor = sum(int(line.sgst_minor or 0) for line in lines)
+    order.igst_minor = sum(int(line.igst_minor or 0) for line in lines)
+    order.cess_minor = sum(int(line.cess_minor or 0) for line in lines)
+    order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor + order.cess_minor
+    order.round_off_minor = round_off
+    order.total_minor = rounded_total
+
+
 async def _source_label(session, order: Order) -> str | None:
     """Human label for where an order came from: its table, or (for a
     gaming/hookah session sent to POS) the station that billed it."""
@@ -297,6 +512,99 @@ async def _source_label(session, order: Order) -> str | None:
     return row
 
 
+def _reject_unsupported_customizations(lines: list[OrderLineCreate]) -> None:
+    """Never accept a priced customization that the tax engine ignores.
+
+    Per-line preparation notes are supported end to end. Variants and priced
+    modifiers remain blocked until the menu API exposes and validates them.
+    Silently dropping either would undercharge the customer and corrupt the
+    receipt snapshot.
+    """
+    if any(line.variant_id is not None or line.modifiers for line in lines):
+        raise BusinessRuleError(
+            "Priced variants and modifiers are not enabled yet. "
+            "Use the item note for preparation instructions."
+        )
+
+
+async def _kitchen_item_ids(
+    session,
+    *,
+    company_id: UUID,
+    menu_item_ids: list[UUID],
+) -> set[UUID]:
+    """Return requested items that belong on the kitchen display."""
+    return set(
+        (
+            await session.execute(
+                select(MenuItem.id).where(
+                    MenuItem.company_id == company_id,
+                    MenuItem.id.in_(menu_item_ids),
+                    MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+                )
+            )
+        ).scalars().all()
+    )
+
+
+async def _materialize_legacy_kitchen_line_state(session, order: Order) -> None:
+    """Backfill an old all-queued batch while its order row is locked.
+
+    The previous KDS changed only Order.kitchen_state. This must run before a
+    late line is inserted and the mirror is reset to received, otherwise old
+    served dishes and the genuinely new line become indistinguishable.
+    """
+    target_status = _KITCHEN_LINE_STATUS_BY_ORDER_STATE.get(order.kitchen_state)
+    if target_status in {None, "queued"}:
+        return
+    existing_lines = (
+        (
+            await session.execute(
+                select(OrderLine)
+                .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+                .where(
+                    OrderLine.order_id == order.id,
+                    OrderLine.voided_at.is_(None),
+                    MenuItem.company_id == order.company_id,
+                    MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+                )
+                .order_by(OrderLine.created_at, OrderLine.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not existing_lines or any(
+        (line.kitchen_status or "queued") != "queued" for line in existing_lines
+    ):
+        return
+    for line in existing_lines:
+        line.kitchen_status = target_status
+
+
+async def _release_table_if_no_active_orders(session, order: Order) -> None:
+    """Free a table only when no other legacy/open ticket still owns it."""
+    if order.table_id is None:
+        return
+    other_active = int(
+        (
+            await session.execute(
+                select(func.count(Order.id)).where(
+                    Order.table_id == order.table_id,
+                    Order.id != order.id,
+                    Order.status.in_(("open", "held")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if other_active:
+        return
+    table = await session.get(Table, order.table_id)
+    if table and table.status == "occupied":
+        table.status = "available"
+
+
 async def _build_order_read(session, order: Order) -> OrderRead:
     line_rows = (
         await session.execute(
@@ -306,6 +614,9 @@ async def _build_order_read(session, order: Order) -> OrderRead:
             .order_by(OrderLine.created_at, OrderLine.id)
         )
     ).all()
+    paid_minor = await _paid_total(session, order.id)
+    due_minor = max(0, int(order.total_minor or 0) - paid_minor)
+    benefits = await applied_benefits_for_order(session, order=order)
     return OrderRead(
         id=order.id,
         invoice_no=order.invoice_no,
@@ -323,6 +634,10 @@ async def _build_order_read(session, order: Order) -> OrderRead:
         tax_minor=order.tax_minor,
         round_off_minor=order.round_off_minor,
         total_minor=order.total_minor,
+        paid_minor=paid_minor,
+        due_minor=due_minor,
+        free_gaming_minutes_applied=benefits.gaming_minutes,
+        free_hookah_count_applied=benefits.hookah_count,
         delivery_via=order.delivery_via,
         place_of_supply_state_code=order.place_of_supply_state_code,
         customer_name=order.customer_name,
@@ -336,6 +651,8 @@ async def _build_order_read(session, order: Order) -> OrderRead:
         lines=[
             OrderLineRead(
                 menu_item_id=line.menu_item_id,
+                variant_id=line.variant_id,
+                modifiers=line.modifiers,
                 name=item.name,
                 sku=item.sku,
                 hsn_or_sac=line.hsn_or_sac or item.hsn_code or "",
@@ -347,10 +664,70 @@ async def _build_order_read(session, order: Order) -> OrderRead:
                 cgst_minor=int(line.cgst_minor),
                 sgst_minor=int(line.sgst_minor),
                 igst_minor=int(line.igst_minor),
+                note=line.note,
             )
             for line, item in line_rows
         ],
     )
+
+
+async def _finalize_order(
+    session,
+    *,
+    order: Order,
+    company_id: UUID,
+    actor_user_id: UUID,
+    at: datetime,
+) -> None:
+    """Issue the invoice and run every sale-finalization side effect once.
+
+    The caller holds the order and shift row locks and has proved the balance
+    is exactly settled.  Payments and membership-funded zero bills share this
+    path so inventory, loyalty, table release, invoice identity, and allowance
+    consumption cannot drift apart.
+    """
+    if order.status not in ("open", "held"):
+        raise BusinessRuleError(f"cannot finalize an order in status={order.status}")
+    branch = await session.get(Branch, order.branch_id)
+    if not branch or branch.company_id != company_id or branch.deleted_at:
+        raise NotFoundError("branch not found")
+    timezone_name = branch.timezone or await company_timezone(session, company_id)
+    if not order.invoice_no:
+        order.invoice_no, order.fiscal_year = await InvoiceNumberService(session).allocate(
+            branch_id=order.branch_id,
+            branch_code=branch.code or "MN",
+            at=at,
+            timezone_name=timezone_name,
+        )
+
+    # This row update is in the same database transaction as the invoice and
+    # all other finalization effects. A rollback leaves the allowance reserved,
+    # never half-consumed.
+    await consume_membership_benefits(session, order_id=order.id, at=at)
+    order.status = "paid"
+    order.closed_at = at
+    order.invoice_issued_at = at
+    await _release_table_if_no_active_orders(session, order)
+
+    order_lines = (
+        await session.execute(select(OrderLine).where(OrderLine.order_id == order.id))
+    ).scalars().all()
+    await deduct_for_order(
+        session,
+        order_id=order.id,
+        order_lines=list(order_lines),
+        branch_id=order.branch_id,
+        created_by=actor_user_id,
+    )
+    if order.customer_phone:
+        await _upsert_and_attach_customer(
+            session,
+            company_id=company_id,
+            phone=order.customer_phone,
+            name=order.customer_name,
+            order=order,
+            order_lines=list(order_lines),
+        )
 
 
 # ----------- endpoints -----------
@@ -383,17 +760,39 @@ async def create_order(
         raise BusinessRuleError("order must have at least one line")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
+    _reject_unsupported_customizations(payload.lines)
 
     branch = await session.get(Branch, tenant.branch_id)
     if not branch:
         raise NotFoundError("branch not found")
+    table: Table | None = None
     if payload.table_id is not None:
-        table = await session.get(Table, payload.table_id)
+        # Lock the table before checking for an unfinished ticket. This makes
+        # two simultaneous devices serialize instead of creating duplicates.
+        table = (
+            await session.execute(
+                select(Table).where(Table.id == payload.table_id).with_for_update()
+            )
+        ).scalar_one_or_none()
         if not table:
             raise NotFoundError("table not found")
         floor = await session.get(Floor, table.floor_id)
         if not floor or floor.branch_id != tenant.branch_id:
             raise NotFoundError("table not found")
+        existing_table_order = (
+            await session.execute(
+                select(Order.id).where(
+                    Order.company_id == tenant.company_id,
+                    Order.branch_id == tenant.branch_id,
+                    Order.table_id == payload.table_id,
+                    Order.status.in_(("open", "held")),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_table_order is not None:
+            raise BusinessRuleError(
+                "This table already has an unfinished order. Open that order instead."
+            )
     shift = (
         await session.execute(
             select(Shift)
@@ -408,6 +807,16 @@ async def create_order(
         terminal_id=tenant.terminal_id,
         operation="creating an order",
     )
+    if payload.table_id is None:
+        # A direct POS bill is recovered only on this cashier's device, so only
+        # the accountable shift opener may prepare it. Table-originated work is
+        # deliberately collaborative and is later selected/billed by cashier.
+        require_shift_opener(
+            shift,
+            user_id=tenant.user_id,
+            protected_access=tenant.protected_access,
+            operation="create a direct POS order on this shift",
+        )
 
     branch_state = branch.state_code or "32"
     delivery_via = payload.delivery_via if payload.type == "delivery" else None
@@ -431,6 +840,11 @@ async def create_order(
             LineRequest(menu_item_id=line.menu_item_id, qty=int(line.qty))
             for line in payload.lines
         ],
+    )
+    kitchen_item_ids = await _kitchen_item_ids(
+        session,
+        company_id=tenant.company_id,
+        menu_item_ids=[line.menu_item_id for line in payload.lines],
     )
 
     # 2. Insert an unpaid order. Invoice identity, stock consumption, and
@@ -466,17 +880,20 @@ async def create_order(
         customer_address=payload.customer_address,
         customer_state_code=payload.customer_state_code,
         notes=payload.notes,
+        kitchen_state="received" if kitchen_item_ids else None,
     )
     session.add(order)
     await session.flush()
 
     # 3. Insert priced order lines.
     order_lines: list[OrderLine] = []
-    for priced_line in priced.lines:
+    for requested_line, priced_line in zip(payload.lines, priced.lines, strict=True):
         ol = OrderLine(
             id=uuid4(),
             order_id=order.id,
             menu_item_id=priced_line.menu_item_id,
+            variant_id=requested_line.variant_id,
+            modifiers=requested_line.modifiers,
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -488,14 +905,14 @@ async def create_order(
             sgst_minor=priced_line.sgst_minor,
             igst_minor=priced_line.igst_minor,
             cess_minor=priced_line.cess_minor,
+            note=requested_line.note,
+            kitchen_status="queued",
         )
         session.add(ol)
         order_lines.append(ol)
 
-    if order.table_id is not None:
-        table = await session.get(Table, order.table_id)
-        if table and table.status == "available":
-            table.status = "occupied"
+    if table and table.status == "available":
+        table.status = "occupied"
 
     await session.flush()
     response = await _build_order_read(session, order)
@@ -537,15 +954,41 @@ async def add_order_lines(
     if existing_response:
         return OrderRead.model_validate(existing_response["body"])
 
+    _reject_unsupported_customizations(payload.lines)
+
     order = (
         await session.execute(
             select(Order).where(Order.id == order_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not order or order.company_id != tenant.company_id:
-        raise NotFoundError("order not found")
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="adding items to an order",
+    )
     if order.status not in ("open", "held"):
         raise BusinessRuleError(f"cannot add lines to an order in status={order.status}")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="adding items to an order",
+    )
+    if order.table_id is None or order.status == "held":
+        require_shift_opener(
+            shift,
+            user_id=tenant.user_id,
+            protected_access=tenant.protected_access,
+            operation="add POS items to an order on this shift",
+        )
 
     pricing = OrderPricingService(session)
     priced = await pricing.price_order(
@@ -559,11 +1002,20 @@ async def add_order_lines(
             for line in payload.lines
         ],
     )
-    for priced_line in priced.lines:
+    kitchen_item_ids = await _kitchen_item_ids(
+        session,
+        company_id=tenant.company_id,
+        menu_item_ids=[line.menu_item_id for line in payload.lines],
+    )
+    if kitchen_item_ids:
+        await _materialize_legacy_kitchen_line_state(session, order)
+    for requested_line, priced_line in zip(payload.lines, priced.lines, strict=True):
         session.add(OrderLine(
             id=uuid4(),
             order_id=order.id,
             menu_item_id=priced_line.menu_item_id,
+            variant_id=requested_line.variant_id,
+            modifiers=requested_line.modifiers,
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -575,7 +1027,15 @@ async def add_order_lines(
             sgst_minor=priced_line.sgst_minor,
             igst_minor=priced_line.igst_minor,
             cess_minor=priced_line.cess_minor,
+            note=requested_line.note,
+            kitchen_status="queued",
         ))
+
+    if kitchen_item_ids:
+        # A late kitchen item must become visible again even if the prior
+        # batch for this ticket had already reached ready/served.
+        order.kitchen_state = "received"
+        order.kitchen_ready_at = None
     await session.flush()
 
     # Re-aggregate the WHOLE order (existing + new lines) and re-round once,
@@ -610,6 +1070,88 @@ async def add_order_lines(
     return response
 
 
+@router.patch("/orders/{order_id}/customer", response_model=OrderRead)
+async def attach_order_customer(
+    order_id: UUID,
+    payload: OrderCustomerUpdate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Attach a customer/member and deterministically reprice an unpaid bill.
+
+    This is the POS handoff step for Tables and Gaming/Shisha orders, whose
+    operational originator may not know the final paying customer. Only the
+    accountable shift opener (or protected owner) may change the bill here.
+    """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return OrderRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="attaching a customer to an order",
+    )
+    if order.status not in ("open", "held"):
+        raise BusinessRuleError(
+            f"cannot change the customer on an order in status={order.status}"
+        )
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="attaching a customer to an order",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="attach a customer or membership to this bill",
+    )
+    if await _paid_total(session, order.id):
+        raise BusinessRuleError("cannot change the customer after a payment was recorded")
+
+    previous_phone = (order.customer_phone or "").strip() or None
+    order.customer_name = payload.customer_name
+    order.customer_phone = payload.customer_phone
+    if order.customer_phone != previous_phone:
+        await _reprice_unpaid_order_for_customer(
+            session,
+            order=order,
+            company_id=tenant.company_id,
+        )
+    await session.flush()
+    response = await _build_order_read(session, order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
 @router.patch("/orders/{order_id}/send-to-pos", response_model=OrderRead)
 async def send_order_to_pos(
     order_id: UUID,
@@ -625,10 +1167,30 @@ async def send_order_to_pos(
             select(Order).where(Order.id == order_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not order or order.company_id != tenant.company_id:
-        raise NotFoundError("order not found")
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="sending an order to POS",
+    )
+    if order.status == "held":
+        # Response-loss retry: the state transition already succeeded.
+        return await _build_order_read(session, order)
     if order.status != "open":
         raise BusinessRuleError(f"cannot send an order in status={order.status} to POS")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="sending an order to POS",
+    )
     has_lines = (
         await session.execute(
             select(func.count()).select_from(OrderLine).where(OrderLine.order_id == order.id)
@@ -662,9 +1224,16 @@ async def void_held_order(
             select(Order).where(Order.id == order_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not order or order.company_id != tenant.company_id:
-        raise NotFoundError("order not found")
-    if order.status != "held":
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="voiding an order",
+    )
+    if order.status == "void":
+        return None
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(f"cannot clear an order in status={order.status}")
     shift = (
         await session.execute(
@@ -686,10 +1255,7 @@ async def void_held_order(
     )
     order.status = "void"
     order.notes = f"{order.notes + ' — ' if order.notes else ''}Voided: {payload.reason}"[:500]
-    if order.table_id is not None:
-        table = await session.get(Table, order.table_id)
-        if table and table.status == "occupied":
-            table.status = "available"
+    await _release_table_if_no_active_orders(session, order)
     await session.flush()
 
 
@@ -700,8 +1266,13 @@ async def get_order(
     tenant: TenantContext = Depends(requires("pos.read")),
 ) -> OrderRead:
     order = await session.get(Order, order_id)
-    if not order or order.company_id != tenant.company_id:
-        raise NotFoundError("order not found")
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="viewing an order",
+    )
     return await _build_order_read(session, order)
 
 
@@ -737,7 +1308,17 @@ async def list_orders(
     a held order shouldn't vanish from the queue just because it crossed
     local midnight.
     """
-    stmt = select(Order).where(Order.company_id == tenant.company_id)
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before viewing orders."
+        )
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required before viewing orders.")
+    stmt = select(Order).where(
+        Order.company_id == tenant.company_id,
+        Order.branch_id == tenant.branch_id,
+        Order.terminal_id == tenant.terminal_id,
+    )
     if status_filter:
         stmt = stmt.where(Order.status.in_(status_filter))
     else:
@@ -749,7 +1330,14 @@ async def list_orders(
         stmt = stmt.where(Order.created_at >= f_dt, Order.created_at < t_dt)
     if table_id is not None:
         stmt = stmt.where(Order.table_id == table_id)
-    stmt = stmt.order_by(Order.created_at.desc()).limit(min(limit, 500))
+    if status_filter and set(status_filter) == {"held"}:
+        stmt = stmt.order_by(
+            func.coalesce(Order.held_at, Order.created_at),
+            Order.created_at,
+        )
+    else:
+        stmt = stmt.order_by(Order.created_at.desc())
+    stmt = stmt.limit(min(limit, 500))
 
     rows = (await session.execute(stmt)).scalars().all()
     if not rows:
@@ -798,6 +1386,7 @@ async def list_orders(
             items_count=int(counts_by_order.get(o.id, 0)),
             customer_name=o.customer_name,
             created_at=o.created_at,
+            held_at=o.held_at,
         ))
     return out
 
@@ -813,6 +1402,7 @@ class ShiftRead(BaseModel):
     expected_minor: int | None
     counted_minor: int | None
     variance_minor: int | None
+    opened_by: UUID
     opened_by_name: str | None = None
     opened_by_email: str | None = None
 
@@ -846,11 +1436,131 @@ async def list_shifts(
             expected_minor=int(s.expected_minor) if s.expected_minor is not None else None,
             counted_minor=int(s.counted_minor) if s.counted_minor is not None else None,
             variance_minor=int(s.variance_minor) if s.variance_minor is not None else None,
+            opened_by=s.opened_by,
             opened_by_name=opener_name,
             opened_by_email=opener_email,
         )
         for s, opener_name, opener_email in rows
     ]
+
+
+def _zero_total_finalization_response(order: Order) -> dict:
+    return {
+        "order_id": str(order.id),
+        "amount_minor": 0,
+        "order_status": order.status,
+        "invoice_no": order.invoice_no,
+        "fiscal_year": order.fiscal_year,
+        "invoice_issued_at": order.invoice_issued_at.isoformat()
+        if order.invoice_issued_at
+        else None,
+    }
+
+
+@router.post("/orders/{order_id}/finalize-zero", status_code=status.HTTP_200_OK)
+async def finalize_zero_total_order(
+    order_id: UUID,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> dict:
+    """Settle an exact-zero bill without inventing a zero-value payment.
+
+    This is primarily for a PS5/Shisha bill fully covered by a reserved member
+    allowance. It remains a high-trust money action: only the shift opener or a
+    protected owner may finalize it, and an Idempotency-Key is mandatory.
+    """
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required for POS writes")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("token has no branch_id")
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return existing_response["body"]
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="finalizing a zero-total order",
+    )
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if order.status == "paid":
+        # A new idempotency key is still a harmless read of the already-issued
+        # zero invoice. The original key is normally replayed above.
+        shift = require_operational_shift_scope(
+            shift,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+            terminal_id=tenant.terminal_id,
+            operation="reviewing a finalized zero-total order",
+        )
+    else:
+        shift = require_open_operational_shift(
+            shift,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+            terminal_id=tenant.terminal_id,
+            operation="finalizing a zero-total order",
+        )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="finalize a zero-total order on this shift",
+    )
+    if order.branch_id != shift.branch_id or order.terminal_id != shift.terminal_id:
+        raise BusinessRuleError("Order branch or terminal does not match its shift.")
+
+    paid_total = await _paid_total(session, order.id)
+    if int(order.total_minor or 0) != 0 or paid_total != 0:
+        raise BusinessRuleError(
+            "Only an unpaid order with an exact zero balance can use zero-total finalization."
+        )
+    if order.status == "paid":
+        if not order.invoice_no or not order.invoice_issued_at:
+            raise BusinessRuleError(
+                "Paid zero-total order is missing its invoice; "
+                "ask a protected owner to reconcile it."
+            )
+    else:
+        if order.status not in ("open", "held"):
+            raise BusinessRuleError(
+                f"cannot finalize an order in status={order.status}"
+            )
+        await _finalize_order(
+            session,
+            order=order,
+            company_id=tenant.company_id,
+            actor_user_id=tenant.user_id,
+            at=datetime.now(timezone.utc),
+        )
+
+    response = _zero_total_finalization_response(order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response,
+    )
+    return response
 
 
 @router.post("/orders/{order_id}/payments", status_code=status.HTTP_201_CREATED)
@@ -881,8 +1591,13 @@ async def record_payment(
             select(Order).where(Order.id == order_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not order or order.company_id != tenant.company_id:
-        raise NotFoundError("order not found")
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="recording a payment",
+    )
     if order.status in {"paid", "void", "refunded"}:
         raise BusinessRuleError(f"cannot pay an order in status={order.status}")
     shift = (
@@ -908,10 +1623,16 @@ async def record_payment(
 
     already_paid = await _paid_total(session, order_id)
     due_minor = max(0, int(order.total_minor or 0) - already_paid)
+    _validate_confirmed_payment_balance(
+        payload,
+        order_total_minor=int(order.total_minor or 0),
+        due_minor=due_minor,
+    )
     if due_minor <= 0:
-        order.status = "paid"
-        order.closed_at = order.closed_at or datetime.now(timezone.utc)
-        raise BusinessRuleError("order is already fully paid")
+        raise BusinessRuleError(
+            "Order balance is zero. Finalize it with the zero-total settlement action; "
+            "do not record a payment."
+        )
     if payload.amount_minor > due_minor:
         raise BusinessRuleError("payment exceeds amount due")
     if (
@@ -940,46 +1661,13 @@ async def record_payment(
         shift.expected_minor = int(shift.expected_minor or 0) + payload.amount_minor
     finalized = already_paid + payload.amount_minor >= order.total_minor
     if finalized:
-        branch = await session.get(Branch, order.branch_id)
-        if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
-            raise NotFoundError("branch not found")
-        timezone_name = branch.timezone or await company_timezone(session, tenant.company_id)
-        if not order.invoice_no:
-            order.invoice_no, order.fiscal_year = await InvoiceNumberService(session).allocate(
-                branch_id=order.branch_id,
-                branch_code=branch.code or "MN",
-                at=now,
-                timezone_name=timezone_name,
-            )
-        order.status = "paid"
-        order.closed_at = now
-        order.invoice_issued_at = now
-        if order.table_id is not None:
-            table = await session.get(Table, order.table_id)
-            if table and table.status == "occupied":
-                table.status = "available"
-
-        order_lines = (
-            await session.execute(
-                select(OrderLine).where(OrderLine.order_id == order.id)
-            )
-        ).scalars().all()
-        await deduct_for_order(
+        await _finalize_order(
             session,
-            order_id=order.id,
-            order_lines=list(order_lines),
-            branch_id=order.branch_id,
-            created_by=tenant.user_id,
+            order=order,
+            company_id=tenant.company_id,
+            actor_user_id=tenant.user_id,
+            at=now,
         )
-        if order.customer_phone:
-            await _upsert_and_attach_customer(
-                session,
-                company_id=tenant.company_id,
-                phone=order.customer_phone,
-                name=order.customer_name,
-                order=order,
-                order_lines=list(order_lines),
-            )
     response = {
         "id": str(payment.id),
         "amount_minor": payment.amount_minor,
@@ -1027,10 +1715,35 @@ async def issue_refund(
             select(Order).where(Order.id == order_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if not order or order.company_id != tenant.company_id:
-        raise NotFoundError("order not found")
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="issuing a refund",
+    )
     if order.status not in {"paid", "refunded"}:
         raise BusinessRuleError("only paid orders can be refunded")
+    original_shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    original_shift = require_operational_shift_scope(
+        original_shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="issuing a refund",
+        resource_branch_id=order.branch_id,
+        resource_name="order",
+    )
+    require_shift_opener(
+        original_shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="refund an order from this shift",
+    )
     payment_rows = (
         await session.execute(
             select(Payment).where(Payment.order_id == order_id).order_by(Payment.paid_at)
@@ -1080,8 +1793,16 @@ async def issue_refund(
             raise BusinessRuleError(
                 "cash refund requires exactly one open shift for this terminal"
             )
-        shift = open_shifts[0]
-        shift.expected_minor = int(shift.expected_minor or 0) - payload.amount_minor
+        cash_shift = open_shifts[0]
+        require_shift_opener(
+            cash_shift,
+            user_id=tenant.user_id,
+            protected_access=tenant.protected_access,
+            operation="issue a cash refund on this shift",
+        )
+        cash_shift.expected_minor = (
+            int(cash_shift.expected_minor or 0) - payload.amount_minor
+        )
     if refunded_total + payload.amount_minor >= paid_total:
         order.status = "refunded"
     response = {"id": str(refund.id), "settlement_method": settlement_method}
@@ -1119,6 +1840,16 @@ async def open_shift(
         )
     ).scalar_one_or_none()
     if existing:
+        if existing.opened_by != tenant.user_id:
+            raise BusinessRuleError(
+                "A shift is already open on this terminal by another staff member. "
+                "Open the Shifts tab to see who is responsible for it."
+            )
+        if int(existing.opening_float_minor or 0) != payload.opening_float_minor:
+            raise BusinessRuleError(
+                "This shift is already open with a different opening float. "
+                "Use the existing shift instead of changing its accountable cash start."
+            )
         return {"id": str(existing.id), "status": existing.status}
     shift = Shift(
         id=uuid4(),
@@ -1147,13 +1878,31 @@ async def close_shift(
             select(Shift).where(Shift.id == shift_id).with_for_update()
         )
     ).scalar_one_or_none()
-    shift = require_open_operational_shift(
+    shift = require_operational_shift_scope(
         shift,
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="closing a shift",
     )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="close this shift",
+    )
+    if shift.status == "closed":
+        if int(shift.counted_minor or 0) != payload.counted_minor:
+            raise BusinessRuleError(
+                "Shift is already closed with a different counted amount."
+            )
+        return {
+            "id": str(shift.id),
+            "status": shift.status,
+            "variance_minor": shift.variance_minor,
+        }
+    if shift.status != "open":
+        raise BusinessRuleError(f"Shift is {shift.status} and cannot be closed.")
     unfinished_orders = int(
         (
             await session.execute(
@@ -1183,6 +1932,23 @@ async def close_shift(
     if running_sessions:
         raise BusinessRuleError(
             f"cannot close shift with {running_sessions} running gaming session(s)"
+        )
+    unbilled_sessions = int(
+        (
+            await session.execute(
+                select(func.count(GamingSession.id)).where(
+                    GamingSession.shift_id == shift.id,
+                    GamingSession.status == "ended",
+                    GamingSession.order_id.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if unbilled_sessions:
+        raise BusinessRuleError(
+            f"cannot close shift with {unbilled_sessions} stopped session(s) "
+            "not yet sent to POS"
         )
     shift.closed_at = datetime.now(timezone.utc)
     shift.counted_minor = payload.counted_minor

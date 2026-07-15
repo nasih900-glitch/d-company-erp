@@ -13,6 +13,7 @@ import {
   Play, Square, Pause, PlayCircle, Gamepad2, Glasses, CarFront, Tv,
   Plus, Edit2, Trash2, Loader2, AlertCircle, RefreshCw, Settings, Flame,
   Timer, TimerOff, X, BellRing, BellOff, Bell, Send,
+  Ban,
 } from 'lucide-react';
 
 import { ALARM_REPEAT_MS, fmtClock, notifyBrowser, playAlarmTone } from '@/lib/alarm';
@@ -82,6 +83,7 @@ export default function GamingScreen() {
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
   const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(
     typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
@@ -105,23 +107,27 @@ export default function GamingScreen() {
     setLoading(true); setError(null);
     try {
       if (LIVE_MODE) {
-        const [stationRows, activeSessions, endedSessions] = await Promise.all([
+        const [stationRows, activeSessions, pausedSessions, endedSessions] = await Promise.all([
           gaming.listStations(),
-          gaming.listSessions('active').catch(() => []),
-          gaming.listSessions('ended').catch(() => []),
+          gaming.listSessions('active'),
+          gaming.listSessions('paused'),
+          // Only stopped sessions still awaiting POS matter operationally.
+          // Fetch enough to cover every station instead of letting paid
+          // history push an older unbilled session out of the default window.
+          gaming.listSessions('ended', { unbilledOnly: true, limit: 500 }),
         ]);
         setStations(stationRows.filter((station) => isAppStoreAllowedType(station.type)));
         // Rehydrate running sessions, AND any stopped-but-not-yet-sent session,
         // so a page refresh never silently drops an unbilled amount from view.
         setSessions((prev) => {
           const next: Record<string, LocalSession> = {};
-          for (const gs of activeSessions) {
+          for (const gs of [...activeSessions, ...pausedSessions]) {
             next[gs.station_id] = prev[gs.station_id]?.backend_session_id === gs.id
               ? prev[gs.station_id]
               : {
                   station_id: gs.station_id,
                   start_at: new Date(gs.start_at).getTime(),
-                  status: 'active',
+                  status: gs.status === 'paused' ? 'paused' : 'active',
                   pausedMs: 0,
                   backend_session_id: gs.id,
                   timer_minutes: gs.timer_minutes,
@@ -335,6 +341,34 @@ export default function GamingScreen() {
     }
   }
 
+  async function cancelSession(st: StationDTO) {
+    const current = sessions[st.id];
+    if (!current?.backend_session_id) return;
+    const reason = prompt(
+      `Why are you cancelling the stopped session for ${st.name}?\n\n`
+      + 'This keeps an audit trail and removes it from billing.',
+    );
+    if (!reason?.trim()) return;
+    setCancelling(st.id);
+    setSendErrors((errors) => {
+      const next = { ...errors };
+      delete next[st.id];
+      return next;
+    });
+    try {
+      await gaming.cancelSession(current.backend_session_id, reason.trim());
+      setSessions((all) => {
+        const next = { ...all };
+        delete next[st.id];
+        return next;
+      });
+    } catch (e) {
+      setSendErrors((errors) => ({ ...errors, [st.id]: (e as Error).message }));
+    } finally {
+      setCancelling(null);
+    }
+  }
+
   async function deleteStation(st: StationDTO) {
     if (!confirm(`Delete station ${st.code}?`)) return;
     try { await gaming.deleteStation(st.id); await load(); }
@@ -466,13 +500,23 @@ export default function GamingScreen() {
                         </div>
                       )}
                     </div>
-                    <button className="btn btn-primary w-full"
-                      disabled={sendingToPos === st.id}
-                      onClick={() => sendToPos(st)}>
-                      {sendingToPos === st.id
-                        ? <Loader2 className="animate-spin" size={14}/>
-                        : <Send size={14}/>} Send to POS
-                    </button>
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <button className="btn btn-primary"
+                        disabled={sendingToPos === st.id || cancelling === st.id}
+                        onClick={() => sendToPos(st)}>
+                        {sendingToPos === st.id
+                          ? <Loader2 className="animate-spin" size={14}/>
+                          : <Send size={14}/>} Send to POS
+                      </button>
+                      <button className="btn btn-ghost text-accent-bad"
+                        disabled={sendingToPos === st.id || cancelling === st.id}
+                        title="Cancel with an audit reason"
+                        onClick={() => cancelSession(st)}>
+                        {cancelling === st.id
+                          ? <Loader2 className="animate-spin" size={14}/>
+                          : <Ban size={14}/>} Cancel
+                      </button>
+                    </div>
                   </>
                 ) : session ? (
                   <>

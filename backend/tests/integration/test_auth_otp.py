@@ -206,7 +206,10 @@ async def test_standard_account_reaches_all_non_audit_modules_only(
         },
     )
     assert login.status_code == 200
-    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    headers = {
+        "Authorization": f"Bearer {login.json()['access_token']}",
+        "X-Terminal-Id": str(seed_owner["terminal"].id),
+    }
 
     me = await client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200

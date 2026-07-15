@@ -24,6 +24,7 @@ function shift(overrides: Partial<ShiftDTO> = {}): ShiftDTO {
     expected_minor: 0,
     counted_minor: null,
     variance_minor: null,
+    opened_by: 'cashier-a',
     opened_by_name: 'Cashier',
     opened_by_email: null,
     ...overrides,

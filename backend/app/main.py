@@ -7,10 +7,11 @@ performs I/O at import time. All wiring happens inside `create_app`.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis
 from sqlalchemy import text
 
 from app.api.v1.router import api_router
@@ -20,11 +21,14 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import (
     IdempotencyMiddleware,
-    RequestContextMiddleware,
     RequestBodyLimitMiddleware,
+    RequestContextMiddleware,
     TimingMiddleware,
 )
 from app.services.audit.recorder import install_audit_listeners
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -82,19 +86,41 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz", tags=["meta"])
     async def readyz() -> dict[str, object]:
+        checks: dict[str, str] = {}
         try:
             async with async_engine.connect() as conn:
                 await conn.execute(text("select 1"))
         except Exception as exc:
             logger.warning("erp.readyz_failed", dependency="database", error=str(exc))
+            checks["database"] = "down"
+        else:
+            checks["database"] = "ok"
+
+        redis = Redis.from_url(
+            str(settings.redis_url),
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        try:
+            await redis.ping()
+        except Exception as exc:
+            logger.warning("erp.readyz_failed", dependency="redis", error=str(exc))
+            checks["redis"] = "down"
+        else:
+            checks["redis"] = "ok"
+        finally:
+            await redis.aclose()
+
+        if "down" in checks.values():
             raise HTTPException(
                 status_code=503,
                 detail={
                     "status": "not_ready",
-                    "checks": {"database": "down"},
+                    "checks": checks,
                 },
-            ) from exc
-        return {"status": "ready", "checks": {"database": "ok"}}
+            )
+        return {"status": "ready", "checks": checks}
 
     return app
 

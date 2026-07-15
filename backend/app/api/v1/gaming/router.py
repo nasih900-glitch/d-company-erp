@@ -8,7 +8,7 @@ from math import ceil
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app.core.db import SessionDep
@@ -18,6 +18,7 @@ from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
 from app.models import (
     Branch,
+    Company,
     GamingBooking,
     GamingSession,
     MenuCategory,
@@ -27,8 +28,13 @@ from app.models import (
     Shift,
     Station,
 )
-from app.services.pos.pricing import OrderPricingService
-from app.services.pos.shift_validation import require_open_operational_shift, require_shift_opener
+from app.services.pos.order_validation import require_operational_order
+from app.services.pos.pricing import OrderPricingService, _round_to_rupee
+from app.services.pos.shift_validation import (
+    require_open_operational_shift,
+    require_operational_shift_scope,
+    require_shift_opener,
+)
 
 router = APIRouter()
 
@@ -77,6 +83,12 @@ class SessionStart(BaseModel):
     # Planned duration in minutes (e.g. a 60-minute PS5 slot). Omit for open-ended.
     timer_minutes: int | None = Field(default=None, ge=1, le=1440)
 
+    @field_validator("customer_name", "customer_phone")
+    @classmethod
+    def normalize_optional_customer_identity(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        return normalized or None
+
 
 class SessionTimerUpdate(BaseModel):
     # Minutes from the session's start_at. null clears the timer (open-ended).
@@ -97,6 +109,19 @@ class SessionRead(BaseModel):
     customer_phone: str | None = None
     rate_per_hour_minor: int | None = None
     order_id: UUID | None = None
+    cancel_reason: str | None = None
+
+
+class SessionCancel(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def require_meaningful_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("cancellation reason cannot be blank")
+        return value
 
 
 class BookingCreate(BaseModel):
@@ -127,7 +152,55 @@ def session_read(gs: GamingSession) -> SessionRead:
         customer_phone=gs.customer_phone,
         rate_per_hour_minor=gs.rate_per_hour_minor,
         order_id=gs.order_id,
+        cancel_reason=gs.cancel_reason,
     )
+
+
+def session_amount_minor(billable_minutes: int, rate_per_hour_minor: int) -> int:
+    """Ceiling-bill whole minutes using integer minor-unit arithmetic."""
+    if billable_minutes <= 0 or rate_per_hour_minor <= 0:
+        return 0
+    return (billable_minutes * rate_per_hour_minor + 59) // 60
+
+
+def _current_gaming_branch_id(tenant: TenantContext) -> UUID:
+    if tenant.branch_id is None:
+        raise BusinessRuleError("select a branch or terminal before managing gaming stations")
+    return tenant.branch_id
+
+
+def _requested_gaming_branch_id(
+    tenant: TenantContext,
+    requested_branch_id: UUID | None,
+) -> UUID:
+    branch_id = _current_gaming_branch_id(tenant)
+    if requested_branch_id is not None and requested_branch_id != branch_id:
+        raise NotFoundError("branch not found")
+    return branch_id
+
+
+async def _operational_station(
+    session,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    station_id: UUID,
+    for_update: bool = False,
+) -> Station | None:
+    stmt = (
+        select(Station)
+        .join(Branch, Branch.id == Station.branch_id)
+        .where(
+            Station.id == station_id,
+            Station.company_id == company_id,
+            Station.branch_id == branch_id,
+            Branch.company_id == company_id,
+            Branch.deleted_at.is_(None),
+        )
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 @router.get("/stations", response_model=list[StationRead])
@@ -135,9 +208,17 @@ async def list_stations(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("gaming.read")),
 ) -> list[StationRead]:
-    stmt = select(Station).where(Station.company_id == tenant.company_id)
-    if tenant.branch_id is not None:
-        stmt = stmt.where(Station.branch_id == tenant.branch_id)
+    branch_id = _current_gaming_branch_id(tenant)
+    stmt = (
+        select(Station)
+        .join(Branch, Branch.id == Station.branch_id)
+        .where(
+            Station.company_id == tenant.company_id,
+            Station.branch_id == branch_id,
+            Branch.company_id == tenant.company_id,
+            Branch.deleted_at.is_(None),
+        )
+    )
     rows = (await session.execute(stmt)).scalars().all()
     return [
         StationRead(
@@ -156,20 +237,20 @@ async def create_station(
     x_pricing_token: str | None = Header(default=None, alias="X-Pricing-Token"),
 ) -> StationRead:
     require_pricing_unlock(x_pricing_token, tenant)
-    branch_id = payload.branch_id or tenant.branch_id
-    if branch_id is None:
-        branch_id = (
-            await session.execute(
-                select(Branch.id)
-                .where(Branch.company_id == tenant.company_id, Branch.deleted_at.is_(None))
-                .order_by(Branch.created_at)
-                .limit(1)
+    branch_id = _requested_gaming_branch_id(tenant, payload.branch_id)
+    branch = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
             )
-        ).scalar_one_or_none()
-    if branch_id is None:
-        raise BusinessRuleError(
-            "no branch exists — create one in Settings → Branches first"
+            .with_for_update()
         )
+    ).scalar_one_or_none()
+    if branch is None:
+        raise NotFoundError("branch not found")
 
     existing = (
         await session.execute(
@@ -210,8 +291,15 @@ async def update_station(
 ) -> StationRead:
     if payload.rate_per_hour_minor is not None:
         require_pricing_unlock(x_pricing_token, tenant)
-    st = await session.get(Station, station_id)
-    if not st or st.company_id != tenant.company_id:
+    branch_id = _current_gaming_branch_id(tenant)
+    st = await _operational_station(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        station_id=station_id,
+        for_update=True,
+    )
+    if not st:
         raise NotFoundError("station not found")
     for f, v in payload.model_dump(exclude_unset=True).items():
         setattr(st, f, v)
@@ -230,8 +318,15 @@ async def delete_station(
     x_pricing_token: str | None = Header(default=None, alias="X-Pricing-Token"),
 ):
     require_pricing_unlock(x_pricing_token, tenant)
-    st = await session.get(Station, station_id)
-    if not st or st.company_id != tenant.company_id:
+    branch_id = _current_gaming_branch_id(tenant)
+    st = await _operational_station(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        station_id=station_id,
+        for_update=True,
+    )
+    if not st:
         raise NotFoundError("station not found")
     # Historical sessions reference stations for billing, GST, and audit trail.
     # Keep the row and hide it from active operations instead of breaking history.
@@ -243,7 +338,8 @@ async def delete_station(
 async def list_sessions(
     session: SessionDep,
     status_filter: str | None = Query(default=None, alias="status"),
-    limit: int = Query(default=80, ge=1, le=200),
+    unbilled_only: bool = Query(default=False),
+    limit: int = Query(default=80, ge=1, le=500),
     tenant: TenantContext = Depends(requires("gaming.read")),
 ) -> list[SessionRead]:
     stmt = select(GamingSession).where(GamingSession.company_id == tenant.company_id)
@@ -253,6 +349,8 @@ async def list_sessions(
         )
     if status_filter:
         stmt = stmt.where(GamingSession.status == status_filter)
+    if unbilled_only:
+        stmt = stmt.where(GamingSession.order_id.is_(None))
     stmt = stmt.order_by(GamingSession.start_at.desc()).limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
     return [session_read(row) for row in rows]
@@ -264,7 +362,13 @@ async def start_session(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
-    station = await session.get(Station, payload.station_id)
+    # Serialise starts per station so concurrent devices cannot both pass the
+    # availability check and create overlapping/unbilled sessions.
+    station = (
+        await session.execute(
+            select(Station).where(Station.id == payload.station_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not station or station.company_id != tenant.company_id:
         raise NotFoundError("station not found")
     if not station.is_active:
@@ -283,22 +387,26 @@ async def start_session(
         resource_branch_id=station.branch_id,
         resource_name="gaming station",
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="start a session on this shift",
-    )
-    active = (
+    blocking = (
         await session.execute(
-            select(GamingSession.id).where(
+            select(GamingSession).where(
                 GamingSession.company_id == tenant.company_id,
                 GamingSession.station_id == payload.station_id,
-                GamingSession.status.in_(("active", "paused")),
-            )
+                (
+                    GamingSession.status.in_(("active", "paused"))
+                    | (
+                        (GamingSession.status == "ended")
+                        & GamingSession.order_id.is_(None)
+                    )
+                ),
+            ).order_by(GamingSession.start_at.desc()).limit(1)
         )
     ).scalar_one_or_none()
-    if active:
+    if blocking and blocking.status == "ended":
+        raise ConflictError(
+            "station has a stopped session that must be sent to POS or cancelled first"
+        )
+    if blocking:
         raise ConflictError("station already has an active session")
     gs = GamingSession(
         id=uuid4(),
@@ -333,6 +441,19 @@ async def set_session_timer(
         raise NotFoundError("session not found")
     if gs.status not in ("active", "paused"):
         raise BusinessRuleError("session is not running")
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = await session.get(Shift, gs.shift_id)
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="updating a gaming session timer",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
     gs.timer_minutes = payload.timer_minutes
     await session.flush()
     return session_read(gs)
@@ -344,17 +465,122 @@ async def stop_session(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
-    gs = await session.get(GamingSession, session_id)
+    gs = (
+        await session.execute(
+            select(GamingSession).where(GamingSession.id == session_id).with_for_update()
+        )
+    ).scalar_one_or_none()
     if not gs or gs.company_id != tenant.company_id:
         raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_operational_shift_scope(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="stopping a gaming session",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
     if gs.status == "ended":
-        raise BusinessRuleError("session already ended")
+        # Response-loss retry: validate the exact operational scope first,
+        # then return the already-computed result.
+        # The original shift may have been closed after the successful stop.
+        return session_read(gs)
+    if gs.status == "cancelled":
+        raise BusinessRuleError("session was cancelled")
+    if gs.status not in ("active", "paused"):
+        raise BusinessRuleError(f"cannot stop a session in status={gs.status}")
+    if shift.status != "open":
+        raise BusinessRuleError(
+            "Shift is "
+            f"{shift.status}. Open a shift for this terminal before stopping a gaming session."
+        )
     gs.end_at = datetime.now(timezone.utc)
     elapsed_seconds = max(0.0, (gs.end_at - gs.start_at).total_seconds())
     elapsed_minutes = ceil(elapsed_seconds / 60) if elapsed_seconds > 0 else 0
     gs.billable_minutes = max(0, elapsed_minutes - gs.paused_minutes)
-    gs.amount_minor = ceil(gs.billable_minutes / 60 * gs.rate_per_hour_minor)
+    gs.amount_minor = session_amount_minor(gs.billable_minutes, gs.rate_per_hour_minor)
     gs.status = "ended"
+    return session_read(gs)
+
+
+@router.post("/sessions/{session_id}/cancel", response_model=SessionRead)
+async def cancel_session(
+    session_id: UUID,
+    payload: SessionCancel,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionRead:
+    """Cancel a mistaken/unbillable session with an auditable reason.
+
+    Operational staff may cancel a session on the exact current branch and
+    terminal while its shift is open. A protected owner may also clean up a
+    legacy ended session whose shift was already closed, but cannot cancel a
+    session that already produced an order.
+    """
+    gs = (
+        await session.execute(
+            select(GamingSession).where(GamingSession.id == session_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not gs or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_operational_shift_scope(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="cancelling a gaming session",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+    if gs.status == "cancelled":
+        # Safe response-loss replay, including after the original shift closes.
+        return session_read(gs)
+    if gs.order_id is not None:
+        raise BusinessRuleError("cannot cancel a session that was already sent to POS")
+    if gs.status not in ("active", "paused", "ended"):
+        raise BusinessRuleError(f"cannot cancel a session in status={gs.status}")
+    if shift.status != "open" and not tenant.protected_access:
+        raise BusinessRuleError(
+            f"Shift is {shift.status}. Ask a protected owner to cancel this legacy session."
+        )
+    if shift.status != "open" and gs.status != "ended":
+        raise BusinessRuleError(
+            "A protected owner may only cancel a legacy ended session after its shift closed."
+        )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="cancel a gaming or shisha session on this shift",
+    )
+
+    now = datetime.now(timezone.utc)
+    gs.status = "cancelled"
+    gs.end_at = gs.end_at or now
+    gs.billable_minutes = 0
+    gs.amount_minor = 0
+    gs.cancelled_at = now
+    gs.cancelled_by = tenant.user_id
+    gs.cancel_reason = payload.reason
+    await session.flush()
     return session_read(gs)
 
 
@@ -365,6 +591,17 @@ async def _ensure_session_menu_item(
     sessions. Never shown in the normal POS menu grid (is_available=False) —
     price/tax are always taken from the session, not this item's base price.
     """
+    # Serialize the first hidden-item/category creation per company. Without
+    # this lock two stations of the same type can both pass the SELECT and race
+    # into the company/SKU or company/category unique constraints.
+    company = (
+        await session.execute(
+            select(Company).where(Company.id == company_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company is None:
+        raise NotFoundError("company not found")
+
     sku = f"SESSION-{station.type.upper()}"
     existing = (
         await session.execute(
@@ -409,6 +646,27 @@ async def _ensure_session_menu_item(
     return item
 
 
+async def _reprice_session_order_for_customer(
+    session,
+    *,
+    order: Order,
+    company_id: UUID,
+) -> None:
+    """Apply POS membership pricing after the session/order link exists.
+
+    The local import avoids a module cycle because the API composer imports
+    Gaming before POS.  Keeping this bridge patchable also makes the gaming
+    route's handoff contract testable without a database.
+    """
+    from app.api.v1.pos.router import _reprice_unpaid_order_for_customer
+
+    await _reprice_unpaid_order_for_customer(
+        session,
+        order=order,
+        company_id=company_id,
+    )
+
+
 @router.post("/sessions/{session_id}/send-to-pos", status_code=status.HTTP_201_CREATED)
 async def send_session_to_pos(
     session_id: UUID,
@@ -425,27 +683,38 @@ async def send_session_to_pos(
     ).scalar_one_or_none()
     if not gs or gs.company_id != tenant.company_id:
         raise NotFoundError("session not found")
-    if gs.status != "ended":
-        raise BusinessRuleError("stop the session before sending it to POS")
-    if gs.order_id is not None:
-        raise BusinessRuleError("session was already sent to POS")
     if tenant.terminal_id is None:
         raise BusinessRuleError("X-Terminal-Id header required for POS writes")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
 
     station = await session.get(Station, gs.station_id)
-    if not station:
+    if not station or station.company_id != tenant.company_id:
         raise NotFoundError("station not found")
+
+    if gs.order_id is not None:
+        existing_order = await session.get(Order, gs.order_id)
+        existing_order = require_operational_order(
+            existing_order,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+            terminal_id=tenant.terminal_id,
+            operation="resuming a session sent to POS",
+        )
+        return {
+            "order_id": str(existing_order.id),
+            "amount_minor": int(existing_order.total_minor),
+        }
+    if gs.status != "ended":
+        raise BusinessRuleError("stop the session before sending it to POS")
+    if int(gs.amount_minor or 0) <= 0:
+        raise BusinessRuleError(
+            "session has no billable amount; cancel it with a reason instead of sending it to POS"
+        )
 
     shift = (
         await session.execute(
-            select(Shift).where(
-                Shift.company_id == tenant.company_id,
-                Shift.branch_id == tenant.branch_id,
-                Shift.terminal_id == tenant.terminal_id,
-                Shift.status == "open",
-            )
+            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
         )
     ).scalar_one_or_none()
     shift = require_open_operational_shift(
@@ -471,16 +740,19 @@ async def send_session_to_pos(
         amount_minor=amount_minor,
         tax_rate=tax_rate,
         rate_includes_tax=rate_includes_tax,
+        customer_phone=gs.customer_phone,
+        item_type=_MENU_TYPE_FOR_STATION.get(station.type, "gaming"),
     )
+    order_total_minor, round_off_minor = _round_to_rupee(priced.total_minor)
 
     now = datetime.now(timezone.utc)
     note = f"{gs.billable_minutes or 0} min @ {gs.rate_per_hour_minor / 100:.2f}/hr"
     order = Order(
         id=uuid4(),
         company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        shift_id=shift.id,
+        branch_id=shift.branch_id,
+        terminal_id=shift.terminal_id,
+        shift_id=gs.shift_id,
         opened_by=tenant.user_id,
         table_id=None,
         type="session",
@@ -492,10 +764,10 @@ async def send_session_to_pos(
         sgst_minor=priced.sgst_minor,
         igst_minor=priced.igst_minor,
         cess_minor=0,
-        discount_minor=0,
+        discount_minor=priced.discount_minor,
         tax_minor=priced.cgst_minor + priced.sgst_minor + priced.igst_minor,
-        round_off_minor=0,
-        total_minor=priced.total_minor,
+        round_off_minor=round_off_minor,
+        total_minor=order_total_minor,
         customer_name=gs.customer_name,
         customer_phone=gs.customer_phone,
         notes=f"{station.name} — {note}",
@@ -510,8 +782,8 @@ async def send_session_to_pos(
         qty=1,
         unit_price_minor=priced.total_minor,
         line_total_minor=priced.total_minor,
-        discount_minor=0,
-        hsn_or_sac=item.hsn_code or "",
+        discount_minor=priced.discount_minor,
+        hsn_or_sac=gs.sac_code or station.sac_code or item.hsn_code or "",
         tax_rate=float(tax_rate),
         taxable_value_minor=priced.taxable_minor,
         cgst_minor=priced.cgst_minor,
@@ -523,7 +795,14 @@ async def send_session_to_pos(
     session.add(ol)
     gs.order_id = order.id
     await session.flush()
-    return {"order_id": str(order.id), "amount_minor": priced.total_minor}
+    if order.customer_phone:
+        await _reprice_session_order_for_customer(
+            session,
+            order=order,
+            company_id=tenant.company_id,
+        )
+        await session.flush()
+    return {"order_id": str(order.id), "amount_minor": int(order.total_minor)}
 
 
 @router.post("/bookings", status_code=status.HTTP_201_CREATED)
@@ -534,8 +813,15 @@ async def create_booking(
 ) -> dict:
     if payload.ends_at <= payload.starts_at:
         raise BusinessRuleError("ends_at must be after starts_at")
-    station = await session.get(Station, payload.station_id)
-    if not station or station.company_id != tenant.company_id:
+    branch_id = _current_gaming_branch_id(tenant)
+    station = await _operational_station(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        station_id=payload.station_id,
+        for_update=True,
+    )
+    if not station:
         raise NotFoundError("station not found")
     if not station.is_active:
         raise BusinessRuleError("station is not active")

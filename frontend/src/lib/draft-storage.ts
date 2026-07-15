@@ -1,15 +1,18 @@
 /**
  * Tiny localStorage helper for in-progress, not-yet-saved UI state (a cart
- * being built, an order being resumed) — so a refresh never loses it. Only
- * ever stores small, non-sensitive JSON (ids/quantities), never card/payment
- * data.
+ * being built, an order being resumed) — so a refresh never loses it. Payloads
+ * stay small and never include card details, access tokens, or payment
+ * credentials. POS recovery can include the attached customer name/phone plus
+ * the method and exact amount, so callers must scope and clear their keys.
  */
 
-export function saveDraft<T>(key: string, value: T): void {
+export function saveDraft<T>(key: string, value: T): boolean {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    const serialized = JSON.stringify(value);
+    localStorage.setItem(key, serialized);
+    return localStorage.getItem(key) === serialized;
   } catch {
-    // Storage unavailable (private browsing, quota) — draft just won't survive a refresh.
+    return false;
   }
 }
 

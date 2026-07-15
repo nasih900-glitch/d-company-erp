@@ -13,7 +13,7 @@
  * is a deliberate action taken from the Shifts tab, and the person who opens
  * it is liable for that shift's cash and payment closing.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, Minus, Trash2, ShoppingCart, Receipt as ReceiptIcon,
   Banknote, CreditCard, Smartphone, QrCode, X, Check, Loader2,
@@ -40,6 +40,22 @@ import {
 } from '@/lib/erp-api';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import {
+  applyCanonicalCheckoutBalance,
+  buildCheckoutPaymentSubmission,
+  buildCheckoutZeroFinalization,
+  createOperationKey,
+  hasBenefitCoveredZeroBalance,
+  hasCollectibleCheckoutBalance,
+  isAmbiguousApiError,
+  normalizePosRetryDraft,
+  shouldPreserveCheckoutRetry,
+  type CheckoutDeliveryVia,
+  type CheckoutOrderType,
+  type CheckoutPaymentMethod,
+  type PosCheckoutRetry,
+  type PosRetryDraft,
+} from '@/lib/retry-drafts';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -52,9 +68,9 @@ import {
 } from './receipt-business';
 
 type CartLine = { item: MenuItemDTO; qty: number };
-type PayMethod = 'cash' | 'upi' | 'card' | 'qr';
-type OrderType = 'dine_in' | 'takeaway' | 'delivery';
-type DeliveryVia = 'inhouse' | 'zomato' | 'swiggy' | 'ubereats' | 'other_aggregator';
+type PayMethod = CheckoutPaymentMethod;
+type OrderType = CheckoutOrderType;
+type DeliveryVia = CheckoutDeliveryVia;
 type CustomerLookupState = 'idle' | 'found' | 'new' | 'error';
 
 const CATEGORY_FROM_TYPE: Record<string, string> = {
@@ -66,24 +82,24 @@ const CATEGORY_FROM_TYPE: Record<string, string> = {
 // billed or cleared, not forgotten about.
 const HELD_ORDER_ALARM_MINUTES = 15;
 const HELD_ORDERS_POLL_MS = 30_000;
+const UNBILLED_QUEUE_LIMIT = 500;
 
 // In-progress work (cart being built, or an order being resumed) survives a
 // refresh — cleared only once it's actually paid, or the cashier clears it.
-function posDraftKey(terminalId: string) {
-  return `pos-draft:${terminalId}`;
-}
-interface PosDraft {
-  resumingOrderId?: string;
-  cart: Array<{ itemId: string; qty: number }>;
-  orderType: OrderType;
-  deliveryVia: DeliveryVia;
-  deliveryStateCode: string;
-  customerName: string;
-  customerPhone: string;
+function posDraftKey(
+  companyId: string,
+  branchId: string,
+  userId: string,
+  terminalId: string,
+) {
+  return `pos-draft:${companyId}:${branchId}:${userId}:${terminalId}`;
 }
 
 export default function LivePOSScreen() {
   const { me, terminalId, terminalReady } = useAuth();
+  const draftKey = me?.company_id && me.branch_id && me.user_id && terminalId
+    ? posDraftKey(me.company_id, me.branch_id, me.user_id, terminalId)
+    : null;
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [shiftId, setShiftId] = useState<string | null>(null);
   const [shiftError, setShiftError] = useState<string | null>(null);
@@ -106,13 +122,12 @@ export default function LivePOSScreen() {
   const [showCart, setShowCart] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [paying, setPaying] = useState(false);
-  // Two-step settle: pick a method, then the cashier confirms payment was received.
-  const [awaitingConfirm, setAwaitingConfirm] = useState<PayMethod | null>(null);
   const [receipt, setReceipt] = useState<OrderDTO | null>(null);
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
   const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
-  const pendingOrderRef = useRef<OrderDTO | null>(null);
-  const checkoutKeyRef = useRef<string | null>(null);
+  const [checkoutRetry, setCheckoutRetry] = useState<PosCheckoutRetry | null>(null);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
+  const draftHydrated = Boolean(draftKey && hydratedDraftKey === draftKey);
 
   // Held orders — sent over from Tables/Gaming, waiting to be found and billed here.
   const [heldOrders, setHeldOrders] = useState<OrderListItemDTO[]>([]);
@@ -125,10 +140,36 @@ export default function LivePOSScreen() {
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const [, setAlarmTick] = useState(0);
   const lastHeldAlarmAtRef = useRef(0);
+  const heldOrderScopeRef = useRef(draftKey);
+  heldOrderScopeRef.current = draftKey;
 
-  // Load menu items + ensure a shift is open
+  // Load menu items, exact shift scope, and any durable checkout journal.
   useEffect(() => {
     let cancelled = false;
+    const storedDraft = draftKey
+      ? normalizePosRetryDraft(loadDraft<unknown>(draftKey))
+      : null;
+    setHydratedDraftKey(null);
+    setItems([]);
+    setCart([]);
+    setResumingOrder(null);
+    setHeldOrders([]);
+    setHeldError(null);
+    setOrderType('dine_in');
+    setDeliveryVia('inhouse');
+    setDeliveryStateCode('32');
+    setCustomerPhone('');
+    setCustomerName('');
+    setCustomer(null);
+    setSubscription(null);
+    setMembershipTier(null);
+    setCustomerLookupState('idle');
+    setCustomerMessage(null);
+    setShowCart(false);
+    setShowPay(false);
+    setReceipt(null);
+    setError(null);
+    setCheckoutRetry(storedDraft?.retry ?? null);
     (async () => {
       setLoading(true);
       setShiftId(null);
@@ -142,7 +183,11 @@ export default function LivePOSScreen() {
         if (!terminalReady || !terminalId) {
           throw new Error('Select the POS terminal used by this device before opening a shift.');
         }
-        const [all, resolvedShiftId] = await Promise.all([
+        if (!draftKey) {
+          throw new Error('The POS recovery scope could not be established for this user and terminal.');
+        }
+        const activeDraftKey = draftKey;
+        const [menuResult, shiftResult] = await Promise.allSettled([
           menu.items(),
           resolveRequiredOpenShift({
             scope: { companyId, branchId, terminalId },
@@ -150,33 +195,137 @@ export default function LivePOSScreen() {
           }),
         ]);
         if (cancelled) return;
+        if (menuResult.status === 'rejected') throw menuResult.reason;
+        const all = menuResult.value;
+        let resolvedShiftId: string | null = null;
+        if (shiftResult.status === 'fulfilled') {
+          resolvedShiftId = shiftResult.value;
+        } else {
+          if (!storedDraft?.retry) throw shiftResult.reason;
+          // A payment-response recovery must remain reachable even if the
+          // original shift was subsequently closed. The backend/idempotency
+          // record remains authoritative about whether that payment committed.
+          setShiftError((shiftResult.reason as Error).message);
+        }
         const available = all.filter((i) => i.is_available && isAppStoreAllowedType(i.type));
+        const restorable = all.filter((i) => isAppStoreAllowedType(i.type));
         setItems(available);
         setShiftId(resolvedShiftId);
 
-        const draft = loadDraft<PosDraft>(posDraftKey(terminalId));
-        if (draft) {
-          const restoredCart = draft.cart
+        if (storedDraft) {
+          if (
+            !storedDraft.retry
+            && storedDraft.shiftId
+            && storedDraft.shiftId !== resolvedShiftId
+          ) {
+            clearDraft(activeDraftKey);
+            setCart([]);
+            setError(
+              'A saved cart belonged to a different shift and was not restored. Rebuild it under the current accountable shift.',
+            );
+            setHydratedDraftKey(activeDraftKey);
+            return;
+          }
+          const restoredCart = storedDraft.cart
             .map((d) => {
-              const item = available.find((i) => i.id === d.itemId);
+              // An unavailable item can still belong to an interrupted request;
+              // retain it so the retry body remains byte-for-byte equivalent.
+              const item = restorable.find((i) => i.id === d.itemId);
               return item ? { item, qty: d.qty } : null;
             })
             .filter((l): l is CartLine => l !== null);
-          if (restoredCart.length) setCart(restoredCart);
-          setOrderType(draft.orderType);
-          setDeliveryVia(draft.deliveryVia);
-          setDeliveryStateCode(draft.deliveryStateCode);
-          setCustomerName(draft.customerName);
-          setCustomerPhone(draft.customerPhone);
-          if (draft.resumingOrderId) {
+          setCart(restoredCart);
+          setOrderType(storedDraft.orderType);
+          setDeliveryVia(storedDraft.deliveryVia);
+          setDeliveryStateCode(storedDraft.deliveryStateCode);
+          setCustomerName(storedDraft.customerName);
+          setCustomerPhone(storedDraft.customerPhone);
+
+          let retry = storedDraft.retry;
+          let pendingOrder: OrderDTO | null = null;
+          if (retry?.pendingOrderId) {
             try {
-              setResumingOrder(await orders.get(draft.resumingOrderId));
-            } catch {
-              // The held order may have been paid/cleared elsewhere since — drop the stale draft.
-              clearDraft(posDraftKey(terminalId));
+              pendingOrder = await orders.get(retry.pendingOrderId);
+              if (cancelled) return;
+              if (
+                retry.phase !== 'recording_payment'
+                && pendingOrder.status === 'paid'
+                && pendingOrder.invoice_no
+                && pendingOrder.invoice_issued_at
+              ) {
+                setReceipt(pendingOrder);
+                setCart([]);
+                setResumingOrder(null);
+                setCheckoutRetry(null);
+                clearDraft(activeDraftKey);
+                setHydratedDraftKey(activeDraftKey);
+                return;
+              }
+              if (pendingOrder.status === 'void' && retry.phase !== 'recording_payment') {
+                setCart([]);
+                setResumingOrder(null);
+                setCheckoutRetry(null);
+                clearDraft(activeDraftKey);
+                setError('The prepared order was voided, so this local checkout recovery was closed.');
+                setHydratedDraftKey(activeDraftKey);
+                return;
+              }
+              if (pendingOrder.status === 'refunded' && retry.phase !== 'recording_payment') {
+                setCart([]);
+                setResumingOrder(null);
+                setCheckoutRetry(null);
+                clearDraft(activeDraftKey);
+                setReceipt(pendingOrder);
+                setError('This order was already refunded; no further payment was recorded.');
+                setHydratedDraftKey(activeDraftKey);
+                return;
+              }
+              if (
+                retry.phase === 'recording_payment'
+                && (pendingOrder.status === 'void' || pendingOrder.status === 'refunded')
+              ) {
+                setError(
+                  `The order is ${pendingOrder.status}, but this browser had already confirmed payment. `
+                  + 'Keep this recovery locked and ask a protected owner to reconcile the physical payment.',
+                );
+              }
+              if (retry.phase !== 'recording_payment') {
+                retry = applyCanonicalCheckoutBalance(retry, pendingOrder);
+              }
+            } catch (e) {
+              if (cancelled) return;
+              setError(`${(e as Error).message} The interrupted checkout remains saved for reconciliation.`);
             }
           }
+
+          const resumingOrderId = retry?.resumingOrderId ?? storedDraft.resumingOrderId;
+          if (resumingOrderId) {
+            try {
+              const resumed = pendingOrder?.id === resumingOrderId
+                ? pendingOrder
+                : await orders.get(resumingOrderId);
+              if (cancelled) return;
+              if (resumed && (resumed.status === 'open' || resumed.status === 'held')) {
+                setResumingOrder(resumed);
+              } else if (!retry) {
+                // It was paid/cleared elsewhere and there is no interrupted
+                // checkout to recover, so the ordinary stale draft can go.
+                setCart([]);
+                clearDraft(activeDraftKey);
+              }
+            } catch (e) {
+              if (cancelled) return;
+              if (retry) {
+                setError(`${(e as Error).message} The interrupted checkout remains saved for a safe retry.`);
+              } else {
+                setCart([]);
+                clearDraft(activeDraftKey);
+              }
+            }
+          }
+          setCheckoutRetry(retry ?? null);
         }
+        setHydratedDraftKey(activeDraftKey);
       } catch (e) {
         if (!cancelled) setShiftError((e as Error).message);
       } finally {
@@ -184,21 +333,44 @@ export default function LivePOSScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [me?.branch_id, me?.company_id, terminalId, terminalReady]);
+  }, [draftKey, me?.branch_id, me?.company_id, terminalId, terminalReady]);
 
-  async function loadHeldOrders(silent = false) {
+  const loadHeldOrders = useCallback(async (silent = false) => {
+    const requestScope = draftKey;
     if (!silent) { setHeldLoading(true); setHeldError(null); }
     try {
-      setHeldOrders(await orders.list({ status: ['held'] }));
-    } catch (e) { if (!silent) setHeldError((e as Error).message); }
-    finally { if (!silent) setHeldLoading(false); }
-  }
+      const result = await orders.list({
+        status: ['held', 'open'],
+        limit: UNBILLED_QUEUE_LIMIT,
+      });
+      // Tables keep their open tickets in the Tables workflow until staff send
+      // them. A table-less open order is a direct POS bill whose browser
+      // journal may have been lost, so it must remain recoverable here.
+      const queue = result.filter((order) => (
+        order.status === 'held' || (order.status === 'open' && !order.table_id)
+      ));
+      if (heldOrderScopeRef.current === requestScope) {
+        setHeldOrders(queue);
+        if (result.length === UNBILLED_QUEUE_LIMIT) {
+          setHeldError(
+            'The unbilled queue reached its 500-order safety limit. Bill or void old orders and ask a protected owner to reconcile the backlog.',
+          );
+        }
+      }
+    } catch (e) {
+      if (!silent && heldOrderScopeRef.current === requestScope) {
+        setHeldError((e as Error).message);
+      }
+    } finally {
+      if (!silent && heldOrderScopeRef.current === requestScope) setHeldLoading(false);
+    }
+  }, [draftKey]);
   useEffect(() => {
     if (!shiftId) return;
     loadHeldOrders();
     const id = setInterval(() => loadHeldOrders(true), HELD_ORDERS_POLL_MS);
     return () => clearInterval(id);
-  }, [shiftId]);
+  }, [loadHeldOrders, shiftId]);
 
   // Age-based alarm: a held order sitting too long should nag, not vanish
   // from mind. The interval below re-renders every second (via setAlarmTick),
@@ -221,24 +393,58 @@ export default function LivePOSScreen() {
       lastHeldAlarmAtRef.current = now;
       playAlarmTone();
       notifyBrowser(
-        '⏰ Held orders waiting',
-        'One or more held orders have been unbilled for a while. Bill them or clear them.',
+        '⏰ POS queue waiting',
+        'One or more sent or recovered orders have been unbilled for a while. Bill or void them.',
         'dcompany-held-orders',
       );
     }, 1000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [heldOrders, heldAlarmMuted]);
 
   async function resumeOrder(row: OrderListItemDTO) {
+    if (cart.length) {
+      setHeldError(
+        'The current POS cart has unsent items. Charge or clear that cart before opening another queued order.',
+      );
+      return;
+    }
+    if (resumingOrder && resumingOrder.id !== row.id) {
+      setHeldError(
+        'Another queued order is already open. Finish it or use Cancel before selecting a different one.',
+      );
+      return;
+    }
     setShowHeldPicker(false);
     setError(null);
     try {
       const full = await orders.get(row.id);
+      const nextCustomerName = full.customer_name ?? '';
+      const nextCustomerPhone = full.customer_phone ?? '';
       setResumingOrder(full);
       setCart([]);
-      pendingOrderRef.current = null;
-      checkoutKeyRef.current = null;
+      setCheckoutRetry(null);
+      setCustomerName(nextCustomerName);
+      setCustomerPhone(nextCustomerPhone);
+      setCustomer(null);
+      setSubscription(null);
+      setMembershipTier(null);
+      setCustomerLookupState('idle');
+      setCustomerMessage(nextCustomerPhone
+        ? 'Customer loaded from this order. Lookup previews membership; the server verifies it when preparing the bill.'
+        : null);
+      if (draftKey) {
+        saveDraft<PosRetryDraft>(draftKey, {
+          version: 2,
+          shiftId: shiftId ?? undefined,
+          resumingOrderId: full.id,
+          cart: [],
+          orderType,
+          deliveryVia,
+          deliveryStateCode,
+          customerName: nextCustomerName,
+          customerPhone: nextCustomerPhone,
+        });
+      }
     } catch (e) { setError((e as Error).message); }
   }
 
@@ -255,8 +461,9 @@ export default function LivePOSScreen() {
   function cancelResume() {
     setResumingOrder(null);
     setCart([]);
-    pendingOrderRef.current = null;
-    checkoutKeyRef.current = null;
+    setCheckoutRetry(null);
+    clearCustomer();
+    if (draftKey) clearDraft(draftKey);
   }
 
   useEffect(() => {
@@ -329,33 +536,71 @@ export default function LivePOSScreen() {
     }, 0);
   }, [cart, membershipTier]);
   const newItemsEstimate = Math.max(0, preview - estimatedMembershipDiscount);
-  const estimatedPayable = resumingOrder ? resumingOrder.total_minor + newItemsEstimate : newItemsEstimate;
-
-  useEffect(() => {
-    pendingOrderRef.current = null;
-    checkoutKeyRef.current = null;
-  }, [cart, customerName, customerPhone, deliveryStateCode, deliveryVia, orderType]);
+  const estimatedPayable = resumingOrder ? resumingOrder.due_minor + newItemsEstimate : newItemsEstimate;
 
   useEffect(() => {
     if (!cart.length) setShowCart(false);
   }, [cart.length]);
 
   useEffect(() => {
-    if (!terminalId) return;
-    const key = posDraftKey(terminalId);
-    if (!cart.length && !resumingOrder) {
+    if (!draftKey || !draftHydrated) return;
+    const key = draftKey;
+    if (!cart.length && !resumingOrder && !checkoutRetry) {
       clearDraft(key);
       return;
     }
-    saveDraft<PosDraft>(key, {
+    saveDraft<PosRetryDraft>(key, {
+      version: 2,
+      shiftId: checkoutRetry?.snapshot.shiftId ?? shiftId ?? undefined,
       resumingOrderId: resumingOrder?.id,
       cart: cart.map((l) => ({ itemId: l.item.id, qty: l.qty })),
       orderType, deliveryVia, deliveryStateCode, customerName, customerPhone,
+      retry: checkoutRetry ?? undefined,
     });
   }, [
-    terminalId, cart, resumingOrder, orderType, deliveryVia,
-    deliveryStateCode, customerName, customerPhone,
+    draftKey, draftHydrated, cart, resumingOrder, orderType, deliveryVia,
+    deliveryStateCode, customerName, customerPhone, checkoutRetry, shiftId,
   ]);
+
+  function buildPosDraft(retry: PosCheckoutRetry | null): PosRetryDraft {
+    return {
+      version: 2,
+      shiftId: retry?.snapshot.shiftId ?? shiftId ?? undefined,
+      resumingOrderId: resumingOrder?.id,
+      cart: cart.map((line) => ({ itemId: line.item.id, qty: line.qty })),
+      orderType,
+      deliveryVia,
+      deliveryStateCode,
+      customerName,
+      customerPhone,
+      retry: retry ?? undefined,
+    };
+  }
+
+  function persistCheckoutRetry(retry: PosCheckoutRetry | null): boolean {
+    setCheckoutRetry(retry);
+    if (!draftKey) return retry === null;
+    const draft = buildPosDraft(retry);
+    if (!draft.cart.length && !draft.resumingOrderId && !retry) {
+      clearDraft(draftKey);
+      return true;
+    } else {
+      // This synchronous write must happen before the next API request. React
+      // effects alone are too late if the page refreshes while a request is in flight.
+      return saveDraft(draftKey, draft);
+    }
+  }
+
+  function finishCheckout(paidOrder: OrderDTO) {
+    setReceipt(paidOrder);
+    setCheckoutRetry(null);
+    setShowPay(false);
+    setCart([]);
+    setResumingOrder(null);
+    clearCustomer();
+    if (draftKey) clearDraft(draftKey);
+    void loadHeldOrders(true);
+  }
 
   async function lookupCustomer() {
     const phone = customerPhone.trim();
@@ -413,66 +658,309 @@ export default function LivePOSScreen() {
     setCustomerMessage(null);
   }
 
-  async function pay(method: PayMethod) {
-    if (!shiftId || !receiptBusiness || receiptSettingsError) {
+  async function prepareCheckout(method: PayMethod) {
+    if ((!shiftId && !checkoutRetry) || !receiptBusiness || receiptSettingsError) {
       if (receiptSettingsError) setError(receiptSettingsError);
-      else if (!shiftId) setError(shiftError || 'No validated shift is available for this terminal.');
+      else if (!shiftId && !checkoutRetry) setError(shiftError || 'No validated shift is available for this terminal.');
+      else if (!receiptBusiness) setError('Receipt configuration is still loading. Wait a moment and try again.');
       return;
     }
-    if (!resumingOrder && !cart.length) return;
+    if (!checkoutRetry && !resumingOrder && !cart.length) return;
+    let retry: PosCheckoutRetry = checkoutRetry ?? {
+      key: createOperationKey(),
+      phase: 'preparing_order',
+      paymentMethod: method,
+      resumingOrderId: resumingOrder?.id,
+      snapshot: {
+        shiftId: shiftId!,
+        cart: cart.map((line) => ({ itemId: line.item.id, qty: line.qty })),
+        orderType,
+        deliveryVia,
+        deliveryStateCode,
+        customerName,
+        customerPhone,
+      },
+    };
+    if (retry.phase === 'recording_payment' || retry.phase === 'finalizing_zero') {
+      await completeCheckout();
+      return;
+    }
+    retry = { ...retry, paymentMethod: method };
+    if (!persistCheckoutRetry(retry)) {
+      setError(
+        'Checkout recovery storage is unavailable. No bill was sent. Enable browser storage before trying again.',
+      );
+      return;
+    }
+    setShowCart(false);
+    setShowPay(false);
     setPaying(true);
     setError(null);
     try {
-      const fallbackNonce = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const checkoutKey = checkoutKeyRef.current ?? (globalThis.crypto?.randomUUID?.() ?? fallbackNonce);
-      checkoutKeyRef.current = checkoutKey;
-      let order = pendingOrderRef.current;
-      if (!order) {
-        if (resumingOrder) {
-          order = cart.length
-            ? await pos.addLines(
-                resumingOrder.id,
-                cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
-                `resume-lines:${checkoutKey}`,
-              )
-            : resumingOrder;
+      let order: OrderDTO;
+      if (retry.pendingOrderId) {
+        order = await pos.getOrder(retry.pendingOrderId);
+        if (order.status === 'paid' && order.invoice_no && order.invoice_issued_at) {
+          finishCheckout(order);
+          return;
+        }
+      } else {
+        if (retry.resumingOrderId) {
+          order = await pos.attachCustomer(
+            retry.resumingOrderId,
+            {
+              customer_name: retry.snapshot.customerName.trim() || undefined,
+              customer_phone: retry.snapshot.customerPhone.trim() || undefined,
+            },
+            `order-customer:${retry.key}`,
+          );
+          if (retry.snapshot.cart.length) {
+            order = await pos.addLines(
+                retry.resumingOrderId,
+                retry.snapshot.cart.map((line) => ({ menu_item_id: line.itemId, qty: line.qty })),
+                `resume-lines:${retry.key}`,
+              );
+          }
         } else {
           order = await pos.createOrder(
             {
-              type: orderType,
-              shift_id: shiftId,
-              lines: cart.map((l) => ({ menu_item_id: l.item.id, qty: l.qty })),
-              delivery_via: orderType === 'delivery' ? deliveryVia : undefined,
-              customer_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
-              place_of_supply_state_code: orderType === 'delivery' ? deliveryStateCode.trim() || undefined : undefined,
-              customer_name: customerName.trim() || undefined,
-              customer_phone: customerPhone.trim() || undefined,
+              type: retry.snapshot.orderType,
+              shift_id: retry.snapshot.shiftId,
+              lines: retry.snapshot.cart.map((line) => ({ menu_item_id: line.itemId, qty: line.qty })),
+              delivery_via: retry.snapshot.orderType === 'delivery'
+                ? retry.snapshot.deliveryVia
+                : undefined,
+              customer_state_code: retry.snapshot.orderType === 'delivery'
+                ? retry.snapshot.deliveryStateCode.trim() || undefined
+                : undefined,
+              place_of_supply_state_code: retry.snapshot.orderType === 'delivery'
+                ? retry.snapshot.deliveryStateCode.trim() || undefined
+                : undefined,
+              customer_name: retry.snapshot.customerName.trim() || undefined,
+              customer_phone: retry.snapshot.customerPhone.trim() || undefined,
             },
-            `order:${checkoutKey}`,
+            `order:${retry.key}`,
           );
         }
-        pendingOrderRef.current = order;
       }
-      await pos.recordPayment(order.id, {
-        method,
-        amount_minor: order.total_minor,
-        tendered_minor: method === 'cash' ? order.total_minor : undefined,
-      }, `payment:${checkoutKey}`);
-      const paidOrder = await pos.getOrder(order.id);
-      if (!paidOrder.invoice_no || !paidOrder.invoice_issued_at) {
-        throw new Error('Payment saved, but the final invoice could not be loaded. Open Orders and reprint it.');
+      if (retry.pendingOrderId !== order.id) {
+        retry = { ...retry, pendingOrderId: order.id };
+        if (!persistCheckoutRetry(retry)) {
+          setError(
+            'The server prepared the order, but its recovery checkpoint could not be saved. '
+            + 'Keep this page open and restore browser storage before continuing; do not start another bill.',
+          );
+          return;
+        }
       }
-      setReceipt(paidOrder);
-      pendingOrderRef.current = null;
-      checkoutKeyRef.current = null;
-      setShowPay(false);
-      setAwaitingConfirm(null);
-      setCart([]);
-      setResumingOrder(null);
-      clearCustomer();
-      loadHeldOrders();
+      if (order.status === 'void') {
+        setCheckoutRetry(null);
+        setCart([]);
+        setResumingOrder(null);
+        if (draftKey) clearDraft(draftKey);
+        setError('This order was voided and cannot be charged.');
+        return;
+      }
+      if (order.status === 'refunded') {
+        setCheckoutRetry(null);
+        setCart([]);
+        setResumingOrder(null);
+        setReceipt(order);
+        if (draftKey) clearDraft(draftKey);
+        setError('This order was already refunded; no new payment was recorded.');
+        return;
+      }
+      if (order.status !== 'open' && order.status !== 'held') {
+        throw new Error(`Order is ${order.status} and cannot be prepared for payment.`);
+      }
+      retry = applyCanonicalCheckoutBalance(retry, order);
+      if (order.due_minor <= 0 && !hasBenefitCoveredZeroBalance(retry)) {
+        throw new Error('The server reports no amount due, but no final invoice is available. Ask a protected owner to reconcile this order.');
+      }
+      if (!persistCheckoutRetry(retry)) {
+        setError(
+          'The exact server bill was prepared, but recovery storage failed. Keep this page open and restore browser storage before collecting payment.',
+        );
+        return;
+      }
+      setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (shouldPreserveCheckoutRetry(e, retry)) {
+        persistCheckoutRetry(retry);
+        const recoveryHint = isAmbiguousApiError(e)
+          ? 'The server result is unknown. Resume the same preparation key; do not start another bill.'
+          : 'The prepared order remains saved and must be reconciled.';
+        setError(`${(e as Error).message} ${recoveryHint}`);
+      } else {
+        persistCheckoutRetry(null);
+        setShowPay(true);
+        setError((e as Error).message);
+      }
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  async function completeCheckout() {
+    const current = checkoutRetry;
+    if (!current) return;
+    if (current.phase === 'preparing_order') {
+      await prepareCheckout(current.paymentMethod);
+      return;
+    }
+    if (
+      !current.pendingOrderId
+      || current.paymentAmountMinor === undefined
+      || current.orderTotalMinor === undefined
+    ) {
+      setError('The checkout journal is incomplete. Ask a protected owner to reconcile it before collecting money.');
+      return;
+    }
+    const benefitCoveredZero = hasBenefitCoveredZeroBalance(current);
+    const retry: PosCheckoutRetry = benefitCoveredZero
+      ? current.phase === 'finalizing_zero'
+        ? current
+        : { ...current, phase: 'finalizing_zero' }
+      : current.phase === 'recording_payment'
+        ? current
+        : { ...current, phase: 'recording_payment' };
+    const paymentSubmission = buildCheckoutPaymentSubmission(retry);
+    const zeroFinalization = buildCheckoutZeroFinalization(retry);
+    if (!paymentSubmission && !zeroFinalization) {
+      setError('The checkout journal has an invalid settlement amount. Ask a protected owner to reconcile it before collecting money.');
+      return;
+    }
+    if (!persistCheckoutRetry(retry)) {
+      setError(
+        'Checkout recovery storage is unavailable. Nothing was submitted; restore browser storage first.',
+      );
+      return;
+    }
+
+    setPaying(true);
+    setError(null);
+    try {
+      const settlement = zeroFinalization
+        ? await pos.finalizeZero(
+          zeroFinalization.orderId,
+          zeroFinalization.idempotencyKey,
+        )
+        : await pos.recordPayment(
+          paymentSubmission!.orderId,
+          paymentSubmission!.body,
+          paymentSubmission!.idempotencyKey,
+        );
+      if (settlement.order_status !== 'paid' || !settlement.invoice_no) {
+        throw new Error(
+          zeroFinalization
+            ? 'The membership benefit did not finalize an invoice.'
+            : 'The payment attempt did not finalize an invoice. Do not collect payment again.',
+        );
+      }
+      const paidOrder = await pos.getOrder(
+        zeroFinalization?.orderId ?? paymentSubmission!.orderId,
+      );
+      if (
+        paidOrder.status !== 'paid'
+        || !paidOrder.invoice_no
+        || !paidOrder.invoice_issued_at
+      ) {
+        throw new Error(
+          zeroFinalization
+            ? 'The membership benefit was accepted, but the final invoice could not be loaded. Resume this same recovery.'
+            : 'Payment was accepted, but the final invoice could not be loaded. Resume this same recovery; do not charge again.',
+        );
+      }
+      finishCheckout(paidOrder);
+    } catch (e) {
+      persistCheckoutRetry(retry);
+      setError(zeroFinalization
+        ? `${(e as Error).message} The no-payment membership settlement remains locked to the same key. Resume it; do not collect money.`
+        : `${(e as Error).message} The payment attempt remains locked to the same key. `
+          + 'Do not collect money again; resume or ask a protected owner to reconcile it.');
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  async function abandonPreparedCheckout() {
+    const retry = checkoutRetry;
+    if (!retry?.pendingOrderId || retry.phase !== 'awaiting_payment') return;
+    const benefitCoveredZero = hasBenefitCoveredZeroBalance(retry);
+    const confirmed = benefitCoveredZero
+      ? confirm('Cancel this prepared membership-covered bill? No money is due and the allowance has not been consumed yet.')
+      : confirm('Confirm that NO cash, UPI, QR, or card payment was received for this bill.');
+    if (!confirmed) return;
+    setPaying(true);
+    setError(null);
+    try {
+      const order = await pos.getOrder(retry.pendingOrderId);
+      if (order.status === 'paid' && order.invoice_no && order.invoice_issued_at) {
+        finishCheckout(order);
+        setError('This order was already paid. No cancellation or additional payment was recorded.');
+        return;
+      }
+      if (order.status === 'void') {
+        setCheckoutRetry(null);
+        setCart([]);
+        setResumingOrder(null);
+        clearCustomer();
+        if (draftKey) clearDraft(draftKey);
+        setError('This prepared bill was already cancelled; no payment was recorded.');
+        return;
+      }
+      if (order.status === 'refunded') {
+        setCheckoutRetry(null);
+        setCart([]);
+        setResumingOrder(null);
+        clearCustomer();
+        setReceipt(order);
+        if (draftKey) clearDraft(draftKey);
+        setError('This order was already refunded; no new payment or cancellation was recorded.');
+        return;
+      }
+      if (order.status !== 'open' && order.status !== 'held') {
+        setError(`Order is ${order.status}; the prepared bill remains locked for protected-owner reconciliation.`);
+        return;
+      }
+      if (retry.resumingOrderId) {
+        // Any appended cart lines are already part of this canonical held
+        // order. Leave it at POS, but never append the local cart again.
+        if (!draftKey || !saveDraft<PosRetryDraft>(draftKey, {
+          version: 2,
+          shiftId: retry.snapshot.shiftId,
+          resumingOrderId: order.id,
+          cart: [],
+          orderType: retry.snapshot.orderType,
+          deliveryVia: retry.snapshot.deliveryVia,
+          deliveryStateCode: retry.snapshot.deliveryStateCode,
+          customerName: retry.snapshot.customerName,
+          customerPhone: retry.snapshot.customerPhone,
+        })) {
+          setError(
+            'The held order is still unpaid, but recovery storage could not be updated. '
+            + 'It remains locked here; restore browser storage before releasing it back to POS.',
+          );
+          return;
+        }
+        setCart([]);
+        setResumingOrder(order);
+        setCheckoutRetry(null);
+        setError('Payment was not recorded. The prepared held order remains available in POS.');
+      } else {
+        const reason = prompt('Why are you cancelling this prepared direct POS bill?');
+        if (!reason?.trim()) return;
+        await pos.voidOrder(order.id, reason.trim());
+        setCheckoutRetry(null);
+        if (draftKey) clearDraft(draftKey);
+        setCart([]);
+        setResumingOrder(null);
+        clearCustomer();
+        setError('Prepared bill cancelled with an audit reason; no payment was recorded.');
+      }
+      void loadHeldOrders(true);
+    } catch (e) {
+      setError(`${(e as Error).message} The prepared bill remains locked; do not start another bill.`);
     } finally {
       setPaying(false);
     }
@@ -510,7 +998,7 @@ export default function LivePOSScreen() {
           </div>
           <div className="flex items-center gap-2">
             <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }}>
-              <Inbox size={14}/> Held orders
+              <Inbox size={14}/> POS queue
               {heldOrders.length > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-bg text-[10px] font-bold flex items-center justify-center">
                   {heldOrders.length}
@@ -594,7 +1082,7 @@ export default function LivePOSScreen() {
             <div className="flex items-center gap-2">
               <AlertCircle size={16} className="shrink-0"/>
               <span>
-                {overdueHeldOrders.length} held order{overdueHeldOrders.length === 1 ? '' : 's'} unbilled
+                {overdueHeldOrders.length} queued order{overdueHeldOrders.length === 1 ? '' : 's'} unbilled
                 for {HELD_ORDER_ALARM_MINUTES}+ min — bill or clear{overdueHeldOrders.length === 1 ? ' it' : ' them'}.
               </span>
             </div>
@@ -611,8 +1099,7 @@ export default function LivePOSScreen() {
           </div>
         )}
 
-        {!resumingOrder && (
-          <CustomerAttachPanel
+        <CustomerAttachPanel
             phone={customerPhone}
             name={customerName}
             customer={customer}
@@ -632,8 +1119,7 @@ export default function LivePOSScreen() {
             onNameChange={setCustomerName}
             onLookup={lookupCustomer}
             onClear={clearCustomer}
-          />
-        )}
+        />
 
         <div className="relative mb-4 max-w-xl">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
@@ -685,9 +1171,12 @@ export default function LivePOSScreen() {
             <div className="mb-2 pb-2 border-b border-bg-border">
               <div className="text-xs text-fg-muted mb-1">Already sent</div>
               {resumingOrder.lines.map((l, i) => (
-                <div key={i} className="flex justify-between text-sm text-fg-muted py-0.5">
-                  <span>{l.qty} × {l.name}</span>
-                  <span>{inr(l.line_total_minor)}</span>
+                <div key={i} className="text-sm text-fg-muted py-0.5">
+                  <div className="flex justify-between">
+                    <span>{l.qty} × {l.name}</span>
+                    <span>{inr(l.line_total_minor)}</span>
+                  </div>
+                  {l.note && <div className="text-xs text-accent-gold">Note: {l.note}</div>}
                 </div>
               ))}
             </div>
@@ -744,7 +1233,7 @@ export default function LivePOSScreen() {
         <button onClick={() => setShowPay(true)}
           disabled={(!cart.length && !resumingOrder) || !shiftId || paying || !receiptBusiness || !!receiptSettingsError}
           className="btn btn-primary mt-3 disabled:opacity-40 disabled:cursor-not-allowed">
-          <ReceiptIcon size={16} /> Charge {inr(estimatedPayable)}
+          <ReceiptIcon size={16} /> Prepare bill · est. {inr(estimatedPayable)}
         </button>
         {error && <p className="text-accent-bad text-xs mt-2">{error}</p>}
       </aside>
@@ -760,7 +1249,7 @@ export default function LivePOSScreen() {
           <span className="shrink-0">{cartQty} items</span>
           <span className="opacity-80">·</span>
           <span className="min-w-0 truncate">
-            {cart.length ? 'Review cart' : 'Charge'} · {inr(estimatedPayable)}
+            {cart.length ? 'Review cart' : 'Prepare bill'} · est. {inr(estimatedPayable)}
           </span>
         </button>
       )}
@@ -824,60 +1313,121 @@ export default function LivePOSScreen() {
             disabled={!shiftId || !receiptBusiness || !!receiptSettingsError}
             className="btn btn-primary mt-4 w-full disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <ReceiptIcon size={16}/> Continue to payment · {inr(estimatedPayable)}
+            <ReceiptIcon size={16}/> Choose payment method · est. {inr(estimatedPayable)}
           </button>
         </Modal>
       )}
 
       {showPay && (
-        <Modal title={`Charge ${inr(estimatedPayable)}`} onClose={() => { if (!paying) { setShowPay(false); setAwaitingConfirm(null); } }}>
+        <Modal title="Choose payment method" onClose={() => { if (!paying) setShowPay(false); }}>
           {estimatedMembershipDiscount > 0 && (
             <div className="mb-3 rounded-xl border border-accent-good/30 bg-accent-good/10 px-3 py-2 text-xs text-accent-good">
-              Estimated membership discount: {inr(estimatedMembershipDiscount)}. Backend will compute the final bill.
+              Estimated membership discount: {inr(estimatedMembershipDiscount)}.
             </div>
           )}
-          {awaitingConfirm ? (() => {
-            const scanMethod = awaitingConfirm === 'upi' || awaitingConfirm === 'qr';
-            const upiLink = scanMethod && receiptBusiness
-              ? buildUpiPayLink(receiptBusiness, estimatedPayable, receiptBusiness.brandName)
+          <p className="mb-3 text-xs text-fg-muted">
+            The server will create or update the order first. The exact discounted, taxed,
+            and rounded amount appears before you collect money.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <PayButton icon={<Banknote size={28}/>}   label="Cash" sub="Prepare exact bill" disabled={paying} onClick={() => prepareCheckout('cash')} />
+            <PayButton icon={<Smartphone size={28}/>} label="UPI"  sub="Prepare exact QR"   disabled={paying} onClick={() => prepareCheckout('upi')} />
+            <PayButton icon={<CreditCard size={28}/>} label="Card" sub="Prepare exact bill" disabled={paying} onClick={() => prepareCheckout('card')} />
+            <PayButton icon={<QrCode size={28}/>}     label="QR"   sub="Prepare exact QR"   disabled={paying} onClick={() => prepareCheckout('qr')} />
+          </div>
+        </Modal>
+      )}
+
+      {checkoutRetry && (
+        <Modal title="Recover checkout" onClose={() => undefined} locked>
+          {(() => {
+            const amount = checkoutRetry.paymentAmountMinor;
+            const collectibleBalance = hasCollectibleCheckoutBalance(checkoutRetry);
+            const benefitCoveredZero = hasBenefitCoveredZeroBalance(checkoutRetry);
+            const scanMethod = checkoutRetry.paymentMethod === 'upi'
+              || checkoutRetry.paymentMethod === 'qr';
+            const upiLink = checkoutRetry.phase === 'awaiting_payment'
+              && scanMethod
+              && collectibleBalance
+              && receiptBusiness
+              && amount !== undefined
+              ? buildUpiPayLink(receiptBusiness, amount, receiptBusiness.brandName)
               : null;
-            const methodLabel = { cash: 'Cash', upi: 'UPI', card: 'Card', qr: 'QR' }[awaitingConfirm];
+            const methodLabel = benefitCoveredZero
+              ? 'Membership benefit · no payment'
+              : {
+                cash: 'Cash',
+                upi: 'UPI',
+                card: 'Card',
+                qr: 'QR',
+              }[checkoutRetry.paymentMethod];
             return (
-              <div className="flex flex-col items-center gap-3">
-                {scanMethod && (upiLink ? (
-                  <>
-                    <div className="text-xs text-fg-muted">Ask the customer to scan &amp; pay {inr(estimatedPayable)}</div>
-                    <div className="rounded-lg bg-white p-2">
-                      <QRCodeSVG value={upiLink} size={192} marginSize={2} level="M" />
-                    </div>
-                    <div className="font-mono text-[10px] text-fg-muted">{receiptBusiness?.upiVpa}</div>
-                  </>
-                ) : (
-                  <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
-                    No UPI ID configured. Add it in Settings → Company to show a scannable QR.
-                  </div>
-                ))}
+              <div className="space-y-4">
+                <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 px-3 py-2 text-sm text-accent-gold">
+                  {checkoutRetry.phase === 'preparing_order'
+                    ? 'The server bill preparation was interrupted. No payment should be collected yet; resume the same request key.'
+                    : checkoutRetry.phase === 'awaiting_payment'
+                      ? benefitCoveredZero
+                        ? 'The member allowance covers this exact server bill. Collect no money; complete the allowance to issue the final invoice.'
+                        : 'This is the exact server balance. If this screen was restored, verify payment was not already received before asking the customer to pay again.'
+                      : checkoutRetry.phase === 'finalizing_zero'
+                        ? 'The no-payment membership settlement is unresolved. Resume only this same key; do not collect money.'
+                        : 'Payment was confirmed and the response is unresolved. Replay only this same payment key; never collect money again.'}
+                </div>
                 <div className="text-center text-sm text-fg-muted">
-                  Confirm once the {methodLabel} payment of <b className="text-fg">{inr(estimatedPayable)}</b> has been received.
+                  Method: <b className="text-fg">{methodLabel}</b>
+                  {amount !== undefined && (
+                    <div className="mt-1 text-2xl font-bold text-fg">{inr(amount)}</div>
+                  )}
                 </div>
-                <div className="grid w-full grid-cols-2 gap-3">
-                  <button onClick={() => setAwaitingConfirm(null)} disabled={paying}
-                    className="btn btn-ghost disabled:opacity-40">Back</button>
-                  <button onClick={() => pay(awaitingConfirm)} disabled={paying}
-                    className="btn btn-primary disabled:opacity-40">
-                    {paying ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Payment received
+                {checkoutRetry.phase === 'awaiting_payment' && !collectibleBalance && !benefitCoveredZero && (
+                  <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
+                    This saved bill has no valid positive server balance. Do not collect money; ask a protected owner to reconcile it.
+                  </div>
+                )}
+                {checkoutRetry.phase === 'awaiting_payment' && scanMethod && collectibleBalance && (
+                  upiLink ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="rounded-lg bg-white p-2">
+                        <QRCodeSVG value={upiLink} size={192} marginSize={2} level="M" />
+                      </div>
+                      <div className="font-mono text-[10px] text-fg-muted">
+                        {receiptBusiness?.upiVpa}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
+                      The exact amount is available, but the configured UPI QR could not be loaded. Verify payment externally before confirming.
+                    </div>
+                  )
+                )}
+                {error && <p className="text-xs text-accent-bad">{error}</p>}
+                {checkoutRetry.phase === 'awaiting_payment' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <button className="btn btn-ghost disabled:opacity-40"
+                      disabled={paying} onClick={abandonPreparedCheckout}>
+                      {benefitCoveredZero ? 'Cancel prepared bill' : 'No payment · Cancel'}
+                    </button>
+                    <button className="btn btn-primary disabled:opacity-40"
+                      disabled={paying || (!collectibleBalance && !benefitCoveredZero)} onClick={completeCheckout}>
+                      {paying ? <Loader2 size={16} className="animate-spin"/> : <Check size={16}/>} {benefitCoveredZero ? 'Complete member benefit' : 'Payment received'}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="btn btn-primary w-full disabled:opacity-40"
+                    disabled={paying}
+                    onClick={() => checkoutRetry.phase === 'preparing_order'
+                      ? prepareCheckout(checkoutRetry.paymentMethod)
+                      : completeCheckout()}
+                  >
+                    {paying ? <Loader2 size={16} className="animate-spin"/> : <RefreshCwIcon/>}
+                    {paying ? 'Reconciling safely…' : 'Resume same attempt'}
                   </button>
-                </div>
+                )}
               </div>
             );
-          })() : (
-            <div className="grid grid-cols-2 gap-3">
-              <PayButton icon={<Banknote size={28}/>}   label="Cash" sub="Confirm on receipt" disabled={paying} onClick={() => setAwaitingConfirm('cash')} />
-              <PayButton icon={<Smartphone size={28}/>} label="UPI"  sub="Scan & confirm"     disabled={paying} onClick={() => setAwaitingConfirm('upi')} />
-              <PayButton icon={<CreditCard size={28}/>} label="Card" sub="Confirm on receipt" disabled={paying} onClick={() => setAwaitingConfirm('card')} />
-              <PayButton icon={<QrCode size={28}/>}     label="QR"   sub="Scan & confirm"     disabled={paying} onClick={() => setAwaitingConfirm('qr')} />
-            </div>
-          )}
+          })()}
         </Modal>
       )}
 
@@ -892,7 +1442,7 @@ export default function LivePOSScreen() {
       )}
 
       {showHeldPicker && (
-        <Modal title="Held orders" onClose={() => setShowHeldPicker(false)} wide>
+        <Modal title="POS queue" onClose={() => setShowHeldPicker(false)} wide>
           <div className="relative mb-3">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
             <input
@@ -926,6 +1476,9 @@ export default function LivePOSScreen() {
                       <button onClick={() => resumeOrder(o)} className="flex-1 min-w-0 text-left">
                         <div className="font-semibold text-sm truncate">
                           {o.source_label || `Order ${o.id.slice(0, 8)}`}
+                          {o.status === 'open' && (
+                            <span className="ml-2 chip !py-0 !px-1.5 !text-[9px]">Recovered POS bill</span>
+                          )}
                         </div>
                         <div className={`text-xs ${overdue ? 'text-accent-bad' : 'text-fg-muted'}`}>
                           {o.items_count} item{o.items_count === 1 ? '' : 's'}
@@ -938,7 +1491,7 @@ export default function LivePOSScreen() {
                         className="btn btn-ghost !p-2 text-accent-bad shrink-0"
                         disabled={voidingId === o.id}
                         onClick={() => voidOrder(o)}
-                        title="Clear this held order">
+                        title="Void this queued order with a reason">
                         {voidingId === o.id ? <Loader2 className="animate-spin" size={14}/> : <Trash2 size={14}/>}
                       </button>
                     </div>
@@ -946,7 +1499,7 @@ export default function LivePOSScreen() {
                 })}
               {!heldOrders.length && (
                 <p className="text-fg-muted text-sm text-center py-6">
-                  Nothing waiting — sent orders from Tables and Gaming will show up here.
+                  Nothing waiting — Tables/Gaming sends and recoverable direct POS bills appear here.
                 </p>
               )}
             </div>
@@ -1068,9 +1621,28 @@ function PayButton({ icon, label, sub, onClick, disabled }: { icon: React.ReactN
   );
 }
 
-function Modal({ title, children, onClose, wide }: { title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
+function RefreshCwIcon() {
+  return <ReceiptIcon size={16}/>;
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+  wide,
+  locked = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+  wide?: boolean;
+  locked?: boolean;
+}) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-bg/80 backdrop-blur-sm md:p-4 print:p-0 print:bg-white" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-bg/80 backdrop-blur-sm md:p-4 print:p-0 print:bg-white"
+      onClick={locked ? undefined : onClose}
+    >
       <div
         className={`bg-bg-surface border border-bg-border rounded-t-2xl md:rounded-2xl shadow-glow w-full ${wide ? 'md:max-w-md' : 'md:max-w-sm'} max-h-[calc(100dvh-1rem)] overflow-auto print:max-w-none print:w-auto print:bg-white print:text-black print:border-none print:shadow-none print:overflow-visible`}
         onClick={(e) => e.stopPropagation()}
@@ -1078,12 +1650,14 @@ function Modal({ title, children, onClose, wide }: { title: string; children: Re
       >
         <div className="flex items-center justify-between p-4 border-b border-bg-border print:hidden sticky top-0 bg-bg-surface">
           <h3 className="font-semibold">{title}</h3>
-          <button
-            onClick={onClose}
-            className="text-fg-muted hover:text-fg p-1 -m-1"
-            aria-label={`Close ${title}`}
-            title="Close"
-          ><X size={20}/></button>
+          {locked ? null : (
+            <button
+              onClick={onClose}
+              className="text-fg-muted hover:text-fg p-1 -m-1"
+              aria-label={`Close ${title}`}
+              title="Close"
+            ><X size={20}/></button>
+          )}
         </div>
         <div className="p-4">{children}</div>
       </div>

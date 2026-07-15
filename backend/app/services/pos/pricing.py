@@ -130,10 +130,14 @@ class TimeBasedPricing:
     """GST split for a single non-catalog, time-based service line
     (a gaming/hookah session amount instead of a MenuItem × qty)."""
     total_minor: int
+    discount_minor: int
     taxable_minor: int
     cgst_minor: int
     sgst_minor: int
     igst_minor: int
+    # Portion of discount_minor funded by a reserved free allowance.  The
+    # remainder is the tier's percentage discount.
+    allowance_discount_minor: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +218,31 @@ def _discount_minor(inclusive_minor: int, rate: Decimal) -> int:
         return 0
     discount = (Decimal(inclusive_minor) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return min(inclusive_minor, max(0, int(discount)))
+
+
+def gaming_minutes_allowance_minor(
+    *,
+    gross_amount_minor: int,
+    billable_minutes: int,
+    reserved_minutes: int,
+    rate_per_hour_minor: int,
+) -> int:
+    """Value reserved PS5 minutes against the original session snapshot.
+
+    The payable remainder uses the same ceiling formula as session billing,
+    then is subtracted from the stored gross amount.  This avoids inventing a
+    new price and guarantees that reserving every minute waives the exact
+    snapshotted session amount, even when per-minute division has a remainder.
+    """
+    gross = max(0, int(gross_amount_minor))
+    minutes = max(0, int(billable_minutes))
+    reserved = min(minutes, max(0, int(reserved_minutes)))
+    hourly_rate = max(0, int(rate_per_hour_minor))
+    if not gross or not minutes or not reserved or not hourly_rate:
+        return 0
+    remaining_minutes = minutes - reserved
+    remaining_gross = (remaining_minutes * hourly_rate + 59) // 60
+    return max(0, gross - min(gross, remaining_gross))
 
 
 def _unit_inclusive_minor(line_inclusive_minor: int, qty: int) -> int:
@@ -373,11 +402,18 @@ class OrderPricingService:
         amount_minor: int,
         tax_rate: Decimal,
         rate_includes_tax: bool,
+        customer_phone: str | None = None,
+        item_type: str | None = None,
+        place_of_supply_state_code: str | None = None,
+        delivery_via: str | None = None,
+        allowance_minor: int = 0,
     ) -> TimeBasedPricing:
-        """GST-split a gaming/hookah session amount under the same
-        registration-mode rules as price_order (composition and
-        unregistered suppliers collect zero GST on the customer document).
-        Always intra-state: a station has no delivery/customer state.
+        """Discount and GST-split one stored gross line amount.
+
+        ``amount_minor`` is the pre-membership amount in the item's configured
+        price mode (GST-inclusive when ``rate_includes_tax`` is true, otherwise
+        GST-exclusive). This supports both session billing and deterministic
+        repricing of a held order when the cashier attaches a member at POS.
         """
         company = await self.session.get(Company, company_id)
         if not company:
@@ -395,25 +431,52 @@ class OrderPricingService:
             branch_state=branch_state,
         )
 
-        if tax_mode in ("composition", "unregistered"):
+        membership_rates = await self._membership_discount_rates(
+            company_id=company_id,
+            customer_phone=customer_phone,
+        )
+        allowance_discount_minor = min(
+            max(0, int(amount_minor)),
+            max(0, int(allowance_minor)),
+        )
+        amount_after_allowance = max(0, amount_minor - allowance_discount_minor)
+        percentage_discount_minor = _discount_minor(
+            amount_after_allowance,
+            _discount_for_item_type(item_type or "", membership_rates),
+        )
+        discount_minor = allowance_discount_minor + percentage_discount_minor
+        net_amount_minor = max(0, amount_minor - discount_minor)
+        is_aggregator = delivery_via and delivery_via.lower() not in {"inhouse", ""}
+        intra_state = (place_of_supply_state_code or branch_state) == branch_state
+
+        if tax_mode in ("composition", "unregistered") or is_aggregator:
             return TimeBasedPricing(
-                total_minor=amount_minor, taxable_minor=amount_minor,
+                total_minor=net_amount_minor,
+                discount_minor=discount_minor,
+                taxable_minor=net_amount_minor,
                 cgst_minor=0, sgst_minor=0, igst_minor=0,
+                allowance_discount_minor=allowance_discount_minor,
             )
         if rate_includes_tax:
             taxable, cgst, sgst, igst = _split_tax_from_inclusive(
-                amount_minor, tax_rate, True
+                net_amount_minor, tax_rate, intra_state
             )
             return TimeBasedPricing(
-                total_minor=amount_minor, taxable_minor=taxable,
+                total_minor=net_amount_minor,
+                discount_minor=discount_minor,
+                taxable_minor=taxable,
                 cgst_minor=cgst, sgst_minor=sgst, igst_minor=igst,
+                allowance_discount_minor=allowance_discount_minor,
             )
         taxable, cgst, sgst, igst = _split_tax_from_exclusive(
-            amount_minor, tax_rate, True
+            net_amount_minor, tax_rate, intra_state
         )
         return TimeBasedPricing(
-            total_minor=taxable + cgst + sgst + igst, taxable_minor=taxable,
+            total_minor=taxable + cgst + sgst + igst,
+            discount_minor=discount_minor,
+            taxable_minor=taxable,
             cgst_minor=cgst, sgst_minor=sgst, igst_minor=igst,
+            allowance_discount_minor=allowance_discount_minor,
         )
 
     async def _membership_discount_rates(
@@ -436,7 +499,7 @@ class OrderPricingService:
                     Customer.company_id == company_id,
                     Customer.phone == customer_phone,
                     Customer.deleted_at.is_(None),
-                    CustomerMembership.cancelled_at.is_(None),
+                    CustomerMembership.starts_at <= now,
                     CustomerMembership.expires_at > now,
                     MembershipTier.company_id == company_id,
                     MembershipTier.deleted_at.is_(None),

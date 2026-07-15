@@ -32,6 +32,7 @@ MENU_SEED = [
         "base_price_minor": 5000,
         "tax_rate": Decimal("0.18"),
         "hsn_code": "999692",
+        "is_available": False,
     },
     {
         "category": "Gaming",
@@ -42,6 +43,7 @@ MENU_SEED = [
         "base_price_minor": 8750,
         "tax_rate": Decimal("0.18"),
         "hsn_code": "999692",
+        "is_available": False,
     },
     {
         "category": "Gaming",
@@ -52,6 +54,7 @@ MENU_SEED = [
         "base_price_minor": 10000,
         "tax_rate": Decimal("0.18"),
         "hsn_code": "999692",
+        "is_available": False,
     },
     {
         "category": "Shisha",
@@ -62,6 +65,7 @@ MENU_SEED = [
         "base_price_minor": 35000,
         "tax_rate": Decimal("0.18"),
         "hsn_code": "999692",
+        "is_available": False,
     },
     {
         "category": "Streaming",
@@ -72,6 +76,7 @@ MENU_SEED = [
         "base_price_minor": 5000,
         "tax_rate": Decimal("0.18"),
         "hsn_code": "999692",
+        "is_available": False,
     },
 ]
 
@@ -172,7 +177,7 @@ async def main() -> None:
                     tax_rate=row["tax_rate"],
                     hsn_code=row["hsn_code"],
                     price_includes_tax=True,
-                    is_available=True,
+                    is_available=row["is_available"],
                 ))
                 created += 1
                 continue
@@ -186,7 +191,7 @@ async def main() -> None:
             row_updated |= _changed(item, "tax_rate", row["tax_rate"])
             row_updated |= _changed(item, "hsn_code", row["hsn_code"])
             row_updated |= _changed(item, "price_includes_tax", True)
-            row_updated |= _changed(item, "is_available", True)
+            row_updated |= _changed(item, "is_available", row["is_available"])
             if row_updated:
                 updated += 1
 

@@ -94,8 +94,23 @@ export default function LiveReceipt({
       <Dashed/>
 
       <div className="space-y-0.5">
-        <Row label={isGstDocument ? 'Subtotal (taxable)' : 'Subtotal'} v={order.subtotal_minor} />
-        {order.discount_minor > 0 && <Row label="Membership discount" v={-order.discount_minor} />}
+        {order.discount_minor > 0 && (
+          <div className="mb-1 text-[10px] text-fg-muted print:text-black/70">
+            Membership savings already included in item prices: {inr(order.discount_minor)}
+          </div>
+        )}
+        <Row
+          label={isGstDocument
+            ? order.discount_minor > 0 ? 'Taxable after savings' : 'Subtotal (taxable)'
+            : order.discount_minor > 0 ? 'Subtotal after savings' : 'Subtotal'}
+          v={order.subtotal_minor}
+        />
+        {order.free_gaming_minutes_applied > 0 && (
+          <TextRow label="Member benefit" value={`${order.free_gaming_minutes_applied} free PS5 min`} />
+        )}
+        {order.free_hookah_count_applied > 0 && (
+          <TextRow label="Member benefit" value={`${order.free_hookah_count_applied} free shisha`} />
+        )}
         {order.cgst_minor > 0 && <Row label="CGST" v={order.cgst_minor} />}
         {order.sgst_minor > 0 && <Row label="SGST" v={order.sgst_minor} />}
         {order.igst_minor > 0 && <Row label="IGST" v={order.igst_minor} />}
@@ -133,6 +148,9 @@ function Line({ l }: { l: OrderDTO['lines'][number] }) {
       <div className="break-words">
         {l.name}
         <span className="text-fg-muted print:text-black/70"> ({l.hsn_or_sac || '—'})</span>
+        {l.note && (
+          <div className="text-[9px] text-fg-muted print:text-black/70">Note: {l.note}</div>
+        )}
       </div>
       <div className="text-right text-fg-muted print:text-black/70 whitespace-nowrap">
         {l.qty} × {inr(l.unit_price_minor, { withSymbol: false })}
@@ -144,5 +162,8 @@ function Line({ l }: { l: OrderDTO['lines'][number] }) {
 function Row({ label, v }: { label: string; v: number }) {
   const amount = v < 0 ? `-${inr(Math.abs(v))}` : inr(v);
   return <div className="flex justify-between"><span className="text-fg-muted print:text-black/80">{label}</span><span>{amount}</span></div>;
+}
+function TextRow({ label, value }: { label: string; value: string }) {
+  return <div className="flex justify-between"><span className="text-fg-muted print:text-black/80">{label}</span><span>{value}</span></div>;
 }
 function Dashed() { return <div className="my-2 border-t border-dashed border-bg-border print:border-black/30" />; }
