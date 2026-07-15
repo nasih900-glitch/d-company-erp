@@ -8,9 +8,10 @@
  * Mounted at /kitchen — open on the kitchen iPad in full-screen mode.
  */
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ChefHat, Clock, CheckCircle2, Flame, Coffee, IceCream,
-  Utensils, AlertTriangle, Loader2,
+  Utensils, AlertTriangle, Loader2, ArrowLeft,
 } from 'lucide-react';
 
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
@@ -99,13 +100,22 @@ export default function KitchenScreen() {
           <ChefHat size={24} className="text-accent"/>
           <h1 className="text-xl font-bold">Kitchen</h1>
         </div>
-        <div className="flex items-center gap-3 text-sm">
+        <div className="flex flex-wrap items-center justify-end gap-3 text-sm">
           <span className="chip border-fg-muted/40">{counts.received} new</span>
           <span className="chip border-accent-gold/40 text-accent-gold">{counts.preparing} preparing</span>
           <span className="chip border-accent-good/40 text-accent-good">{counts.ready} ready</span>
           <span className="text-xs text-fg-muted hidden sm:inline">
             {lastSync ? `synced ${Math.floor((Date.now() - lastSync.getTime()) / 1000)}s ago` : 'syncing…'}
           </span>
+          <Link
+            to="/pos"
+            aria-label="Exit KDS and return to POS"
+            className="inline-flex items-center gap-2 rounded-lg border border-bg-border bg-bg px-3 py-2 font-semibold text-fg transition hover:border-accent/60 hover:text-accent active:scale-95"
+          >
+            <ArrowLeft size={16} aria-hidden="true" />
+            <span className="hidden sm:inline">Exit KDS</span>
+            <span className="sm:hidden">Exit</span>
+          </Link>
         </div>
       </header>
 
