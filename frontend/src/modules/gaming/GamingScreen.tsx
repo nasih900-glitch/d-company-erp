@@ -63,6 +63,12 @@ const DURATION_PRESETS = [
   { label: '2h', minutes: 120 },
 ] as const;
 
+// Sessions only ever loaded once at mount otherwise — on a multi-device
+// floor, if another staff member stops/starts/extends a session from a
+// different screen, this screen would show stale state (a stopped session
+// still ticking as "overtime") until someone happened to reload the page.
+const GAMING_SESSIONS_POLL_MS = 30_000;
+
 function notifyTimerExpired(stationName: string) {
   notifyBrowser(
     `⏰ ${stationName} — time's up`,
@@ -155,6 +161,17 @@ export default function GamingScreen() {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  // Re-sync with the server periodically so another device's stop/start/
+  // extend shows up here without a manual reload. load()'s merge logic
+  // (see above) already reuses the existing local session object when the
+  // backend session id hasn't changed, so this doesn't disrupt the locally
+  // ticking countdown for sessions nothing happened to.
+  useEffect(() => {
+    if (!LIVE_MODE) return;
+    const id = setInterval(() => { void load(); }, GAMING_SESSIONS_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   // Live ticking timer + alarm check. One interval drives both the countdown
   // re-render and the "has any timer just expired" scan, using refs so it
