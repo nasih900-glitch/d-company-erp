@@ -47,4 +47,23 @@ post_install do |installer|
   # you click "Perform Changes", because the next `pod install` overwrites it
   # right back to 1600. Match the App project's own value instead, every install.
   installer.pods_project.root_object.attributes['LastUpgradeCheck'] = '2660'
+
+  # Silences the 3 remaining warnings, all from Capacitor's OWN source
+  # (CapacitorBridge.swift/TmpViewController.swift): it marks `tmpWindow` and
+  # `tmpVCAppeared` `@available(*, deprecated, message: "obsolete")` and then
+  # keeps using them internally — Capacitor's own unfinished cleanup, not
+  # anything in our code, and not fixed by any available stable release (only
+  # unstable 9.0 nightlies exist past this version). We don't own that file
+  # and won't patch node_modules directly — it'd be silently reverted on the
+  # next install. Suppressing warnings for just this one target is the
+  # standard, sanctioned way to quiet a dependency's own warnings without
+  # touching its source or hiding warnings from OUR code.
+  installer.pods_project.targets.each do |target|
+    next unless target.name == 'Capacitor'
+
+    target.build_configurations.each do |config|
+      config.build_settings['SWIFT_SUPPRESS_WARNINGS'] = 'YES'
+    end
+  end
+  installer.pods_project.save
 end
