@@ -729,6 +729,22 @@ private struct ReportDTO: Codable {
     let net_profit_minor: Int
 }
 
+private struct BusinessMetricsDTO: Codable {
+    let period_start: Date
+    let period_end: Date
+    let aov_minor: Int
+    let orders_count: Int
+    let mrr_minor: Int
+    let arr_minor: Int
+    let active_members_count: Int
+    let cac_minor: Int?
+    let new_customers_count: Int
+    let marketing_spend_minor: Int
+    let ltv_minor: Int
+    let customers_count: Int
+    let burn_rate_minor: Int
+}
+
 private struct TaxComplianceIssueDTO: Decodable, Identifiable {
     let severity: String
     let area: String
@@ -4108,6 +4124,10 @@ private struct DashboardNativeView: View {
                                 .foregroundColor(.white)
                                 .padding(.bottom, 4)
 
+                            // Grouped so the day-to-day tools staff open constantly
+                            // aren't mixed in with occasional setup/admin screens.
+                            // Every link below is unchanged — only regrouped.
+                            WorkspaceSectionHeader(title: "Daily Operations", isFirst: true)
                             if session.canSeeTables {
                                 NavigationLink {
                                     TablesNativeView()
@@ -4120,6 +4140,18 @@ private struct DashboardNativeView: View {
                             } label: {
                                 WorkspaceLinkRow(title: "Kitchen", subtitle: "Live order queue, received to served", icon: "flame")
                             }
+                            NavigationLink {
+                                OrdersNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Orders", subtitle: "Recent bills and payment status", icon: "receipt")
+                            }
+                            NavigationLink {
+                                CustomersNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Customers", subtitle: "Visits, spend, and loyalty points", icon: "person.2")
+                            }
+
+                            WorkspaceSectionHeader(title: "Catalog & Stock")
                             if session.canSeeMenu {
                                 NavigationLink {
                                     MenuCatalogNativeView()
@@ -4135,52 +4167,9 @@ private struct DashboardNativeView: View {
                                 }
                             }
                             NavigationLink {
-                                OrdersNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Orders", subtitle: "Recent bills and payment status", icon: "receipt")
-                            }
-                            NavigationLink {
-                                CustomersNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Customers", subtitle: "Visits, spend, and loyalty points", icon: "person.2")
-                            }
-                            NavigationLink {
-                                StaffNativeView()
-                            } label: {
-                                WorkspaceLinkRow(title: "Staff", subtitle: "Users, roles, and login history", icon: "person.badge.key")
-                            }
-                            NavigationLink {
                                 MembershipsNativeView()
                             } label: {
                                 WorkspaceLinkRow(title: "Memberships", subtitle: "D Club tiers, pricing, and perks", icon: "crown")
-                            }
-                            if session.canSeeOcr {
-                                NavigationLink {
-                                    OcrNativeView()
-                                } label: {
-                                    WorkspaceLinkRow(title: "OCR — Receipts", subtitle: "Scan bills, extract vendor and amount, approve", icon: "scanner")
-                                }
-                            }
-                            if session.canSeeInsights {
-                                NavigationLink {
-                                    AnalyticsNativeView()
-                                } label: {
-                                    WorkspaceLinkRow(title: "Analytics", subtitle: "Today's KPIs and revenue by stream", icon: "chart.line.uptrend.xyaxis")
-                                }
-                            }
-                            if session.canSeeInsights || session.canSeeInventory || session.canSeeFinance {
-                                NavigationLink {
-                                    InsightsNativeView()
-                                } label: {
-                                    WorkspaceLinkRow(title: "Insights", subtitle: "Growth, inventory value, accounting, and losses", icon: "chart.bar.doc.horizontal")
-                                }
-                            }
-                            if session.canSeeFinance {
-                                NavigationLink {
-                                    FinanceNativeView()
-                                } label: {
-                                    WorkspaceLinkRow(title: "Finance", subtitle: "P&L overview, expenses, and partner capital", icon: "banknote")
-                                }
                             }
                             if session.canSeeGaming {
                                 NavigationLink {
@@ -4188,6 +4177,45 @@ private struct DashboardNativeView: View {
                                 } label: {
                                     WorkspaceLinkRow(title: "Events", subtitle: "Screenings, seats, and ticket sales", icon: "tv")
                                 }
+                            }
+
+                            if session.canSeeOcr || session.canSeeInsights || session.canSeeInventory || session.canSeeFinance {
+                                WorkspaceSectionHeader(title: "Reports & Money")
+                                if session.canSeeOcr {
+                                    NavigationLink {
+                                        OcrNativeView()
+                                    } label: {
+                                        WorkspaceLinkRow(title: "OCR — Receipts", subtitle: "Scan bills, extract vendor and amount, approve", icon: "scanner")
+                                    }
+                                }
+                                if session.canSeeInsights {
+                                    NavigationLink {
+                                        AnalyticsNativeView()
+                                    } label: {
+                                        WorkspaceLinkRow(title: "Analytics", subtitle: "Today's KPIs and revenue by stream", icon: "chart.line.uptrend.xyaxis")
+                                    }
+                                }
+                                if session.canSeeInsights || session.canSeeInventory || session.canSeeFinance {
+                                    NavigationLink {
+                                        InsightsNativeView()
+                                    } label: {
+                                        WorkspaceLinkRow(title: "Insights", subtitle: "Growth, inventory value, accounting, and losses", icon: "chart.bar.doc.horizontal")
+                                    }
+                                }
+                                if session.canSeeFinance {
+                                    NavigationLink {
+                                        FinanceNativeView()
+                                    } label: {
+                                        WorkspaceLinkRow(title: "Finance", subtitle: "P&L overview, expenses, and partner capital", icon: "banknote")
+                                    }
+                                }
+                            }
+
+                            WorkspaceSectionHeader(title: "Setup")
+                            NavigationLink {
+                                StaffNativeView()
+                            } label: {
+                                WorkspaceLinkRow(title: "Staff", subtitle: "Users, roles, and login history", icon: "person.badge.key")
                             }
                             if session.hasProtectedOwnerAccess {
                                 NavigationLink {
@@ -6126,6 +6154,7 @@ private struct POSNativeView: View {
     @State private var cart: [String: Int] = [:]
     @State private var checkoutDraft: CheckoutDraft?
     @State private var sessionDraft: GamingSessionDraft?
+    @State private var closingShift: ShiftDTO?
     @State private var posMode: POSMode = .all
     @State private var createdInvoice: String?
     @State private var lastChargedOrder: OrderReadDTO?
@@ -6239,6 +6268,9 @@ private struct POSNativeView: View {
                 } openShift: {
                     Haptics.selection()
                     Task { await openShift() }
+                } closeShift: {
+                    Haptics.selection()
+                    closingShift = activeShift
                 } openMenu: {
                     Haptics.selection()
                     withAnimation(.easeInOut(duration: 0.16)) {
@@ -6390,6 +6422,11 @@ private struct POSNativeView: View {
             .sheet(item: $sessionDraft) { draft in
                 GamingSessionSheet(draft: draft, activeShift: activeShift, isSubmitting: isSubmitting) { updatedDraft in
                     Task { await start(updatedDraft) }
+                }
+            }
+            .sheet(item: $closingShift) { shift in
+                CloseShiftSheet(shift: shift) {
+                    Task { await load() }
                 }
             }
             .sheet(item: $resumeOrder) { order in
@@ -9047,6 +9084,7 @@ private struct FinanceNativeView: View {
 private struct FinanceOverviewTab: View {
     @EnvironmentObject private var session: AppSession
     @State private var report: ReportDTO?
+    @State private var metrics: BusinessMetricsDTO?
     @State private var isLoading = true
     @State private var error: String?
 
@@ -9095,6 +9133,12 @@ private struct FinanceOverviewTab: View {
                             }
                             Divider().background(Brand.gold.opacity(0.35))
                             PNLRow(title: "Net revenue (after GST)", value: inr(report.net_revenue_minor), highlight: true)
+                            PNLRow(title: "Less: cost of goods sold", value: "-\(inr(report.cogs_minor))")
+                            Text("What the food, drinks, and items you sold actually cost you.")
+                                .font(.caption2)
+                                .foregroundColor(Brand.muted)
+                            Divider().background(Brand.gold.opacity(0.35))
+                            PNLRow(title: "Gross profit", value: inr(report.gross_profit_minor), highlight: true)
                         }
                     }
 
@@ -9110,6 +9154,54 @@ private struct FinanceOverviewTab: View {
                             }
                             Divider().background(Brand.gold.opacity(0.35))
                             PNLRow(title: "Total expenses", value: inr(report.expense_total_minor), highlight: true)
+                        }
+                    }
+
+                    if let metrics {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Business metrics")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(Brand.muted)
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                MetricCard(
+                                    title: "Avg order value",
+                                    value: inr(metrics.aov_minor),
+                                    detail: "\(metrics.orders_count) order\(metrics.orders_count == 1 ? "" : "s") this period",
+                                    icon: "cart"
+                                )
+                                MetricCard(
+                                    title: "MRR",
+                                    value: inr(metrics.mrr_minor),
+                                    detail: "\(metrics.active_members_count) active member\(metrics.active_members_count == 1 ? "" : "s")",
+                                    icon: "arrow.triangle.2.circlepath"
+                                )
+                                MetricCard(title: "ARR", value: inr(metrics.arr_minor), detail: "MRR x 12, projected", icon: "calendar")
+                                MetricCard(
+                                    title: "Customer lifetime value",
+                                    value: inr(metrics.ltv_minor),
+                                    detail: "avg across \(metrics.customers_count) customer\(metrics.customers_count == 1 ? "" : "s"), all-time",
+                                    icon: "person.fill.checkmark"
+                                )
+                                MetricCard(
+                                    title: "Cost per new customer",
+                                    value: metrics.cac_minor.map(inr) ?? "—",
+                                    detail: metrics.cac_minor == nil
+                                        ? "no new customers this period"
+                                        : "\(inr(metrics.marketing_spend_minor)) marketing / \(metrics.new_customers_count) new",
+                                    icon: "megaphone"
+                                )
+                                MetricCard(
+                                    title: "Burn rate",
+                                    value: inr(metrics.burn_rate_minor),
+                                    detail: metrics.burn_rate_minor > 0 ? "lost money this period, after cost of goods sold" : "profitable this period",
+                                    icon: metrics.burn_rate_minor > 0 ? "flame" : "checkmark.seal"
+                                )
+                            }
+
+                            Text("These fit a single-location, self-funded business — not SaaS/VC fundraising metrics that don't apply here.")
+                                .font(.caption2)
+                                .foregroundColor(Brand.muted)
                         }
                     }
 
@@ -9130,10 +9222,17 @@ private struct FinanceOverviewTab: View {
         defer { isLoading = false }
         error = nil
         do {
-            let result: ReportDTO = try await session.authorized { token in
+            async let loadedReport: ReportDTO = session.authorized { token in
                 try await APIClient.shared.get("reports/daily", token: token)
             }
-            withAnimation(.easeOut(duration: 0.18)) { report = result }
+            async let loadedMetrics: BusinessMetricsDTO = session.authorized { token in
+                try await APIClient.shared.get("finance/metrics", token: token)
+            }
+            let (freshReport, freshMetrics) = try await (loadedReport, loadedMetrics)
+            withAnimation(.easeOut(duration: 0.18)) {
+                report = freshReport
+                metrics = freshMetrics
+            }
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
@@ -15615,6 +15714,7 @@ private struct POSShiftCommandCard: View {
     let isSubmitting: Bool
     let openSessions: () -> Void
     let openShift: () -> Void
+    let closeShift: () -> Void
     let openMenu: () -> Void
     let reviewBill: () -> Void
 
@@ -15671,6 +15771,21 @@ private struct POSShiftCommandCard: View {
                     .background((terminal == nil || isSubmitting) ? Brand.muted.opacity(0.45) : Brand.gold)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .disabled(terminal == nil || isSubmitting)
+                } else {
+                    Button(action: closeShift) {
+                        Label("Close shift", systemImage: "clock.badge.xmark")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Brand.softGold)
+                    .background(Brand.elevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Brand.gold.opacity(0.35), lineWidth: 1)
+                    )
                 }
 
                 Text("\(serviceCount) services configured - \(activeSessionCount) running now")
@@ -16584,6 +16699,19 @@ private struct WorkspaceLinkRow: View {
         .padding(12)
         .background(Brand.elevated)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private struct WorkspaceSectionHeader: View {
+    let title: String
+    var isFirst: Bool = false
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.bold))
+            .tracking(0.6)
+            .foregroundColor(Brand.muted)
+            .padding(.top, isFirst ? 0 : 10)
     }
 }
 
