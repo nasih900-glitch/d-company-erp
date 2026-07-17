@@ -233,6 +233,16 @@ private struct APIClient {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
+        // Attach this device's resolved terminal to EVERY authenticated
+        // request by default, not just the ones a call site remembers to
+        // pass it on. Multiple call sites (order lists, shift close) forgot
+        // to include it individually and broke as a result — rather than
+        // keep hunting for the next one, make it structurally impossible to
+        // forget. An explicit value in `headers` above still wins.
+        if request.value(forHTTPHeaderField: "X-Terminal-Id") == nil, let terminalId = TerminalStore.read() {
+            request.setValue(terminalId, forHTTPHeaderField: "X-Terminal-Id")
+        }
+
         return request
     }
 
