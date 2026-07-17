@@ -4772,7 +4772,8 @@ private struct TableOrderSheet: View {
             async let loadedOrders: [OrderListItemDTO] = session.authorized { token in
                 try await APIClient.shared.get(
                     "pos/orders", token: token,
-                    queryItems: [URLQueryItem(name: "table_id", value: table.id), URLQueryItem(name: "limit", value: "5")]
+                    queryItems: [URLQueryItem(name: "table_id", value: table.id), URLQueryItem(name: "limit", value: "5")],
+                    headers: session.terminalId.map { ["X-Terminal-Id": $0] } ?? [:]
                 )
             }
             let (freshCategories, freshItems, freshShifts, freshTerminals, freshOrders) = try await (
@@ -6701,7 +6702,8 @@ private struct POSNativeView: View {
                     queryItems: [
                         URLQueryItem(name: "status", value: "held"),
                         URLQueryItem(name: "limit", value: "50")
-                    ]
+                    ],
+                    headers: session.terminalId.map { ["X-Terminal-Id": $0] } ?? [:]
                 )
             }
             async let loadedCompany: CompanyDTO = session.authorized { token in
@@ -11444,7 +11446,8 @@ private struct OrdersNativeView: View {
             async let loadedOrders: [OrderListItemDTO] = session.authorized { token in
                 try await APIClient.shared.get(
                     "pos/orders", token: token,
-                    queryItems: [URLQueryItem(name: "limit", value: "80")]
+                    queryItems: [URLQueryItem(name: "limit", value: "80")],
+                    headers: session.terminalId.map { ["X-Terminal-Id": $0] } ?? [:]
                 )
             }
             async let loadedShifts: [ShiftDTO] = session.authorized { token in
