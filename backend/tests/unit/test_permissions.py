@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.errors import AuthError
-from app.core.permissions import PERMISSIONS, ROLE_PERMISSIONS
+from app.core.permissions import PERMISSIONS, ROLE_PERMISSIONS, _has_permission
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.security import issue_pricing_token
 from app.core.tenant import TenantContext
@@ -63,12 +63,37 @@ def test_all_role_perms_are_declared() -> None:
             assert p in PERMISSIONS, f"role {role!r} grants undeclared permission {p!r}"
 
 
-def _tenant(protected_access: bool) -> TenantContext:
+def test_co_owner_role_matches_owner_permissions_exactly() -> None:
+    assert ROLE_PERMISSIONS["co_owner"] == ROLE_PERMISSIONS["owner"]
+    assert "admin.audit.read" not in ROLE_PERMISSIONS["co_owner"]
+
+
+async def test_protected_access_never_leaks_admin_audit_read() -> None:
+    # A co_owner-shaped tenant: protected_access=True (operational bypass)
+    # but audit_access=False. This is the exact scenario the carve-out in
+    # _has_permission exists for — protected_access alone must not grant
+    # admin.audit.read, only audit_access does.
+    co_owner = _tenant(protected_access=True, audit_access=False, roles=("co_owner",))
+    assert await _has_permission(None, co_owner, "admin.audit.read") is False
+    # The blanket bypass still applies to every other permission.
+    assert await _has_permission(None, co_owner, "finance.write") is True
+    assert await _has_permission(None, co_owner, "staff.write") is True
+
+
+async def test_audit_access_grants_admin_audit_read_regardless_of_role() -> None:
+    super_owner = _tenant(protected_access=True, audit_access=True, roles=("super_owner",))
+    assert await _has_permission(None, super_owner, "admin.audit.read") is True
+
+
+def _tenant(
+    protected_access: bool, audit_access: bool = False, roles: tuple[str, ...] = ("owner",),
+) -> TenantContext:
     return TenantContext(
         user_id=uuid4(),
         company_id=uuid4(),
         branch_id=None,
         terminal_id=None,
-        roles=("owner",),
+        roles=roles,
         protected_access=protected_access,
+        audit_access=audit_access,
     )

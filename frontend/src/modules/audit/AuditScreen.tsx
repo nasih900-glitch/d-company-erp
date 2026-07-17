@@ -392,10 +392,10 @@ function auditArea(entry: AuditEntryDTO): string {
   if (['User', 'UserRole', 'Role'].includes(entry.entity_type)) return 'staff';
   if (['Order', 'OrderLine', 'Payment', 'Refund', 'Shift'].includes(entry.entity_type)) return 'pos';
   if (['Customer', 'CustomerMembership', 'MembershipTier'].includes(entry.entity_type)) return 'customers';
-  if (['Ingredient', 'Supplier', 'GRN'].includes(entry.entity_type)) return 'inventory';
-  if (['Expense', 'ExpenseCategory', 'Partner', 'CapitalEntry'].includes(entry.entity_type)) return 'finance';
+  if (['Ingredient', 'Supplier', 'Batch', 'StockMovement', 'PurchaseOrder', 'PurchaseOrderLine', 'GRN'].includes(entry.entity_type)) return 'inventory';
+  if (['Account', 'Asset', 'Expense', 'ExpenseCategory', 'JournalEntry', 'JournalLine', 'ManualCollection', 'Partner', 'CapitalEntry'].includes(entry.entity_type)) return 'finance';
   if (['MenuCategory', 'MenuItem'].includes(entry.entity_type)) return 'menu';
-  if (['Table', 'Floor', 'Reservation', 'Station', 'Event', 'EventTicket'].includes(entry.entity_type)) {
+  if (['Table', 'Floor', 'Reservation', 'Station', 'GamingSession', 'GamingBooking', 'Event', 'EventTicket'].includes(entry.entity_type)) {
     return 'operations';
   }
   return 'system';
@@ -423,8 +423,13 @@ function entityLabel(entityType: string): string {
     Ingredient: 'Ingredient',
     Supplier: 'Supplier',
     GRN: 'Stock received',
+    Account: 'Ledger account',
+    Asset: 'Asset',
     Expense: 'Expense',
     ExpenseCategory: 'Expense category',
+    JournalEntry: 'Journal entry',
+    JournalLine: 'Journal line',
+    ManualCollection: 'Manual collection',
     Partner: 'Partner',
     CapitalEntry: 'Partner capital',
     MenuCategory: 'Menu category',
@@ -433,6 +438,8 @@ function entityLabel(entityType: string): string {
     Floor: 'Floor',
     Reservation: 'Reservation',
     Station: 'Gaming / hookah station',
+    GamingSession: 'Gaming / hookah session',
+    GamingBooking: 'Gaming booking',
     Event: 'Event',
     EventTicket: 'Event ticket',
   };

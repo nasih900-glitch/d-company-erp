@@ -16,6 +16,7 @@ export const DEMO_USER = {
   name: 'Owner',
   roles: ['owner'],
   protected_access: true,
+  audit_access: true,
   company_id: '00000000-0000-0000-0000-000000000000',
   branch_id: null as string | null,
   accessible_modules: [

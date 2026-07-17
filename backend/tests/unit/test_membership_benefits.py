@@ -660,8 +660,12 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
     async def _loyalty(_session, **kwargs):
         events.append(("loyalty", kwargs))
 
+    async def _consume_points(_session, **kwargs):
+        events.append(("consume_points", kwargs))
+
     monkeypatch.setattr(pos_router, "InvoiceNumberService", _InvoiceNumbers)
     monkeypatch.setattr(pos_router, "consume_membership_benefits", _consume)
+    monkeypatch.setattr(pos_router, "consume_points_redemption", _consume_points)
     monkeypatch.setattr(pos_router, "_release_table_if_no_active_orders", _release)
     monkeypatch.setattr(pos_router, "deduct_for_order", _deduct)
     monkeypatch.setattr(pos_router, "_upsert_and_attach_customer", _loyalty)
@@ -681,6 +685,7 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
     assert [event[0] for event in events] == [
         "invoice",
         "consume",
+        "consume_points",
         "release",
         "deduct",
         "loyalty",

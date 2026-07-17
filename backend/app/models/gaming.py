@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TenantMixin, TimestampMixin, _uuid_pk
+from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin, _uuid_pk
 
 
 class Station(Base, TimestampMixin, TenantMixin):
@@ -55,7 +55,9 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paused_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rate_per_hour_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    package_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    package_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("gaming_packages.id", ondelete="SET NULL")
+    )
     # Planned duration in minutes from start_at (e.g. a 60-minute PS5 slot).
     # NULL = open-ended, billed by actual elapsed time as before.
     timer_minutes: Mapped[int | None] = mapped_column(Integer)
@@ -75,6 +77,41 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     tax_rate: Mapped[float | None] = mapped_column(Numeric(5, 4))
     sac_code: Mapped[str | None] = mapped_column(String(8))
     rate_includes_tax: Mapped[bool | None] = mapped_column()
+    # Extra controllers/players beyond what the package's base mode covers
+    # (e.g. a 3rd/4th player joining a Dual-mode PS5 slot). Surcharge is
+    # computed at package-price time, never re-derived from elapsed time.
+    extra_controllers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class GamingPackage(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
+    """A named, fixed-price session tier — e.g. "Single Mode · 30 min" = ₹80.
+
+    Session pricing is package-driven, not elapsed-time-driven: the price is
+    locked in the moment a package is selected, not recomputed from how long
+    the customer actually played. kind='extension' rows are added on top of
+    an already-running package session (own duration + price), never used to
+    start a fresh session. Stations with no active packages for their type
+    fall back to the station's plain rate_per_hour_minor (open-ended, billed
+    by elapsed time) — packages are additive, not a hard requirement.
+    """
+
+    __tablename__ = "gaming_packages"
+
+    id: Mapped[UUID] = _uuid_pk()
+    branch_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    station_type: Mapped[str] = mapped_column(String(20), nullable=False)  # ps5|simulator|vr|...
+    # Names the specific product line within a station type — e.g. "single"
+    # vs "dual" for ps5, "games" vs "racing" for vr. Stations of the same
+    # type share one variant unless the mode changes what's on screen.
+    variant: Mapped[str] = mapped_column(String(20), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # base|extension
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class GamingBooking(Base, TimestampMixin):

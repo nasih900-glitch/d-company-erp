@@ -24,7 +24,10 @@ type Tab = 'account' | 'company' | 'branches' | 'pricing' | 'sheets' | 'membersh
 
 export default function SettingsScreen() {
   const { me, demo } = useAuth();
-  const isProtectedOwner = Boolean(demo || me?.protected_access);
+  // Access Control is itself gated by admin.audit.read on the backend — a
+  // co_owner (protected_access=true, audit_access=false) must not see this
+  // tab, so it keys off audit_access specifically, not protected_access.
+  const hasAuditAccess = Boolean(demo || me?.audit_access);
   const [tab, setTab] = useState<Tab>('account');
 
   return (
@@ -55,7 +58,7 @@ export default function SettingsScreen() {
         <TabBtn active={tab === 'sheets'}   onClick={() => setTab('sheets')}>
           <Sheet size={14}/> Google Sheets
         </TabBtn>
-        {isProtectedOwner && (
+        {hasAuditAccess && (
           <TabBtn active={tab === 'access'} onClick={() => setTab('access')}>
             <ShieldCheck size={14}/> Access Control
           </TabBtn>
@@ -68,7 +71,7 @@ export default function SettingsScreen() {
       {tab === 'pricing'     && <PricingTab/>}
       {tab === 'memberships' && <MembershipsTab/>}
       {tab === 'sheets'      && <SheetsTab/>}
-      {tab === 'access' && isProtectedOwner && <AccessControlTab/>}
+      {tab === 'access' && hasAuditAccess && <AccessControlTab/>}
     </div>
   );
 }

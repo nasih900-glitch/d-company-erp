@@ -74,7 +74,17 @@ AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
         "GoodsReceiptNote",
         "GRN",
     ),
-    "finance": ("Expense", "ExpenseCategory", "Partner", "CapitalEntry"),
+    "finance": (
+        "Account",
+        "Asset",
+        "Expense",
+        "ExpenseCategory",
+        "JournalEntry",
+        "JournalLine",
+        "ManualCollection",
+        "Partner",
+        "CapitalEntry",
+    ),
     "menu": ("MenuCategory", "MenuItem"),
     "operations": (
         "Table",

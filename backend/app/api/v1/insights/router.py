@@ -21,7 +21,7 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
-    Batch, Branch, Ingredient, MenuItem, Order, OrderLine,
+    Batch, Branch, Ingredient, ManualCollection, MenuItem, Order, OrderLine,
     Recipe, RecipeLine, StockMovement,
 )
 
@@ -80,6 +80,7 @@ class TopItemDTO(BaseModel):
 class GrowthPeriodDTO(BaseModel):
     label: str
     revenue_minor: int
+    manual_collections_minor: int
     orders_count: int
     avg_ticket_minor: int
 
@@ -275,10 +276,31 @@ async def _period_stats(
             )
         )
     ).one()
-    rev = int(row.rev)
+    order_revenue = int(row.rev)
     n = int(row.n)
-    avg = int(rev / n) if n else 0
-    return GrowthPeriodDTO(label="", revenue_minor=rev, orders_count=n, avg_ticket_minor=avg)
+    manual_revenue = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(ManualCollection.amount_minor), 0)).where(
+                    ManualCollection.company_id == company_id,
+                    ManualCollection.business_date >= d_from,
+                    ManualCollection.business_date <= d_to,
+                    ManualCollection.voided_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    # Manual collections are revenue but not orders. They affect growth and
+    # cash movement, while AOV remains based only on itemized POS orders.
+    avg = order_revenue // n if n else 0
+    return GrowthPeriodDTO(
+        label="",
+        revenue_minor=order_revenue + manual_revenue,
+        manual_collections_minor=manual_revenue,
+        orders_count=n,
+        avg_ticket_minor=avg,
+    )
 
 
 @router.get("/growth", response_model=GrowthDTO)

@@ -19,6 +19,7 @@ All money is integer minor units (paise). Floats are forbidden.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -28,6 +29,8 @@ from uuid import UUID
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import BusinessRuleError
+from app.core.timezone import company_timezone, local_date_bounds_utc
 from app.models import (
     Batch,
     Branch,
@@ -35,6 +38,7 @@ from app.models import (
     EventTicket,
     Expense,
     ExpenseCategory,
+    ManualCollection,
     MenuItem,
     Order,
     OrderLine,
@@ -42,8 +46,6 @@ from app.models import (
     Refund,
     StockMovement,
 )
-from app.core.errors import BusinessRuleError
-from app.core.timezone import company_timezone, local_date_bounds_utc
 from app.services.pos.pricing import split_tax_from_inclusive_minor
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
@@ -120,6 +122,16 @@ class RevenueBreakdown:
     event_tickets_minor: int = 0  # event ticket sales
     delivery_aggregator_minor: int = 0  # delivery via Zomato/Swiggy (9(5))
     other_minor: int = 0
+    # Revenue received outside itemized POS billing.  It remains explicit so
+    # nobody mistakes it for product/category revenue or an order count.
+    manual_collections_minor: int = 0
+    # food/gaming/hookah/other above are summed from OrderLine.line_total_minor,
+    # which does NOT reflect an order-level manual discount or points
+    # redemption (both applied after line pricing). delivery_aggregator_minor
+    # already uses Order.total_minor and is already net. Subtracted here so
+    # gross_revenue_minor reflects what was actually collected, not the
+    # pre-discount line total.
+    discounts_and_points_redeemed_minor: int = 0
 
     @property
     def total_minor(self) -> int:
@@ -130,6 +142,8 @@ class RevenueBreakdown:
             + self.event_tickets_minor
             + self.delivery_aggregator_minor
             + self.other_minor
+            + self.manual_collections_minor
+            - self.discounts_and_points_redeemed_minor
         )
 
 
@@ -150,6 +164,7 @@ class PaymentBreakdown:
     cash_minor: int = 0
     upi_minor: int = 0
     card_minor: int = 0
+    bank_minor: int = 0
     qr_minor: int = 0
     wallet_minor: int = 0
     other_minor: int = 0
@@ -160,6 +175,7 @@ class PaymentBreakdown:
             self.cash_minor
             + self.upi_minor
             + self.card_minor
+            + self.bank_minor
             + self.qr_minor
             + self.wallet_minor
             + self.other_minor
@@ -202,6 +218,10 @@ class PnLReport:
         return self.revenue.total_minor
 
     @property
+    def manual_collections_minor(self) -> int:
+        return self.revenue.manual_collections_minor
+
+    @property
     def net_revenue_minor(self) -> int:
         """Revenue minus GST collected (which belongs to government)."""
         return (
@@ -239,6 +259,23 @@ def _proportional_cumulative(component: int, refunded: int, total: int) -> int:
             Decimal("1"), rounding=ROUND_HALF_UP
         )
     )
+
+
+def _manual_collection_totals(
+    rows: Iterable[ManualCollection],
+) -> dict[str, int]:
+    """Return active manual totals by method with a defensive void check."""
+    totals = {"cash": 0, "upi": 0, "card": 0, "bank": 0}
+    for row in rows:
+        if row.voided_at is not None:
+            continue
+        if row.method not in totals:
+            # The database constraint rejects this. Keeping the aggregation
+            # defensive prevents an old/corrupt row from being misreported as
+            # a supported settlement method.
+            continue
+        totals[row.method] += int(row.amount_minor)
+    return totals
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +341,24 @@ class ReportsAggregator:
             Order.delivery_via != "inhouse",
         )
         delivery_total = int((await self.session.execute(delivery_q)).scalar_one() or 0)
+
+        # In-house manual discount + points redemption (excluded from the
+        # per-category sums below, which are built from pre-discount line
+        # totals) — see RevenueBreakdown.discounts_and_points_redeemed_minor.
+        discounts_q = select(
+            func.coalesce(
+                func.sum(Order.manual_discount_minor + Order.points_redeemed_minor), 0
+            )
+        ).where(
+            Order.company_id == company_id,
+            sale_at >= start_at,
+            sale_at < end_at,
+            Order.status.in_(("paid", "refunded")),
+            or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
+        )
+        discounts_and_points_total = int(
+            (await self.session.execute(discounts_q)).scalar_one() or 0
+        )
 
         # Revenue by menu item type (excluding aggregator orders)
         type_q = (
@@ -411,6 +466,39 @@ class ReportsAggregator:
             event_tickets_minor=tickets_total,
             delivery_aggregator_minor=delivery_total,
             other_minor=other_total,
+            manual_collections_minor=0,
+            discounts_and_points_redeemed_minor=discounts_and_points_total,
+        )
+
+        # ---------- Manual daily collections ----------
+        # Business date is explicitly stored in company-local terms, so a
+        # backfill created after midnight UTC still belongs to the date the
+        # owner attested. Voids remain visible in Finance but never contribute
+        # to P&L or payment totals.
+        manual_q = (
+            select(ManualCollection)
+            .where(
+                ManualCollection.company_id == company_id,
+                ManualCollection.business_date >= period_start,
+                ManualCollection.business_date <= period_end,
+                ManualCollection.voided_at.is_(None),
+            )
+            .order_by(ManualCollection.business_date, ManualCollection.id)
+        )
+        manual_rows = (await self.session.execute(manual_q)).scalars().all()
+        manual_by_method = _manual_collection_totals(manual_rows)
+        manual_total = sum(manual_by_method.values())
+        revenue = RevenueBreakdown(
+            food_minor=revenue.food_minor,
+            gaming_minor=revenue.gaming_minor,
+            hookah_minor=revenue.hookah_minor,
+            event_tickets_minor=revenue.event_tickets_minor,
+            delivery_aggregator_minor=revenue.delivery_aggregator_minor,
+            other_minor=revenue.other_minor,
+            manual_collections_minor=manual_total,
+            discounts_and_points_redeemed_minor=(
+                revenue.discounts_and_points_redeemed_minor
+            ),
         )
 
         # ---------- Payments breakdown ----------
@@ -424,21 +512,26 @@ class ReportsAggregator:
                 Order.company_id == company_id,
                 Payment.paid_at >= start_at,
                 Payment.paid_at < end_at,
+                Order.status.in_(("paid", "refunded")),
             )
             .group_by(Payment.method)
         )
-        cash = upi = card = qr = wallet = other_pay = 0
+        cash = upi = card = bank = qr = wallet = other_pay = 0
         for row in (await self.session.execute(pay_q)).all():
             m = row.method
             amt = int(row.amount)
             if m == "cash":   cash = amt
             elif m == "upi":  upi = amt
             elif m == "card": card = amt
+            elif m == "bank": bank = amt
             elif m == "qr":   qr = amt
             elif m == "wallet": wallet = amt
             else:             other_pay += amt
         payments = PaymentBreakdown(
-            cash_minor=cash, upi_minor=upi, card_minor=card,
+            cash_minor=cash + manual_by_method.get("cash", 0),
+            upi_minor=upi + manual_by_method.get("upi", 0),
+            card_minor=card + manual_by_method.get("card", 0),
+            bank_minor=bank + manual_by_method.get("bank", 0),
             qr_minor=qr, wallet_minor=wallet, other_minor=other_pay,
         )
 

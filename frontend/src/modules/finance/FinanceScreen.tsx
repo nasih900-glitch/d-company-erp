@@ -3,15 +3,17 @@
  *
  *  Overview     today's P&L (demo) + KPIs
  *  Expenses     list, add, delete expenses (live)
- *  Partners     list partners + capital movements (invest / withdraw / profit_share)
+ *  Collections  immutable off-POS / legacy daily collection register
+ *  Partners     list partners + contributed-capital movements (invest / withdraw)
  *
- * In demo mode the Expenses & Partners tabs show empty states; live mode
+ * In demo mode the write-oriented tabs show empty states; live mode
  * hits /api/v1/finance/* and /api/v1/settings/*.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   TrendingUp, TrendingDown, Receipt, Users, Plus, Trash2,
-  Loader2, AlertCircle, Wallet, Banknote, RefreshCw,
+  Loader2, AlertCircle, Wallet, Banknote, RefreshCw, BookOpen,
+  Ban,
 } from 'lucide-react';
 
 import { inr, inrShort } from '@/lib/inr';
@@ -19,11 +21,18 @@ import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   finance, settings, reports,
   type ExpenseDTO, type PartnerDTO, type BranchDTO, type ExpenseCategoryDTO,
-  type CapitalEntryDTO, type ReportDataDTO,
+  type CapitalEntryDTO, type ReportDataDTO, type PartnerPLReportDTO,
+  type BusinessMetricsDTO, type DistributableProfitReportDTO,
 } from '@/lib/erp-api';
+import {
+  DEFAULT_BUSINESS_TIMEZONE,
+  dateISOInTimeZone,
+  rupeesToMinor,
+} from '@/lib/manual-collections';
 import Modal from '@/components/ui/Modal';
+import ManualCollectionsTab from './ManualCollectionsTab';
 
-type Tab = 'overview' | 'expenses' | 'partners';
+type Tab = 'overview' | 'expenses' | 'collections' | 'partners';
 
 export default function FinanceScreen() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -32,7 +41,7 @@ export default function FinanceScreen() {
       <header className="mb-6">
         <h2 className="text-2xl font-bold">Finance</h2>
         <p className="text-fg-muted text-sm">
-          P&amp;L · expenses · partner capital · Kerala GST split
+          P&amp;L · expenses · manual collections · partner capital
         </p>
       </header>
 
@@ -43,6 +52,9 @@ export default function FinanceScreen() {
         <TabBtn active={tab === 'expenses'} onClick={() => setTab('expenses')}>
           <Receipt size={14}/> Expenses
         </TabBtn>
+        <TabBtn active={tab === 'collections'} onClick={() => setTab('collections')}>
+          <BookOpen size={14}/> Manual collections
+        </TabBtn>
         <TabBtn active={tab === 'partners'} onClick={() => setTab('partners')}>
           <Users size={14}/> Partners
         </TabBtn>
@@ -50,29 +62,31 @@ export default function FinanceScreen() {
 
       {tab === 'overview' && <OverviewTab/>}
       {tab === 'expenses' && <ExpensesTab/>}
+      {tab === 'collections' && <ManualCollectionsTab/>}
       {tab === 'partners' && <PartnersTab/>}
     </div>
   );
 }
 
-// ============================================================================
-// OVERVIEW TAB — today's P&L from live /reports/daily
-// ============================================================================
-function todayISO(): string {
-  const d = new Date();
-  const p = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
 function OverviewTab() {
   const [data, setData] = useState<ReportDataDTO | null>(null);
+  const [metrics, setMetrics] = useState<BusinessMetricsDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
     setLoading(true); setErr(null);
     try {
-      setData(await reports.daily(todayISO()));
+      const [company, businessMetrics] = await Promise.all([
+        settings.getCompany(),
+        finance.businessMetrics(),
+      ]);
+      const daily = await reports.daily(dateISOInTimeZone(
+        new Date(),
+        company.timezone || DEFAULT_BUSINESS_TIMEZONE,
+      ));
+      setData(daily);
+      setMetrics(businessMetrics);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
@@ -89,7 +103,9 @@ function OverviewTab() {
   const exp = data.expense_total_minor;
   const net = data.net_profit_minor;
   const totalGst = tax.cgst_minor + tax.sgst_minor + tax.igst_minor;
-  const empty = data.orders_count === 0 && data.tickets_count === 0 && exp === 0;
+  const manualCollections = data.manual_collections_minor;
+  const empty = data.orders_count === 0 && data.tickets_count === 0
+    && manualCollections === 0 && exp === 0;
 
   return (
     <>
@@ -105,6 +121,14 @@ function OverviewTab() {
       {empty && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm">
           <b>No activity today yet.</b> Take an order from <b>POS</b> or record an expense from the Expenses tab to see real numbers here.
+        </div>
+      )}
+
+      {manualCollections > 0 && (
+        <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
+          <b>{inr(manualCollections)} of today's revenue is unitemized manual collection.</b>{' '}
+          It is included in P&amp;L and payment movement, but has no POS order, tax invoice,
+          table ticket, gaming session, item mix, or automatic COGS.
         </div>
       )}
 
@@ -127,14 +151,24 @@ function OverviewTab() {
           {rev.delivery_aggregator_minor > 0 && (
             <Row label="Delivery aggregator (§9(5))" v={rev.delivery_aggregator_minor} sub="zero GST on our invoice"/>
           )}
+          {rev.manual_collections_minor > 0 && (
+            <Row label="Manual collections (unitemized)" v={rev.manual_collections_minor}
+              sub="off-POS / daily legacy total"/>
+          )}
           {rev.other_minor > 0 && <Row label="Other" v={rev.other_minor}/>}
           {rev.total_minor === 0 && <Row label="No revenue yet" v={0}/>}
+          {rev.discounts_and_points_redeemed_minor > 0 && (
+            <Row label="Less: discounts & points redeemed" v={-rev.discounts_and_points_redeemed_minor}/>
+          )}
           <Divider/>
           <Row label="Less: Output CGST" v={-tax.cgst_minor}/>
           <Row label="Less: Output SGST" v={-tax.sgst_minor}/>
           {tax.igst_minor > 0 && <Row label="Less: Output IGST" v={-tax.igst_minor}/>}
           <Divider/>
           <Row label="Net revenue (after GST)" v={data.net_revenue_minor} bold/>
+          <Divider/>
+          <Row label="Less: cost of goods sold" v={-data.cogs_minor} sub="what the food/drinks/items you sold actually cost you"/>
+          <Row label="Gross profit" v={data.gross_profit_minor} bold/>
         </div>
 
         <div className="card">
@@ -149,9 +183,45 @@ function OverviewTab() {
         </div>
       </div>
 
+      <div className="card mt-3 md:mt-4">
+        <Row label="Gross profit" v={data.gross_profit_minor}/>
+        <Row label="Less: total expenses" v={-exp}/>
+        <Divider/>
+        <Row label="Net profit (today)" v={net} bold/>
+      </div>
+
       <p className="text-xs text-fg-muted mt-4">
         For monthly / quarterly / yearly P&amp;L → open <b>Reports</b> in the sidebar.
       </p>
+
+      {metrics && (
+        <div className="mt-6">
+          <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm text-fg-muted">
+            Business metrics · {new Date(metrics.period_start).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
+            {' – '}{new Date(metrics.period_end).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
+            <Stat label="Avg order value" value={inrShort(metrics.aov_minor)}
+              sub={`${metrics.orders_count} order${metrics.orders_count === 1 ? '' : 's'} this period`}/>
+            <Stat label="MRR" value={inrShort(metrics.mrr_minor)}
+              sub={`${metrics.active_members_count} active member${metrics.active_members_count === 1 ? '' : 's'}`}/>
+            <Stat label="ARR" value={inrShort(metrics.arr_minor)} sub="MRR × 12"/>
+            <Stat label="Customer LTV" value={inrShort(metrics.ltv_minor)}
+              sub={`avg across ${metrics.customers_count} customer${metrics.customers_count === 1 ? '' : 's'}, all-time`}/>
+            <Stat label="CAC" value={metrics.cac_minor === null ? '—' : inrShort(metrics.cac_minor)}
+              sub={metrics.cac_minor === null
+                ? 'no new customers this period'
+                : `₹${(metrics.marketing_spend_minor / 100).toFixed(0)} marketing ÷ ${metrics.new_customers_count} new`}/>
+            <Stat label="Burn rate" value={inrShort(metrics.burn_rate_minor)}
+              tone={metrics.burn_rate_minor > 0 ? 'bad' : 'good'}
+              sub={metrics.burn_rate_minor > 0 ? 'lost money this period, after cost of goods sold' : 'profitable this period'}/>
+          </div>
+          <p className="text-xs text-fg-muted mt-3">
+            These are the metrics that actually fit a single-location, self-funded business —
+            not SaaS/VC fundraising metrics like Rule of 40 or TAM/SAM/SOM, which don't apply here.
+          </p>
+        </div>
+      )}
     </>
   );
 }
@@ -400,12 +470,13 @@ function ExpenseForm({
     </Modal>
   );
 }
-
 // ============================================================================
 // PARTNERS TAB
 // ============================================================================
 function PartnersTab() {
   const [rows, setRows] = useState<PartnerDTO[]>([]);
+  const [split, setSplit] = useState<PartnerPLReportDTO | null>(null);
+  const [distributable, setDistributable] = useState<DistributableProfitReportDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -414,11 +485,25 @@ function PartnersTab() {
 
   async function load() {
     setLoading(true); setErr(null);
-    try { setRows(await finance.listPartners()); }
+    try {
+      const [partners, profitSplit, distributableProfit] = await Promise.all([
+        finance.listPartners(),
+        finance.partnerProfitSplit(),
+        finance.distributableProfit(),
+      ]);
+      setRows(partners);
+      setSplit(profitSplit);
+      setDistributable(distributableProfit);
+    }
     catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  const shareByPartnerId = new Map(split?.partners.map((p) => [p.partner_id, p.profit_share_minor]) ?? []);
+  const distributableByPartnerId = new Map(
+    distributable?.partners.map((p) => [p.partner_id, p]) ?? []
+  );
 
   if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
 
@@ -435,6 +520,60 @@ function PartnersTab() {
 
       {err && <ErrorRow text={err}/>}
 
+      {distributable && (
+        <div className="card mb-3 border-accent-good/40">
+          <div className="flex justify-between items-start flex-wrap gap-2 mb-3">
+            <div>
+              <div className="font-bold text-sm">Safe to distribute right now</div>
+              <div className="text-[11px] text-fg-muted mt-0.5">
+                All-time profit, minus everything ever withdrawn, minus a {distributable.reserve_months}-month
+                safety buffer — capped by actual cash on hand, not just what the books say
+              </div>
+            </div>
+            <div className={`text-2xl font-bold font-mono ${distributable.safe_to_distribute_minor > 0 ? 'text-accent-good' : ''}`}>
+              {inr(distributable.safe_to_distribute_minor)}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs pt-3 border-t border-bg-border/60">
+            <div>
+              <div className="text-fg-muted">Lifetime profit</div>
+              <div className={`font-mono font-semibold ${distributable.lifetime_net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>
+                {inr(distributable.lifetime_net_profit_minor)}
+              </div>
+            </div>
+            <div>
+              <div className="text-fg-muted">Already withdrawn</div>
+              <div className="font-mono font-semibold">{inr(distributable.lifetime_withdrawn_minor)}</div>
+            </div>
+            <div>
+              <div className="text-fg-muted">Reserve kept back</div>
+              <div className="font-mono font-semibold">{inr(distributable.reserve_minor)}</div>
+            </div>
+            <div>
+              <div className="text-fg-muted">Cash on hand</div>
+              <div className="font-mono font-semibold">{inr(distributable.liquid_cash_minor)}</div>
+            </div>
+          </div>
+          {distributable.cash_based_capacity_minor < distributable.profit_based_capacity_minor && (
+            <p className="text-[11px] text-accent-gold mt-3">
+              Limited by cash on hand, not by profit — some of what you've earned is currently tied up in stock or equipment.
+            </p>
+          )}
+        </div>
+      )}
+
+      {split && (
+        <div className="card mb-3 flex justify-between items-center flex-wrap gap-2">
+          <div className="text-sm text-fg-muted">
+            Net profit this month ({new Date(split.period_start).toLocaleDateString('en-IN')}
+            {' – '}{new Date(split.period_end).toLocaleDateString('en-IN')}), split by ownership share
+          </div>
+          <div className={`font-bold font-mono ${split.net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>
+            {inr(split.net_profit_minor)}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {rows.map((p) => (
           <div key={p.id} className="card">
@@ -446,12 +585,37 @@ function PartnersTab() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-xs text-fg-muted">Capital balance</div>
+                <div className="text-xs text-fg-muted">Active capital balance</div>
                 <div className={`font-bold font-mono ${p.capital_balance_minor < 0 ? 'text-accent-bad' : ''}`}>
                   {inr(p.capital_balance_minor)}
                 </div>
+                <div className="text-[10px] text-fg-muted">Voided entries excluded</div>
               </div>
             </div>
+            {distributableByPartnerId.has(p.id) && (
+              <div className="flex justify-between items-center text-xs mb-3 pb-3 border-b border-bg-border/60">
+                <span className="text-fg-muted">
+                  Safe to take out right now
+                  <span className="block text-[10px]">
+                    Withdrawn to date: {inr(distributableByPartnerId.get(p.id)?.lifetime_withdrawn_minor ?? 0)}
+                  </span>
+                </span>
+                <span className={`font-bold font-mono ${(distributableByPartnerId.get(p.id)?.distributable_share_minor ?? 0) > 0 ? 'text-accent-good' : ''}`}>
+                  {inr(distributableByPartnerId.get(p.id)?.distributable_share_minor ?? 0)}
+                </span>
+              </div>
+            )}
+            {shareByPartnerId.has(p.id) && (
+              <div className="flex justify-between items-center text-xs mb-3 pb-3 border-b border-bg-border/60">
+                <span className="text-fg-muted">
+                  This month's indicative profit share
+                  <span className="block text-[10px]">Informational · not added to capital</span>
+                </span>
+                <span className={`font-bold font-mono ${(shareByPartnerId.get(p.id) ?? 0) < 0 ? 'text-accent-bad' : 'text-accent-good'}`}>
+                  {inr(shareByPartnerId.get(p.id) ?? 0)}
+                </span>
+              </div>
+            )}
             <div className="flex gap-1 pt-3 border-t border-bg-border/60">
               <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
                 onClick={() => setCapPartner(p)}>
@@ -473,7 +637,7 @@ function PartnersTab() {
         onClose={() => setCapPartner(null)}
         onSuccess={() => { setCapPartner(null); load(); }}/>}
       {ledgerPartner && <LedgerModal partner={ledgerPartner}
-        onClose={() => setLedgerPartner(null)}/>}
+        onClose={() => setLedgerPartner(null)} onChanged={load}/>}
     </div>
   );
 }
@@ -535,23 +699,38 @@ function CapitalForm({
   partner, onClose, onSuccess,
 }: { partner: PartnerDTO; onClose: () => void; onSuccess: () => void }) {
   const [form, setForm] = useState({
-    type: 'invest' as 'invest' | 'withdraw' | 'profit_share',
+    type: 'invest' as 'invest' | 'withdraw',
     amount_rupees: '',
-    effective_at: new Date().toISOString().slice(0, 16),
+    effective_at: dateTimeLocalNow(),
+    settlement_account: 'bank' as 'cash' | 'bank' | 'upi',
+    source_ref: '',
     note: '',
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); setBusy(true); setErr(null);
+    e.preventDefault();
+    const amountMinor = rupeesToMinor(form.amount_rupees);
+    if (amountMinor === null) {
+      setErr('Enter an amount greater than ₹0 with no more than two decimal places.');
+      return;
+    }
+    const sourceRef = form.source_ref.trim();
+    if (!sourceRef) {
+      setErr('Enter the unique bank, UPI, or cash-voucher reference that proves this movement.');
+      return;
+    }
+    setBusy(true); setErr(null);
     try {
       await finance.createCapitalEntry({
         partner_id: partner.id,
         type: form.type,
-        amount_minor: Math.round(parseFloat(form.amount_rupees || '0') * 100),
+        amount_minor: amountMinor,
         effective_at: new Date(form.effective_at).toISOString(),
-        note: form.note || undefined,
+        settlement_account: form.settlement_account,
+        source_ref: sourceRef,
+        note: form.note.trim() || undefined,
       });
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
@@ -561,30 +740,61 @@ function CapitalForm({
   return (
     <Modal open onClose={onClose} title={`Capital movement — ${partner.name}`}>
       <form onSubmit={submit} className="space-y-3">
-        <Field label="Type">
-          <select className="input" value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value as typeof form.type })}>
-            <option value="invest">Investment (+)</option>
-            <option value="withdraw">Withdrawal (−)</option>
-            <option value="profit_share">Profit share (+)</option>
-          </select>
+        <p className="text-sm text-fg-muted">
+          Investment records money contributed by this partner. Withdrawal records capital repaid.
+          Profit share is calculated separately and does not change contributed capital.
+        </p>
+        <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-xs">
+          Entries are immutable. Use a unique evidence reference so a retry cannot create a
+          duplicate; mistakes must be voided with a reason from the ledger.
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Movement type">
+            <select className="input" value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value as typeof form.type })}>
+              <option value="invest">Investment (+)</option>
+              <option value="withdraw">Capital repayment (−)</option>
+            </select>
+          </Field>
+          <Field label="Settlement account">
+            <select className="input" value={form.settlement_account}
+              onChange={(e) => setForm({
+                ...form,
+                settlement_account: e.target.value as typeof form.settlement_account,
+              })}>
+              <option value="bank">Bank transfer</option>
+              <option value="upi">UPI</option>
+              <option value="cash">Cash</option>
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Amount (₹)">
+            <input type="number" min={0.01} step="0.01" required inputMode="decimal"
+              className="input font-mono text-right" value={form.amount_rupees}
+              onChange={(e) => setForm({ ...form, amount_rupees: e.target.value })}/>
+          </Field>
+          <Field label="Effective date / time">
+            <input type="datetime-local" className="input" required value={form.effective_at}
+              onChange={(e) => setForm({ ...form, effective_at: e.target.value })}/>
+          </Field>
+        </div>
+        <Field label="Evidence reference">
+          <input className="input" required minLength={1} maxLength={160}
+            placeholder="Bank UTR, UPI transaction ID, or cash voucher no."
+            value={form.source_ref}
+            onChange={(e) => setForm({ ...form, source_ref: e.target.value })}/>
+          <span className="mt-1 block text-[10px] text-fg-muted">
+            Must be unique. On a network retry, submit the same reference instead of inventing a new one.
+          </span>
         </Field>
-        <Field label="Amount (₹)">
-          <input type="number" min={0.01} step="0.01" required className="input font-mono text-right"
-            value={form.amount_rupees}
-            onChange={(e) => setForm({ ...form, amount_rupees: e.target.value })}/>
-        </Field>
-        <Field label="Effective date / time">
-          <input type="datetime-local" className="input" required value={form.effective_at}
-            onChange={(e) => setForm({ ...form, effective_at: e.target.value })}/>
-        </Field>
-        <Field label="Note">
-          <input className="input" value={form.note}
+        <Field label="Note (optional)">
+          <textarea className="input" rows={2} maxLength={500} value={form.note}
             onChange={(e) => setForm({ ...form, note: e.target.value })}/>
         </Field>
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : null} Record
           </button>
@@ -594,50 +804,254 @@ function CapitalForm({
   );
 }
 
-function LedgerModal({ partner, onClose }: { partner: PartnerDTO; onClose: () => void }) {
+function LedgerModal({
+  partner,
+  onClose,
+  onChanged,
+}: {
+  partner: PartnerDTO;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
   const [rows, setRows] = useState<CapitalEntryDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [voiding, setVoiding] = useState<CapitalEntryDTO | null>(null);
 
-  useEffect(() => {
-    finance.listCapital(partner.id)
-      .then(setRows)
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      setRows(await finance.listCapital(partner.id, true));
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, [partner.id]);
 
+  useEffect(() => { void load(); }, [load]);
+
+  const activeBalance = rows.reduce((sum, row) => {
+    if (row.is_voided) return sum;
+    return sum + (row.type === 'withdraw' ? -row.amount_minor : row.amount_minor);
+  }, 0);
+  const activeCount = rows.filter((row) => !row.is_voided).length;
+
   return (
-    <Modal open onClose={onClose} title={`${partner.name} — capital ledger`} size="lg">
-      {loading ? (
-        <div className="text-fg-muted flex items-center gap-2"><Loader2 className="animate-spin" size={14}/> Loading…</div>
-      ) : !rows.length ? (
-        <p className="text-fg-muted text-sm">No movements yet.</p>
-      ) : (
-        <div className="overflow-x-auto">
-        <table className="w-full min-w-[520px] text-sm">
-          <thead>
-            <tr className="text-left text-fg-muted">
-              <th className="py-2">Date</th>
-              <th>Type</th>
-              <th className="text-right">Amount</th>
-              <th>Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-bg-border/60">
-                <td className="py-2 font-mono text-xs">{new Date(r.effective_at).toLocaleDateString('en-IN')}</td>
-                <td><span className="chip text-xs">{r.type}</span></td>
-                <td className={`text-right font-mono ${r.type === 'withdraw' ? 'text-accent-bad' : ''}`}>
-                  {r.type === 'withdraw' ? '−' : '+'}{inr(r.amount_minor)}
-                </td>
-                <td className="text-xs text-fg-muted">{r.note || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <>
+      <Modal open onClose={onClose} title={`${partner.name} — capital ledger`} size="lg">
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-bg-border bg-bg-raised p-3">
+          <div>
+            <div className="text-xs text-fg-muted">Active investments minus capital repayments</div>
+            <div className="text-[10px] text-fg-muted">{activeCount} active · voided entries excluded</div>
+          </div>
+          <div className={`font-mono text-lg font-bold ${activeBalance < 0 ? 'text-accent-bad' : ''}`}>
+            {inr(activeBalance)}
+          </div>
         </div>
+        {err && <ErrorRow text={err}/>}
+        {loading ? (
+          <div className="text-fg-muted flex items-center gap-2"><Loader2 className="animate-spin" size={14}/> Loading…</div>
+        ) : !rows.length ? (
+          <p className="text-fg-muted text-sm">No investment or capital-repayment movements yet.</p>
+        ) : (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[850px] text-sm">
+                <thead>
+                  <tr className="text-left text-fg-muted">
+                    <th className="py-2">Effective</th>
+                    <th>Movement / account</th>
+                    <th>Evidence / note</th>
+                    <th>Recorded by</th>
+                    <th className="text-right">Amount</th>
+                    <th className="text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <CapitalLedgerRow key={row.id} row={row} onVoid={() => setVoiding(row)}/>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="space-y-2 md:hidden">
+              {rows.map((row) => (
+                <CapitalLedgerCard key={row.id} row={row} onVoid={() => setVoiding(row)}/>
+              ))}
+            </div>
+          </>
+        )}
+      </Modal>
+      {voiding && (
+        <VoidCapitalEntryForm
+          row={voiding}
+          onClose={() => setVoiding(null)}
+          onSuccess={async () => {
+            setVoiding(null);
+            await load();
+            onChanged();
+          }}
+        />
       )}
+    </>
+  );
+}
+
+function CapitalLedgerRow({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () => void }) {
+  return (
+    <tr className={`border-t border-bg-border/60 ${row.is_voided ? 'opacity-60' : ''}`}>
+      <td className="py-3 pr-3 font-mono text-xs">
+        {new Date(row.effective_at).toLocaleString('en-IN')}
+      </td>
+      <td className="pr-3">
+        <span className="chip text-xs">{row.type === 'invest' ? 'Investment' : 'Capital repayment'}</span>
+        <div className="mt-1 text-[10px] text-fg-muted">{capitalAccountLabel(row.settlement_account)}</div>
+      </td>
+      <td className="max-w-xs pr-3 text-xs">
+        <div className={row.is_voided ? 'line-through' : ''}>{row.source_ref || 'Migrated record — no reference'}</div>
+        {row.note && <div className="mt-1 text-fg-muted break-words">{row.note}</div>}
+        {row.void_reason && <div className="mt-1 text-accent-bad break-words">Void: {row.void_reason}</div>}
+      </td>
+      <td className="pr-3 text-xs text-fg-muted">
+        <div>{capitalActorLabel(row.created_by_name, row.created_by)}</div>
+        <div>{new Date(row.created_at).toLocaleString('en-IN')}</div>
+        {row.is_voided && row.voided_at && (
+          <div className="mt-1">
+            Voided by {capitalActorLabel(row.voided_by_name, row.voided_by)} ·{' '}
+            {new Date(row.voided_at).toLocaleString('en-IN')}
+          </div>
+        )}
+      </td>
+      <td className={`pr-3 text-right font-mono font-semibold ${row.is_voided ? 'line-through' : row.type === 'withdraw' ? 'text-accent-bad' : ''}`}>
+        {row.type === 'withdraw' ? '−' : '+'}{inr(row.amount_minor)}
+      </td>
+      <td className="text-right">
+        {row.is_voided ? (
+          <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
+        ) : (
+          <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+            onClick={onVoid} aria-label={`Void ${row.source_ref || 'capital entry'}`}>
+            <Ban size={12}/> Void
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function CapitalLedgerCard({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () => void }) {
+  return (
+    <div className={`rounded-xl border border-bg-border p-3 ${row.is_voided ? 'opacity-60' : ''}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className={`font-semibold break-words ${row.is_voided ? 'line-through' : ''}`}>
+            {row.source_ref || 'Migrated record — no reference'}
+          </div>
+          <div className="mt-1 text-xs text-fg-muted">
+            {row.type === 'invest' ? 'Investment' : 'Capital repayment'} · {capitalAccountLabel(row.settlement_account)}
+          </div>
+        </div>
+        <div className={`shrink-0 font-mono font-semibold ${row.is_voided ? 'line-through' : row.type === 'withdraw' ? 'text-accent-bad' : ''}`}>
+          {row.type === 'withdraw' ? '−' : '+'}{inr(row.amount_minor)}
+        </div>
+      </div>
+      {row.note && <div className="mt-2 text-xs text-fg-muted break-words">{row.note}</div>}
+      {row.void_reason && <div className="mt-2 text-xs text-accent-bad">Void: {row.void_reason}</div>}
+      <div className="mt-3 border-t border-bg-border/60 pt-3 text-[10px] text-fg-muted">
+        Effective {new Date(row.effective_at).toLocaleString('en-IN')} · recorded by{' '}
+        {capitalActorLabel(row.created_by_name, row.created_by)}
+      </div>
+      <div className="mt-2 flex justify-end">
+        {row.is_voided ? (
+          <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
+        ) : (
+          <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+            onClick={onVoid}>
+            <Ban size={12}/> Void
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VoidCapitalEntryForm({
+  row,
+  onClose,
+  onSuccess,
+}: {
+  row: CapitalEntryDTO;
+  onClose: () => void;
+  onSuccess: () => void | Promise<void>;
+}) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const trimmed = reason.trim();
+    if (trimmed.length < 3) {
+      setErr('Enter a clear void reason of at least 3 characters.');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await finance.voidCapitalEntry(row.id, trimmed);
+      await onSuccess();
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={busy ? () => undefined : onClose} title="Void capital movement">
+      <form onSubmit={submit} className="space-y-3">
+        <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
+          <b>{row.type === 'invest' ? 'Investment' : 'Capital repayment'} · {inr(row.amount_minor)}</b>
+          <div className="mt-1 text-xs text-fg-muted">{row.source_ref || 'Migrated record — no reference'}</div>
+          <div className="mt-2 text-xs">
+            The entry stays in the audit history, but will be excluded from the active capital balance.
+          </div>
+        </div>
+        <Field label="Void reason">
+          <textarea className="input" required minLength={3} maxLength={500} rows={3}
+            autoFocus value={reason}
+            placeholder="Explain exactly why this movement is wrong"
+            onChange={(event) => setReason(event.target.value)}/>
+        </Field>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn btn-danger" disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>}
+            Void movement
+          </button>
+        </div>
+      </form>
     </Modal>
   );
+}
+
+function capitalAccountLabel(account: CapitalEntryDTO['settlement_account']): string {
+  if (account === 'bank') return 'Bank transfer';
+  if (account === 'upi') return 'UPI';
+  if (account === 'cash') return 'Cash';
+  return 'Imported historical record';
+}
+
+function capitalActorLabel(name: string | null, id: string | null): string {
+  return name || (id ? `User ${id.slice(0, 8)}` : 'Legacy import');
+}
+
+function dateTimeLocalNow(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
 // ---------------------------------------------------------------- helpers

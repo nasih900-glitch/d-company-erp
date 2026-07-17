@@ -125,6 +125,15 @@ function GrowthTab() {
         />
       </div>
 
+      {(growth.current.manual_collections_minor > 0 || growth.previous.manual_collections_minor > 0) && (
+        <div className="card mb-6 border-accent-gold/40 bg-accent-gold/10 text-sm">
+          Revenue growth includes unitemized manual collections: current{' '}
+          <b>{inr(growth.current.manual_collections_minor)}</b>, previous{' '}
+          <b>{inr(growth.previous.manual_collections_minor)}</b>. Order counts, average order value,
+          top items, and hourly heatmap remain POS-only.
+        </div>
+      )}
+
       {/* Top items */}
       <div className="card mb-6">
         <h3 className="font-semibold mb-3">Top items (this month)</h3>

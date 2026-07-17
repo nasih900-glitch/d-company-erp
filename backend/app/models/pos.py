@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TenantMixin, TimestampMixin, _uuid_pk
@@ -62,6 +63,15 @@ class Order(Base, TimestampMixin, TenantMixin):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")  # open|paid|void|refunded|held
     subtotal_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     discount_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Cashier-entered custom discount (e.g. "unregistered business, take ₹50
+    # off the raw total"). Kept separate from discount_minor above — that
+    # field is fully recomputed from line totals whenever a membership is
+    # attached or a line is added, and folding this in would get silently
+    # wiped by either of those recomputes.
+    manual_discount_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # Loyalty-points redemption value — same reprice-survival reasoning as
+    # manual_discount_minor above; see app/services/pos/points.py.
+    points_redeemed_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     # Tax breakdown — India needs explicit CGST/SGST/IGST/Cess columns for
     # GSTR-1 reporting and auditor reconciliation. tax_minor stays as the sum.
     cgst_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)

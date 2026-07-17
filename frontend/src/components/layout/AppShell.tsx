@@ -39,17 +39,22 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const loc = useLocation();
-  const isSuperOwner = Boolean(demo || me?.protected_access);
+  // protected_access (co_owner or super_owner) bypasses per-module Access
+  // Control gating below. audit_access (super_owner only) additionally
+  // gates the Audit Log nav item — a co_owner must not see a tab that the
+  // backend will 403 on (see core/permissions.py's admin.audit.read carve-out).
+  const isProtectedOwner = Boolean(demo || me?.protected_access);
+  const hasAuditAccess = Boolean(demo || me?.audit_access);
   const accessibleModules = me?.accessible_modules;
   const navItems = useMemo(
     () => NAV.filter((item) => {
-      if ('protectedOnly' in item && !isSuperOwner) return false;
-      if (item.module && !isSuperOwner && accessibleModules && !accessibleModules.includes(item.module)) {
+      if ('protectedOnly' in item && !hasAuditAccess) return false;
+      if (item.module && !isProtectedOwner && accessibleModules && !accessibleModules.includes(item.module)) {
         return false;
       }
       return true;
     }),
-    [isSuperOwner, accessibleModules],
+    [isProtectedOwner, hasAuditAccess, accessibleModules],
   );
 
   const current = useMemo(

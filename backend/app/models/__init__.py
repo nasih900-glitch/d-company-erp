@@ -18,7 +18,7 @@ from app.models.inventory import (
 )
 from app.models.pos import Order, OrderLine, Payment, Refund, Shift
 from app.models.tables import Floor, Table, Reservation
-from app.models.gaming import Station, GamingSession, GamingBooking, Tournament
+from app.models.gaming import Station, GamingSession, GamingBooking, GamingPackage, Tournament
 from app.models.finance import (
     Account,
     JournalEntry,
@@ -27,12 +27,13 @@ from app.models.finance import (
     CapitalEntry,
     Expense,
     ExpenseCategory,
+    ManualCollection,
     Asset,
 )
 from app.models.ocr import OcrUpload, OcrExtraction, OcrVerification
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
-from app.models.customer import Customer
+from app.models.customer import Customer, PointsRedemption
 from app.models.membership import (
     CustomerMembership,
     MembershipBenefitReservation,
@@ -69,6 +70,7 @@ __all__ = [
     "ExpenseCategory",
     "Floor",
     "GamingBooking",
+    "GamingPackage",
     "GamingSession",
     "GRN",
     "GRNLine",
@@ -82,6 +84,7 @@ __all__ = [
     "JournalLine",
     "MembershipTier",
     "MembershipBenefitReservation",
+    "ManualCollection",
     "MenuCategory",
     "MenuItem",
     "MenuModifier",
@@ -94,6 +97,7 @@ __all__ = [
     "Partner",
     "Payment",
     "PayrollEntry",
+    "PointsRedemption",
     "PurchaseOrder",
     "PurchaseOrderLine",
     "Recipe",

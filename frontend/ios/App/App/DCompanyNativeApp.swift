@@ -642,6 +642,8 @@ private struct RevenueBucketDTO: Codable {
     let event_tickets_minor: Int
     let delivery_aggregator_minor: Int
     let other_minor: Int
+    let manual_collections_minor: Int?
+    let discounts_and_points_redeemed_minor: Int?
     let total_minor: Int
 }
 
@@ -657,6 +659,7 @@ private struct PaymentsBucketDTO: Codable {
     let cash_minor: Int
     let upi_minor: Int
     let card_minor: Int
+    let bank_minor: Int?
     let qr_minor: Int
     let wallet_minor: Int
     let other_minor: Int
@@ -684,6 +687,7 @@ private struct ReportSheetPayload: Encodable {
     let delivery_minor: Int
     let gross_revenue_minor: Int
     let net_revenue_minor: Int
+    let manual_collections_minor: Int
     let cgst_minor: Int
     let sgst_minor: Int
     let igst_minor: Int
@@ -703,6 +707,7 @@ private struct ReportDTO: Codable {
     let revenue: RevenueBucketDTO
     let tax_collected: TaxBucketDTO
     let payments_received: PaymentsBucketDTO
+    let manual_collections_minor: Int?
     let refunds_issued_minor: Int
     let net_payments_received_minor: Int
     let expenses: [ExpenseLineDTO]
@@ -750,6 +755,7 @@ private struct DashboardKPIsDTO: Decodable {
     let revenue_gaming_minor: Int
     let revenue_hookah_minor: Int
     let revenue_events_minor: Int
+    let revenue_manual_collections_minor: Int?
     let revenue_total_minor: Int
     let orders_count: Int
     let tickets_count: Int
@@ -863,6 +869,7 @@ private struct TopItemDTO: Decodable, Identifiable {
 private struct GrowthPeriodDTO: Decodable {
     let label: String
     let revenue_minor: Int
+    let manual_collections_minor: Int?
     let orders_count: Int
     let avg_ticket_minor: Int
 }
@@ -1342,6 +1349,22 @@ private struct CheckoutDraft: Identifiable {
     var customerGSTIN = ""
     var customerStateCode = ""
     var isInterstate = false
+    // Ignoring GST is intentional here — D Company is GST-unregistered, so
+    // this is a flat rupee amount knocked off the final total, same as an
+    // unregistered business would write on a plain cash memo.
+    var discountRupeesText = ""
+    // 10 points = ₹1 of playtime value — must match backend MINOR_PER_POINT.
+    // Blind entry: the app has no live customer/points lookup at checkout
+    // yet, so the server validates the customer actually has this balance.
+    var pointsRedeemedText = ""
+
+    var discountMinor: Int {
+        max(0, Int(discountRupeesText) ?? 0) * 100
+    }
+
+    var pointsRedeemed: Int {
+        max(0, Int(pointsRedeemedText) ?? 0)
+    }
 
     func tenderedMinor(totalMinor: Int) -> Int? {
         paymentMethod == .cash ? (cashTenderedMinor ?? totalMinor) : nil
@@ -1701,6 +1724,9 @@ private struct OrderReadDTO: Decodable, Identifiable {
     let source_label: String?
     let subtotal_minor: Int
     let discount_minor: Int
+    let manual_discount_minor: Int
+    let points_redeemed_minor: Int
+    let points_redeemed: Int
     let cgst_minor: Int
     let sgst_minor: Int
     let igst_minor: Int
@@ -1752,6 +1778,14 @@ private struct OrderCreateRequest: Encodable {
     let customer_state_code: String?
     let place_of_supply_state_code: String?
     let notes: String?
+}
+
+private struct OrderDiscountRequest: Encodable {
+    let manual_discount_minor: Int
+}
+
+private struct OrderPointsRequest: Encodable {
+    let points: Int
 }
 
 private struct PaymentCreateRequest: Encodable {
@@ -2154,6 +2188,12 @@ private enum ReportPrinter {
         lines.append(row("Event tickets", r.revenue.event_tickets_minor))
         lines.append(row("Delivery (aggregator, Sec 9(5))", r.revenue.delivery_aggregator_minor))
         if r.revenue.other_minor > 0 { lines.append(row("Other", r.revenue.other_minor)) }
+        if (r.revenue.manual_collections_minor ?? 0) > 0 {
+            lines.append(row("Manual collections (unitemized)", r.revenue.manual_collections_minor ?? 0))
+        }
+        if (r.revenue.discounts_and_points_redeemed_minor ?? 0) > 0 {
+            lines.append(row("Less: discounts and points", -(r.revenue.discounts_and_points_redeemed_minor ?? 0)))
+        }
         lines.append(String(repeating: "-", count: 32))
         lines.append(row("Gross revenue", r.revenue.total_minor, bold: true))
         if r.refunds_issued_minor > 0 { lines.append(row("Less: refunds", -r.refunds_issued_minor)) }
@@ -2178,6 +2218,9 @@ private enum ReportPrinter {
         lines.append(row("Cash", r.payments_received.cash_minor))
         lines.append(row("UPI", r.payments_received.upi_minor))
         lines.append(row("Card", r.payments_received.card_minor))
+        if (r.payments_received.bank_minor ?? 0) > 0 {
+            lines.append(row("Bank transfer", r.payments_received.bank_minor ?? 0))
+        }
         lines.append(row("QR", r.payments_received.qr_minor))
         lines.append(row("Wallet", r.payments_received.wallet_minor))
         if r.payments_received.other_minor > 0 { lines.append(row("Other", r.payments_received.other_minor)) }
@@ -3656,6 +3699,7 @@ private struct LoginView: View {
                                 .keyboardType(.emailAddress)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
+                                .textContentType(.username)
                                 .focused($focusedField, equals: .email)
                                 .submitLabel(.next)
                                 .onSubmit { focusedField = .password }
@@ -3667,6 +3711,7 @@ private struct LoginView: View {
                     if mode == .login {
                         field("Password") {
                             SecureField("Password", text: $password)
+                                .textContentType(.password)
                                 .focused($focusedField, equals: .password)
                                 .submitLabel(.go)
                                 .onSubmit { Task { await primaryAction() } }
@@ -3678,11 +3723,13 @@ private struct LoginView: View {
                     if mode == .registerRequest || mode == .resetConfirm {
                         field("New password") {
                             SecureField("At least 10 characters", text: $password)
+                                .textContentType(.newPassword)
                                 .focused($focusedField, equals: .password)
                                 .nativeField()
                         }
                         field("Confirm password") {
                             SecureField("", text: $confirmPassword)
+                                .textContentType(.newPassword)
                                 .focused($focusedField, equals: .confirmPassword)
                                 .nativeField()
                         }
@@ -6054,6 +6101,8 @@ private struct POSNativeView: View {
     // order instead of minting a duplicate. Reset whenever the cart/sheet
     // is dismissed or a charge fully succeeds.
     @State private var checkoutOrderKey = UUID().uuidString
+    @State private var checkoutDiscountKey = UUID().uuidString
+    @State private var checkoutPointsKey = UUID().uuidString
     @State private var checkoutPaymentKey = UUID().uuidString
     @State private var pendingCheckoutOrder: OrderReadDTO?
     // Held-order aging alarm, mirroring the web app's 15-minute threshold /
@@ -6349,6 +6398,12 @@ private struct POSNativeView: View {
                     onAddLines: { lines in
                         Task { await addLinesToHeldOrder(order, lines: lines) }
                     },
+                    onApplyDiscount: { manualDiscountMinor in
+                        Task { await applyDiscountToHeldOrder(order, manualDiscountMinor: manualDiscountMinor) }
+                    },
+                    onRedeemPoints: { points in
+                        Task { await redeemPointsForHeldOrder(order, points: points) }
+                    },
                     menuItems: items
                 )
             }
@@ -6388,12 +6443,55 @@ private struct POSNativeView: View {
         }
     }
 
+    private func applyDiscountToHeldOrder(_ order: OrderReadDTO, manualDiscountMinor: Int) async {
+        error = nil
+        do {
+            let updated: OrderReadDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "pos/orders/\(order.id)/discount",
+                    body: OrderDiscountRequest(manual_discount_minor: manualDiscountMinor),
+                    token: token,
+                    headers: ["Idempotency-Key": "held-discount-\(order.id)-\(UUID().uuidString)"]
+                )
+            }
+            resumeOrder = updated
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func redeemPointsForHeldOrder(_ order: OrderReadDTO, points: Int) async {
+        error = nil
+        do {
+            let updated: OrderReadDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "pos/orders/\(order.id)/points",
+                    body: OrderPointsRequest(points: points),
+                    token: token,
+                    headers: ["Idempotency-Key": "held-points-\(order.id)-\(UUID().uuidString)"]
+                )
+            }
+            resumeOrder = updated
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
     private func addLinesToHeldOrder(_ order: OrderReadDTO, lines: [OrderLineCreateRequest]) async {
         guard !lines.isEmpty else { return }
         error = nil
         do {
             let updated: OrderReadDTO = try await session.authorized { token in
-                try await APIClient.shared.post("pos/orders/\(order.id)/lines", body: OrderLinesAppendRequest(lines: lines), token: token)
+                try await APIClient.shared.post(
+                    "pos/orders/\(order.id)/lines",
+                    body: OrderLinesAppendRequest(lines: lines),
+                    token: token,
+                    headers: ["Idempotency-Key": "held-lines-\(order.id)-\(UUID().uuidString)"]
+                )
             }
             resumeOrder = updated
             Haptics.success()
@@ -6522,6 +6620,8 @@ private struct POSNativeView: View {
 
     private func resetCheckoutRetryState() {
         checkoutOrderKey = UUID().uuidString
+        checkoutDiscountKey = UUID().uuidString
+        checkoutPointsKey = UUID().uuidString
         checkoutPaymentKey = UUID().uuidString
         pendingCheckoutOrder = nil
     }
@@ -6859,7 +6959,7 @@ private struct POSNativeView: View {
             error = "No registered POS terminal is available for this shift."
             return
         }
-        guard draft.isCashTenderReady(totalMinor: cartTotal) else {
+        guard draft.isCashTenderReady(totalMinor: max(0, cartTotal - draft.discountMinor - draft.pointsRedeemed * 10)) else {
             error = "Cash received is below the bill total."
             return
         }
@@ -6876,7 +6976,7 @@ private struct POSNativeView: View {
             // time) — both the order-creation and payment calls keep the
             // SAME idempotency key across retries, so a network blip never
             // creates a duplicate order or double-charges.
-            let order: OrderReadDTO
+            var order: OrderReadDTO
             if let pendingCheckoutOrder {
                 order = pendingCheckoutOrder
             } else {
@@ -6911,6 +7011,35 @@ private struct POSNativeView: View {
                 }
                 pendingCheckoutOrder = created
                 order = created
+            }
+
+            // Applied after order creation (not baked into the create-order
+            // payload) so the same PATCH can be safely retried under its own
+            // idempotency key without touching order creation or payment.
+            if draft.discountMinor > 0 && draft.discountMinor != order.manual_discount_minor {
+                let discountRequest = OrderDiscountRequest(manual_discount_minor: draft.discountMinor)
+                let discountHeaders = [
+                    "Idempotency-Key": checkoutDiscountKey,
+                    "X-Terminal-Id": terminal.id
+                ]
+                let discounted: OrderReadDTO = try await session.authorized { token in
+                    try await APIClient.shared.patch("pos/orders/\(order.id)/discount", body: discountRequest, token: token, headers: discountHeaders)
+                }
+                pendingCheckoutOrder = discounted
+                order = discounted
+            }
+
+            if draft.pointsRedeemed > 0 && draft.pointsRedeemed != order.points_redeemed {
+                let pointsRequest = OrderPointsRequest(points: draft.pointsRedeemed)
+                let pointsHeaders = [
+                    "Idempotency-Key": checkoutPointsKey,
+                    "X-Terminal-Id": terminal.id
+                ]
+                let redeemed: OrderReadDTO = try await session.authorized { token in
+                    try await APIClient.shared.patch("pos/orders/\(order.id)/points", body: pointsRequest, token: token, headers: pointsHeaders)
+                }
+                pendingCheckoutOrder = redeemed
+                order = redeemed
             }
 
             let paymentRequest = PaymentCreateRequest(
@@ -7566,6 +7695,15 @@ private struct ReportsNativeView: View {
                                 if report.revenue.other_minor > 0 {
                                     PNLRow(title: "Other", value: inr(report.revenue.other_minor))
                                 }
+                                if (report.revenue.manual_collections_minor ?? 0) > 0 {
+                                    PNLRow(title: "Manual collections (unitemized)", value: inr(report.revenue.manual_collections_minor ?? 0))
+                                    Text("No POS order, item mix, tax invoice, or automatic COGS is attached.")
+                                        .font(.caption2)
+                                        .foregroundColor(Brand.muted)
+                                }
+                                if (report.revenue.discounts_and_points_redeemed_minor ?? 0) > 0 {
+                                    PNLRow(title: "Less: discounts and points", value: "-\(inr(report.revenue.discounts_and_points_redeemed_minor ?? 0))")
+                                }
                                 Text("Aggregator delivery: platform pays GST — Sec 9(5)")
                                     .font(.caption2)
                                     .foregroundColor(Brand.muted)
@@ -7592,6 +7730,9 @@ private struct ReportsNativeView: View {
                                 PNLRow(title: "Cash", value: inr(report.payments_received.cash_minor))
                                 PNLRow(title: "UPI", value: inr(report.payments_received.upi_minor))
                                 PNLRow(title: "Card", value: inr(report.payments_received.card_minor))
+                                if (report.payments_received.bank_minor ?? 0) > 0 {
+                                    PNLRow(title: "Bank transfer", value: inr(report.payments_received.bank_minor ?? 0))
+                                }
                                 PNLRow(title: "QR", value: inr(report.payments_received.qr_minor))
                                 PNLRow(title: "Wallet", value: inr(report.payments_received.wallet_minor))
                                 if report.payments_received.other_minor > 0 {
@@ -7704,6 +7845,7 @@ private struct ReportsNativeView: View {
             delivery_minor: report.revenue.delivery_aggregator_minor,
             gross_revenue_minor: report.gross_revenue_minor,
             net_revenue_minor: report.net_revenue_minor,
+            manual_collections_minor: report.manual_collections_minor ?? 0,
             cgst_minor: report.tax_collected.cgst_minor,
             sgst_minor: report.tax_collected.sgst_minor,
             igst_minor: report.tax_collected.igst_minor,
@@ -8039,7 +8181,8 @@ private struct AnalyticsNativeView: View {
                                     (label: "Food", minor: data.revenue_food_minor),
                                     (label: "Gaming", minor: data.revenue_gaming_minor),
                                     (label: "Hookah", minor: data.revenue_hookah_minor),
-                                    (label: "Events", minor: data.revenue_events_minor)
+                                    (label: "Events", minor: data.revenue_events_minor),
+                                    (label: "Manual", minor: data.revenue_manual_collections_minor ?? 0)
                                 ])
                             }
                         }
@@ -8210,6 +8353,20 @@ private struct InsightsGrowthTab: View {
                             previousLabel: growth.previous.label,
                             isCurrency: false
                         )
+                    }
+
+                    if (growth.current.manual_collections_minor ?? 0) > 0 ||
+                        (growth.previous.manual_collections_minor ?? 0) > 0 {
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Manual collections included in revenue growth")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(Brand.softGold)
+                                Text("Current \(inr(growth.current.manual_collections_minor ?? 0)) · Previous \(inr(growth.previous.manual_collections_minor ?? 0)). Orders, average order value, top items, and the heatmap remain POS-only.")
+                                    .font(.caption)
+                                    .foregroundColor(Brand.muted)
+                            }
+                        }
                     }
 
                     BrandedCard {
@@ -8909,6 +9066,15 @@ private struct FinanceOverviewTab: View {
                                 PNLRow(title: "Delivery aggregator (zero GST, Sec 9(5))", value: inr(report.revenue.delivery_aggregator_minor))
                             }
                             if report.revenue.other_minor > 0 { PNLRow(title: "Other", value: inr(report.revenue.other_minor)) }
+                            if (report.revenue.manual_collections_minor ?? 0) > 0 {
+                                PNLRow(title: "Manual collections (unitemized)", value: inr(report.revenue.manual_collections_minor ?? 0))
+                                Text("Included in revenue without an order, item mix, or automatic COGS.")
+                                    .font(.caption2)
+                                    .foregroundColor(Brand.muted)
+                            }
+                            if (report.revenue.discounts_and_points_redeemed_minor ?? 0) > 0 {
+                                PNLRow(title: "Less: discounts and points", value: "-\(inr(report.revenue.discounts_and_points_redeemed_minor ?? 0))")
+                            }
                             Divider().background(Brand.gold.opacity(0.35))
                             PNLRow(title: "Less: Output CGST", value: "-\(inr(report.tax_collected.cgst_minor))")
                             PNLRow(title: "Less: Output SGST", value: "-\(inr(report.tax_collected.sgst_minor))")
@@ -14130,8 +14296,8 @@ private struct AuditNativeView: View {
         error = nil
         do {
             var query = [URLQueryItem(name: "limit", value: "80")]
-            if let entity = entityFilter(for: selectedArea) {
-                query.append(URLQueryItem(name: "entity_type", value: entity))
+            if let area = auditAreaFilter(for: selectedArea) {
+                query.append(URLQueryItem(name: "area", value: area))
             }
             entries = try await session.authorized { token in
                 try await APIClient.shared.get("admin/audit", token: token, queryItems: query, headers: ["X-Audit-Token": auditToken])
@@ -14142,20 +14308,14 @@ private struct AuditNativeView: View {
         }
     }
 
-    private func entityFilter(for area: String) -> String? {
+    private func auditAreaFilter(for area: String) -> String? {
         switch area {
-        case "Login":
-            return "User"
-        case "POS":
-            return "Order"
-        case "Inventory":
-            return "Inventory"
-        case "Staff":
-            return "Staff"
-        case "Finance":
-            return "Finance"
-        case "Access":
-            return "AuditAccess"
+        case "Login": return "login"
+        case "POS": return "pos"
+        case "Inventory": return "inventory"
+        case "Staff": return "staff"
+        case "Finance": return "finance"
+        case "Access": return "system"
         default:
             return nil
         }
@@ -14346,14 +14506,40 @@ private struct CheckoutSheet: View {
                                     CartReviewLine(row: row)
                                 }
                                 Divider().background(Brand.gold.opacity(0.35))
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Discount (₹)")
+                                        .font(.caption)
+                                        .foregroundColor(Brand.muted)
+                                    TextField("0", text: $draft.discountRupeesText)
+                                        .keyboardType(.numberPad)
+                                        .nativeField()
+                                }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Redeem points (10 pts = ₹1)")
+                                        .font(.caption)
+                                        .foregroundColor(Brand.muted)
+                                    TextField("0", text: $draft.pointsRedeemedText)
+                                        .keyboardType(.numberPad)
+                                        .nativeField()
+                                    if draft.pointsRedeemed > 0 && draft.customerPhone.trimmingCharacters(in: .whitespaces).isEmpty {
+                                        Text("Enter the customer's phone number above to redeem points.")
+                                            .font(.caption2)
+                                            .foregroundColor(Brand.danger)
+                                    }
+                                }
                                 HStack {
                                     Text("Total")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     Spacer()
-                                    Text(inr(totalMinor))
+                                    Text(inr(max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10)))
                                         .font(.title3.weight(.bold))
                                         .foregroundColor(Brand.softGold)
+                                }
+                                if draft.discountMinor > 0 || draft.pointsRedeemed > 0 {
+                                    Text("Exact discounted total is confirmed by the server once the bill is created.")
+                                        .font(.caption2)
+                                        .foregroundColor(Brand.muted)
                                 }
                             }
                         }
@@ -14437,10 +14623,10 @@ private struct CheckoutSheet: View {
                                 }
                                 PaymentTerminalNotice(method: draft.paymentMethod)
                                 if draft.paymentMethod == .cash {
-                                    CashTenderPad(totalMinor: totalMinor, tenderedMinor: $draft.cashTenderedMinor)
+                                    CashTenderPad(totalMinor: max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10), tenderedMinor: $draft.cashTenderedMinor)
                                 }
                                 if draft.paymentMethod == .upi || draft.paymentMethod == .qr {
-                                    UpiQRView(upiVpa: upiVpa, businessName: businessName, amountMinor: totalMinor)
+                                    UpiQRView(upiVpa: upiVpa, businessName: businessName, amountMinor: max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10))
                                 }
                                 Toggle(isOn: $draft.printReceiptAfterCharge) {
                                     Label("Print receipt after charge", systemImage: "printer")
@@ -14542,6 +14728,8 @@ private struct HeldOrderBillSheet: View {
     @State private var showVoidConfirm = false
     @State private var voidReason = ""
     @State private var showAddItems = false
+    @State private var discountRupeesText = ""
+    @State private var pointsRedeemedText = ""
 
     let order: OrderReadDTO
     let terminal: TerminalDTO?
@@ -14552,6 +14740,8 @@ private struct HeldOrderBillSheet: View {
     let onBill: (PaymentMethod, Int?) -> Void
     let onVoid: (String) -> Void
     let onAddLines: ([OrderLineCreateRequest]) -> Void
+    let onApplyDiscount: (Int) -> Void
+    let onRedeemPoints: (Int) -> Void
     let menuItems: [MenuItemDTO]
 
     private func isCashTenderReady() -> Bool {
@@ -14606,6 +14796,82 @@ private struct HeldOrderBillSheet: View {
                                             .font(.caption.weight(.bold))
                                     }
                                     .buttonStyle(PressableButtonStyle())
+                                }
+                                Divider().background(Brand.gold.opacity(0.35))
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("Discount (₹)")
+                                            .font(.caption)
+                                            .foregroundColor(Brand.muted)
+                                        Spacer()
+                                        if order.manual_discount_minor > 0 {
+                                            Text("Applied: \(inr(order.manual_discount_minor))")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.softGold)
+                                        }
+                                    }
+                                    HStack(spacing: 10) {
+                                        TextField("0", text: $discountRupeesText)
+                                            .keyboardType(.numberPad)
+                                            .nativeField()
+                                        Button {
+                                            Haptics.selection()
+                                            let minor = max(0, Int(discountRupeesText) ?? 0) * 100
+                                            onApplyDiscount(minor)
+                                            discountRupeesText = ""
+                                        } label: {
+                                            Text("Apply")
+                                                .font(.subheadline.weight(.bold))
+                                        }
+                                        .buttonStyle(PressableButtonStyle())
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 10)
+                                        .background(Brand.gold.opacity(0.16))
+                                        .foregroundColor(Brand.softGold)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                        .disabled(discountRupeesText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmitting)
+                                    }
+                                }
+                                Divider().background(Brand.gold.opacity(0.35))
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("Redeem points (10 pts = ₹1)")
+                                            .font(.caption)
+                                            .foregroundColor(Brand.muted)
+                                        Spacer()
+                                        if order.points_redeemed_minor > 0 {
+                                            Text("Applied: \(inr(order.points_redeemed_minor))")
+                                                .font(.caption2)
+                                                .foregroundColor(Brand.softGold)
+                                        }
+                                    }
+                                    if order.customer_phone == nil {
+                                        Text("Attach a customer to this order before redeeming points.")
+                                            .font(.caption2)
+                                            .foregroundColor(Brand.muted)
+                                    } else {
+                                        HStack(spacing: 10) {
+                                            TextField("0", text: $pointsRedeemedText)
+                                                .keyboardType(.numberPad)
+                                                .nativeField()
+                                            Button {
+                                                Haptics.selection()
+                                                let points = max(0, Int(pointsRedeemedText) ?? 0)
+                                                onRedeemPoints(points)
+                                                pointsRedeemedText = ""
+                                            } label: {
+                                                Text("Redeem")
+                                                    .font(.subheadline.weight(.bold))
+                                            }
+                                            .buttonStyle(PressableButtonStyle())
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 10)
+                                            .background(Brand.gold.opacity(0.16))
+                                            .foregroundColor(Brand.softGold)
+                                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                            .disabled(pointsRedeemedText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmitting)
+                                        }
+                                    }
                                 }
                                 Divider().background(Brand.gold.opacity(0.35))
                                 HStack {

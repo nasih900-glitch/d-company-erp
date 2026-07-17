@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.core.db import SessionDep
 from app.core.errors import AuthError, TenantViolation
-from app.core.roles import has_protected_owner_access, public_roles
+from app.core.roles import has_full_access, has_protected_owner_access, public_roles
 from app.core.security import decode_token
 from app.models import Branch, Terminal, User
 from app.services.audit.recorder import set_actor
@@ -24,7 +24,14 @@ class TenantContext:
     branch_id: UUID | None
     terminal_id: UUID | None
     roles: tuple[str, ...]
+    # Broad operational bypass (shift-opener-only billing, force-stop, etc.) —
+    # true for super_owner AND co_owner. NOT the same as audit_access below.
     protected_access: bool = False
+    # Narrow: only super_owner. Gates admin.audit.read specifically (see
+    # permissions.py's _has_permission) — deliberately not implied by
+    # protected_access, so a co_owner can bypass operational RBAC without
+    # also getting audit-log / Access Control panel access.
+    audit_access: bool = False
 
     def require_role(self, *allowed: str) -> None:
         if not set(self.roles).intersection(allowed):
@@ -67,7 +74,8 @@ async def get_tenant_context(
     except (TypeError, ValueError) as exc:
         raise AuthError("malformed terminal id") from exc
     raw_roles = list(payload.get("roles", []))
-    protected_access = bool(payload.get("protected_access")) or has_protected_owner_access(raw_roles)
+    protected_access = bool(payload.get("protected_access")) or has_full_access(raw_roles)
+    audit_access = bool(payload.get("audit_access")) or has_protected_owner_access(raw_roles)
     roles = tuple(public_roles(raw_roles))
 
     user = (
@@ -119,6 +127,7 @@ async def get_tenant_context(
         terminal_id=terminal_id,
         roles=roles,
         protected_access=protected_access,
+        audit_access=audit_access,
     )
 
 

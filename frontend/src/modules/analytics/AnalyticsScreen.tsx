@@ -44,7 +44,9 @@ export default function AnalyticsScreen() {
 
   const empty = data && data.orders_count === 0 && data.tickets_count === 0
     && data.revenue_total_minor === 0;
-  const canSeeProtected = Boolean(demo || me?.protected_access);
+  // Gates the Audit quick-action below — admin.audit.read specifically, not
+  // the broader protected_access (co_owner has that but not audit access).
+  const canSeeProtected = Boolean(demo || me?.audit_access);
 
   return (
     <div>

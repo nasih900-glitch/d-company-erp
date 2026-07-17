@@ -22,8 +22,19 @@ from app.core.errors import NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import Customer
+from app.services.pos.points import gaming_rank, rank_progress, rewards_available_to
 
 router = APIRouter()
+
+
+class RewardRead(BaseModel):
+    key: str
+    name: str
+    description: str
+    points_cost: int
+    value_minor: int
+    min_rank: str
+    affordable: bool
 
 
 # ---------------------------------------------------------------- DTOs
@@ -36,6 +47,12 @@ class CustomerRead(BaseModel):
     visit_count: int
     total_spent_minor: int
     loyalty_points: int
+    lifetime_gaming_points_earned: int
+    gaming_rank: str
+    gaming_rank_floor: int
+    next_gaming_rank: str | None
+    next_gaming_rank_floor: int | None
+    points_to_next_gaming_rank: int | None
     last_visit_at: datetime | None
     notes: str | None
 
@@ -57,10 +74,17 @@ class CustomerUpdate(BaseModel):
 
 # ---------------------------------------------------------------- helpers
 def _to_read(c: Customer) -> CustomerRead:
+    progress = rank_progress(c.lifetime_gaming_points_earned)
     return CustomerRead(
         id=c.id, name=c.name, phone=c.phone, email=c.email,
         birthday=c.birthday, visit_count=c.visit_count,
         total_spent_minor=c.total_spent_minor, loyalty_points=c.loyalty_points,
+        lifetime_gaming_points_earned=progress.lifetime_points,
+        gaming_rank=progress.rank,
+        gaming_rank_floor=progress.rank_floor,
+        next_gaming_rank=progress.next_rank,
+        next_gaming_rank_floor=progress.next_rank_floor,
+        points_to_next_gaming_rank=progress.points_to_next_rank,
         last_visit_at=c.last_visit_at, notes=c.notes,
     )
 
@@ -104,6 +128,36 @@ async def get_by_phone(
         )
     ).scalar_one_or_none()
     return _to_read(c) if c else None
+
+
+@router.get("/by-phone/{phone}/rewards", response_model=list[RewardRead])
+async def get_rewards_by_phone(
+    phone: str,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+) -> list[RewardRead]:
+    """Rewards this phone number's rank has unlocked, with an affordable flag
+    against their current spendable balance — for the POS redemption menu."""
+    c = (
+        await session.execute(
+            select(Customer).where(
+                Customer.company_id == tenant.company_id,
+                Customer.phone == phone,
+                Customer.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not c:
+        return []
+    rank = gaming_rank(c.lifetime_gaming_points_earned)
+    return [
+        RewardRead(
+            key=r.key, name=r.name, description=r.description,
+            points_cost=r.points_cost, value_minor=r.value_minor, min_rank=r.min_rank,
+            affordable=c.loyalty_points >= r.points_cost,
+        )
+        for r in rewards_available_to(rank)
+    ]
 
 
 @router.get("/{customer_id}", response_model=CustomerRead)

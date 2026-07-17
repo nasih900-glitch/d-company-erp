@@ -36,6 +36,7 @@ import {
   type MenuItemDTO,
   type OrderDTO,
   type OrderListItemDTO,
+  type RewardDTO,
   type SubscriptionDTO,
 } from '@/lib/erp-api';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
@@ -103,6 +104,7 @@ export default function LivePOSScreen() {
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [shiftId, setShiftId] = useState<string | null>(null);
   const [shiftError, setShiftError] = useState<string | null>(null);
+  const [todaysSalesMinor, setTodaysSalesMinor] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,6 +128,12 @@ export default function LivePOSScreen() {
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
   const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
   const [checkoutRetry, setCheckoutRetry] = useState<PosCheckoutRetry | null>(null);
+  // The key of a retry actually found in storage at mount (a genuine
+  // crash/reload recovery) vs. one built fresh during this session's normal
+  // checkout flow. Every retry gets a unique key (createOperationKey()), so
+  // comparing checkoutRetry.key against this tells the "Recover checkout"
+  // modal whether recovery language is actually warranted.
+  const [restoredRetryKey, setRestoredRetryKey] = useState<string | null>(null);
   const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
   const draftHydrated = Boolean(draftKey && hydratedDraftKey === draftKey);
 
@@ -139,9 +147,38 @@ export default function LivePOSScreen() {
   const [heldAlarmMuted, setHeldAlarmMuted] = useState(false);
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const [, setAlarmTick] = useState(0);
+  const [discountInput, setDiscountInput] = useState('');
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+  const [discountError, setDiscountError] = useState<string | null>(null);
+  // Set when a discount is entered on the cart-review screen before any
+  // order exists yet (a brand-new walk-in sale) — prepareCheckout() applies
+  // it to the order the moment it's created, before the payment screen shows.
+  const [pendingCartDiscountMinor, setPendingCartDiscountMinor] = useState(0);
+  const [pointsInput, setPointsInput] = useState('');
+  const [applyingPoints, setApplyingPoints] = useState(false);
+  const [pointsError, setPointsError] = useState<string | null>(null);
+  // Same pre-order-creation problem as pendingCartDiscountMinor above, but
+  // for points — prepareCheckout() redeems them the moment the order exists.
+  const [pendingCartPointsMinor, setPendingCartPointsMinor] = useState(0);
+  const [rewards, setRewards] = useState<RewardDTO[]>([]);
+  const [redeemingReward, setRedeemingReward] = useState<string | null>(null);
+  const [rewardError, setRewardError] = useState<string | null>(null);
   const lastHeldAlarmAtRef = useRef(0);
   const heldOrderScopeRef = useRef(draftKey);
   heldOrderScopeRef.current = draftKey;
+
+  // Reward menu for whichever customer is attached — their balance doesn't
+  // change mid-checkout (points are only reserved, not spent, until final
+  // settlement), so one fetch per lookup is enough; no need to refresh after
+  // a redemption within the same bill.
+  useEffect(() => {
+    if (!customer?.phone) { setRewards([]); return; }
+    let cancelled = false;
+    customers.rewardsByPhone(customer.phone)
+      .then((r) => { if (!cancelled) setRewards(r); })
+      .catch(() => { if (!cancelled) setRewards([]); });
+    return () => { cancelled = true; };
+  }, [customer?.phone]);
 
   // Load menu items, exact shift scope, and any durable checkout journal.
   useEffect(() => {
@@ -170,6 +207,7 @@ export default function LivePOSScreen() {
     setReceipt(null);
     setError(null);
     setCheckoutRetry(storedDraft?.retry ?? null);
+    setRestoredRetryKey(storedDraft?.retry?.key ?? null);
     (async () => {
       setLoading(true);
       setShiftId(null);
@@ -372,6 +410,27 @@ export default function LivePOSScreen() {
     return () => clearInterval(id);
   }, [loadHeldOrders, shiftId]);
 
+  // Today's sales corner badge — scoped to itemized POS sales on this shift
+  // (all payment methods), not the cash-only expected_minor float or any
+  // separate off-POS manual collection. Naturally reads back to 0 once the
+  // shift closes and a new one opens.
+  const loadTodaysSales = useCallback(async () => {
+    if (!shiftId) { setTodaysSalesMinor(null); return; }
+    try {
+      const rows = await shifts.list(true);
+      const current = rows.find((s) => s.id === shiftId);
+      if (current) setTodaysSalesMinor(current.pos_sales_minor);
+    } catch {
+      // Non-critical display — leave the last known value rather than error.
+    }
+  }, [shiftId]);
+  useEffect(() => {
+    if (!shiftId) { setTodaysSalesMinor(null); return; }
+    loadTodaysSales();
+    const id = setInterval(loadTodaysSales, HELD_ORDERS_POLL_MS);
+    return () => clearInterval(id);
+  }, [loadTodaysSales, shiftId]);
+
   // Age-based alarm: a held order sitting too long should nag, not vanish
   // from mind. The interval below re-renders every second (via setAlarmTick),
   // so this plain computation — not memoized — stays fresh without it.
@@ -423,6 +482,8 @@ export default function LivePOSScreen() {
       setResumingOrder(full);
       setCart([]);
       setCheckoutRetry(null);
+      setPendingCartDiscountMinor(0);
+      setPendingCartPointsMinor(0);
       setCustomerName(nextCustomerName);
       setCustomerPhone(nextCustomerPhone);
       setCustomer(null);
@@ -462,6 +523,8 @@ export default function LivePOSScreen() {
     setResumingOrder(null);
     setCart([]);
     setCheckoutRetry(null);
+    setPendingCartDiscountMinor(0);
+    setPendingCartPointsMinor(0);
     clearCustomer();
     if (draftKey) clearDraft(draftKey);
   }
@@ -519,7 +582,17 @@ export default function LivePOSScreen() {
     });
   }
   function adjust(id: string, delta: number) {
-    setCart((c) => c.map((l) => l.item.id === id ? { ...l, qty: Math.max(0, l.qty + delta) } : l).filter((l) => l.qty > 0));
+    setCart((c) => {
+      const next = c.map((l) => l.item.id === id ? { ...l, qty: Math.max(0, l.qty + delta) } : l).filter((l) => l.qty > 0);
+      if (next.length === 0 && c.length > 0) {
+        // Cart just emptied out via -/trash — a stashed discount/points
+        // redemption meant for THIS cart must not silently reattach to
+        // whatever order gets built or resumed next.
+        setPendingCartDiscountMinor(0);
+        setPendingCartPointsMinor(0);
+      }
+      return next;
+    });
   }
 
   // Cart preview math (backend does the canonical math on submit)
@@ -597,9 +670,12 @@ export default function LivePOSScreen() {
     setShowPay(false);
     setCart([]);
     setResumingOrder(null);
+    setPendingCartDiscountMinor(0);
+    setPendingCartPointsMinor(0);
     clearCustomer();
     if (draftKey) clearDraft(draftKey);
     void loadHeldOrders(true);
+    void loadTodaysSales();
   }
 
   async function lookupCustomer() {
@@ -656,6 +732,10 @@ export default function LivePOSScreen() {
     setMembershipTier(null);
     setCustomerLookupState('idle');
     setCustomerMessage(null);
+    // Points redemption is tied to whichever customer's balance it was
+    // computed against — clearing the customer must not let it silently
+    // reattach to a different (or no) customer at checkout.
+    setPendingCartPointsMinor(0);
   }
 
   async function prepareCheckout(method: PayMethod) {
@@ -773,6 +853,19 @@ export default function LivePOSScreen() {
       if (order.status !== 'open' && order.status !== 'held') {
         throw new Error(`Order is ${order.status} and cannot be prepared for payment.`);
       }
+      // A discount entered on the cart-review screen, before this order
+      // existed — apply it now so the confirm-payment screen already shows
+      // the discounted total instead of asking the cashier to re-enter it.
+      if (pendingCartDiscountMinor > 0) {
+        order = await pos.applyDiscount(order.id, pendingCartDiscountMinor, `cart-discount:${retry.key}`);
+        setPendingCartDiscountMinor(0);
+      }
+      // Same idea as the discount above, but for points redeemed before this
+      // order existed — requires a customer to already be attached.
+      if (pendingCartPointsMinor > 0) {
+        order = await pos.redeemPoints(order.id, pendingCartPointsMinor / 10, `cart-points:${retry.key}`);
+        setPendingCartPointsMinor(0);
+      }
       retry = applyCanonicalCheckoutBalance(retry, order);
       if (order.due_minor <= 0 && !hasBenefitCoveredZeroBalance(retry)) {
         throw new Error('The server reports no amount due, but no final invoice is available. Ask a protected owner to reconcile this order.');
@@ -880,6 +973,113 @@ export default function LivePOSScreen() {
           + 'Do not collect money again; resume or ask a protected owner to reconcile it.');
     } finally {
       setPaying(false);
+    }
+  }
+
+  async function applyManualDiscount() {
+    const rupees = Number(discountInput);
+    if (!Number.isFinite(rupees) || rupees < 0) {
+      setDiscountError('Enter a valid discount amount.');
+      return;
+    }
+    const minor = Math.round(rupees * 100);
+
+    // Prefer an order that already exists (a resumed held order, or the
+    // exact bill already prepared on the confirm-payment screen). A brand
+    // new walk-in sale has no order yet at cart-review time — stash the
+    // amount and prepareCheckout() applies it the moment the order exists.
+    const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
+    if (!targetOrderId) {
+      setPendingCartDiscountMinor(minor);
+      setDiscountInput('');
+      setDiscountError(null);
+      return;
+    }
+
+    setApplyingDiscount(true);
+    setDiscountError(null);
+    try {
+      const order = await pos.applyDiscount(targetOrderId, minor, createOperationKey());
+      if (resumingOrder && order.id === resumingOrder.id) {
+        setResumingOrder(order);
+      }
+      if (checkoutRetry?.pendingOrderId === order.id) {
+        const updated = applyCanonicalCheckoutBalance(checkoutRetry, order);
+        setCheckoutRetry(updated);
+        persistCheckoutRetry(updated);
+      }
+      setPendingCartDiscountMinor(0);
+      setDiscountInput('');
+    } catch (e) {
+      setDiscountError((e as Error).message);
+    } finally {
+      setApplyingDiscount(false);
+    }
+  }
+
+  async function redeemPoints() {
+    const points = Math.trunc(Number(pointsInput));
+    if (!Number.isFinite(points) || points < 0) {
+      setPointsError('Enter a valid number of points.');
+      return;
+    }
+    if (customer && points > customer.loyalty_points) {
+      setPointsError(`Only ${customer.loyalty_points.toLocaleString('en-IN')} points available.`);
+      return;
+    }
+    const minor = points * 10; // 10 points = ₹1 — keep in sync with backend MINOR_PER_POINT
+
+    const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
+    if (!targetOrderId) {
+      setPendingCartPointsMinor(minor);
+      setPointsInput('');
+      setPointsError(null);
+      return;
+    }
+
+    setApplyingPoints(true);
+    setPointsError(null);
+    try {
+      const order = await pos.redeemPoints(targetOrderId, points, createOperationKey());
+      if (resumingOrder && order.id === resumingOrder.id) {
+        setResumingOrder(order);
+      }
+      if (checkoutRetry?.pendingOrderId === order.id) {
+        const updated = applyCanonicalCheckoutBalance(checkoutRetry, order);
+        setCheckoutRetry(updated);
+        persistCheckoutRetry(updated);
+      }
+      setPendingCartPointsMinor(0);
+      setPointsInput('');
+    } catch (e) {
+      setPointsError((e as Error).message);
+    } finally {
+      setApplyingPoints(false);
+    }
+  }
+
+  async function redeemReward(key: string) {
+    const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
+    if (!targetOrderId) {
+      setRewardError('Prepare the bill first, then redeem a reward against it.');
+      return;
+    }
+    setRedeemingReward(key);
+    setRewardError(null);
+    try {
+      const order = await pos.redeemReward(targetOrderId, key, createOperationKey());
+      if (resumingOrder && order.id === resumingOrder.id) {
+        setResumingOrder(order);
+      }
+      if (checkoutRetry?.pendingOrderId === order.id) {
+        const updated = applyCanonicalCheckoutBalance(checkoutRetry, order);
+        setCheckoutRetry(updated);
+        persistCheckoutRetry(updated);
+      }
+    } catch (e) {
+      setRewardError((e as Error).message);
+    } finally {
+      setRedeemingReward(null);
     }
   }
 
@@ -997,6 +1197,11 @@ export default function LivePOSScreen() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {shiftId && todaysSalesMinor !== null && (
+              <div className="chip text-xs !py-1.5" title="Total sales on this shift — resets when a new shift opens">
+                Today: <span className="font-bold font-mono ml-1">{inr(todaysSalesMinor)}</span>
+              </div>
+            )}
             <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }}>
               <Inbox size={14}/> POS queue
               {heldOrders.length > 0 && (
@@ -1121,6 +1326,69 @@ export default function LivePOSScreen() {
             onClear={clearCustomer}
         />
 
+        {customer && customer.loyalty_points > 0 && (
+          <div className="mb-4 max-w-xl space-y-2 rounded-xl border border-bg-border px-3 py-2">
+            <div className="flex items-center justify-between text-xs text-fg-muted">
+              <span>Redeem points · {customer.loyalty_points.toLocaleString('en-IN')} available (10 pts = ₹1)</span>
+              {pendingCartPointsMinor > 0 && (
+                <span className="text-accent-good">Pending: -{inr(pendingCartPointsMinor)}</span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                max={customer.loyalty_points}
+                inputMode="numeric"
+                placeholder="Points to redeem"
+                value={pointsInput}
+                onChange={(e) => setPointsInput(e.target.value)}
+                disabled={applyingPoints}
+                className="input flex-1"
+              />
+              <button
+                className="btn btn-ghost disabled:opacity-40"
+                disabled={applyingPoints || !pointsInput}
+                onClick={redeemPoints}
+              >
+                {applyingPoints ? <Loader2 size={16} className="animate-spin"/> : 'Redeem'}
+              </button>
+            </div>
+            {pointsError && <p className="text-xs text-accent-bad">{pointsError}</p>}
+          </div>
+        )}
+
+        {customer && rewards.length > 0 && (
+          <div className="mb-4 max-w-xl space-y-2 rounded-xl border border-bg-border px-3 py-2">
+            <div className="text-xs text-fg-muted">
+              Rewards · {customer.gaming_rank} rank
+            </div>
+            <div className="grid grid-cols-1 gap-1.5">
+              {rewards.map((r) => (
+                <button
+                  key={r.key}
+                  className="btn btn-ghost !justify-between !py-1.5 text-xs disabled:opacity-40"
+                  disabled={!r.affordable || redeemingReward === r.key}
+                  onClick={() => redeemReward(r.key)}
+                  title={r.description}
+                >
+                  <span className="text-left">
+                    <span className="block font-semibold">{r.name}</span>
+                    <span className="block text-fg-muted">{r.description}</span>
+                  </span>
+                  <span className="shrink-0 font-mono font-bold text-accent-gold">
+                    {redeemingReward === r.key
+                      ? <Loader2 size={14} className="animate-spin"/>
+                      : `${r.points_cost} pts`}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {rewardError && <p className="text-xs text-accent-bad">{rewardError}</p>}
+          </div>
+        )}
+
         <div className="relative mb-4 max-w-xl">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
           <input
@@ -1163,7 +1431,14 @@ export default function LivePOSScreen() {
       <aside className="hidden xl:flex card flex-col">
         <header className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold flex items-center gap-2"><ShoppingCart size={18} /> Cart · {cartQty}</h3>
-          {cart.length > 0 && <button onClick={() => setCart([])} className="text-xs text-fg-muted hover:text-accent-bad">Clear</button>}
+          {cart.length > 0 && (
+            <button
+              onClick={() => { setCart([]); setPendingCartDiscountMinor(0); setPendingCartPointsMinor(0); }}
+              className="text-xs text-fg-muted hover:text-accent-bad"
+            >
+              Clear
+            </button>
+          )}
         </header>
 
         <div className="flex-1 space-y-2 overflow-auto min-h-[120px]">
@@ -1224,16 +1499,61 @@ export default function LivePOSScreen() {
               <span>Membership discount (est.)</span><span>-{inr(estimatedMembershipDiscount)}</span>
             </div>
           )}
+          {pendingCartDiscountMinor > 0 && (
+            <div className="flex justify-between text-accent-good mb-1">
+              <span>Custom discount</span><span>-{inr(pendingCartDiscountMinor)}</span>
+            </div>
+          )}
+          {!!resumingOrder?.manual_discount_minor && (
+            <div className="flex justify-between text-accent-good mb-1">
+              <span>Custom discount</span><span>-{inr(resumingOrder.manual_discount_minor)}</span>
+            </div>
+          )}
+          {pendingCartPointsMinor > 0 && (
+            <div className="flex justify-between text-accent-good mb-1">
+              <span>Points redeemed</span><span>-{inr(pendingCartPointsMinor)}</span>
+            </div>
+          )}
+          {!!resumingOrder?.points_redeemed_minor && (
+            <div className="flex justify-between text-accent-good mb-1">
+              <span>Points redeemed</span><span>-{inr(resumingOrder.points_redeemed_minor)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-lg font-bold">
-            <span>Total (est.)</span><span>{inr(estimatedPayable)}</span>
+            <span>Total (est.)</span><span>{inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}</span>
           </div>
           <p className="text-xs text-fg-muted mt-1">Final GST split &amp; round-off computed by backend on charge.</p>
+        </div>
+
+        <div className="mt-3 space-y-2 rounded-xl border border-bg-border px-3 py-2">
+          <span className="text-xs text-fg-muted">Custom discount</span>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="decimal"
+              placeholder="₹ off"
+              value={discountInput}
+              onChange={(e) => setDiscountInput(e.target.value)}
+              disabled={applyingDiscount}
+              className="input flex-1"
+            />
+            <button
+              className="btn btn-ghost disabled:opacity-40"
+              disabled={applyingDiscount || !discountInput}
+              onClick={applyManualDiscount}
+            >
+              {applyingDiscount ? <Loader2 size={16} className="animate-spin"/> : 'Apply'}
+            </button>
+          </div>
+          {discountError && <p className="text-xs text-accent-bad">{discountError}</p>}
         </div>
 
         <button onClick={() => setShowPay(true)}
           disabled={(!cart.length && !resumingOrder) || !shiftId || paying || !receiptBusiness || !!receiptSettingsError}
           className="btn btn-primary mt-3 disabled:opacity-40 disabled:cursor-not-allowed">
-          <ReceiptIcon size={16} /> Prepare bill · est. {inr(estimatedPayable)}
+          <ReceiptIcon size={16} /> Prepare bill · est. {inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}
         </button>
         {error && <p className="text-accent-bad text-xs mt-2">{error}</p>}
       </aside>
@@ -1249,7 +1569,7 @@ export default function LivePOSScreen() {
           <span className="shrink-0">{cartQty} items</span>
           <span className="opacity-80">·</span>
           <span className="min-w-0 truncate">
-            {cart.length ? 'Review cart' : 'Prepare bill'} · est. {inr(estimatedPayable)}
+            {cart.length ? 'Review cart' : 'Prepare bill'} · est. {inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}
           </span>
         </button>
       )}
@@ -1298,11 +1618,60 @@ export default function LivePOSScreen() {
                 <span>-{inr(estimatedMembershipDiscount)}</span>
               </div>
             )}
+            {pendingCartDiscountMinor > 0 && (
+              <div className="mb-1 flex justify-between gap-3 text-accent-good">
+                <span>Custom discount</span>
+                <span>-{inr(pendingCartDiscountMinor)}</span>
+              </div>
+            )}
+            {!!resumingOrder?.manual_discount_minor && (
+              <div className="mb-1 flex justify-between gap-3 text-accent-good">
+                <span>Custom discount</span>
+                <span>-{inr(resumingOrder.manual_discount_minor)}</span>
+              </div>
+            )}
+            {pendingCartPointsMinor > 0 && (
+              <div className="mb-1 flex justify-between gap-3 text-accent-good">
+                <span>Points redeemed</span>
+                <span>-{inr(pendingCartPointsMinor)}</span>
+              </div>
+            )}
+            {!!resumingOrder?.points_redeemed_minor && (
+              <div className="mb-1 flex justify-between gap-3 text-accent-good">
+                <span>Points redeemed</span>
+                <span>-{inr(resumingOrder.points_redeemed_minor)}</span>
+              </div>
+            )}
             <div className="flex justify-between gap-3 text-lg font-bold">
               <span>Total (est.)</span>
-              <span>{inr(estimatedPayable)}</span>
+              <span>{inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}</span>
             </div>
             <p className="mt-1 text-xs text-fg-muted">Final GST split and round-off are computed by the backend.</p>
+          </div>
+
+          <div className="mt-3 space-y-2 rounded-xl border border-border-base px-3 py-2">
+            <span className="text-xs text-fg-muted">Custom discount</span>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="decimal"
+                placeholder="₹ off"
+                value={discountInput}
+                onChange={(e) => setDiscountInput(e.target.value)}
+                disabled={applyingDiscount}
+                className="input flex-1"
+              />
+              <button
+                className="btn btn-ghost disabled:opacity-40"
+                disabled={applyingDiscount || !discountInput}
+                onClick={applyManualDiscount}
+              >
+                {applyingDiscount ? <Loader2 size={16} className="animate-spin"/> : 'Apply'}
+              </button>
+            </div>
+            {discountError && <p className="text-xs text-accent-bad">{discountError}</p>}
           </div>
 
           <button
@@ -1339,11 +1708,22 @@ export default function LivePOSScreen() {
       )}
 
       {checkoutRetry && (
-        <Modal title="Recover checkout" onClose={() => undefined} locked>
+        <Modal
+          title={
+            checkoutRetry.key === restoredRetryKey
+              ? 'Recover checkout'
+              : checkoutRetry.phase === 'awaiting_payment'
+                ? 'Confirm payment'
+                : 'Processing payment'
+          }
+          onClose={() => undefined}
+          locked
+        >
           {(() => {
             const amount = checkoutRetry.paymentAmountMinor;
             const collectibleBalance = hasCollectibleCheckoutBalance(checkoutRetry);
             const benefitCoveredZero = hasBenefitCoveredZeroBalance(checkoutRetry);
+            const isGenuineRestore = checkoutRetry.key === restoredRetryKey;
             const scanMethod = checkoutRetry.paymentMethod === 'upi'
               || checkoutRetry.paymentMethod === 'qr';
             const upiLink = checkoutRetry.phase === 'awaiting_payment'
@@ -1369,7 +1749,9 @@ export default function LivePOSScreen() {
                     : checkoutRetry.phase === 'awaiting_payment'
                       ? benefitCoveredZero
                         ? 'The member allowance covers this exact server bill. Collect no money; complete the allowance to issue the final invoice.'
-                        : 'This is the exact server balance. If this screen was restored, verify payment was not already received before asking the customer to pay again.'
+                        : isGenuineRestore
+                          ? 'This is the exact server balance, restored after this screen was reopened. Verify payment was not already received before asking the customer to pay again.'
+                          : 'This is the exact server balance. Collect payment from the customer now.'
                       : checkoutRetry.phase === 'finalizing_zero'
                         ? 'The no-payment membership settlement is unresolved. Resume only this same key; do not collect money.'
                         : 'Payment was confirmed and the response is unresolved. Replay only this same payment key; never collect money again.'}
@@ -1380,6 +1762,37 @@ export default function LivePOSScreen() {
                     <div className="mt-1 text-2xl font-bold text-fg">{inr(amount)}</div>
                   )}
                 </div>
+                {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && (
+                  <div className="space-y-2 rounded-xl border border-border-base px-3 py-2">
+                    <div className="flex items-center justify-between text-xs text-fg-muted">
+                      <span>Custom discount</span>
+                      {!!checkoutRetry.orderManualDiscountMinor && (
+                        <span>Applied so far: {inr(checkoutRetry.orderManualDiscountMinor)}</span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        inputMode="decimal"
+                        placeholder="₹ off"
+                        value={discountInput}
+                        onChange={(e) => setDiscountInput(e.target.value)}
+                        disabled={applyingDiscount || paying}
+                        className="input flex-1"
+                      />
+                      <button
+                        className="btn btn-ghost disabled:opacity-40"
+                        disabled={applyingDiscount || paying || !discountInput}
+                        onClick={applyManualDiscount}
+                      >
+                        {applyingDiscount ? <Loader2 size={16} className="animate-spin"/> : 'Apply'}
+                      </button>
+                    </div>
+                    {discountError && <p className="text-xs text-accent-bad">{discountError}</p>}
+                  </div>
+                )}
                 {checkoutRetry.phase === 'awaiting_payment' && !collectibleBalance && !benefitCoveredZero && (
                   <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
                     This saved bill has no valid positive server balance. Do not collect money; ask a protected owner to reconcile it.
@@ -1589,7 +2002,8 @@ function CustomerAttachPanel({
             <div>{message}</div>
             {customer && (
               <div className="mt-1 opacity-80">
-                Visits: {customer.visit_count} · Points: {customer.loyalty_points.toLocaleString('en-IN')}
+                Visits: {customer.visit_count} · Points: {customer.loyalty_points.toLocaleString('en-IN')} · {customer.gaming_rank} rank
+                {customer.next_gaming_rank && ` (${customer.points_to_next_gaming_rank} pts to ${customer.next_gaming_rank})`}
               </div>
             )}
             {tier && (

@@ -15,6 +15,7 @@ import { api } from '@/lib/api';
 import { COMPANY, HOURLY_REVENUE, TODAY_KPI } from '@/lib/demo-data';
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { DEFAULT_BUSINESS_TIMEZONE, dateISOInTimeZone } from '@/lib/manual-collections';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { settings, type BranchDTO, type CompanyDTO } from '@/lib/erp-api';
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
@@ -47,6 +48,8 @@ interface ReportData {
     event_tickets_minor: number;
     delivery_aggregator_minor: number;
     other_minor: number;
+    manual_collections_minor: number;
+    discounts_and_points_redeemed_minor: number;
     total_minor: number;
   };
   tax_collected: {
@@ -60,11 +63,13 @@ interface ReportData {
     cash_minor: number;
     upi_minor: number;
     card_minor: number;
+    bank_minor: number;
     qr_minor: number;
     wallet_minor: number;
     other_minor: number;
     total_minor: number;
   };
+  manual_collections_minor: number;
   refunds_issued_minor: number;
   net_payments_received_minor: number;
   expenses: Array<{ category: string; amount_minor: number }>;
@@ -107,23 +112,26 @@ export default function ReportsScreen() {
   const [report, setReport] = useState<ReportData | null>(null);
   const [taxHealth, setTaxHealth] = useState<TaxComplianceData | null>(null);
   const [taxError, setTaxError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(LIVE_MODE);
   const [error, setError] = useState<string | null>(null);
   const [company, setCompany] = useState<CompanyDTO | null>(null);
   const [branch, setBranch] = useState<BranchDTO | null>(null);
+  const [timezoneReady, setTimezoneReady] = useState(!LIVE_MODE);
 
   // Period-specific selectors
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dateISOInTimeZone(new Date(), DEFAULT_BUSINESS_TIMEZONE);
+  const todayAsDate = parseISODate(today);
   const yyyy_mm = today.slice(0, 7);
-  const fy = fiscalYearFor(new Date());
+  const fy = fiscalYearFor(todayAsDate);
   const [onDate, setOnDate] = useState<string>(today);
   const [weekDate, setWeekDate] = useState<string>(today);
   const [month, setMonth] = useState<string>(yyyy_mm);
   const [year, setYear] = useState<string>(fy);
-  const [quarter, setQuarter] = useState<number>(currentFiscalQuarter(new Date()));
-  const [halfYear, setHalfYear] = useState<HalfYear>(currentFiscalHalf(new Date()));
+  const [quarter, setQuarter] = useState<number>(currentFiscalQuarter(todayAsDate));
+  const [halfYear, setHalfYear] = useState<HalfYear>(currentFiscalHalf(todayAsDate));
 
   const load = useCallback(async () => {
+    if (!timezoneReady) return;
     setLoading(true);
     setError(null);
     setTaxError(null);
@@ -141,21 +149,38 @@ export default function ReportsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [halfYear, month, onDate, period, quarter, weekDate, year]);
+  }, [halfYear, month, onDate, period, quarter, timezoneReady, weekDate, year]);
 
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
     if (!LIVE_MODE) return;
+    let cancelled = false;
     Promise.all([settings.getCompany(), settings.listBranches()])
       .then(([companyData, branches]) => {
+        if (cancelled) return;
+        const businessToday = dateISOInTimeZone(
+          new Date(),
+          companyData.timezone || DEFAULT_BUSINESS_TIMEZONE,
+        );
+        const businessDate = parseISODate(businessToday);
         setCompany(companyData);
         setBranch(branches[0] ?? null);
+        setOnDate(businessToday);
+        setWeekDate(businessToday);
+        setMonth(businessToday.slice(0, 7));
+        setYear(fiscalYearFor(businessDate));
+        setQuarter(currentFiscalQuarter(businessDate));
+        setHalfYear(currentFiscalHalf(businessDate));
+        setTimezoneReady(true);
       })
       .catch(() => {
+        if (cancelled) return;
         setCompany(null);
         setBranch(null);
+        setTimezoneReady(true);
       });
+    return () => { cancelled = true; };
   }, []);
 
   async function pushToSheets() {
@@ -173,6 +198,7 @@ export default function ReportsScreen() {
       delivery_minor: report.revenue.delivery_aggregator_minor,
       gross_revenue_minor: report.gross_revenue_minor,
       net_revenue_minor: report.net_revenue_minor,
+      manual_collections_minor: report.manual_collections_minor,
       cgst_minor: report.tax_collected.cgst_minor,
       sgst_minor: report.tax_collected.sgst_minor,
       igst_minor: report.tax_collected.igst_minor,
@@ -306,11 +332,20 @@ export default function ReportsScreen() {
             <KPI label="Net revenue" value={inr(report.net_revenue_minor)}/>
             <KPI label="Profit margin" value={percent(report.net_profit_minor, report.net_revenue_minor)}
               tone={report.net_profit_minor >= 0 ? 'good' : 'bad'}/>
-            <KPI label="Expense ratio" value={percent(report.expense_total_minor, report.net_revenue_minor)}
-              tone={report.expense_total_minor <= report.net_revenue_minor ? 'good' : 'bad'}/>
+            <KPI label="Cost ratio" value={percent(report.cogs_minor + report.expense_total_minor, report.net_revenue_minor)}
+              tone={report.cogs_minor + report.expense_total_minor <= report.net_revenue_minor ? 'good' : 'bad'}/>
             <KPI label="Net profit" value={inr(report.net_profit_minor)}
               tone={report.net_profit_minor >= 0 ? 'good' : 'bad'}/>
           </div>
+
+          {report.manual_collections_minor > 0 && (
+            <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm print:border print:border-black/30">
+              <b>{inr(report.manual_collections_minor)} is unitemized manual collection.</b>{' '}
+              It is included once in revenue and payment movement, but it has no POS order,
+              tax invoice, item mix, or automatic COGS. Review the immutable register in
+              Finance → Manual collections for source references and void history.
+            </div>
+          )}
 
           {taxError && (
             <p className="text-accent-bad text-sm mb-4 print:hidden">{taxError}</p>
@@ -328,19 +363,29 @@ export default function ReportsScreen() {
               <Row label="Event tickets"                     v={report.revenue.event_tickets_minor}/>
               <Row label="Delivery (Zomato/Swiggy §9(5))"    v={report.revenue.delivery_aggregator_minor}
                    sub="aggregator pays the GST"/>
+              {report.revenue.manual_collections_minor > 0 &&
+                <Row label="Manual collections (unitemized)" v={report.revenue.manual_collections_minor}
+                  sub="off-POS / legacy daily totals"/>}
               {report.revenue.other_minor > 0 &&
                 <Row label="Other"                          v={report.revenue.other_minor}/>}
+              {report.revenue.discounts_and_points_redeemed_minor > 0 &&
+                <Row label="Less: discounts & points redeemed" v={-report.revenue.discounts_and_points_redeemed_minor}/>}
               <Divider/>
-              <Row label="Gross revenue" v={report.revenue.total_minor} bold/>
-              {report.refunds_issued_minor > 0 && (
-                <Row label="Less: refunds" v={-report.refunds_issued_minor}/>
+              <Row label="Gross revenue" v={report.revenue.total_minor} bold
+                sub="everything customers paid, before tax and costs"/>
+              {(report.refunds_issued_minor ?? 0) > 0 && (
+                <Row label="Less: refunds" v={-(report.refunds_issued_minor ?? 0)}/>
               )}
-              <Row label="Less: GST collected" v={-report.tax_collected.total_minor}/>
+              <Row label="Less: GST collected" v={-report.tax_collected.total_minor}
+                sub="owed to the government, never was your money"/>
               <Divider/>
-              <Row label="Net revenue (after GST)" v={report.net_revenue_minor} bold/>
-              <Row label="Less: cost of goods sold" v={-report.cogs_minor}/>
+              <Row label="Net revenue (after GST)" v={report.net_revenue_minor} bold
+                sub="what's really yours before any costs"/>
+              <Row label="Less: cost of goods sold" v={-report.cogs_minor}
+                sub="what the food/drinks/items you sold actually cost you"/>
               <Divider/>
-              <Row label="Gross profit" v={report.gross_profit_minor} bold/>
+              <Row label="Gross profit" v={report.gross_profit_minor} bold
+                sub="what's left after replacing what you sold"/>
             </section>
 
             {/* GST collected */}
@@ -366,17 +411,20 @@ export default function ReportsScreen() {
               <Row label="Cash"   v={report.payments_received.cash_minor}/>
               <Row label="UPI"    v={report.payments_received.upi_minor}/>
               <Row label="Card"   v={report.payments_received.card_minor}/>
+              <Row label="Bank transfer" v={report.payments_received.bank_minor}/>
               <Row label="QR"     v={report.payments_received.qr_minor}/>
               <Row label="Wallet" v={report.payments_received.wallet_minor}/>
               {report.payments_received.other_minor > 0 &&
                 <Row label="Other" v={report.payments_received.other_minor}/>}
               <Divider/>
               <Row label="Gross payments collected" v={report.payments_received.total_minor}/>
-              {report.refunds_issued_minor > 0 && (
-                <Row label="Less: refunds issued" v={-report.refunds_issued_minor}/>
+              {(report.refunds_issued_minor ?? 0) > 0 && (
+                <Row label="Less: refunds issued" v={-(report.refunds_issued_minor ?? 0)}/>
               )}
               <Divider/>
-              <Row label="Net payment movement" v={report.net_payments_received_minor} bold/>
+              <Row label="Net payment movement"
+                v={report.net_payments_received_minor
+                  ?? report.payments_received.total_minor - (report.refunds_issued_minor ?? 0)} bold/>
             </section>
 
             {/* Expenses */}
@@ -409,13 +457,19 @@ export default function ReportsScreen() {
                 <div className="text-2xl font-bold mt-1">
                   {inr(report.net_revenue_minor)}
                 </div>
+                <div className="text-[10px] text-fg-muted print:text-black/60 mt-1">
+                  what's really yours before any costs
+                </div>
               </div>
               <div>
                 <div className="text-xs text-fg-muted print:text-black/60 uppercase tracking-wider">
-                  COGS + expenses
+                  Cost of goods + running costs
                 </div>
                 <div className="text-2xl font-bold mt-1">
                   {inr(report.cogs_minor + report.expense_total_minor)}
+                </div>
+                <div className="text-[10px] text-fg-muted print:text-black/60 mt-1">
+                  what you sold cost, plus what it took to run the place
                 </div>
               </div>
               <div>
@@ -426,6 +480,9 @@ export default function ReportsScreen() {
                   report.net_profit_minor >= 0 ? 'text-accent-good print:text-black' : 'text-accent-bad print:text-black'
                 }`}>
                   {inr(report.net_profit_minor)}
+                </div>
+                <div className="text-[10px] text-fg-muted print:text-black/60 mt-1">
+                  your real bottom line
                 </div>
               </div>
             </div>
@@ -605,6 +662,8 @@ function demoReport(
       event_tickets_minor: tickets_revenue,
       delivery_aggregator_minor: delivery,
       other_minor: 0,
+      manual_collections_minor: 0,
+      discounts_and_points_redeemed_minor: 0,
       total_minor: gross,
     },
     tax_collected: {
@@ -615,11 +674,13 @@ function demoReport(
       cash_minor:   Math.round(gross * 0.30),
       upi_minor:    Math.round(gross * 0.45),
       card_minor:   Math.round(gross * 0.20),
+      bank_minor:   0,
       qr_minor:     Math.round(gross * 0.04),
       wallet_minor: Math.round(gross * 0.01),
       other_minor:  0,
       total_minor:  gross,
     },
+    manual_collections_minor: 0,
     refunds_issued_minor: 0,
     net_payments_received_minor: gross,
     expenses: [

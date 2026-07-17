@@ -14,6 +14,7 @@ export interface MeResponse {
   name: string;
   roles: string[];
   protected_access: boolean;
+  audit_access: boolean;
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];
@@ -83,6 +84,9 @@ export interface OrderDTO {
   source_label: string | null;
   subtotal_minor: number;
   discount_minor: number;
+  manual_discount_minor: number;
+  points_redeemed_minor: number;
+  points_redeemed: number;
   cgst_minor: number;
   sgst_minor: number;
   igst_minor: number;
@@ -191,6 +195,36 @@ export const pos = {
       .then((r) => r.data),
   sendToPos: (orderId: string) =>
     api.patch<OrderDTO>(`/pos/orders/${orderId}/send-to-pos`).then((r) => r.data),
+  applyDiscount: (
+    orderId: string,
+    manual_discount_minor: number,
+    idempotencyKey: string,
+  ) =>
+    api
+      .patch<OrderDTO>(`/pos/orders/${orderId}/discount`, { manual_discount_minor }, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      })
+      .then((r) => r.data),
+  redeemPoints: (
+    orderId: string,
+    points: number,
+    idempotencyKey: string,
+  ) =>
+    api
+      .patch<OrderDTO>(`/pos/orders/${orderId}/points`, { points }, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      })
+      .then((r) => r.data),
+  redeemReward: (
+    orderId: string,
+    reward_key: string,
+    idempotencyKey: string,
+  ) =>
+    api
+      .patch<OrderDTO>(`/pos/orders/${orderId}/reward`, { reward_key }, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      })
+      .then((r) => r.data),
   voidOrder: (orderId: string, reason: string) =>
     api.delete(`/pos/orders/${orderId}`, { data: { reason } }).then(() => undefined),
   recordPayment: (
@@ -393,10 +427,98 @@ export interface PartnerDTO {
 export interface CapitalEntryDTO {
   id: string;
   partner_id: string;
-  type: 'invest' | 'withdraw' | 'profit_share';
+  type: 'invest' | 'withdraw';
   amount_minor: number;
   effective_at: string;
+  settlement_account: 'cash' | 'bank' | 'upi' | 'historical_funds';
+  source_ref: string | null;
   note: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  voided_by_name: string | null;
+  void_reason: string | null;
+  is_voided: boolean;
+}
+
+export type ManualCollectionMethod = 'cash' | 'upi' | 'card' | 'bank';
+export type ManualCollectionSourceKind = 'manual_daily' | 'legacy_daily';
+
+export interface ManualCollectionDTO {
+  id: string;
+  company_id: string;
+  branch_id: string;
+  business_date: string;
+  method: ManualCollectionMethod;
+  amount_minor: number;
+  source_kind: ManualCollectionSourceKind;
+  source_ref: string;
+  idempotency_key: string;
+  note: string | null;
+  created_by: string;
+  created_by_name: string | null;
+  created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  voided_by_name: string | null;
+  void_reason: string | null;
+  is_voided: boolean;
+}
+
+export interface PartnerProfitShareDTO {
+  partner_id: string;
+  name: string;
+  share_pct: number;
+  capital_balance_minor: number;
+  profit_share_minor: number;
+}
+
+export interface PartnerPLReportDTO {
+  period_start: string;
+  period_end: string;
+  net_profit_minor: number;
+  partners: PartnerProfitShareDTO[];
+}
+
+export interface DistributablePartnerShareDTO {
+  partner_id: string;
+  name: string;
+  share_pct: number;
+  capital_balance_minor: number;
+  lifetime_withdrawn_minor: number;
+  distributable_share_minor: number;
+}
+
+export interface DistributableProfitReportDTO {
+  as_of: string;
+  lifetime_net_profit_minor: number;
+  lifetime_withdrawn_minor: number;
+  reserve_months: number;
+  avg_monthly_cost_minor: number;
+  reserve_minor: number;
+  liquid_cash_minor: number;
+  profit_based_capacity_minor: number;
+  cash_based_capacity_minor: number;
+  safe_to_distribute_minor: number;
+  partners: DistributablePartnerShareDTO[];
+}
+
+export interface BusinessMetricsDTO {
+  period_start: string;
+  period_end: string;
+  aov_minor: number;
+  orders_count: number;
+  mrr_minor: number;
+  arr_minor: number;
+  active_members_count: number;
+  cac_minor: number | null;
+  new_customers_count: number;
+  marketing_spend_minor: number;
+  ltv_minor: number;
+  customers_count: number;
+  burn_rate_minor: number;
 }
 
 export const finance = {
@@ -416,12 +538,50 @@ export const finance = {
   updatePartner: (id: string, body: Partial<{ name: string; share_pct: number; notes: string }>) =>
     api.patch<PartnerDTO>(`/finance/partners/${id}`, body).then((r) => r.data),
 
-  listCapital: (partner_id: string) =>
-    api.get<CapitalEntryDTO[]>(`/finance/partners/${partner_id}/capital`).then((r) => r.data),
+  listCapital: (partner_id: string, include_voided = false) =>
+    api.get<CapitalEntryDTO[]>(`/finance/partners/${partner_id}/capital`, {
+      params: { include_voided },
+    }).then((r) => r.data),
   createCapitalEntry: (body: {
-    partner_id: string; type: 'invest' | 'withdraw' | 'profit_share';
-    amount_minor: number; effective_at: string; note?: string;
+    partner_id: string; type: 'invest' | 'withdraw';
+    amount_minor: number; effective_at: string;
+    settlement_account: 'cash' | 'bank' | 'upi';
+    source_ref: string; note?: string;
   }) => api.post<CapitalEntryDTO>('/finance/capital-entries', body).then((r) => r.data),
+  voidCapitalEntry: (id: string, reason: string) =>
+    api.post<CapitalEntryDTO>(`/finance/capital-entries/${id}/void`, { reason })
+      .then((r) => r.data),
+
+  partnerProfitSplit: (params?: { period_start?: string; period_end?: string }) =>
+    api.get<PartnerPLReportDTO>('/finance/pnl/partners', { params }).then((r) => r.data),
+
+  distributableProfit: () =>
+    api.get<DistributableProfitReportDTO>('/finance/distributable').then((r) => r.data),
+
+  businessMetrics: (params?: { period_start?: string; period_end?: string }) =>
+    api.get<BusinessMetricsDTO>('/finance/metrics', { params }).then((r) => r.data),
+
+  listManualCollections: (params?: {
+    from_date?: string;
+    to_date?: string;
+    branch_id?: string;
+    include_voided?: boolean;
+    limit?: number;
+  }) => api.get<ManualCollectionDTO[]>('/finance/manual-collections', { params }).then((r) => r.data),
+  createManualCollection: (body: {
+    branch_id: string;
+    business_date: string;
+    method: ManualCollectionMethod;
+    amount_minor: number;
+    source_ref: string;
+    note?: string;
+  }, idempotencyKey: string) =>
+    api.post<ManualCollectionDTO>('/finance/manual-collections', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  voidManualCollection: (id: string, reason: string) =>
+    api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/void`, { reason })
+      .then((r) => r.data),
 };
 
 // =============================================================================
@@ -615,6 +775,7 @@ export interface TopItemDTO {
 }
 export interface GrowthPeriodDTO {
   label: string; revenue_minor: number;
+  manual_collections_minor: number;
   orders_count: number; avg_ticket_minor: number;
 }
 export interface GrowthDTO {
@@ -662,6 +823,12 @@ export interface CustomerDTO {
   visit_count: number;
   total_spent_minor: number;
   loyalty_points: number;
+  lifetime_gaming_points_earned: number;
+  gaming_rank: string;
+  gaming_rank_floor: number;
+  next_gaming_rank: string | null;
+  next_gaming_rank_floor: number | null;
+  points_to_next_gaming_rank: number | null;
   last_visit_at: string | null;
   notes: string | null;
 }
@@ -747,6 +914,16 @@ export const kitchen = {
     api.patch<KitchenOrderDTO>(`/kitchen/orders/${order_id}/state`, { state }).then((r) => r.data),
 };
 
+export interface RewardDTO {
+  key: string;
+  name: string;
+  description: string;
+  points_cost: number;
+  value_minor: number;
+  min_rank: string;
+  affordable: boolean;
+}
+
 export const customers = {
   list: (q?: string) =>
     api.get<CustomerDTO[]>('/customers', { params: q ? { q } : {} }).then((r) => r.data),
@@ -757,6 +934,8 @@ export const customers = {
     api.post<CustomerDTO>('/customers', body).then((r) => r.data),
   update: (id: string, body: Partial<{ name: string; email: string; birthday: string; notes: string }>) =>
     api.patch<CustomerDTO>(`/customers/${id}`, body).then((r) => r.data),
+  rewardsByPhone: (phone: string) =>
+    api.get<RewardDTO[]>(`/customers/by-phone/${encodeURIComponent(phone)}/rewards`).then((r) => r.data),
 };
 
 // =============================================================================
@@ -823,6 +1002,8 @@ export interface ReportRevenueDTO {
   event_tickets_minor: number;
   delivery_aggregator_minor: number;
   other_minor: number;
+  manual_collections_minor: number;
+  discounts_and_points_redeemed_minor: number;
   total_minor: number;
 }
 export interface ReportTaxDTO {
@@ -836,6 +1017,7 @@ export interface ReportPaymentsDTO {
   cash_minor: number;
   upi_minor: number;
   card_minor: number;
+  bank_minor: number;
   qr_minor: number;
   wallet_minor: number;
   other_minor: number;
@@ -857,6 +1039,9 @@ export interface ReportDataDTO {
   revenue: ReportRevenueDTO;
   tax_collected: ReportTaxDTO;
   payments_received: ReportPaymentsDTO;
+  manual_collections_minor: number;
+  refunds_issued_minor: number;
+  net_payments_received_minor: number;
   expenses: ReportExpenseLineDTO[];
   expense_total_minor: number;
   cogs_minor: number;
@@ -929,6 +1114,7 @@ export interface ShiftDTO {
   expected_minor: number | null;
   counted_minor: number | null;
   variance_minor: number | null;
+  pos_sales_minor: number;
   opened_by: string;
   opened_by_name: string | null;
   opened_by_email: string | null;
@@ -1016,6 +1202,18 @@ export interface GameSessionDTO {
   amount_minor: number | null;
   order_id: string | null;
   cancel_reason: string | null;
+  package_id: string | null;
+  extra_controllers: number;
+}
+
+export interface GamingPackageDTO {
+  id: string;
+  station_type: string;
+  variant: string;
+  kind: 'base' | 'extension';
+  name: string;
+  duration_minutes: number;
+  price_minor: number;
 }
 
 export const gaming = {
@@ -1040,12 +1238,18 @@ export const gaming = {
       ...(options?.limit ? { limit: options.limit } : {}),
     },
   }).then((r) => r.data),
+  listPackages: (station_type?: string) =>
+    api.get<GamingPackageDTO[]>('/gaming/packages', {
+      params: station_type ? { station_type } : {},
+    }).then((r) => r.data),
   startSession: (body: {
     station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
-    timer_minutes?: number;
+    timer_minutes?: number; package_id?: string; extra_controllers?: number;
   }) => api.post<GameSessionDTO>('/gaming/sessions/start', body).then((r) => r.data),
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
+  extendSessionWithPackage: (id: string, package_id: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend`, { package_id }).then((r) => r.data),
   stopSession: (id: string) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`).then((r) => r.data),
   cancelSession: (id: string, reason: string) =>

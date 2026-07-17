@@ -80,6 +80,7 @@ STAFF_ACCESS = STANDARD_ACCESS - {
 
 ROLE_DESCRIPTIONS: dict[str, str] = {
     "owner": "Business owner title — all standard modules",
+    "co_owner": "Co-owner — full operational access, no audit log/Access Control",
     "partner": "Business partner title — all standard modules",
     "manager": "Operations manager title — all standard modules",
     "cashier": "Cashier title — all standard modules",
@@ -96,6 +97,7 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
 # these defaults rather than replacing them.
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "super_owner": set(PERMISSIONS),
+    "co_owner": set(STANDARD_ACCESS),
     "owner": set(STANDARD_ACCESS),
     "partner": set(STANDARD_ACCESS),
     "manager": set(STANDARD_ACCESS),
@@ -155,6 +157,13 @@ async def _module_override(
 
 
 async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
+    # admin.audit.read is deliberately excluded from the protected_access
+    # blanket bypass — co_owner gets protected_access=True (see roles.py's
+    # has_full_access) for operational RBAC, but must NOT thereby gain the
+    # audit log / Access Control panel. Only audit_access (super_owner only)
+    # grants this specific permission.
+    if perm == "admin.audit.read":
+        return tenant.audit_access
     if tenant.protected_access:
         return True
     module = _PERMISSION_TO_MODULE.get(perm)

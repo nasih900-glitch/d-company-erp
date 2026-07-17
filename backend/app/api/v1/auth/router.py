@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.db import SessionDep
 from app.core.errors import AuthError, BusinessRuleError, ConflictError, ServiceUnavailableError
 from app.core.permissions import SELF_SERVICE_SIGNUP_ROLE, accessible_modules
-from app.core.roles import has_protected_owner_access, public_roles
+from app.core.roles import has_full_access, has_protected_owner_access, public_roles
 from app.core.security import (
     decode_token,
     hash_password,
@@ -63,6 +63,7 @@ class MeResponse(BaseModel):
     name: str
     roles: list[str]
     protected_access: bool = False
+    audit_access: bool = False
     company_id: str
     branch_id: str | None
     accessible_modules: list[str] = []
@@ -528,14 +529,15 @@ async def login(payload: LoginRequest, request: Request, session: SessionDep) ->
         details={"name": user.name, "roles": public_roles(roles)},
     )
 
-    protected_access = has_protected_owner_access(roles)
+    protected_access = has_full_access(roles)
+    audit_access = has_protected_owner_access(roles)
     access = issue_access_token(
         user_id=user.id,
         company_id=user.company_id,
         roles=public_roles(roles),
         branch_id=branch_id,
         auth_version=user.auth_version,
-        extra={"protected_access": protected_access},
+        extra={"protected_access": protected_access, "audit_access": audit_access},
     )
     refresh = issue_refresh_token(
         user_id=user.id,
@@ -572,14 +574,15 @@ async def refresh(payload: RefreshRequest, session: SessionDep) -> TokenPair:
     if auth_version != user.auth_version:
         raise AuthError("session expired")
     roles, branch_id = await _roles_and_branch(session, user)
-    protected_access = has_protected_owner_access(roles)
+    protected_access = has_full_access(roles)
+    audit_access = has_protected_owner_access(roles)
     access = issue_access_token(
         user_id=user.id,
         company_id=user.company_id,
         roles=public_roles(roles),
         branch_id=branch_id,
         auth_version=user.auth_version,
-        extra={"protected_access": protected_access},
+        extra={"protected_access": protected_access, "audit_access": audit_access},
     )
     new_refresh = issue_refresh_token(
         user_id=user.id,
@@ -606,6 +609,7 @@ async def me(tenant: TenantDep, session: SessionDep) -> MeResponse:
         name=user.name,
         roles=list(tenant.roles),
         protected_access=tenant.protected_access,
+        audit_access=tenant.audit_access,
         company_id=str(tenant.company_id),
         branch_id=str(tenant.branch_id) if tenant.branch_id else None,
         accessible_modules=await accessible_modules(session, tenant),

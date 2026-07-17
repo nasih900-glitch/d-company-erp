@@ -10,12 +10,27 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   UserPlus, Edit2, Search, Loader2, AlertCircle, RefreshCw,
-  Phone, Award, ShoppingBag,
+  Phone, Award, ShoppingBag, Trophy,
 } from 'lucide-react';
 
 import { inr } from '@/lib/inr';
 import { customers, type CustomerDTO } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+
+const RANK_STYLES: Record<string, string> = {
+  Rookie: 'text-fg-muted border-bg-border',
+  Player: 'text-accent border-accent/40',
+  Pro: 'text-accent-purple border-accent-purple/40',
+  Legend: 'text-accent-gold border-accent-gold/50',
+};
+
+function RankBadge({ rank }: { rank: string }) {
+  return (
+    <span className={`chip text-[10px] font-semibold ${RANK_STYLES[rank] ?? 'text-fg-muted border-bg-border'}`}>
+      <Trophy size={10} className="inline mr-1"/>{rank}
+    </span>
+  );
+}
 
 export default function CustomersScreen() {
   const [rows, setRows] = useState<CustomerDTO[]>([]);
@@ -98,6 +113,7 @@ export default function CustomersScreen() {
                 <th className="text-right p-3">Visits</th>
                 <th className="text-right p-3">Total spent</th>
                 <th className="text-right p-3">Points</th>
+                <th className="text-left p-3">Rank</th>
                 <th className="text-left p-3">Last visit</th>
                 <th className="p-3"></th>
               </tr>
@@ -112,6 +128,7 @@ export default function CustomersScreen() {
                   <td className="p-3 text-right font-mono text-accent-gold">
                     <Award size={11} className="inline mr-1"/>{c.loyalty_points}
                   </td>
+                  <td className="p-3"><RankBadge rank={c.gaming_rank}/></td>
                   <td className="p-3 text-fg-muted text-xs">
                     {c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('en-IN') : '—'}
                   </td>
@@ -159,6 +176,9 @@ export default function CustomersScreen() {
                       <Award size={11} className="inline mr-1"/>{c.loyalty_points}
                     </div>
                   </div>
+                </div>
+                <div className="mt-2 flex justify-center">
+                  <RankBadge rank={c.gaming_rank}/>
                 </div>
                 <div className="mt-2 text-xs text-fg-muted">
                   Last visit: {c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('en-IN') : '—'}
@@ -235,10 +255,41 @@ function CustomerForm({
             onChange={(e) => setForm({ ...form, notes: e.target.value })}/>
         </Field>
         {isEdit && (
-          <div className="grid grid-cols-3 gap-3 pt-3 border-t border-bg-border text-xs">
-            <Mini icon={<ShoppingBag size={11}/>} label="Visits" value={customer!.visit_count.toString()}/>
-            <Mini icon={<Phone size={11}/>} label="Total spend" value={inr(customer!.total_spent_minor)}/>
-            <Mini icon={<Award size={11}/>} label="Points" value={customer!.loyalty_points.toString()}/>
+          <div className="pt-3 border-t border-bg-border text-xs space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <Mini icon={<ShoppingBag size={11}/>} label="Visits" value={customer!.visit_count.toString()}/>
+              <Mini icon={<Phone size={11}/>} label="Total spend" value={inr(customer!.total_spent_minor)}/>
+              <Mini icon={<Award size={11}/>} label="Points" value={customer!.loyalty_points.toString()}/>
+            </div>
+            <div className="rounded-lg border border-bg-border p-3">
+              <div className="flex items-center justify-between mb-2">
+                <RankBadge rank={customer!.gaming_rank}/>
+                <span className="text-fg-muted">
+                  {customer!.lifetime_gaming_points_earned} gaming pts earned lifetime
+                </span>
+              </div>
+              {customer!.next_gaming_rank && customer!.next_gaming_rank_floor != null ? (
+                <>
+                  <div className="h-1.5 rounded-full bg-bg-border overflow-hidden">
+                    <div
+                      className="h-full bg-accent-gold"
+                      style={{
+                        width: `${Math.min(100, Math.max(0, Math.round(
+                          ((customer!.lifetime_gaming_points_earned - customer!.gaming_rank_floor)
+                            / Math.max(1, customer!.next_gaming_rank_floor - customer!.gaming_rank_floor)
+                          ) * 100
+                        )))}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="mt-1.5 text-fg-muted">
+                    {customer!.points_to_next_gaming_rank} pts to {customer!.next_gaming_rank}
+                  </div>
+                </>
+              ) : (
+                <div className="text-accent-gold font-semibold">Top rank reached</div>
+              )}
+            </div>
           </div>
         )}
         {err && (

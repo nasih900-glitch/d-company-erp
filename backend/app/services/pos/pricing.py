@@ -245,6 +245,45 @@ def gaming_minutes_allowance_minor(
     return max(0, gross - min(gross, remaining_gross))
 
 
+def apply_manual_discount(
+    *, line_discount_total_minor: int, manual_discount_minor: int, rounded_total_minor: int
+) -> tuple[int, int, int]:
+    """Fold a cashier's custom discount into a line-based recompute.
+
+    Returns ``(clamped_manual_discount_minor, combined_discount_minor,
+    final_total_minor)``. The manual amount is clamped to the rounded total so
+    it can never take an order negative (e.g. a membership discount or a
+    removed line already ate most of the bill). Used identically whenever an
+    order's totals are rebuilt from its lines — order creation never calls
+    this since a manual discount is only ever applied to an existing order.
+    """
+    clamped = min(max(0, manual_discount_minor), max(0, rounded_total_minor))
+    return (
+        clamped,
+        line_discount_total_minor + clamped,
+        rounded_total_minor - clamped,
+    )
+
+
+def apply_points_redemption(
+    *, discount_so_far_minor: int, points_redeemed_minor: int, remaining_total_minor: int
+) -> tuple[int, int, int]:
+    """Fold a customer's loyalty-points redemption into an already-discounted total.
+
+    Returns ``(clamped_points_redeemed_minor, combined_discount_minor,
+    final_total_minor)``. Call this AFTER apply_manual_discount, passing its
+    combined_discount_minor and final_total_minor through — clamping against
+    what's left post-discount means points can never push the bill negative
+    on top of an existing discount.
+    """
+    clamped = min(max(0, points_redeemed_minor), max(0, remaining_total_minor))
+    return (
+        clamped,
+        discount_so_far_minor + clamped,
+        remaining_total_minor - clamped,
+    )
+
+
 def _unit_inclusive_minor(line_inclusive_minor: int, qty: int) -> int:
     if qty <= 0:
         return 0

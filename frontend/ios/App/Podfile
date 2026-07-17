@@ -1,4 +1,4 @@
-require_relative '../../node_modules/@capacitor/ios/scripts/pods_helpers'
+require_relative '../../node_modules/.pnpm/@capacitor+ios@8.4.1_@capacitor+core@8.4.1/node_modules/@capacitor/ios/scripts/pods_helpers'
 
 platform :ios, '15.0'
 use_frameworks!
@@ -9,10 +9,10 @@ use_frameworks!
 install! 'cocoapods', :disable_input_output_paths => true
 
 def capacitor_pods
-  pod 'Capacitor', :path => '../../node_modules/@capacitor/ios'
-  pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/ios'
-  pod 'CapacitorSplashScreen', :path => '../../node_modules/@capacitor/splash-screen'
-  pod 'CapacitorStatusBar', :path => '../../node_modules/@capacitor/status-bar'
+  pod 'Capacitor', :path => '../../node_modules/.pnpm/@capacitor+ios@8.4.1_@capacitor+core@8.4.1/node_modules/@capacitor/ios'
+  pod 'CapacitorCordova', :path => '../../node_modules/.pnpm/@capacitor+ios@8.4.1_@capacitor+core@8.4.1/node_modules/@capacitor/ios'
+  pod 'CapacitorSplashScreen', :path => '../../node_modules/.pnpm/@capacitor+splash-screen@8.0.1_@capacitor+core@8.4.1/node_modules/@capacitor/splash-screen'
+  pod 'CapacitorStatusBar', :path => '../../node_modules/.pnpm/@capacitor+status-bar@8.0.2_@capacitor+core@8.4.1/node_modules/@capacitor/status-bar'
 end
 
 target 'App' do
@@ -21,4 +21,30 @@ end
 
 post_install do |installer|
   assertDeploymentTarget(installer)
+
+  # Silences "[CP] Embed Pods Frameworks will be run during every build
+  # because it does not specify any outputs" — CocoaPods' generated script
+  # phase genuinely has no cacheable outputs (it embeds whatever changed), so
+  # the fix is to tell Xcode that's deliberate, not to add fake outputs. This
+  # phase lives in the CONSUMING app's own project (App.xcodeproj via
+  # aggregate_target.user_project), not in Pods.xcodeproj — CocoaPods injects
+  # it there, so that's where it has to be patched, every install.
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_project.native_targets.each do |native_target|
+      native_target.build_phases.each do |phase|
+        if phase.respond_to?(:name) && phase.name&.include?('Embed Pods Frameworks')
+          phase.always_out_of_date = '1'
+        end
+      end
+    end
+    aggregate_target.user_project.save
+  end
+
+  # Silences Xcode's "Update to recommended settings" nag on the Pods
+  # project: CocoaPods stamps every regenerated Pods.xcodeproj with an old
+  # LastUpgradeCheck (1600), which never matches the App project's real Xcode
+  # version, so Xcode always sees it as "needs upgrading" — even right after
+  # you click "Perform Changes", because the next `pod install` overwrites it
+  # right back to 1600. Match the App project's own value instead, every install.
+  installer.pods_project.root_object.attributes['LastUpgradeCheck'] = '2660'
 end

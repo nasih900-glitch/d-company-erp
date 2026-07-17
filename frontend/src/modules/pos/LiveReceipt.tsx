@@ -94,17 +94,29 @@ export default function LiveReceipt({
       <Dashed/>
 
       <div className="space-y-0.5">
-        {order.discount_minor > 0 && (
-          <div className="mb-1 text-[10px] text-fg-muted print:text-black/70">
-            Membership savings already included in item prices: {inr(order.discount_minor)}
-          </div>
-        )}
+        {(() => {
+          const membershipSavings = Math.max(
+            0,
+            order.discount_minor - order.manual_discount_minor - order.points_redeemed_minor
+          );
+          return membershipSavings > 0 && (
+            <div className="mb-1 text-[10px] text-fg-muted print:text-black/70">
+              Membership savings already included in item prices: {inr(membershipSavings)}
+            </div>
+          );
+        })()}
         <Row
           label={isGstDocument
             ? order.discount_minor > 0 ? 'Taxable after savings' : 'Subtotal (taxable)'
             : order.discount_minor > 0 ? 'Subtotal after savings' : 'Subtotal'}
           v={order.subtotal_minor}
         />
+        {order.manual_discount_minor > 0 && (
+          <Row label="Custom discount" v={-order.manual_discount_minor} />
+        )}
+        {order.points_redeemed_minor > 0 && (
+          <Row label="Points redeemed" v={-order.points_redeemed_minor} />
+        )}
         {order.free_gaming_minutes_applied > 0 && (
           <TextRow label="Member benefit" value={`${order.free_gaming_minutes_applied} free PS5 min`} />
         )}

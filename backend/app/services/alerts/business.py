@@ -37,7 +37,11 @@ def _rs(minor: int) -> str:
 def build_pnl_alerts(report: PnLReport, previous: PnLReport | None = None) -> list[BusinessAlert]:
     alerts: list[BusinessAlert] = []
 
-    if report.orders_count == 0 and report.tickets_count == 0:
+    if (
+        report.orders_count == 0
+        and report.tickets_count == 0
+        and report.manual_collections_minor == 0
+    ):
         alerts.append(
             BusinessAlert(
                 severity="warning",
@@ -45,6 +49,22 @@ def build_pnl_alerts(report: PnLReport, previous: PnLReport | None = None) -> li
                 detail=(
                     f"No POS orders or event tickets were recorded for {report.label}. "
                     "Check whether the shop was closed or sales were entered outside ERP."
+                ),
+            )
+        )
+    elif (
+        report.orders_count == 0
+        and report.tickets_count == 0
+        and report.manual_collections_minor > 0
+    ):
+        alerts.append(
+            BusinessAlert(
+                severity="info",
+                title="Only manual collections recorded",
+                detail=(
+                    f"{_rs(report.manual_collections_minor)} was recorded for "
+                    f"{report.label}, but there are no itemized POS orders or "
+                    "event tickets for product, customer, or average-order analysis."
                 ),
             )
         )

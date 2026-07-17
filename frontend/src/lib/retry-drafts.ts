@@ -44,7 +44,14 @@ export interface PosCheckoutRetry {
   pendingOrderId?: string;
   orderTotalMinor?: number;
   paymentAmountMinor?: number;
+  // Combined membership + custom-discount + points figure — kept for the
+  // final receipt/reconciliation math. For the cashier-facing "applied so
+  // far" confirmation, use orderManualDiscountMinor/orderPointsRedeemedMinor
+  // below instead: this one silently includes automatic membership savings
+  // that the cashier never took an action for.
   orderDiscountMinor?: number;
+  orderManualDiscountMinor?: number;
+  orderPointsRedeemedMinor?: number;
   freeGamingMinutesApplied?: number;
   freeHookahCountApplied?: number;
   snapshot: PosCheckoutSnapshot;
@@ -248,6 +255,8 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
   const amount = value.paymentAmountMinor;
   const orderTotal = value.orderTotalMinor;
   const orderDiscount = value.orderDiscountMinor;
+  const orderManualDiscount = value.orderManualDiscountMinor;
+  const orderPointsRedeemed = value.orderPointsRedeemedMinor;
   const freeGamingMinutes = value.freeGamingMinutesApplied;
   const freeHookahCount = value.freeHookahCountApplied;
   const pendingOrderId = nonEmptyString(value.pendingOrderId);
@@ -274,6 +283,16 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
       && Number.isInteger(orderDiscount)
       && orderDiscount >= 0
       ? { orderDiscountMinor: orderDiscount }
+      : {}),
+    ...(typeof orderManualDiscount === 'number'
+      && Number.isInteger(orderManualDiscount)
+      && orderManualDiscount >= 0
+      ? { orderManualDiscountMinor: orderManualDiscount }
+      : {}),
+    ...(typeof orderPointsRedeemed === 'number'
+      && Number.isInteger(orderPointsRedeemed)
+      && orderPointsRedeemed >= 0
+      ? { orderPointsRedeemedMinor: orderPointsRedeemed }
       : {}),
     ...(typeof freeGamingMinutes === 'number'
       && Number.isInteger(freeGamingMinutes)
@@ -314,6 +333,8 @@ export function applyCanonicalCheckoutBalance(
     total_minor: number;
     due_minor: number;
     discount_minor?: number;
+    manual_discount_minor?: number;
+    points_redeemed_minor?: number;
     free_gaming_minutes_applied?: number;
     free_hookah_count_applied?: number;
   },
@@ -329,6 +350,8 @@ export function applyCanonicalCheckoutBalance(
     orderTotalMinor: order.total_minor,
     paymentAmountMinor: order.due_minor,
     orderDiscountMinor: order.discount_minor ?? 0,
+    orderManualDiscountMinor: order.manual_discount_minor ?? 0,
+    orderPointsRedeemedMinor: order.points_redeemed_minor ?? 0,
     freeGamingMinutesApplied: order.free_gaming_minutes_applied ?? 0,
     freeHookahCountApplied: order.free_hookah_count_applied ?? 0,
   };

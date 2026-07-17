@@ -20,6 +20,7 @@ from app.models import (
     Branch,
     Company,
     GamingBooking,
+    GamingPackage,
     GamingSession,
     MenuCategory,
     MenuItem,
@@ -80,8 +81,17 @@ class SessionStart(BaseModel):
     shift_id: UUID
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
-    # Planned duration in minutes (e.g. a 60-minute PS5 slot). Omit for open-ended.
+    # A fixed-price base package (see GET /gaming/packages) — locks in the
+    # price immediately and sets timer_minutes from the package's duration.
+    # Omit for the legacy open-ended flow (billed by elapsed time at the
+    # station's plain hourly rate).
+    package_id: UUID | None = None
+    # Planned duration in minutes (e.g. a 60-minute PS5 slot). Ignored if
+    # package_id is set (the package's own duration wins). Omit for open-ended.
     timer_minutes: int | None = Field(default=None, ge=1, le=1440)
+    # Extra controllers/players beyond the package's base mode — only
+    # meaningful together with package_id.
+    extra_controllers: int = Field(default=0, ge=0, le=8)
 
     @field_validator("customer_name", "customer_phone")
     @classmethod
@@ -110,6 +120,22 @@ class SessionRead(BaseModel):
     rate_per_hour_minor: int | None = None
     order_id: UUID | None = None
     cancel_reason: str | None = None
+    package_id: UUID | None = None
+    extra_controllers: int = 0
+
+
+class GamingPackageRead(BaseModel):
+    id: UUID
+    station_type: str
+    variant: str
+    kind: str
+    name: str
+    duration_minutes: int
+    price_minor: int
+
+
+class SessionExtend(BaseModel):
+    package_id: UUID
 
 
 class SessionCancel(BaseModel):
@@ -153,6 +179,8 @@ def session_read(gs: GamingSession) -> SessionRead:
         rate_per_hour_minor=gs.rate_per_hour_minor,
         order_id=gs.order_id,
         cancel_reason=gs.cancel_reason,
+        package_id=gs.package_id,
+        extra_controllers=int(gs.extra_controllers or 0),
     )
 
 
@@ -161,6 +189,29 @@ def session_amount_minor(billable_minutes: int, rate_per_hour_minor: int) -> int
     if billable_minutes <= 0 or rate_per_hour_minor <= 0:
         return 0
     return (billable_minutes * rate_per_hour_minor + 59) // 60
+
+
+# ₹30 per extra controller per hour, ₹30 minimum per controller — printed
+# pricing card, "applicable for more than 2 players".
+EXTRA_CONTROLLER_PRICE_PER_HOUR_MINOR = 3000
+EXTRA_CONTROLLER_MIN_CHARGE_MINOR = 3000
+
+
+def extra_controller_surcharge_minor(*, extra_controllers: int, duration_minutes: int) -> int:
+    """One extra-controller charge per player beyond the base package mode.
+
+    Priced per hour of the package's own duration (not actual elapsed play
+    time — package sessions are prepaid, fixed-price slots), with a ₹30
+    floor per controller so even a 15-minute slot costs a full ₹30 to add
+    a controller to.
+    """
+    if extra_controllers <= 0 or duration_minutes <= 0:
+        return 0
+    hours = ceil(duration_minutes / 60)
+    per_controller = max(
+        EXTRA_CONTROLLER_MIN_CHARGE_MINOR, hours * EXTRA_CONTROLLER_PRICE_PER_HOUR_MINOR
+    )
+    return extra_controllers * per_controller
 
 
 def _current_gaming_branch_id(tenant: TenantContext) -> UUID:
@@ -334,6 +385,39 @@ async def delete_station(
     await session.flush()
 
 
+@router.get("/packages", response_model=list[GamingPackageRead])
+async def list_packages(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.read")),
+    station_type: str | None = None,
+) -> list[GamingPackageRead]:
+    branch_id = _current_gaming_branch_id(tenant)
+    stmt = select(GamingPackage).where(
+        GamingPackage.company_id == tenant.company_id,
+        GamingPackage.branch_id == branch_id,
+        GamingPackage.deleted_at.is_(None),
+        GamingPackage.is_active.is_(True),
+    )
+    if station_type:
+        stmt = stmt.where(GamingPackage.station_type == station_type)
+    stmt = stmt.order_by(
+        GamingPackage.station_type, GamingPackage.variant, GamingPackage.sort_order
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        GamingPackageRead(
+            id=p.id,
+            station_type=p.station_type,
+            variant=p.variant,
+            kind=p.kind,
+            name=p.name,
+            duration_minutes=p.duration_minutes,
+            price_minor=p.price_minor,
+        )
+        for p in rows
+    ]
+
+
 @router.get("/sessions", response_model=list[SessionRead])
 async def list_sessions(
     session: SessionDep,
@@ -408,6 +492,32 @@ async def start_session(
         )
     if blocking:
         raise ConflictError("station already has an active session")
+
+    package: GamingPackage | None = None
+    timer_minutes = payload.timer_minutes
+    locked_in_amount_minor: int | None = None
+    if payload.package_id is not None:
+        package = await session.get(GamingPackage, payload.package_id)
+        if (
+            not package
+            or package.company_id != tenant.company_id
+            or package.branch_id != station.branch_id
+            or package.deleted_at is not None
+            or not package.is_active
+        ):
+            raise NotFoundError("package not found")
+        if package.kind != "base":
+            raise BusinessRuleError("only a base package can start a session")
+        if package.station_type != station.type:
+            raise BusinessRuleError("this package is not offered for this station type")
+        timer_minutes = package.duration_minutes
+        locked_in_amount_minor = package.price_minor + extra_controller_surcharge_minor(
+            extra_controllers=payload.extra_controllers,
+            duration_minutes=package.duration_minutes,
+        )
+    elif payload.extra_controllers:
+        raise BusinessRuleError("extra_controllers requires a package_id")
+
     gs = GamingSession(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -416,10 +526,13 @@ async def start_session(
         shift_id=payload.shift_id,
         start_at=datetime.now(timezone.utc),
         rate_per_hour_minor=station.rate_per_hour_minor,
+        package_id=package.id if package else None,
+        extra_controllers=payload.extra_controllers,
+        amount_minor=locked_in_amount_minor,
         status="active",
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
-        timer_minutes=payload.timer_minutes,
+        timer_minutes=timer_minutes,
         tax_rate=station.tax_rate,
         sac_code=station.sac_code,
         rate_includes_tax=station.rate_includes_tax,
@@ -455,6 +568,69 @@ async def set_session_timer(
         resource_name="gaming station",
     )
     gs.timer_minutes = payload.timer_minutes
+    await session.flush()
+    return session_read(gs)
+
+
+@router.post("/sessions/{session_id}/extend", response_model=SessionRead)
+async def extend_session_with_package(
+    session_id: UUID,
+    payload: SessionExtend,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionRead:
+    """Add a paid extension package on top of a running package session.
+
+    Only for sessions that started with a base package — open-ended sessions
+    have no fixed price to extend and just keep running (use the plain timer
+    endpoint above to move their reminder alarm instead).
+    """
+    gs = (
+        await session.execute(
+            select(GamingSession).where(GamingSession.id == session_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not gs or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    if gs.status not in ("active", "paused"):
+        raise BusinessRuleError("session is not running")
+    if gs.package_id is None:
+        raise BusinessRuleError(
+            "this session has no base package to extend — it bills by elapsed time instead"
+        )
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    shift = await session.get(Shift, gs.shift_id)
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="extending a gaming session",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+    extension = await session.get(GamingPackage, payload.package_id)
+    if (
+        not extension
+        or extension.company_id != tenant.company_id
+        or extension.branch_id != station.branch_id
+        or extension.deleted_at is not None
+        or not extension.is_active
+    ):
+        raise NotFoundError("package not found")
+    if extension.kind != "extension":
+        raise BusinessRuleError("only an extension package can extend a running session")
+    if extension.station_type != station.type:
+        raise BusinessRuleError("this extension is not offered for this station type")
+
+    extra_surcharge = extra_controller_surcharge_minor(
+        extra_controllers=gs.extra_controllers,
+        duration_minutes=extension.duration_minutes,
+    )
+    gs.amount_minor = int(gs.amount_minor or 0) + extension.price_minor + extra_surcharge
+    gs.timer_minutes = int(gs.timer_minutes or 0) + extension.duration_minutes
     await session.flush()
     return session_read(gs)
 
@@ -507,7 +683,12 @@ async def stop_session(
     elapsed_seconds = max(0.0, (gs.end_at - gs.start_at).total_seconds())
     elapsed_minutes = ceil(elapsed_seconds / 60) if elapsed_seconds > 0 else 0
     gs.billable_minutes = max(0, elapsed_minutes - gs.paused_minutes)
-    gs.amount_minor = session_amount_minor(gs.billable_minutes, gs.rate_per_hour_minor)
+    if gs.package_id is None:
+        # Open-ended session — bill by actual elapsed time, as before.
+        gs.amount_minor = session_amount_minor(gs.billable_minutes, gs.rate_per_hour_minor)
+    # else: a package session's amount_minor was locked in at start (plus any
+    # paid extensions) and never changes based on how long they actually
+    # played — billable_minutes above is still recorded for the audit trail.
     gs.status = "ended"
     return session_read(gs)
 

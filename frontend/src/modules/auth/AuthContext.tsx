@@ -16,6 +16,7 @@ interface Me {
   name: string;
   roles: string[];
   protected_access: boolean;
+  audit_access: boolean;
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];

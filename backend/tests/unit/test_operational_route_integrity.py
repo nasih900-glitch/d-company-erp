@@ -127,6 +127,8 @@ def _gaming_session(tenant: TenantContext, station_id: UUID, shift_id: UUID, **o
         "tax_rate": 0.18,
         "sac_code": "999692",
         "rate_includes_tax": True,
+        "package_id": None,
+        "extra_controllers": 0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -230,6 +232,8 @@ async def test_customer_repricing_updates_existing_lines_and_canonical_order_tot
         delivery_via=None,
         subtotal_minor=0,
         discount_minor=0,
+        manual_discount_minor=0,
+        points_redeemed_minor=0,
         cgst_minor=0,
         sgst_minor=0,
         igst_minor=0,
@@ -285,6 +289,8 @@ async def test_customer_repricing_updates_existing_lines_and_canonical_order_tot
         _Result(rows=[line]),
         _Result(rows=[item]),
         _Result(rows=[]),
+        _Result(),  # points redemption: existing reservation lookup (none)
+        _Result(),  # points redemption: reserve_points_redemption's own lookup (none)
     )
 
     await pos_router._reprice_unpaid_order_for_customer(
@@ -762,6 +768,8 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
         table_id=table_id,
         subtotal_minor=1_000,
         discount_minor=0,
+        manual_discount_minor=0,
+        points_redeemed_minor=0,
         cgst_minor=25,
         sgst_minor=25,
         igst_minor=0,
@@ -800,6 +808,7 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
         _Result(rows=[(line, item)]),
         _Result(scalar=0),
         _Result(rows=[]),
+        _Result(),  # points redemption lookup (none)
         entities={(Table, table_id): SimpleNamespace(code="T1")},
     )
 

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-import re
 from typing import Literal
 from uuid import UUID
 
@@ -59,6 +59,8 @@ class RevenueDTO(BaseModel):
     event_tickets_minor: int
     delivery_aggregator_minor: int
     other_minor: int
+    manual_collections_minor: int
+    discounts_and_points_redeemed_minor: int
     total_minor: int
 
 
@@ -74,6 +76,7 @@ class PaymentsDTO(BaseModel):
     cash_minor: int
     upi_minor: int
     card_minor: int
+    bank_minor: int
     qr_minor: int
     wallet_minor: int
     other_minor: int
@@ -99,6 +102,9 @@ class ReportDTO(BaseModel):
     revenue: RevenueDTO
     tax_collected: TaxDTO
     payments_received: PaymentsDTO
+    # Same value as revenue.manual_collections_minor, repeated at the report
+    # level so exports and accounting clients cannot mistake it for an order.
+    manual_collections_minor: int
     refunds_issued_minor: int
     net_payments_received_minor: int
     expenses: list[ExpenseLineDTO] = Field(default_factory=list)
@@ -154,6 +160,8 @@ def _to_dto(r: PnLReport) -> ReportDTO:
             event_tickets_minor=r.revenue.event_tickets_minor,
             delivery_aggregator_minor=r.revenue.delivery_aggregator_minor,
             other_minor=r.revenue.other_minor,
+            manual_collections_minor=r.revenue.manual_collections_minor,
+            discounts_and_points_redeemed_minor=r.revenue.discounts_and_points_redeemed_minor,
             total_minor=r.revenue.total_minor,
         ),
         tax_collected=TaxDTO(
@@ -167,11 +175,13 @@ def _to_dto(r: PnLReport) -> ReportDTO:
             cash_minor=r.payments_received.cash_minor,
             upi_minor=r.payments_received.upi_minor,
             card_minor=r.payments_received.card_minor,
+            bank_minor=r.payments_received.bank_minor,
             qr_minor=r.payments_received.qr_minor,
             wallet_minor=r.payments_received.wallet_minor,
             other_minor=r.payments_received.other_minor,
             total_minor=r.payments_received.total_minor,
         ),
+        manual_collections_minor=r.manual_collections_minor,
         refunds_issued_minor=r.refunds_issued_minor,
         net_payments_received_minor=r.net_payments_received_minor,
         expenses=[
@@ -557,7 +567,13 @@ async def tax_compliance(
         if int(order.tax_minor or 0) != components:
             component_mismatch += 1
         line_sum = line_sum_by_order.get(order.id, 0)
-        expected_total = line_sum + int(order.round_off_minor or 0) + int(order.tip_minor or 0)
+        expected_total = (
+            line_sum
+            + int(order.round_off_minor or 0)
+            + int(order.tip_minor or 0)
+            - int(order.manual_discount_minor or 0)
+            - int(order.points_redeemed_minor or 0)
+        )
         if expected_total != int(order.total_minor or 0):
             balance_mismatch += 1
         if _is_aggregator(order.delivery_via) and int(order.tax_minor or 0) != 0:

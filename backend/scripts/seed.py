@@ -35,36 +35,18 @@ from app.models import (
     User,
     UserRole,
 )
+from app.services.accounting.accounts import (
+    DEFAULT_CHART_OF_ACCOUNTS,
+    DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
+)
 
-DEFAULT_ACCOUNTS: list[dict] = [
-    # (code, name, type, normal_side)
-    {"code": "1000", "name": "Cash", "type": "asset", "normal_side": "dr"},
-    {"code": "1010", "name": "Bank", "type": "asset", "normal_side": "dr"},
-    {"code": "1100", "name": "Card Clearing", "type": "asset", "normal_side": "dr"},
-    {"code": "1110", "name": "UPI Clearing", "type": "asset", "normal_side": "dr"},
-    {"code": "1200", "name": "Inventory", "type": "asset", "normal_side": "dr"},
-    {"code": "1500", "name": "Fixed Assets", "type": "asset", "normal_side": "dr"},
-    {"code": "2000", "name": "Accounts Payable", "type": "liability", "normal_side": "cr"},
-    {"code": "2100", "name": "Tax Payable", "type": "liability", "normal_side": "cr"},
-    {"code": "3000", "name": "Partner Capital", "type": "equity", "normal_side": "cr"},
-    {"code": "4000", "name": "Revenue — Food", "type": "revenue", "normal_side": "cr"},
-    {"code": "4010", "name": "Revenue — Coffee", "type": "revenue", "normal_side": "cr"},
-    {"code": "4020", "name": "Revenue — Desserts", "type": "revenue", "normal_side": "cr"},
-    {"code": "4100", "name": "Revenue — Gaming", "type": "revenue", "normal_side": "cr"},
-    {"code": "4150", "name": "Revenue — Hookah", "type": "revenue", "normal_side": "cr"},
-    {"code": "4160", "name": "Revenue — Streaming", "type": "revenue", "normal_side": "cr"},
-    {"code": "4200", "name": "Revenue — Events", "type": "revenue", "normal_side": "cr"},
-    {"code": "5000", "name": "COGS", "type": "expense", "normal_side": "dr"},
-    {"code": "5100", "name": "Wages", "type": "expense", "normal_side": "dr"},
-    {"code": "5200", "name": "Rent", "type": "expense", "normal_side": "dr"},
-    {"code": "5300", "name": "Utilities", "type": "expense", "normal_side": "dr"},
-    {"code": "5400", "name": "Marketing", "type": "expense", "normal_side": "dr"},
-    {"code": "5500", "name": "Repairs & Maintenance", "type": "expense", "normal_side": "dr"},
-    {"code": "5900", "name": "Other Expenses", "type": "expense", "normal_side": "dr"},
+DEFAULT_ACCOUNTS: list[dict[str, str]] = [
+    account.seed_dict() for account in DEFAULT_CHART_OF_ACCOUNTS
 ]
 
 DEFAULT_ROLES: list[tuple[str, str]] = [
     ("super_owner", "Super owner — protected full access"),
+    ("co_owner", "Co-owner — full operational access, no audit log/Access Control"),
     ("owner", "Business owner title — all standard modules"),
     ("partner", "Business partner title — all standard modules"),
     ("manager", "Operations manager title — all standard modules"),
@@ -345,6 +327,11 @@ async def seed() -> None:
                     amount_minor=capital,
                     effective_at=joined,
                     note=f"Opening balance ({name})",
+                    settlement_account="historical_funds",
+                    source_ref=(
+                        f"seed:partner-opening:{company.id}:{name.casefold()}"
+                    ),
+                    created_by=owner.id,
                 ))
 
         # Their real expense categories (from Lists tab — spelling preserved)
@@ -354,28 +341,12 @@ async def seed() -> None:
             )
         ).scalars().all()
         if not existing_cats:
-            real_categories = [
-                "Furnitures",            # sic — matches the user's spelling
-                "Design & Architecture",
-                "Utilities",
-                "Labour Charges",
-                "Building Materials",
-                "Rent",
-                "PaperWork Charges",
-                "Food & Water",
-                "Gaming Equipments",
-                "Kitchen Equipments",
-                "Marketing",
-                "Transportation Cost",
-                "Wages",
-                "Cafe Equipments",
-                "Others",
-            ]
-            for name in real_categories:
+            for name, account in DEFAULT_EXPENSE_CATEGORY_ACCOUNTS.items():
                 s.add(ExpenseCategory(
                     id=uuid4(),
                     company_id=company.id,
                     name=name,
+                    code=account.code,
                 ))
 
         # ============================================================

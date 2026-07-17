@@ -31,6 +31,7 @@ class DashboardKPIs(BaseModel):
     revenue_gaming_minor: int
     revenue_hookah_minor: int
     revenue_events_minor: int
+    revenue_manual_collections_minor: int
     revenue_total_minor: int
     orders_count: int
     tickets_count: int
@@ -100,6 +101,7 @@ async def dashboard(
         revenue_gaming_minor=report.revenue.gaming_minor,
         revenue_hookah_minor=report.revenue.hookah_minor,
         revenue_events_minor=report.revenue.event_tickets_minor,
+        revenue_manual_collections_minor=report.manual_collections_minor,
         revenue_total_minor=report.gross_revenue_minor,
         orders_count=report.orders_count,
         tickets_count=report.tickets_count,
@@ -149,6 +151,16 @@ async def export_csv(
     writer.writerow(["Events", report.revenue.event_tickets_minor, f"{report.revenue.event_tickets_minor / 100:.2f}"])
     writer.writerow(["Delivery aggregators", report.revenue.delivery_aggregator_minor, f"{report.revenue.delivery_aggregator_minor / 100:.2f}"])
     writer.writerow(["Other", report.revenue.other_minor, f"{report.revenue.other_minor / 100:.2f}"])
+    writer.writerow([
+        "Manual collections (not itemized orders)",
+        report.manual_collections_minor,
+        f"{report.manual_collections_minor / 100:.2f}",
+    ])
+    writer.writerow([
+        "Less: discounts & points redeemed",
+        -report.revenue.discounts_and_points_redeemed_minor,
+        f"{-report.revenue.discounts_and_points_redeemed_minor / 100:.2f}",
+    ])
     writer.writerow([])
     writer.writerow(["Tax", "Amount minor", "Amount INR"])
     writer.writerow(["CGST", report.tax_collected.cgst_minor, f"{report.tax_collected.cgst_minor / 100:.2f}"])
@@ -161,6 +173,7 @@ async def export_csv(
     writer.writerow(["Cash", report.payments_received.cash_minor, f"{report.payments_received.cash_minor / 100:.2f}"])
     writer.writerow(["UPI", report.payments_received.upi_minor, f"{report.payments_received.upi_minor / 100:.2f}"])
     writer.writerow(["Card", report.payments_received.card_minor, f"{report.payments_received.card_minor / 100:.2f}"])
+    writer.writerow(["Bank", report.payments_received.bank_minor, f"{report.payments_received.bank_minor / 100:.2f}"])
     writer.writerow(["QR", report.payments_received.qr_minor, f"{report.payments_received.qr_minor / 100:.2f}"])
     writer.writerow(["Wallet", report.payments_received.wallet_minor, f"{report.payments_received.wallet_minor / 100:.2f}"])
     writer.writerow(["Other", report.payments_received.other_minor, f"{report.payments_received.other_minor / 100:.2f}"])

@@ -33,6 +33,7 @@ from app.models import (
     Order,
     OrderLine,
     Payment,
+    PointsRedemption,
     Refund,
     Shift,
     Station,
@@ -47,11 +48,23 @@ from app.services.pos.membership_benefits import (
     reserve_membership_benefits,
 )
 from app.services.pos.order_validation import require_operational_order
+from app.services.pos.points import (
+    consume_points_redemption,
+    minor_to_points,
+    points_redeemed_for_order,
+    rank_up_bonus_points,
+    reserve_catalog_reward_redemption,
+    reserve_points_redemption,
+    reward_by_key,
+    rewards_available_to,
+)
 from app.services.pos.pricing import (
     InvoiceNumberService,
     LineRequest,
     OrderPricingService,
     _round_to_rupee,
+    apply_manual_discount,
+    apply_points_redemption,
     gaming_minutes_allowance_minor,
 )
 from app.services.pos.shift_validation import (
@@ -128,6 +141,9 @@ class OrderRead(BaseModel):
     source_label: str | None = None
     subtotal_minor: int
     discount_minor: int
+    manual_discount_minor: int = 0
+    points_redeemed_minor: int = 0
+    points_redeemed: int = 0
     cgst_minor: int = 0
     sgst_minor: int = 0
     igst_minor: int = 0
@@ -172,6 +188,19 @@ class OrderCustomerUpdate(BaseModel):
         return normalized or None
 
 
+class OrderDiscountUpdate(BaseModel):
+    # Absolute set, not an increment — re-sending the same value is a no-op,
+    # and a cashier who changes their mind sends the new total, not a delta.
+    manual_discount_minor: int = Field(ge=0)
+
+
+class OrderPointsRedemptionUpdate(BaseModel):
+    # Absolute set of how many points the customer wants to spend on this
+    # bill, not an increment. Requires a customer already attached to the
+    # order (points belong to a specific phone number's balance).
+    points: int = Field(ge=0)
+
+
 class RefundCreate(BaseModel):
     reason_code: str = Field(min_length=1, max_length=50)
     amount_minor: int = Field(gt=0)
@@ -199,15 +228,22 @@ async def _compute_points_with_multiplier(
     order_lines: list[OrderLine],
     membership_multiplier: float = 1.0,
 ) -> int:
-    """Loyalty point allocation with category multipliers.
+    """Loyalty point allocation — gaming only.
 
     Rules:
-      - Food/drink/dessert: 1 point per ₹10
-      - Gaming / hookah / streaming / event tickets: 2 points per ₹10  (high-margin, encourages repeat visits)
+      - Gaming (PS5 / VR / simulator sessions): 2 points per ₹10 spent.
+      - Food, drinks, hookah, streaming, event tickets: earn nothing. The
+        points program is a gaming rewards ladder, not a general discount.
       - Multiplied by the customer's membership multiplier (e.g. 1.5× for Gold tier).
+
+    Earned on what was actually collected: line_total_minor reflects
+    line/membership discounts, but not order.manual_discount_minor or
+    order.points_redeemed_minor (both order-level, layered on after line
+    pricing). Scaling by the paid ratio stops a customer from re-earning
+    points on money a discount or a points redemption already covered.
     """
     if not order_lines:
-        return order.total_minor // 1000  # safe fallback
+        return 0  # no lines to attribute to gaming — nothing earned
 
     # Pull each line's menu item type in one query
     item_ids = [ol.menu_item_id for ol in order_lines]
@@ -216,14 +252,23 @@ async def _compute_points_with_multiplier(
     ).scalars().all()
     type_by_id = {i.id: i.type for i in items}
 
-    high_margin = {"gaming", "hookah", "streaming", "event"}
-    points = 0.0
+    GAMING_POINTS_PER_10_RUPEES = 2.0
+    raw_points = 0.0
     for ol in order_lines:
+        if type_by_id.get(ol.menu_item_id) != "gaming":
+            continue
         line_total = int(ol.line_total_minor or 0)
-        item_type = type_by_id.get(ol.menu_item_id, "food")
-        multiplier = 2.0 if item_type in high_margin else 1.0
-        points += (line_total / 1000) * multiplier
-    return int(points * membership_multiplier)
+        raw_points += (line_total / 1000) * GAMING_POINTS_PER_10_RUPEES
+
+    pre_discount_total = (
+        int(order.total_minor or 0)
+        + int(order.manual_discount_minor or 0)
+        + int(order.points_redeemed_minor or 0)
+    )
+    paid_ratio = (
+        min(1.0, order.total_minor / pre_discount_total) if pre_discount_total > 0 else 0.0
+    )
+    return int(raw_points * paid_ratio * membership_multiplier)
 
 
 async def _upsert_and_attach_customer(
@@ -273,13 +318,24 @@ async def _upsert_and_attach_customer(
     )
 
     if existing:
+        old_lifetime = int(existing.lifetime_gaming_points_earned or 0)
+        new_lifetime = old_lifetime + int(points_earned)
+        bonus = rank_up_bonus_points(old_lifetime=old_lifetime, new_lifetime=new_lifetime)
         existing.visit_count += 1
         existing.total_spent_minor += order.total_minor
         existing.last_visit_at = now
-        existing.loyalty_points += int(points_earned)
+        existing.loyalty_points += int(points_earned) + bonus
+        # Points are gaming-only now (see _compute_points_with_multiplier),
+        # so every point earned is a gaming point — this counter just never
+        # goes back down when loyalty_points is spent (see points.py rank_progress).
+        # The rank-up bonus is credited to loyalty_points ONLY, never here —
+        # crediting it here would let a bonus cascade into unlocking the next
+        # rank too.
+        existing.lifetime_gaming_points_earned = new_lifetime
         if name and not existing.name:
             existing.name = name
     else:
+        bonus = rank_up_bonus_points(old_lifetime=0, new_lifetime=int(points_earned))
         session.add(
             Customer(
                 id=uuid4(),
@@ -290,7 +346,8 @@ async def _upsert_and_attach_customer(
                 total_spent_minor=order.total_minor,
                 first_visit_at=now,
                 last_visit_at=now,
-                loyalty_points=int(points_earned),
+                loyalty_points=int(points_earned) + bonus,
+                lifetime_gaming_points_earned=int(points_earned),
             )
         )
 
@@ -404,7 +461,10 @@ async def _reprice_unpaid_order_for_customer(
     station = session_row[1] if session_row else None
     requested_gaming_minutes = (
         max(0, int(gaming_session.billable_minutes or 0))
-        if gaming_session and station and station.type == "ps5"
+        if gaming_session
+        and station
+        and station.type == "ps5"
+        and gaming_session.package_id is None
         else 0
     )
     requested_hookah_count = (
@@ -444,7 +504,17 @@ async def _reprice_unpaid_order_for_customer(
 
         allowance_minor = 0
         if is_session_line and gaming_session and station:
-            if station.type == "ps5" and benefits.gaming_minutes:
+            if (
+                station.type == "ps5"
+                and benefits.gaming_minutes
+                and gaming_session.package_id is None
+            ):
+                # A package session's amount_minor is a fixed, advertised
+                # price (see gaming/router.py) with no proportional
+                # relationship to billable_minutes — the elapsed-time waiver
+                # math below would let a member leave minutes into a package
+                # and have it waived almost in full. Free-minutes benefits
+                # only apply to legacy open-ended (non-package) sessions.
                 allowance_minor = gaming_minutes_allowance_minor(
                     gross_amount_minor=gross_amount,
                     billable_minutes=int(gaming_session.billable_minutes or 0),
@@ -485,14 +555,56 @@ async def _reprice_unpaid_order_for_customer(
     raw_total = sum(int(line.line_total_minor or 0) for line in lines)
     rounded_total, round_off = _round_to_rupee(raw_total)
     order.subtotal_minor = sum(int(line.taxable_value_minor or 0) for line in lines)
-    order.discount_minor = sum(int(line.discount_minor or 0) for line in lines)
+    line_discount_total = sum(int(line.discount_minor or 0) for line in lines)
     order.cgst_minor = sum(int(line.cgst_minor or 0) for line in lines)
     order.sgst_minor = sum(int(line.sgst_minor or 0) for line in lines)
     order.igst_minor = sum(int(line.igst_minor or 0) for line in lines)
     order.cess_minor = sum(int(line.cess_minor or 0) for line in lines)
     order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor + order.cess_minor
     order.round_off_minor = round_off
-    order.total_minor = rounded_total
+    # A cashier's manual discount and a customer's points redemption both
+    # live outside this line-based recompute — preserve them (clamped so
+    # neither can exceed the new total, e.g. if a membership just waived
+    # most of the bill). Points must be re-requested at their PRIOR count,
+    # never maxed out to fill the new total — this repricing preserves an
+    # existing redemption, it doesn't grow it. Only preserve if the order's
+    # customer is still the same one the points were reserved against —
+    # attaching a different customer must never silently spend their points.
+    previously_redeemed_points = 0
+    existing_redemption = (
+        await session.execute(
+            select(PointsRedemption).where(PointsRedemption.order_id == order.id)
+        )
+    ).scalar_one_or_none()
+    if existing_redemption is not None:
+        current_customer_id = (
+            await session.execute(
+                select(Customer.id).where(
+                    Customer.company_id == company_id,
+                    Customer.phone == order.customer_phone,
+                    Customer.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if current_customer_id == existing_redemption.customer_id:
+            previously_redeemed_points = existing_redemption.points_spent
+    order.manual_discount_minor, discount_after_manual, total_after_manual = apply_manual_discount(
+        line_discount_total_minor=line_discount_total,
+        manual_discount_minor=int(order.manual_discount_minor or 0),
+        rounded_total_minor=rounded_total,
+    )
+    points_result = await reserve_points_redemption(
+        session,
+        order=order,
+        company_id=company_id,
+        requested_points=min(previously_redeemed_points, minor_to_points(total_after_manual)),
+        at=datetime.now(timezone.utc),
+    )
+    order.points_redeemed_minor, order.discount_minor, order.total_minor = apply_points_redemption(
+        discount_so_far_minor=discount_after_manual,
+        points_redeemed_minor=points_result.amount_minor,
+        remaining_total_minor=total_after_manual,
+    )
 
 
 async def _source_label(session, order: Order) -> str | None:
@@ -627,6 +739,9 @@ async def _build_order_read(session, order: Order) -> OrderRead:
         source_label=await _source_label(session, order),
         subtotal_minor=order.subtotal_minor,
         discount_minor=order.discount_minor,
+        manual_discount_minor=order.manual_discount_minor,
+        points_redeemed_minor=order.points_redeemed_minor,
+        points_redeemed=await points_redeemed_for_order(session, order=order),
         cgst_minor=order.cgst_minor,
         sgst_minor=order.sgst_minor,
         igst_minor=order.igst_minor,
@@ -704,6 +819,7 @@ async def _finalize_order(
     # all other finalization effects. A rollback leaves the allowance reserved,
     # never half-consumed.
     await consume_membership_benefits(session, order_id=order.id, at=at)
+    await consume_points_redemption(session, order_id=order.id, at=at)
     order.status = "paid"
     order.closed_at = at
     order.invoice_issued_at = at
@@ -1049,10 +1165,32 @@ async def add_order_lines(
     order.cgst_minor = sum(int(l.cgst_minor) for l in all_lines)
     order.sgst_minor = sum(int(l.sgst_minor) for l in all_lines)
     order.igst_minor = sum(int(l.igst_minor) for l in all_lines)
-    order.discount_minor = sum(int(l.discount_minor) for l in all_lines)
-    order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor
+    order.cess_minor = sum(int(l.cess_minor or 0) for l in all_lines)
+    line_discount_total = sum(int(l.discount_minor) for l in all_lines)
+    order.tax_minor = order.cgst_minor + order.sgst_minor + order.igst_minor + order.cess_minor
     order.round_off_minor = round_off
-    order.total_minor = rounded
+    # Preserve any manual discount and points redemption already applied to
+    # this order — adding a line recomputes everything else from scratch,
+    # but neither is derived from lines and both must survive the recompute.
+    # customer_phone never changes in this endpoint, so no reattribution risk.
+    previously_redeemed_points = await points_redeemed_for_order(session, order=order)
+    order.manual_discount_minor, discount_after_manual, total_after_manual = apply_manual_discount(
+        line_discount_total_minor=line_discount_total,
+        manual_discount_minor=int(order.manual_discount_minor or 0),
+        rounded_total_minor=rounded,
+    )
+    points_result = await reserve_points_redemption(
+        session,
+        order=order,
+        company_id=tenant.company_id,
+        requested_points=min(previously_redeemed_points, minor_to_points(total_after_manual)),
+        at=datetime.now(timezone.utc),
+    )
+    order.points_redeemed_minor, order.discount_minor, order.total_minor = apply_points_redemption(
+        discount_so_far_minor=discount_after_manual,
+        points_redeemed_minor=points_result.amount_minor,
+        remaining_total_minor=total_after_manual,
+    )
 
     if order.table_id is not None:
         table = await session.get(Table, order.table_id)
@@ -1141,6 +1279,306 @@ async def attach_order_customer(
             order=order,
             company_id=tenant.company_id,
         )
+    await session.flush()
+    response = await _build_order_read(session, order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.patch("/orders/{order_id}/discount", response_model=OrderRead)
+async def apply_order_discount(
+    order_id: UUID,
+    payload: OrderDiscountUpdate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Set (or clear) a cashier-entered custom discount on an unpaid bill.
+
+    This company is GST-unregistered, so there is no proportional tax
+    recalculation here — the amount is knocked straight off the final total,
+    same as an unregistered business would do on a plain cash memo.
+    """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return OrderRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="applying a discount to an order",
+    )
+    if order.status not in ("open", "held"):
+        raise BusinessRuleError(
+            f"cannot change the discount on an order in status={order.status}"
+        )
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="applying a discount to an order",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="apply a discount to this bill",
+    )
+    if await _paid_total(session, order.id):
+        raise BusinessRuleError("cannot change the discount after a payment was recorded")
+
+    previous_manual = int(order.manual_discount_minor or 0)
+    previous_points_minor = int(order.points_redeemed_minor or 0)
+    line_discount_only = int(order.discount_minor or 0) - previous_manual - previous_points_minor
+    pre_reduction_total = int(order.total_minor or 0) + previous_manual + previous_points_minor
+    new_manual = payload.manual_discount_minor
+    if new_manual > pre_reduction_total:
+        raise BusinessRuleError("discount cannot exceed the order total")
+
+    order.manual_discount_minor = new_manual
+    remaining_after_manual = pre_reduction_total - new_manual
+
+    # A points redemption already on this bill must be re-clamped against
+    # whatever room the new discount leaves — it can shrink, never grow,
+    # from what was previously reserved.
+    previously_redeemed_points = await points_redeemed_for_order(session, order=order)
+    points_result = await reserve_points_redemption(
+        session,
+        order=order,
+        company_id=tenant.company_id,
+        requested_points=min(previously_redeemed_points, minor_to_points(remaining_after_manual)),
+        at=datetime.now(timezone.utc),
+    )
+    order.points_redeemed_minor = points_result.amount_minor
+    order.discount_minor = line_discount_only + new_manual + points_result.amount_minor
+    order.total_minor = remaining_after_manual - points_result.amount_minor
+
+    await session.flush()
+    response = await _build_order_read(session, order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.patch("/orders/{order_id}/points", response_model=OrderRead)
+async def redeem_points(
+    order_id: UUID,
+    payload: OrderPointsRedemptionUpdate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Set (or clear) how many loyalty points a customer spends on this bill.
+
+    Points convert to playtime value at a fixed rate (see
+    app/services/pos/points.py) and come straight off the total, same as the
+    manual discount above. Requires a customer already attached to the order
+    — points belong to a specific phone number's balance, never anonymous.
+    """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return OrderRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="redeeming points on an order",
+    )
+    if order.status not in ("open", "held"):
+        raise BusinessRuleError(
+            f"cannot change points redemption on an order in status={order.status}"
+        )
+    if not order.customer_phone:
+        raise BusinessRuleError("attach a customer to this order before redeeming points")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="redeeming points on an order",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="redeem points on this bill",
+    )
+    if await _paid_total(session, order.id):
+        raise BusinessRuleError("cannot change points redemption after a payment was recorded")
+
+    previous_manual = int(order.manual_discount_minor or 0)
+    previous_points_minor = int(order.points_redeemed_minor or 0)
+    line_discount_only = int(order.discount_minor or 0) - previous_manual - previous_points_minor
+    remaining_after_manual = int(order.total_minor or 0) + previous_points_minor
+
+    max_points_for_bill = minor_to_points(remaining_after_manual)
+    if payload.points > max_points_for_bill:
+        raise BusinessRuleError(
+            f"This bill can only absorb {max_points_for_bill} points "
+            f"(₹{remaining_after_manual / 100:.2f})."
+        )
+
+    points_result = await reserve_points_redemption(
+        session,
+        order=order,
+        company_id=tenant.company_id,
+        requested_points=payload.points,
+        at=datetime.now(timezone.utc),
+    )
+    if points_result.points_spent < payload.points:
+        raise BusinessRuleError("Not enough points available on this customer's balance.")
+
+    order.points_redeemed_minor = points_result.amount_minor
+    order.discount_minor = line_discount_only + previous_manual + points_result.amount_minor
+    order.total_minor = remaining_after_manual - points_result.amount_minor
+
+    await session.flush()
+    response = await _build_order_read(session, order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+class OrderRewardRedemptionUpdate(BaseModel):
+    reward_key: str
+
+
+@router.patch("/orders/{order_id}/reward", response_model=OrderRead)
+async def redeem_reward(
+    order_id: UUID,
+    payload: OrderRewardRedemptionUpdate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Redeem a named REWARD_CATALOG item (see app/services/pos/points.py) —
+    a fixed points cost for a fixed discount value, gated by the customer's
+    gaming rank. All-or-nothing, unlike the generic points endpoint above.
+    """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return OrderRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="redeeming a reward on an order",
+    )
+    if order.status not in ("open", "held"):
+        raise BusinessRuleError(
+            f"cannot change reward redemption on an order in status={order.status}"
+        )
+    if not order.customer_phone:
+        raise BusinessRuleError("attach a customer to this order before redeeming a reward")
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="redeeming a reward on an order",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="redeem a reward on this bill",
+    )
+    if await _paid_total(session, order.id):
+        raise BusinessRuleError("cannot change reward redemption after a payment was recorded")
+
+    previous_manual = int(order.manual_discount_minor or 0)
+    previous_points_minor = int(order.points_redeemed_minor or 0)
+    line_discount_only = int(order.discount_minor or 0) - previous_manual - previous_points_minor
+    remaining_after_manual = int(order.total_minor or 0) + previous_points_minor
+
+    # reserve_catalog_reward_redemption checks the reward's value against
+    # order.total_minor as "remaining bill room" — same convention the manual
+    # discount / generic points paths use, so set it to the post-manual-
+    # discount remainder (pre-existing-points-redemption) before calling it.
+    order.total_minor = remaining_after_manual
+    points_result = await reserve_catalog_reward_redemption(
+        session,
+        order=order,
+        company_id=tenant.company_id,
+        reward_key=payload.reward_key,
+        at=datetime.now(timezone.utc),
+    )
+
+    order.points_redeemed_minor = points_result.amount_minor
+    order.discount_minor = line_discount_only + previous_manual + points_result.amount_minor
+    order.total_minor = remaining_after_manual - points_result.amount_minor
+
     await session.flush()
     response = await _build_order_read(session, order)
     await store_response(
@@ -1402,6 +1840,16 @@ class ShiftRead(BaseModel):
     expected_minor: int | None
     counted_minor: int | None
     variance_minor: int | None
+    # Sum of Payment.amount_minor across ALL methods for this shift — unlike
+    # expected_minor (cash-drawer float, cash payments only, used for till
+    # reconciliation), this is the actual total sold through the POS. Naturally
+    # resets to 0 for the next shift since it's scoped by shift_id, not a
+    # running total.
+    pos_sales_minor: int
+    # Kept as an explicit total for clients that display a shift summary.
+    # Off-POS collections are independent Finance records and never belong to
+    # a till/terminal shift, so this is intentionally equal to POS sales.
+    total_sales_minor: int
     opened_by: UUID
     opened_by_name: str | None = None
     opened_by_email: str | None = None
@@ -1414,8 +1862,14 @@ async def list_shifts(
     only_open: bool = False,
     limit: int = 50,
 ) -> list[ShiftRead]:
+    sales_subq = (
+        select(func.coalesce(func.sum(Payment.amount_minor), 0))
+        .where(Payment.shift_id == Shift.id)
+        .correlate(Shift)
+        .scalar_subquery()
+    )
     stmt = (
-        select(Shift, User.name, User.email)
+        select(Shift, User.name, User.email, sales_subq.label("total_sales"))
         .outerjoin(User, User.id == Shift.opened_by)
         .where(Shift.company_id == tenant.company_id)
         .order_by(Shift.opened_at.desc())
@@ -1428,20 +1882,25 @@ async def list_shifts(
     if only_open:
         stmt = stmt.where(Shift.status == "open")
     rows = (await session.execute(stmt)).all()
-    return [
-        ShiftRead(
-            id=s.id, branch_id=s.branch_id, terminal_id=s.terminal_id, status=s.status,
-            opened_at=s.opened_at, closed_at=s.closed_at,
-            opening_float_minor=int(s.opening_float_minor or 0),
-            expected_minor=int(s.expected_minor) if s.expected_minor is not None else None,
-            counted_minor=int(s.counted_minor) if s.counted_minor is not None else None,
-            variance_minor=int(s.variance_minor) if s.variance_minor is not None else None,
-            opened_by=s.opened_by,
-            opened_by_name=opener_name,
-            opened_by_email=opener_email,
+    result = []
+    for s, opener_name, opener_email, total_sales in rows:
+        pos_sales = int(total_sales or 0)
+        result.append(
+            ShiftRead(
+                id=s.id, branch_id=s.branch_id, terminal_id=s.terminal_id, status=s.status,
+                opened_at=s.opened_at, closed_at=s.closed_at,
+                opening_float_minor=int(s.opening_float_minor or 0),
+                expected_minor=int(s.expected_minor) if s.expected_minor is not None else None,
+                counted_minor=int(s.counted_minor) if s.counted_minor is not None else None,
+                variance_minor=int(s.variance_minor) if s.variance_minor is not None else None,
+                pos_sales_minor=pos_sales,
+                total_sales_minor=pos_sales,
+                opened_by=s.opened_by,
+                opened_by_name=opener_name,
+                opened_by_email=opener_email,
+            )
         )
-        for s, opener_name, opener_email in rows
-    ]
+    return result
 
 
 def _zero_total_finalization_response(order: Order) -> dict:

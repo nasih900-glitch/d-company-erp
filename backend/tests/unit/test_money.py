@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.core.money import Money
+from app.core.money import Money, apportion
 
 
 def test_addition_same_currency() -> None:
@@ -42,3 +42,38 @@ def test_currency_validation() -> None:
 
 def test_str() -> None:
     assert str(Money(12345, "INR")) == "123.45 INR"
+
+
+class TestApportion:
+    def test_equal_split_sums_exactly(self) -> None:
+        shares = apportion(100, [33.3334, 33.3333, 33.3333])
+        assert sum(shares) == 100
+        assert shares == [34, 33, 33]
+
+    def test_evenly_divisible_split(self) -> None:
+        assert apportion(300, [1, 1, 1]) == [100, 100, 100]
+
+    def test_uneven_weights(self) -> None:
+        shares = apportion(1000, [29.27, 36.94, 33.79])
+        assert sum(shares) == 1000
+
+    def test_zero_total(self) -> None:
+        assert apportion(0, [50, 50]) == [0, 0]
+
+    def test_negative_total_preserves_sign_and_sum(self) -> None:
+        shares = apportion(-100, [33.3334, 33.3333, 33.3333])
+        assert sum(shares) == -100
+        assert all(s <= 0 for s in shares)
+
+    def test_empty_weights(self) -> None:
+        assert apportion(500, []) == []
+
+    def test_single_weight_gets_everything(self) -> None:
+        assert apportion(777, [100]) == [777]
+
+    def test_remainder_smaller_than_one_paisa_per_head(self) -> None:
+        # 7 paise across 3 equal weights: two get 2, one gets 3 (or similar),
+        # but the total must always reconcile exactly.
+        shares = apportion(7, [1, 1, 1])
+        assert sum(shares) == 7
+        assert max(shares) - min(shares) <= 1

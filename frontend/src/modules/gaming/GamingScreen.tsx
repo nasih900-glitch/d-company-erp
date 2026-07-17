@@ -21,7 +21,7 @@ import { LIVE_MODE } from '@/lib/demo';
 import { STATIONS, type Station as DemoStation } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
-import { gaming, shifts, type StationDTO } from '@/lib/erp-api';
+import { gaming, shifts, type GamingPackageDTO, type StationDTO } from '@/lib/erp-api';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
@@ -54,6 +54,12 @@ type LocalSession = {
   timer_ends_at?: number | null;
   ended_minutes?: number;
   ended_amount_minor?: number;
+  package_id?: string | null;
+  extra_controllers?: number;
+  // Fixed, locked-in price for a package session — never recomputed from
+  // elapsed time (see gaming/router.py stop_session). Undefined/null for an
+  // open-ended (non-package) session, which bills off elapsed time instead.
+  locked_amount_minor?: number | null;
 };
 
 const DURATION_PRESETS = [
@@ -87,6 +93,14 @@ export default function GamingScreen() {
   const [, setTick] = useState(0); // force overtime/countdown recompute every second
   const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
+  // Member phone attached at session start — carried through to the order
+  // created at send-to-pos so loyalty points accrue automatically without
+  // the cashier re-entering it at POS checkout (gaming/router.py already
+  // wires GamingSession.customer_phone -> order.customer_phone -> points).
+  const [sessionPhone, setSessionPhone] = useState<Record<string, string>>({});
+  const [packages, setPackages] = useState<GamingPackageDTO[]>([]);
+  const [pickerVariant, setPickerVariant] = useState<Record<string, string>>({});
+  const [pickerControllers, setPickerControllers] = useState<Record<string, number>>({});
   const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
@@ -113,7 +127,7 @@ export default function GamingScreen() {
     setLoading(true); setError(null);
     try {
       if (LIVE_MODE) {
-        const [stationRows, activeSessions, pausedSessions, endedSessions] = await Promise.all([
+        const [stationRows, activeSessions, pausedSessions, endedSessions, packageRows] = await Promise.all([
           gaming.listStations(),
           gaming.listSessions('active'),
           gaming.listSessions('paused'),
@@ -121,8 +135,10 @@ export default function GamingScreen() {
           // Fetch enough to cover every station instead of letting paid
           // history push an older unbilled session out of the default window.
           gaming.listSessions('ended', { unbilledOnly: true, limit: 500 }),
+          gaming.listPackages(),
         ]);
         setStations(stationRows.filter((station) => isAppStoreAllowedType(station.type)));
+        setPackages(packageRows);
         // Rehydrate running sessions, AND any stopped-but-not-yet-sent session,
         // so a page refresh never silently drops an unbilled amount from view.
         setSessions((prev) => {
@@ -138,6 +154,9 @@ export default function GamingScreen() {
                   backend_session_id: gs.id,
                   timer_minutes: gs.timer_minutes,
                   timer_ends_at: gs.timer_ends_at ? new Date(gs.timer_ends_at).getTime() : null,
+                  package_id: gs.package_id,
+                  extra_controllers: gs.extra_controllers,
+                  locked_amount_minor: gs.package_id ? gs.amount_minor : null,
                 };
           }
           for (const gs of endedSessions) {
@@ -219,10 +238,18 @@ export default function GamingScreen() {
     });
   }
 
-  async function startSession(st: StationDTO, customer = '') {
-    const timerMinutes = pendingDuration[st.id] ?? null;
+  async function startSession(
+    st: StationDTO,
+    customer = '',
+    pkg?: { packageId: string; extraControllers: number },
+    phone = '',
+  ) {
+    const timerMinutes = pkg ? null : pendingDuration[st.id] ?? null;
     let backendId: string | undefined;
     let timerEndsAt: number | null = timerMinutes ? Date.now() + timerMinutes * 60000 : null;
+    let packageId: string | undefined;
+    let extraControllers = 0;
+    let lockedAmountMinor: number | null = null;
     if (LIVE_MODE) {
       try {
         const shiftId = await ensureShiftId(st);
@@ -230,10 +257,16 @@ export default function GamingScreen() {
           station_id: st.id,
           shift_id: shiftId,
           customer_name: customer || undefined,
+          customer_phone: phone.trim() || undefined,
           timer_minutes: timerMinutes ?? undefined,
+          package_id: pkg?.packageId,
+          extra_controllers: pkg?.extraControllers,
         });
         backendId = r.id;
         timerEndsAt = r.timer_ends_at ? new Date(r.timer_ends_at).getTime() : null;
+        packageId = r.package_id ?? undefined;
+        extraControllers = r.extra_controllers;
+        lockedAmountMinor = packageId ? r.amount_minor ?? null : null;
       } catch (e) {
         alert(`Cannot start session: ${(e as Error).message}`);
         return;
@@ -247,11 +280,16 @@ export default function GamingScreen() {
         status: 'active',
         pausedMs: 0,
         backend_session_id: backendId,
-        timer_minutes: timerMinutes,
+        timer_minutes: pkg ? (timerEndsAt ? Math.round((timerEndsAt - Date.now()) / 60000) : null) : timerMinutes,
         timer_ends_at: timerEndsAt,
+        package_id: packageId,
+        extra_controllers: extraControllers,
+        locked_amount_minor: lockedAmountMinor,
       },
     }));
     setPendingDuration((p) => ({ ...p, [st.id]: null }));
+    setPickerControllers((p) => ({ ...p, [st.id]: 0 }));
+    setSessionPhone((p) => ({ ...p, [st.id]: '' }));
     setCustomDurationFor(null);
   }
 
@@ -278,6 +316,38 @@ export default function GamingScreen() {
     const elapsedMinutesNow = Math.max(0, Math.ceil((Date.now() - s.start_at) / 60000));
     const baseMinutes = s.timer_minutes ?? elapsedMinutesNow;
     setStationTimer(st, Math.min(1440, baseMinutes + addMinutes));
+  }
+
+  // A package session is a prepaid, fixed-price slot — extending it is a
+  // paid action (buy an extension package), not a free timer bump like
+  // extendTimer above (which only applies to open-ended, no-package sessions).
+  async function extendPackageSession(st: StationDTO, extensionPackageId: string) {
+    const s = sessions[st.id];
+    if (!s?.backend_session_id) return;
+    try {
+      const r = await gaming.extendSessionWithPackage(s.backend_session_id, extensionPackageId);
+      setSessions((map) => ({
+        ...map,
+        [st.id]: {
+          ...s,
+          timer_minutes: r.timer_minutes,
+          timer_ends_at: r.timer_ends_at ? new Date(r.timer_ends_at).getTime() : s.timer_ends_at,
+          locked_amount_minor: r.amount_minor ?? s.locked_amount_minor,
+        },
+      }));
+      delete lastAlarmAtRef.current[st.id];
+      setMutedStations((m) => (m[st.id] ? { ...m, [st.id]: false } : m));
+    } catch (e) {
+      alert(`Could not extend session: ${(e as Error).message}`);
+    }
+  }
+
+  function packagesFor(stationType: string, kind: 'base' | 'extension') {
+    return packages.filter((p) => p.station_type === stationType && p.kind === kind);
+  }
+
+  function variantsFor(stationType: string) {
+    return Array.from(new Set(packagesFor(stationType, 'base').map((p) => p.variant)));
   }
 
   function pauseSession(st: StationDTO) {
@@ -462,13 +532,20 @@ export default function GamingScreen() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
           {stations.map((st) => {
             const session = sessions[st.id];
+            const phone = sessionPhone[st.id] ?? '';
             const elapsedMs = session
               ? (session.status === 'paused' && session.pause_started_at
                   ? session.pause_started_at - session.start_at - session.pausedMs
                   : Date.now() - session.start_at - session.pausedMs)
               : 0;
             const elapsedMin = Math.floor(elapsedMs / 60000);
-            const amount = Math.ceil((elapsedMs / 3600000) * st.rate_per_hour_minor);
+            // A package session's price is locked in at start (see backend
+            // gaming/router.py stop_session) and never grows with elapsed
+            // time — showing the elapsed*rate estimate here would be flat
+            // wrong, not just approximate.
+            const amount = session?.locked_amount_minor != null
+              ? session.locked_amount_minor
+              : Math.ceil((elapsedMs / 3600000) * st.rate_per_hour_minor);
 
             return (
               <div key={st.id} className={`card ${session ? 'border-accent/40' : ''}`}>
@@ -546,7 +623,9 @@ export default function GamingScreen() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-xs text-fg-muted">Running bill</div>
+                          <div className="text-xs text-fg-muted">
+                            {session?.locked_amount_minor != null ? 'Package price' : 'Running bill'}
+                          </div>
                           <div className="text-2xl font-bold font-mono text-accent">
                             {inr(amount)}
                           </div>
@@ -563,14 +642,15 @@ export default function GamingScreen() {
                         const overtime = remainingMs <= 0;
                         const lowTime = !overtime && remainingMs <= 5 * 60000;
                         const clock = fmtClock(Math.abs(Math.round(remainingMs / 1000)));
+                        const extensionOptions = session.package_id ? packagesFor(st.type, 'extension') : [];
                         return (
-                          <div className={`mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 ${
+                          <div className={`mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 flex-wrap ${
                             overtime ? 'text-accent-bad' : lowTime ? 'text-accent-gold' : 'text-fg-muted'
                           }`}>
                             <div className="flex items-center gap-1.5 text-sm font-mono font-bold">
                               <Timer size={13}/> {overtime ? `+${clock} over` : `${clock} left`}
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 flex-wrap">
                               {overtime && (
                                 <button className="text-fg-muted hover:text-accent p-0.5"
                                   onClick={() => toggleMute(st.id)}
@@ -578,14 +658,32 @@ export default function GamingScreen() {
                                   {mutedStations[st.id] ? <BellOff size={13}/> : <Bell size={13}/>}
                                 </button>
                               )}
-                              <button className="chip text-[10px] hover:border-accent"
-                                onClick={() => extendTimer(st, 15)} title="Add 15 minutes">
-                                +15m
-                              </button>
-                              <button className="text-fg-muted hover:text-accent-bad p-0.5"
-                                onClick={() => setStationTimer(st, null)} title="Clear timer">
-                                <X size={13}/>
-                              </button>
+                              {session.package_id ? (
+                                extensionOptions.length > 0 ? extensionOptions.map((ext) => (
+                                  <button key={ext.id}
+                                    className="chip text-[10px] !border-accent-gold/50 text-accent-gold hover:!border-accent-gold"
+                                    onClick={() => {
+                                      if (!confirm(`Add ${ext.name} for ${inr(ext.price_minor)}? This charges the customer's bill.`)) return;
+                                      extendPackageSession(st, ext.id);
+                                    }}
+                                    title={`Paid extension: ${ext.name} · ${inr(ext.price_minor)}`}>
+                                    +{ext.duration_minutes}m · {inr(ext.price_minor)}
+                                  </button>
+                                )) : (
+                                  <span className="text-[10px] text-fg-muted">No extension for this package</span>
+                                )
+                              ) : (
+                                <>
+                                  <button className="chip text-[10px] hover:border-accent"
+                                    onClick={() => extendTimer(st, 15)} title="Add 15 minutes">
+                                    +15m
+                                  </button>
+                                  <button className="text-fg-muted hover:text-accent-bad p-0.5"
+                                    onClick={() => setStationTimer(st, null)} title="Clear timer">
+                                    <X size={13}/>
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </div>
                         );
@@ -619,8 +717,70 @@ export default function GamingScreen() {
                       </button>
                     </div>
                   </>
-                ) : (
+                ) : variantsFor(st.type).length > 0 ? (() => {
+                  const variants = variantsFor(st.type);
+                  const variant = pickerVariant[st.id] ?? variants[0];
+                  const tiers = packagesFor(st.type, 'base').filter((p) => p.variant === variant);
+                  const controllers = pickerControllers[st.id] ?? 0;
+                  const showControllerStepper = st.type === 'ps5' && variant === 'dual';
+                  return (
+                    <>
+                      <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
+                        className="input !py-1.5 text-xs w-full mb-2"
+                        value={phone}
+                        onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
+                      {variants.length > 1 && (
+                        <div className="flex items-center gap-1.5 mb-2">
+                          {variants.map((v) => (
+                            <button key={v}
+                              className={`chip text-[11px] capitalize ${variant === v ? '!border-accent !text-accent' : 'hover:border-accent'}`}
+                              onClick={() => {
+                                setPickerVariant((s) => ({ ...s, [st.id]: v }));
+                                // Extra-controller count only makes sense for
+                                // the dual variant's stepper — stop it from
+                                // silently surviving a switch to single.
+                                setPickerControllers((s) => ({ ...s, [st.id]: 0 }));
+                              }}>
+                              {v}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 gap-1.5 mb-2">
+                        {tiers.map((tier) => (
+                          <button key={tier.id}
+                            className="btn btn-ghost !justify-between !py-1.5 text-xs"
+                            onClick={() => startSession(st, '', { packageId: tier.id, extraControllers: showControllerStepper ? controllers : 0 }, phone)}
+                            disabled={!st.is_active}>
+                            <span>{tier.name}</span>
+                            <span className="font-mono font-bold">{inr(tier.price_minor)}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {showControllerStepper && (
+                        <div className="flex items-center justify-between gap-2 mb-2 text-xs text-fg-muted">
+                          <span>Extra controllers (₹30/hr, min ₹30)</span>
+                          <div className="flex items-center gap-2">
+                            <button className="chip !px-2 text-[11px]"
+                              onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.max(0, controllers - 1) }))}>
+                              −
+                            </button>
+                            <span className="w-4 text-center font-mono">{controllers}</span>
+                            <button className="chip !px-2 text-[11px]"
+                              onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.min(6, controllers + 1) }))}>
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })() : (
                   <>
+                    <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
+                      className="input !py-1.5 text-xs w-full mb-2"
+                      value={phone}
+                      onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
                     <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                       {DURATION_PRESETS.map((p) => (
                         <button key={p.label}
@@ -646,7 +806,7 @@ export default function GamingScreen() {
                         <span className="text-xs text-fg-muted">min</span>
                       </div>
                     )}
-                    <button className="btn btn-primary w-full" onClick={() => startSession(st)}
+                    <button className="btn btn-primary w-full" onClick={() => startSession(st, '', undefined, phone)}
                       disabled={!st.is_active}>
                       <Play size={14}/> Start session
                       {pendingDuration[st.id] ? ` · ${pendingDuration[st.id]}m` : ''}
