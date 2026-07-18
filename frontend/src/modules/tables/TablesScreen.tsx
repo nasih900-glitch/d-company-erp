@@ -24,6 +24,7 @@ import {
 } from '@/lib/erp-api';
 import { clearDraft, loadDraft, saveDraft } from '@/lib/draft-storage';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import { subscribeRealtime } from '@/lib/realtime';
 import {
   beginTableRetryOperation,
   clearTableRetryOperation,
@@ -71,7 +72,10 @@ const STATUS_NEXT: Record<TableDTO['status'], TableDTO['status']> = {
   reserved:  'occupied',
   merged:    'available',
 };
-const TABLES_POLL_MS = 30_000;
+// Fallback only — the real-time push (see subscribeRealtime below) is what
+// actually keeps this in sync; this just covers the rare case of a missed
+// or dropped push (e.g. reconnecting after a network blip).
+const TABLES_POLL_MS = 120_000;
 
 export default function TablesScreen() {
   const [rows, setRows] = useState<TableDTO[]>([]);
@@ -92,13 +96,17 @@ export default function TablesScreen() {
   }
   useEffect(() => { load(); }, []);
 
-  // Table status is shared across every device on the floor — poll quietly
-  // (no loading spinner) so a table freed elsewhere doesn't stay stuck
-  // "occupied" here until someone happens to hit refresh.
+  // Table status is shared across every device on the floor. Real-time push
+  // is what actually keeps this current — the moment anyone changes a
+  // table's status or sends an order, every other screen hears about it
+  // within about a second, quietly (no loading spinner). The interval below
+  // is just a safety net for a missed push, not the primary mechanism.
   useEffect(() => {
     if (!LIVE_MODE) return;
-    const id = setInterval(() => { tables.list().then(setRows).catch(() => {}); }, TABLES_POLL_MS);
-    return () => clearInterval(id);
+    const refresh = () => { tables.list().then(setRows).catch(() => {}); };
+    const unsubscribe = subscribeRealtime('tables', refresh);
+    const id = setInterval(refresh, TABLES_POLL_MS);
+    return () => { unsubscribe(); clearInterval(id); };
   }, []);
 
   async function cycleStatus(t: TableDTO) {

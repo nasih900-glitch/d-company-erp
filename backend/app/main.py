@@ -21,6 +21,7 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import (
     IdempotencyMiddleware,
+    RealtimeBroadcastMiddleware,
     RequestBodyLimitMiddleware,
     RequestContextMiddleware,
     TimingMiddleware,
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(TimingMiddleware)
+    app.add_middleware(RealtimeBroadcastMiddleware)
     app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(
         RequestBodyLimitMiddleware,

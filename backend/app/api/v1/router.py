@@ -24,6 +24,7 @@ from app.api.v1.memberships.router import router as memberships_router
 from app.api.v1.kitchen.router import router as kitchen_router
 from app.api.v1.accounting.router import router as accounting_router
 from app.api.v1.insights.router import router as insights_router
+from app.api.v1.ws.router import router as ws_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
@@ -46,3 +47,4 @@ api_router.include_router(memberships_router, prefix="/memberships", tags=["memb
 api_router.include_router(kitchen_router, prefix="/kitchen", tags=["kitchen"])
 api_router.include_router(accounting_router, prefix="/accounting", tags=["accounting"])
 api_router.include_router(insights_router, prefix="/insights", tags=["insights"])
+api_router.include_router(ws_router, prefix="/ws", tags=["realtime"])

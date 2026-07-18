@@ -349,6 +349,121 @@ private struct APIClient {
     }
 }
 
+// Real-time push over WebSocket — replaces polling-on-a-timer with a
+// server-initiated "this changed" signal, the same way any high-end
+// live-data app works: a screen doesn't ask "did anything change yet?"
+// every N seconds, the server tells it the instant something does.
+//
+// One shared connection for the whole app. Screens subscribe to a resource
+// ("shifts", "tables", "orders", "gaming", "kitchen") and get called back
+// when it changes — they already have a load() for that resource (the one
+// that used to run on a timer), so the callback just re-runs it.
+//
+// Auth is a first-message handshake, not a query-string token — the token
+// would otherwise sit in plaintext in server access logs.
+private final class RealtimeClient {
+    static let shared = RealtimeClient()
+
+    private var task: URLSessionWebSocketTask?
+    private var reconnectAttempt = 0
+    private var reconnectWorkItem: DispatchWorkItem?
+    private var intentionallyClosed = false
+    private var listeners: [String: [UUID: () -> Void]] = [:]
+
+    private var wsURL: URL {
+        // Mirrors APIClient's hardcoded baseURL — same host, wss instead of https.
+        URL(string: "wss://dcompany.duckdns.org/api/v1/ws")!
+    }
+
+    func connect() {
+        guard let token = TokenStore.read("access_token") else { return }
+        intentionallyClosed = false
+        guard task == nil else { return }
+
+        let session = URLSession(configuration: .default)
+        let newTask = session.webSocketTask(with: wsURL)
+        task = newTask
+        newTask.resume()
+        newTask.send(.string("{\"token\": \"\(token)\"}")) { [weak self] error in
+            if error != nil { self?.handleDisconnect() }
+        }
+        listen(on: newTask)
+    }
+
+    func disconnect() {
+        intentionallyClosed = true
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        reconnectAttempt = 0
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+    }
+
+    /// Subscribe a screen's refetch closure to a resource. Call the
+    /// returned closure (e.g. from `.onDisappear` or a `deinit`-adjacent
+    /// path) to unsubscribe.
+    func subscribe(_ resource: String, _ callback: @escaping () -> Void) -> () -> Void {
+        let id = UUID()
+        listeners[resource, default: [:]][id] = callback
+        return { [weak self] in self?.listeners[resource]?[id] = nil }
+    }
+
+    private func listen(on task: URLSessionWebSocketTask) {
+        task.receive { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure:
+                self.handleDisconnect()
+            case .success(let message):
+                if case .string(let text) = message {
+                    self.handle(text)
+                }
+                // Still the same task (a stale closure from a prior
+                // generation would have already returned above via
+                // handleDisconnect swapping `self.task`) — keep listening.
+                if self.task === task {
+                    self.listen(on: task)
+                }
+            }
+        }
+    }
+
+    private func handle(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String else { return }
+        if type == "connected" {
+            reconnectAttempt = 0
+        } else if type == "changed", let resource = json["resource"] as? String {
+            DispatchQueue.main.async { [weak self] in
+                self?.listeners[resource]?.values.forEach { $0() }
+            }
+        }
+        // "ping" needs no reply — the server only sends it to keep the
+        // connection active through any intermediate proxy/timeout.
+    }
+
+    private func handleDisconnect() {
+        task = nil
+        guard !intentionallyClosed else { return }
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        guard reconnectWorkItem == nil else { return }
+        // Capped exponential backoff — instant retry on a blip, but a flaky
+        // network doesn't turn into a reconnect storm.
+        let delay = min(30.0, pow(2.0, Double(reconnectAttempt)))
+        reconnectAttempt += 1
+        let work = DispatchWorkItem { [weak self] in
+            self?.reconnectWorkItem = nil
+            self?.connect()
+        }
+        reconnectWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+}
+
 private enum DateFormatters {
     static let isoFractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -2946,6 +3061,7 @@ private final class AppSession: ObservableObject {
             me = resolvedMe
             await resolveTerminalClaim(for: resolvedMe)
             status = .signedIn
+            RealtimeClient.shared.connect()
         } catch {
             signOut()
         }
@@ -2962,6 +3078,7 @@ private final class AppSession: ObservableObject {
             me = resolvedMe
             await resolveTerminalClaim(for: resolvedMe)
             status = .signedIn
+            RealtimeClient.shared.connect()
         } catch {
             status = .signedOut
             lastError = readable(error)
@@ -2969,6 +3086,7 @@ private final class AppSession: ObservableObject {
     }
 
     func signOut() {
+        RealtimeClient.shared.disconnect()
         TokenStore.delete("access_token")
         TokenStore.delete("refresh_token")
         TerminalStore.clear()
@@ -4533,6 +4651,7 @@ private struct TablesNativeView: View {
     @State private var isLoading = true
     @State private var error: String?
     @State private var selectedTable: TableDTO?
+    @State private var unsubscribeRealtime: (() -> Void)?
 
     var body: some View {
         AppNavigation {
@@ -4576,14 +4695,21 @@ private struct TablesNativeView: View {
         }
         .task { await load() }
         .task { await pollForServerUpdates() }
+        .onAppear {
+            unsubscribeRealtime = RealtimeClient.shared.subscribe("tables") { Task { await load() } }
+        }
+        .onDisappear {
+            unsubscribeRealtime?()
+            unsubscribeRealtime = nil
+        }
     }
 
     // Table status (occupied/available/cleaning) is shared across every
-    // device on the floor — without this, a table freed on one phone stays
-    // "occupied" on everyone else's until they happen to pull-to-refresh.
+    // device on the floor. Real-time push (see .onAppear above) is the
+    // primary mechanism; this is only a safety net for a missed/dropped push.
     private func pollForServerUpdates() async {
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
             if Task.isCancelled { break }
             await load()
         }
@@ -4921,14 +5047,16 @@ private struct TableOrderSheet: View {
     }
 }
 
-// Forward-only KDS: received -> preparing -> ready -> served. Auto-polls
-// every 3s like the web KitchenScreen, since this is a kiosk-style display
-// meant to stay open, not a screen someone actively refreshes.
+// Forward-only KDS: received -> preparing -> ready -> served. Real-time
+// push (see .task below) is the primary update mechanism, like the web
+// KitchenScreen; the 20s poll is a fallback for a missed/dropped push on
+// this kiosk-style display that's meant to stay open all shift.
 private struct KitchenNativeView: View {
     @EnvironmentObject private var session: AppSession
     @State private var orders: [KitchenOrderDTO] = []
     @State private var isLoading = true
     @State private var error: String?
+    @State private var unsubscribeRealtime: [() -> Void] = []
 
     private static let stages = ["received", "preparing", "ready", "served"]
 
@@ -4962,6 +5090,15 @@ private struct KitchenNativeView: View {
             .background(Brand.background)
         }
         .task { await pollLoop() }
+        .onAppear {
+            unsubscribeRealtime = ["kitchen", "tables", "orders"].map { resource in
+                RealtimeClient.shared.subscribe(resource) { Task { await load() } }
+            }
+        }
+        .onDisappear {
+            unsubscribeRealtime.forEach { $0() }
+            unsubscribeRealtime = []
+        }
     }
 
     private func nextStage(after stage: String) -> String? {
@@ -4986,7 +5123,7 @@ private struct KitchenNativeView: View {
         await load()
         isLoading = false
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
             await load()
         }
     }
@@ -5737,6 +5874,7 @@ private struct GamingNativeView: View {
     @State private var isSubmitting = false
     @State private var error: String?
     @State private var alarmedSessionIDs: Set<String> = []
+    @State private var unsubscribeRealtime: (() -> Void)?
 
     private var overtimeSessions: [GamingSessionDTO] {
         activeSessions.filter { gs in
@@ -5904,18 +6042,24 @@ private struct GamingNativeView: View {
         .task { await load() }
         .task { await watchForOvertime() }
         .task { await pollForServerUpdates() }
-        .onAppear { LocalAlarmScheduler.requestAuthorizationIfNeeded() }
+        .onAppear {
+            LocalAlarmScheduler.requestAuthorizationIfNeeded()
+            unsubscribeRealtime = RealtimeClient.shared.subscribe("gaming") { Task { await load() } }
+        }
+        .onDisappear {
+            unsubscribeRealtime?()
+            unsubscribeRealtime = nil
+        }
     }
 
-    // load() only ever ran once at mount otherwise, plus whenever this
-    // device's own actions (start/stop/extend) triggered it. On a
-    // multi-device floor, another staff member stopping a session from a
-    // different phone would leave this screen showing it as still running
-    // — and overtime as still counting — until someone happened to pull to
-    // refresh.
+    // load() only ran on this device's own actions (start/stop/extend)
+    // otherwise. On a multi-device floor, another staff member stopping a
+    // session from a different phone would leave this screen showing it as
+    // still running — and overtime as still counting — until the push above
+    // (or this fallback poll, for a missed/dropped push) catches it up.
     private func pollForServerUpdates() async {
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
             if Task.isCancelled { break }
             await load()
         }
@@ -6188,6 +6332,7 @@ private struct POSNativeView: View {
     @State private var isLoading = true
     @State private var isSubmitting = false
     @State private var error: String?
+    @State private var unsubscribeRealtime: [() -> Void] = []
 
     var body: some View {
         AppNavigation {
@@ -6484,17 +6629,26 @@ private struct POSNativeView: View {
         .task { await load() }
         .task { await watchHeldOrdersOvertime() }
         .task { await pollForServerUpdates() }
-        .onAppear { LocalAlarmScheduler.requestAuthorizationIfNeeded() }
+        .onAppear {
+            LocalAlarmScheduler.requestAuthorizationIfNeeded()
+            unsubscribeRealtime = ["orders", "shifts", "gaming"].map { resource in
+                RealtimeClient.shared.subscribe(resource) { Task { await load() } }
+            }
+        }
+        .onDisappear {
+            unsubscribeRealtime.forEach { $0() }
+            unsubscribeRealtime = []
+        }
     }
 
     // Same reasoning as GamingNativeView's pollForServerUpdates: this view's
     // own activeSessions/heldOrders otherwise only ever refresh once at mount
-    // plus whenever this device's own actions trigger a reload — another
-    // staff member's action from a different screen wouldn't show up here
-    // until someone happened to pull to refresh.
+    // plus whenever this device's own actions trigger a reload. Real-time
+    // push (see .onAppear above) is the primary mechanism now; this is only
+    // a safety net for a missed/dropped push.
     private func pollForServerUpdates() async {
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
             if Task.isCancelled { break }
             await load()
         }
@@ -11469,6 +11623,7 @@ private struct OrdersNativeView: View {
     @State private var isLoading = true
     @State private var error: String?
     @State private var closingShift: ShiftDTO?
+    @State private var unsubscribeRealtime: [() -> Void] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11505,16 +11660,26 @@ private struct OrdersNativeView: View {
         }
         .task { await load() }
         .task { await pollForServerUpdates() }
+        .onAppear {
+            unsubscribeRealtime = ["orders", "shifts"].map { resource in
+                RealtimeClient.shared.subscribe(resource) { Task { await load() } }
+            }
+        }
+        .onDisappear {
+            unsubscribeRealtime.forEach { $0() }
+            unsubscribeRealtime = []
+        }
     }
 
     // Whether a shift is open, and who has it open, is shared across every
     // device on this terminal — without this, a shift opened on one phone
-    // stays invisible on everyone else's screen until they happen to
-    // pull-to-refresh, which is exactly what leads someone else to try
-    // opening a second one and hit a "already open" error out of nowhere.
+    // stays invisible on everyone else's screen, which is exactly what leads
+    // someone else to try opening a second one and hit a "already open"
+    // error out of nowhere. Real-time push (see .onAppear above) is the
+    // primary mechanism; this is only a safety net for a missed/dropped push.
     private func pollForServerUpdates() async {
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
             if Task.isCancelled { break }
             await load()
         }

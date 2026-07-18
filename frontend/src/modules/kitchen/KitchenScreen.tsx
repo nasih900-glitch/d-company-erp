@@ -16,6 +16,12 @@ import {
 
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { kitchen, type KitchenOrderDTO } from '@/lib/erp-api';
+import { subscribeRealtime } from '@/lib/realtime';
+
+// Fallback only — real-time push is the primary mechanism. This kiosk
+// screen can sit open for a whole shift, so it's worth a somewhat tighter
+// safety net than other screens in case a connection drop goes unnoticed.
+const KITCHEN_FALLBACK_POLL_MS = 20_000;
 
 const TYPE_ICON: Record<string, React.ReactNode> = {
   food:    <Utensils size={14}/>,
@@ -72,8 +78,12 @@ export default function KitchenScreen() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 3000);
-    return () => clearInterval(id);
+    // New work can land in the queue from a kitchen state advance (this
+    // screen itself), a table sending items, or a direct POS order — so
+    // this listens for all three rather than just "kitchen".
+    const unsubscribers = ['kitchen', 'tables', 'orders'].map((resource) => subscribeRealtime(resource, load));
+    const id = setInterval(load, KITCHEN_FALLBACK_POLL_MS);
+    return () => { unsubscribers.forEach((unsub) => unsub()); clearInterval(id); };
   }, []);
 
   async function advance(o: KitchenOrderDTO) {

@@ -9,6 +9,7 @@ import {
   storeTerminalId,
   terminalResolutionMessage,
 } from '@/lib/operational-context';
+import { connectRealtime, disconnectRealtime } from '@/lib/realtime';
 
 interface Me {
   user_id: string;
@@ -110,6 +111,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (localStorage.getItem('notif_permission_asked')) return;
     localStorage.setItem('notif_permission_asked', '1');
     void Notification.requestPermission();
+  }, [me]);
+
+  // One shared real-time connection for the whole app, live for as long as
+  // someone is signed in — screens subscribe to it instead of each polling
+  // their own REST endpoint on a timer. connectRealtime() is a no-op if
+  // there's no access token (demo mode), so this is safe unconditionally.
+  useEffect(() => {
+    if (me) connectRealtime();
+    else disconnectRealtime();
   }, [me]);
 
   useEffect(() => {

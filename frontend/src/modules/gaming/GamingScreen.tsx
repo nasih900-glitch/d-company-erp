@@ -23,6 +23,7 @@ import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { gaming, shifts, type GamingPackageDTO, type StationDTO } from '@/lib/erp-api';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import { subscribeRealtime } from '@/lib/realtime';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 
@@ -73,7 +74,8 @@ const DURATION_PRESETS = [
 // floor, if another staff member stops/starts/extends a session from a
 // different screen, this screen would show stale state (a stopped session
 // still ticking as "overtime") until someone happened to reload the page.
-const GAMING_SESSIONS_POLL_MS = 30_000;
+// Fallback only — real-time push is the primary mechanism.
+const GAMING_SESSIONS_POLL_MS = 120_000;
 
 function notifyTimerExpired(stationName: string) {
   notifyBrowser(
@@ -181,15 +183,16 @@ export default function GamingScreen() {
   }
   useEffect(() => { load(); }, []);
 
-  // Re-sync with the server periodically so another device's stop/start/
-  // extend shows up here without a manual reload. load()'s merge logic
-  // (see above) already reuses the existing local session object when the
-  // backend session id hasn't changed, so this doesn't disrupt the locally
-  // ticking countdown for sessions nothing happened to.
+  // Real-time push re-syncs with the server the moment another device's
+  // stop/start/extend happens, instead of waiting for a timer. load()'s
+  // merge logic (see above) already reuses the existing local session
+  // object when the backend session id hasn't changed, so this doesn't
+  // disrupt the locally ticking countdown for sessions nothing happened to.
   useEffect(() => {
     if (!LIVE_MODE) return;
+    const unsubscribe = subscribeRealtime('gaming', () => { void load(); });
     const id = setInterval(() => { void load(); }, GAMING_SESSIONS_POLL_MS);
-    return () => clearInterval(id);
+    return () => { unsubscribe(); clearInterval(id); };
   }, []);
 
   // Live ticking timer + alarm check. One interval drives both the countdown

@@ -60,6 +60,7 @@ import {
 import { useAuth } from '@/modules/auth/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
+import { subscribeRealtime } from '@/lib/realtime';
 
 import LiveReceipt from './LiveReceipt';
 import {
@@ -83,7 +84,8 @@ const CATEGORY_FROM_TYPE: Record<string, string> = {
 // A held order sitting this long unbilled starts alarming — orders should be
 // billed or cleared, not forgotten about.
 const HELD_ORDER_ALARM_MINUTES = 15;
-const HELD_ORDERS_POLL_MS = 30_000;
+// Fallback only — real-time push is the primary mechanism.
+const HELD_ORDERS_POLL_MS = 120_000;
 const UNBILLED_QUEUE_LIMIT = 500;
 
 // In-progress work (cart being built, or an order being resumed) survives a
@@ -410,8 +412,9 @@ export default function LivePOSScreen() {
   useEffect(() => {
     if (!shiftId) return;
     loadHeldOrders();
+    const unsubscribe = subscribeRealtime('orders', () => loadHeldOrders(true));
     const id = setInterval(() => loadHeldOrders(true), HELD_ORDERS_POLL_MS);
-    return () => clearInterval(id);
+    return () => { unsubscribe(); clearInterval(id); };
   }, [loadHeldOrders, shiftId]);
 
   // Today's sales corner badge — scoped to itemized POS sales on this shift
@@ -431,8 +434,9 @@ export default function LivePOSScreen() {
   useEffect(() => {
     if (!shiftId) { setTodaysSalesMinor(null); return; }
     loadTodaysSales();
+    const unsubscribe = subscribeRealtime('shifts', loadTodaysSales);
     const id = setInterval(loadTodaysSales, HELD_ORDERS_POLL_MS);
-    return () => clearInterval(id);
+    return () => { unsubscribe(); clearInterval(id); };
   }, [loadTodaysSales, shiftId]);
 
   // Age-based alarm: a held order sitting too long should nag, not vanish

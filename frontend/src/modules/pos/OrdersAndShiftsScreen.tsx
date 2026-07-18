@@ -25,9 +25,12 @@ import {
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { subscribeRealtime } from '@/lib/realtime';
 
 type Tab = 'orders' | 'shifts';
-const OPERATIONS_POLL_MS = 30_000;
+// Fallback only — real-time push (see subscribeRealtime below) is what
+// actually keeps this current; this just covers a missed/dropped push.
+const OPERATIONS_POLL_MS = 120_000;
 
 export default function OrdersAndShiftsScreen() {
   const [tab, setTab] = useState<Tab>('orders');
@@ -73,12 +76,15 @@ function OrdersTab() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  // Poll quietly (no loading spinner) so orders billed from another
-  // device/login show up here without a manual refresh.
+  // Real-time push keeps this current the moment an order is billed from
+  // another device/login — quietly (no loading spinner). The interval is
+  // just a safety net for a missed push.
   useEffect(() => {
     if (!LIVE_MODE) return;
-    const id = setInterval(() => { orders.list().then(setRows).catch(() => {}); }, OPERATIONS_POLL_MS);
-    return () => clearInterval(id);
+    const refresh = () => { orders.list().then(setRows).catch(() => {}); };
+    const unsubscribe = subscribeRealtime('orders', refresh);
+    const id = setInterval(refresh, OPERATIONS_POLL_MS);
+    return () => { unsubscribe(); clearInterval(id); };
   }, []);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Order history is live-mode only.</div>;
@@ -241,14 +247,17 @@ function ShiftsTab() {
   useEffect(() => { void load(); }, [load]);
 
   // Whether a shift is open, and who has it open, is shared across every
-  // device on this terminal — poll quietly so a shift opened elsewhere
-  // shows up here without a manual refresh. This is what stops someone
-  // from trying to open a second shift on top of one that's already
-  // running, just because their screen hadn't caught up yet.
+  // device on this terminal. Real-time push means a shift opened elsewhere
+  // shows up here within about a second — this is what stops someone from
+  // trying to open a second shift on top of one that's already running,
+  // just because their screen hadn't caught up yet. The interval is just a
+  // safety net for a missed push.
   useEffect(() => {
     if (!LIVE_MODE || !terminalReady || !terminalId) return;
-    const id = setInterval(() => { shifts.list().then(setRows).catch(() => {}); }, OPERATIONS_POLL_MS);
-    return () => clearInterval(id);
+    const refresh = () => { shifts.list().then(setRows).catch(() => {}); };
+    const unsubscribe = subscribeRealtime('shifts', refresh);
+    const id = setInterval(refresh, OPERATIONS_POLL_MS);
+    return () => { unsubscribe(); clearInterval(id); };
   }, [terminalReady, terminalId]);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Shift management is live-mode only.</div>;

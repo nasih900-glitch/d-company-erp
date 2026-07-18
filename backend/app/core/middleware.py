@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 import uuid
 from typing import Awaitable, Callable
+from uuid import UUID
 
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -14,7 +16,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.logging import get_logger
+from app.core.security import decode_token
 from app.services.audit.recorder import clear_actor
+from app.services.realtime import manager, resource_for_path
 
 log = get_logger(__name__)
 
@@ -133,6 +137,45 @@ class TimingMiddleware(BaseHTTPMiddleware):
             duration_ms=round(dur_ms, 1),
         )
         return response
+
+
+class RealtimeBroadcastMiddleware(BaseHTTPMiddleware):
+    """After any successful write to an operationally-shared resource
+    (shifts, tables, orders, gaming, kitchen), push a "changed" signal to
+    every other connected client for that company over WebSocket — see
+    app.services.realtime. This is what lets a shift opened on one login
+    show up on every other login within roughly a second, instead of each
+    screen only finding out next time it happens to poll or gets manually
+    refreshed.
+
+    Decodes the bearer token itself rather than reading the audit
+    recorder's actor ContextVar, so this middleware's correctness doesn't
+    depend on where it's registered relative to RequestContextMiddleware's
+    own set/clear lifecycle — it's fully self-contained.
+    """
+
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        if request.method in ("POST", "PATCH", "PUT", "DELETE") and 200 <= response.status_code < 300:
+            resource = resource_for_path(request.url.path)
+            if resource:
+                company_id = self._company_id(request)
+                if company_id is not None:
+                    asyncio.create_task(manager.broadcast(company_id, resource))
+        return response
+
+    @staticmethod
+    def _company_id(request: Request) -> UUID | None:
+        auth = request.headers.get("authorization")
+        if not auth or not auth.lower().startswith("bearer "):
+            return None
+        try:
+            claims = decode_token(auth.split(" ", 1)[1])
+            return UUID(str(claims["company_id"]))
+        except Exception:
+            return None
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
