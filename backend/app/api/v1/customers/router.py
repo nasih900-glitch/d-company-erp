@@ -5,7 +5,7 @@ Endpoints:
   GET    /customers/by-phone/{phone}    — lookup by exact phone (POS quick-attach)
   GET    /customers/{id}                — detail
   POST   /customers                     — upsert by phone (create or fetch)
-  PATCH  /customers/{id}                — edit name/email/birthday/notes
+  PATCH  /customers/{id}                — edit name/phone/email/birthday/notes
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 
 from app.core.db import SessionDep
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import Customer
@@ -67,6 +67,7 @@ class CustomerUpsert(BaseModel):
 
 class CustomerUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=200)
+    phone: str | None = Field(default=None, max_length=20)
     email: str | None = Field(default=None, max_length=254)
     birthday: datetime | None = None
     notes: str | None = Field(default=None, max_length=500)
@@ -225,6 +226,25 @@ async def update_customer(
     c = await session.get(Customer, customer_id)
     if not c or c.company_id != tenant.company_id or c.deleted_at:
         raise NotFoundError("customer not found")
+    if payload.phone is not None and payload.phone != c.phone:
+        # Updated in place, by ID — never by the upsert-by-phone POST route
+        # above — so the same row (and all its points/order/visit history)
+        # carries over. Just needs a manual uniqueness check first, since a
+        # collision here should read as a clean "already in use" rather than
+        # the raw IntegrityError the DB's unique constraint would otherwise
+        # surface as a 500.
+        clash = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.company_id == tenant.company_id,
+                    Customer.phone == payload.phone,
+                    Customer.deleted_at.is_(None),
+                    Customer.id != customer_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if clash:
+            raise ConflictError(f"Another customer already uses {payload.phone}")
     for f, v in payload.model_dump(exclude_unset=True).items():
         setattr(c, f, v)
     await session.flush()

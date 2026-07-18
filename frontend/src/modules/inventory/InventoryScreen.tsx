@@ -614,9 +614,13 @@ function AdjustmentForm({
     if (!branchId) { setErr('select a branch'); return; }
     setBusy(true); setErr(null);
     try {
-      // Waste/damage are typically negative
+      // Waste/damage/transfer-out always reduce stock, so the field only
+      // ever asks for a positive amount and this negates it here. Count
+      // correction is the exception — it needs to go either direction (the
+      // physical count can come up higher OR lower than the system count),
+      // so its field accepts a signed number directly, unnegated.
       const q = parseFloat(qty);
-      const delta = (type === 'waste' || type === 'damage') && q > 0 ? -q : q;
+      const delta = (type === 'waste' || type === 'damage' || type === 'transfer') && q > 0 ? -q : q;
       await inventory.postAdjustment({
         ingredient_id: ingredient.id,
         branch_id: branchId,
@@ -651,8 +655,10 @@ function AdjustmentForm({
             <option value="transfer">Transfer out</option>
           </select>
         </Field>
-        <Field label={`Quantity in ${ingredient.base_unit} (positive number)`}>
-          <input type="number" min={0} step="0.01" required className="input font-mono"
+        <Field label={type === 'adjustment'
+          ? `Count correction in ${ingredient.base_unit} (use a minus sign if the real count is lower, e.g. -3)`
+          : `Quantity in ${ingredient.base_unit} (positive number — this will be subtracted from stock)`}>
+          <input type="number" min={type === 'adjustment' ? undefined : 0} step="0.01" required className="input font-mono"
             value={qty} onChange={(e) => setQty(e.target.value)}/>
         </Field>
         <Field label="Note (optional)">

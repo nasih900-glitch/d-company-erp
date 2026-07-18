@@ -22,7 +22,7 @@ from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
     Batch, Branch, Ingredient, ManualCollection, MenuItem, Order, OrderLine,
-    Recipe, RecipeLine, StockMovement,
+    Recipe, RecipeLine, Refund, StockMovement,
 )
 
 router = APIRouter()
@@ -80,6 +80,7 @@ class TopItemDTO(BaseModel):
 class GrowthPeriodDTO(BaseModel):
     label: str
     revenue_minor: int
+    refunds_minor: int
     manual_collections_minor: int
     orders_count: int
     avg_ticket_minor: int
@@ -278,6 +279,26 @@ async def _period_stats(
     ).one()
     order_revenue = int(row.rev)
     n = int(row.n)
+    # order_revenue sums total_minor for paid AND refunded orders (refunded
+    # orders still represent a real service event, so they stay in the order
+    # count) — but a refund is money handed back, so it must not also inflate
+    # the revenue figure sitting above it. Net it out here the same way it's
+    # netted in ReportsAggregator, just without that service's proportional
+    # cross-period tax allocation, which this simple growth headline doesn't need.
+    refunds_minor = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Refund.amount_minor), 0))
+                .select_from(Refund)
+                .join(Order, Order.id == Refund.order_id)
+                .where(
+                    Order.company_id == company_id,
+                    Refund.created_at >= f_dt, Refund.created_at < t_dt,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
     manual_revenue = int(
         (
             await session.execute(
@@ -293,10 +314,12 @@ async def _period_stats(
     )
     # Manual collections are revenue but not orders. They affect growth and
     # cash movement, while AOV remains based only on itemized POS orders.
-    avg = order_revenue // n if n else 0
+    net_order_revenue = order_revenue - refunds_minor
+    avg = net_order_revenue // n if n else 0
     return GrowthPeriodDTO(
         label="",
-        revenue_minor=order_revenue + manual_revenue,
+        revenue_minor=net_order_revenue + manual_revenue,
+        refunds_minor=refunds_minor,
         manual_collections_minor=manual_revenue,
         orders_count=n,
         avg_ticket_minor=avg,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
@@ -13,25 +13,52 @@ import InstallButton from './InstallButton';
 // `module` matches a key in the backend's MODULE_PERMISSIONS — used to hide
 // a tab when the caller's role/company access-control override says no.
 // Tabs without a `module` are visible to everyone, same as before this existed.
-const NAV = [
-  { to: '/pos',       label: 'POS',        Icon: Calculator },
-  { to: '/operations',label: 'Operations', Icon: ClipboardList },
-  { to: '/tables',    label: 'Tables',     Icon: LayoutGrid },
-  { to: '/kitchen',   label: 'Kitchen',    Icon: ChefHat },
-  { to: '/menu',      label: 'Menu',       Icon: BookOpen },
-  { to: '/inventory', label: 'Inventory',  Icon: Boxes, module: 'inventory' },
-  { to: '/gaming',    label: 'Gaming',     Icon: Gamepad2 },
-  { to: '/events',    label: 'Events',     Icon: Tv },
-  { to: '/finance',   label: 'Finance',    Icon: Wallet },
-  { to: '/ocr',       label: 'OCR',        Icon: ScanLine },
-  { to: '/staff',     label: 'Staff',      Icon: Users },
-  { to: '/customers', label: 'Customers',  Icon: UserCircle },
-  { to: '/analytics', label: 'Analytics',  Icon: BarChart3, module: 'insights_reports' },
-  { to: '/insights',  label: 'Insights',   Icon: Sparkles, module: 'insights_reports' },
-  { to: '/reports',   label: 'Reports',    Icon: FileText, module: 'insights_reports' },
-  { to: '/audit',     label: 'Audit Log',  Icon: ShieldCheck, protectedOnly: true },
-  { to: '/settings',  label: 'Settings',   Icon: Settings },
+//
+// Grouped so the screens staff open constantly during a shift aren't mixed
+// in with occasional setup/admin screens — mirrors the same grouping used
+// in the native app's Workspace list. Every route/link below is unchanged,
+// only organized into sections.
+const NAV_GROUPS = [
+  {
+    title: 'Daily Operations',
+    items: [
+      { to: '/pos',        label: 'POS',        Icon: Calculator },
+      { to: '/operations', label: 'Operations', Icon: ClipboardList },
+      { to: '/tables',     label: 'Tables',     Icon: LayoutGrid },
+      { to: '/kitchen',    label: 'Kitchen',    Icon: ChefHat },
+      { to: '/gaming',     label: 'Gaming',     Icon: Gamepad2 },
+      { to: '/customers',  label: 'Customers',  Icon: UserCircle },
+    ],
+  },
+  {
+    title: 'Catalog & Stock',
+    items: [
+      { to: '/menu',      label: 'Menu',      Icon: BookOpen },
+      { to: '/inventory', label: 'Inventory', Icon: Boxes, module: 'inventory' },
+      { to: '/events',    label: 'Events',    Icon: Tv },
+    ],
+  },
+  {
+    title: 'Reports & Money',
+    items: [
+      { to: '/ocr',       label: 'OCR',       Icon: ScanLine },
+      { to: '/analytics', label: 'Analytics', Icon: BarChart3, module: 'insights_reports' },
+      { to: '/insights',  label: 'Insights',  Icon: Sparkles, module: 'insights_reports' },
+      { to: '/reports',   label: 'Reports',   Icon: FileText, module: 'insights_reports' },
+      { to: '/finance',   label: 'Finance',   Icon: Wallet },
+    ],
+  },
+  {
+    title: 'Setup',
+    items: [
+      { to: '/staff',    label: 'Staff',     Icon: Users },
+      { to: '/audit',    label: 'Audit Log', Icon: ShieldCheck, protectedOnly: true },
+      { to: '/settings', label: 'Settings',  Icon: Settings },
+    ],
+  },
 ];
+
+const NAV = NAV_GROUPS.flatMap((g) => g.items);
 
 export default function AppShell({ children }: { children?: ReactNode }) {
   const {
@@ -46,16 +73,23 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
   const accessibleModules = me?.accessible_modules;
-  const navItems = useMemo(
-    () => NAV.filter((item) => {
+  const isVisible = useCallback(
+    (item: (typeof NAV)[number]) => {
       if ('protectedOnly' in item && !hasAuditAccess) return false;
       if (item.module && !isProtectedOwner && accessibleModules && !accessibleModules.includes(item.module)) {
         return false;
       }
       return true;
-    }),
+    },
     [isProtectedOwner, hasAuditAccess, accessibleModules],
   );
+  const navGroups = useMemo(
+    () => NAV_GROUPS
+      .map((g) => ({ ...g, items: g.items.filter(isVisible) }))
+      .filter((g) => g.items.length > 0),
+    [isVisible],
+  );
+  const navItems = useMemo(() => NAV.filter(isVisible), [isVisible]);
 
   const current = useMemo(
     () => navItems.find((n) => n.to === loc.pathname),
@@ -162,24 +196,31 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         </div>
 
         <nav
-          className="flex-1 min-h-0 space-y-1 overflow-y-auto -mx-1 px-1"
+          className="flex-1 min-h-0 space-y-4 overflow-y-auto -mx-1 px-1"
           style={{ WebkitOverflowScrolling: 'touch' }}
         >
-          {navItems.map(({ to, label, Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +
-                (isActive
-                  ? 'bg-bg-raised text-fg shadow-glow'
-                  : 'text-fg-muted hover:text-fg hover:bg-bg-raised/50 active:scale-[0.98]')
-              }
-            >
-              <Icon size={18} />
-              {label}
-            </NavLink>
+          {navGroups.map((group) => (
+            <div key={group.title} className="space-y-1">
+              <p className="px-3 pt-1 text-[10px] font-bold uppercase tracking-wider text-fg-muted/70">
+                {group.title}
+              </p>
+              {group.items.map(({ to, label, Icon }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  onClick={onNavigate}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +
+                    (isActive
+                      ? 'bg-bg-raised text-fg shadow-glow'
+                      : 'text-fg-muted hover:text-fg hover:bg-bg-raised/50 active:scale-[0.98]')
+                  }
+                >
+                  <Icon size={18} />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 

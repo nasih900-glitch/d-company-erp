@@ -32,6 +32,7 @@ class DashboardKPIs(BaseModel):
     revenue_hookah_minor: int
     revenue_events_minor: int
     revenue_manual_collections_minor: int
+    discounts_and_points_redeemed_minor: int
     revenue_total_minor: int
     orders_count: int
     tickets_count: int
@@ -102,6 +103,7 @@ async def dashboard(
         revenue_hookah_minor=report.revenue.hookah_minor,
         revenue_events_minor=report.revenue.event_tickets_minor,
         revenue_manual_collections_minor=report.manual_collections_minor,
+        discounts_and_points_redeemed_minor=report.revenue.discounts_and_points_redeemed_minor,
         revenue_total_minor=report.gross_revenue_minor,
         orders_count=report.orders_count,
         tickets_count=report.tickets_count,

@@ -59,6 +59,7 @@ import {
 } from '@/lib/retry-drafts';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
+import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
 
 import LiveReceipt from './LiveReceipt';
 import {
@@ -146,6 +147,9 @@ export default function LivePOSScreen() {
   const [resumingOrder, setResumingOrder] = useState<OrderDTO | null>(null);
   const [heldAlarmMuted, setHeldAlarmMuted] = useState(false);
   const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [voidPromptRow, setVoidPromptRow] = useState<OrderListItemDTO | null>(null);
+  const [abandonConfirmVariant, setAbandonConfirmVariant] = useState<'benefit_covered' | 'no_payment' | null>(null);
+  const [abandonReasonOrder, setAbandonReasonOrder] = useState<OrderDTO | null>(null);
   const [, setAlarmTick] = useState(0);
   const [discountInput, setDiscountInput] = useState('');
   const [applyingDiscount, setApplyingDiscount] = useState(false);
@@ -452,7 +456,7 @@ export default function LivePOSScreen() {
       lastHeldAlarmAtRef.current = now;
       playAlarmTone();
       notifyBrowser(
-        '⏰ POS queue waiting',
+        '⏰ Incoming orders waiting',
         'One or more sent or recovered orders have been unbilled for a while. Bill or void them.',
         'dcompany-held-orders',
       );
@@ -509,12 +513,10 @@ export default function LivePOSScreen() {
     } catch (e) { setError((e as Error).message); }
   }
 
-  async function voidOrder(row: OrderListItemDTO) {
-    const reason = prompt(`Why are you clearing ${row.source_label || 'this order'}?`);
-    if (!reason || !reason.trim()) return;
+  async function voidOrder(row: OrderListItemDTO, reason: string) {
     setVoidingId(row.id);
     try {
-      await pos.voidOrder(row.id, reason.trim());
+      await pos.voidOrder(row.id, reason);
       await loadHeldOrders(true);
     } catch (e) { setHeldError((e as Error).message); }
     finally { setVoidingId(null); }
@@ -1083,14 +1085,16 @@ export default function LivePOSScreen() {
     }
   }
 
-  async function abandonPreparedCheckout() {
+  function startAbandonPreparedCheckout() {
     const retry = checkoutRetry;
     if (!retry?.pendingOrderId || retry.phase !== 'awaiting_payment') return;
-    const benefitCoveredZero = hasBenefitCoveredZeroBalance(retry);
-    const confirmed = benefitCoveredZero
-      ? confirm('Cancel this prepared membership-covered bill? No money is due and the allowance has not been consumed yet.')
-      : confirm('Confirm that NO cash, UPI, QR, or card payment was received for this bill.');
-    if (!confirmed) return;
+    setAbandonConfirmVariant(hasBenefitCoveredZeroBalance(retry) ? 'benefit_covered' : 'no_payment');
+  }
+
+  async function abandonPreparedCheckout() {
+    setAbandonConfirmVariant(null);
+    const retry = checkoutRetry;
+    if (!retry?.pendingOrderId || retry.phase !== 'awaiting_payment') return;
     setPaying(true);
     setError(null);
     try {
@@ -1148,16 +1152,34 @@ export default function LivePOSScreen() {
         setCheckoutRetry(null);
         setError('Payment was not recorded. The prepared held order remains available in POS.');
       } else {
-        const reason = prompt('Why are you cancelling this prepared direct POS bill?');
-        if (!reason?.trim()) return;
-        await pos.voidOrder(order.id, reason.trim());
-        setCheckoutRetry(null);
-        if (draftKey) clearDraft(draftKey);
-        setCart([]);
-        setResumingOrder(null);
-        clearCustomer();
-        setError('Prepared bill cancelled with an audit reason; no payment was recorded.');
+        // Needs a reason before it can be voided — hand off to the reason
+        // modal rather than blocking here; finishAbandonWithReason() below
+        // picks up from this exact order once the staff member submits one.
+        setAbandonReasonOrder(order);
+        return;
       }
+      void loadHeldOrders(true);
+    } catch (e) {
+      setError(`${(e as Error).message} The prepared bill remains locked; do not start another bill.`);
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  async function finishAbandonWithReason(reason: string) {
+    const order = abandonReasonOrder;
+    setAbandonReasonOrder(null);
+    if (!order) return;
+    setPaying(true);
+    setError(null);
+    try {
+      await pos.voidOrder(order.id, reason);
+      setCheckoutRetry(null);
+      if (draftKey) clearDraft(draftKey);
+      setCart([]);
+      setResumingOrder(null);
+      clearCustomer();
+      setError('Prepared bill cancelled with an audit reason; no payment was recorded.');
       void loadHeldOrders(true);
     } catch (e) {
       setError(`${(e as Error).message} The prepared bill remains locked; do not start another bill.`);
@@ -1202,8 +1224,8 @@ export default function LivePOSScreen() {
                 Today: <span className="font-bold font-mono ml-1">{inr(todaysSalesMinor)}</span>
               </div>
             )}
-            <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }}>
-              <Inbox size={14}/> POS queue
+            <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }} title="Orders sent here from Tables and Gaming">
+              <Inbox size={14}/> Incoming orders
               {heldOrders.length > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-bg text-[10px] font-bold flex items-center justify-center">
                   {heldOrders.length}
@@ -1818,7 +1840,7 @@ export default function LivePOSScreen() {
                 {checkoutRetry.phase === 'awaiting_payment' ? (
                   <div className="grid grid-cols-2 gap-3">
                     <button className="btn btn-ghost disabled:opacity-40"
-                      disabled={paying} onClick={abandonPreparedCheckout}>
+                      disabled={paying} onClick={startAbandonPreparedCheckout}>
                       {benefitCoveredZero ? 'Cancel prepared bill' : 'No payment · Cancel'}
                     </button>
                     <button className="btn btn-primary disabled:opacity-40"
@@ -1855,7 +1877,7 @@ export default function LivePOSScreen() {
       )}
 
       {showHeldPicker && (
-        <Modal title="POS queue" onClose={() => setShowHeldPicker(false)} wide>
+        <Modal title="Incoming orders (sent from Tables & Gaming)" onClose={() => setShowHeldPicker(false)} wide>
           <div className="relative mb-3">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
             <input
@@ -1903,7 +1925,7 @@ export default function LivePOSScreen() {
                       <button
                         className="btn btn-ghost !p-2 text-accent-bad shrink-0"
                         disabled={voidingId === o.id}
-                        onClick={() => voidOrder(o)}
+                        onClick={() => setVoidPromptRow(o)}
                         title="Void this queued order with a reason">
                         {voidingId === o.id ? <Loader2 className="animate-spin" size={14}/> : <Trash2 size={14}/>}
                       </button>
@@ -1918,6 +1940,39 @@ export default function LivePOSScreen() {
             </div>
           )}
         </Modal>
+      )}
+      {voidPromptRow && (
+        <PromptModal
+          title="Void queued order"
+          label={`Why are you clearing ${voidPromptRow.source_label || 'this order'}?`}
+          confirmLabel="Void"
+          busy={voidingId === voidPromptRow.id}
+          onSubmit={(reason) => { const row = voidPromptRow; setVoidPromptRow(null); void voidOrder(row, reason); }}
+          onCancel={() => setVoidPromptRow(null)}
+        />
+      )}
+      {abandonConfirmVariant && (
+        <ConfirmModal
+          title="Cancel prepared bill"
+          message={abandonConfirmVariant === 'benefit_covered'
+            ? 'Cancel this prepared membership-covered bill? No money is due and the allowance has not been consumed yet.'
+            : 'Confirm that NO cash, UPI, QR, or card payment was received for this bill.'}
+          confirmLabel="Cancel bill"
+          danger
+          busy={paying}
+          onConfirm={abandonPreparedCheckout}
+          onCancel={() => setAbandonConfirmVariant(null)}
+        />
+      )}
+      {abandonReasonOrder && (
+        <PromptModal
+          title="Cancel prepared bill"
+          label="Why are you cancelling this prepared direct POS bill?"
+          confirmLabel="Cancel bill"
+          busy={paying}
+          onSubmit={finishAbandonWithReason}
+          onCancel={() => setAbandonReasonOrder(null)}
+        />
       )}
     </div>
   );

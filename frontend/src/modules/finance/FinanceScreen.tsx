@@ -71,6 +71,7 @@ export default function FinanceScreen() {
 function OverviewTab() {
   const [data, setData] = useState<ReportDataDTO | null>(null);
   const [metrics, setMetrics] = useState<BusinessMetricsDTO | null>(null);
+  const [gstRegistered, setGstRegistered] = useState(true);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -87,6 +88,7 @@ function OverviewTab() {
       ));
       setData(daily);
       setMetrics(businessMetrics);
+      setGstRegistered(company.gst_registration_type !== 'unregistered');
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
@@ -124,19 +126,28 @@ function OverviewTab() {
         </div>
       )}
 
+      {!gstRegistered && (
+        <div className="card mb-4 border-bg-border bg-bg-raised text-sm text-fg-muted">
+          <b>Not GST-registered.</b> The GST fields below are inactive placeholders for when
+          you register — they are not live tax figures, and no GST is actually being charged
+          or collected today.
+        </div>
+      )}
+
       {manualCollections > 0 && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
           <b>{inr(manualCollections)} of today's revenue is unitemized manual collection.</b>{' '}
           It is included in P&amp;L and payment movement, but has no POS order, tax invoice,
-          table ticket, gaming session, item mix, or automatic COGS.
+          table ticket, gaming session, item mix, or automatic COGS
+          {manualCollections > 0 ? ' — so Gross profit below runs a little rich on days with a big manual-collection share, since none of it carries any COGS.' : '.'}
         </div>
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
         <Stat label="Revenue (gross)"   value={inrShort(rev.total_minor)} sub={inr(rev.total_minor)} tone="good"/>
-        <Stat label="GST collected"     value={inrShort(totalGst)} sub="CGST + SGST + IGST"/>
+        {gstRegistered && <Stat label="GST collected"     value={inrShort(totalGst)} sub="CGST + SGST + IGST"/>}
         <Stat label="Expenses"          value={inrShort(exp)} sub={inr(exp)} tone="bad"/>
-        <Stat label="Net profit (today)" value={inrShort(net)} sub={inr(net)} tone={net >= 0 ? 'good' : 'bad'}/>
+        <Stat label="Operating profit (today)" value={inrShort(net)} sub={`${inr(net)} · before depreciation`} tone={net >= 0 ? 'good' : 'bad'}/>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
@@ -144,12 +155,12 @@ function OverviewTab() {
           <h3 className="font-semibold mb-4 flex items-center gap-2">
             <TrendingUp size={16} className="text-accent-good"/> Revenue
           </h3>
-          {rev.food_minor > 0 && <Row label="Food (5% GST)" v={rev.food_minor}/>}
-          {rev.gaming_minor > 0 && <Row label="Gaming (18% GST)" v={rev.gaming_minor}/>}
-          {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label="Shisha (18% GST)" v={rev.hookah_minor}/>}
-          {rev.event_tickets_minor > 0 && <Row label="Event tickets (18% GST)" v={rev.event_tickets_minor}/>}
+          {rev.food_minor > 0 && <Row label={gstRegistered ? 'Food (5% GST)' : 'Food'} v={rev.food_minor}/>}
+          {rev.gaming_minor > 0 && <Row label={gstRegistered ? 'Gaming (18% GST)' : 'Gaming'} v={rev.gaming_minor}/>}
+          {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label={gstRegistered ? 'Shisha (18% GST)' : 'Shisha'} v={rev.hookah_minor}/>}
+          {rev.event_tickets_minor > 0 && <Row label={gstRegistered ? 'Event tickets (18% GST)' : 'Event tickets'} v={rev.event_tickets_minor}/>}
           {rev.delivery_aggregator_minor > 0 && (
-            <Row label="Delivery aggregator (§9(5))" v={rev.delivery_aggregator_minor} sub="zero GST on our invoice"/>
+            <Row label={gstRegistered ? 'Delivery aggregator (§9(5))' : 'Delivery aggregator'} v={rev.delivery_aggregator_minor} sub={gstRegistered ? 'zero GST on our invoice' : undefined}/>
           )}
           {rev.manual_collections_minor > 0 && (
             <Row label="Manual collections (unitemized)" v={rev.manual_collections_minor}
@@ -160,15 +171,19 @@ function OverviewTab() {
           {rev.discounts_and_points_redeemed_minor > 0 && (
             <Row label="Less: discounts & points redeemed" v={-rev.discounts_and_points_redeemed_minor}/>
           )}
-          <Divider/>
-          <Row label="Less: Output CGST" v={-tax.cgst_minor}/>
-          <Row label="Less: Output SGST" v={-tax.sgst_minor}/>
-          {tax.igst_minor > 0 && <Row label="Less: Output IGST" v={-tax.igst_minor}/>}
-          <Divider/>
-          <Row label="Net revenue (after GST)" v={data.net_revenue_minor} bold/>
+          {gstRegistered && (
+            <>
+              <Divider/>
+              {tax.cgst_minor > 0 && <Row label="Less: Output CGST" v={-tax.cgst_minor}/>}
+              {tax.sgst_minor > 0 && <Row label="Less: Output SGST" v={-tax.sgst_minor}/>}
+              {tax.igst_minor > 0 && <Row label="Less: Output IGST" v={-tax.igst_minor}/>}
+              <Divider/>
+              <Row label="Net revenue (after GST)" v={data.net_revenue_minor} bold/>
+            </>
+          )}
           <Divider/>
           <Row label="Less: cost of goods sold" v={-data.cogs_minor} sub="what the food/drinks/items you sold actually cost you"/>
-          <Row label="Gross profit" v={data.gross_profit_minor} bold/>
+          <Row label="Gross profit" v={data.gross_profit_minor} bold sub={manualCollections > 0 ? 'includes manual collections at 0% COGS' : undefined}/>
         </div>
 
         <div className="card">
@@ -187,7 +202,7 @@ function OverviewTab() {
         <Row label="Gross profit" v={data.gross_profit_minor}/>
         <Row label="Less: total expenses" v={-exp}/>
         <Divider/>
-        <Row label="Net profit (today)" v={net} bold/>
+        <Row label="Operating profit (today)" v={net} bold sub="before equipment depreciation"/>
       </div>
 
       <p className="text-xs text-fg-muted mt-4">
@@ -201,12 +216,12 @@ function OverviewTab() {
             {' – '}{new Date(metrics.period_end).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-            <Stat label="Avg order value" value={inrShort(metrics.aov_minor)}
+            <Stat label="Avg order value (this period)" value={inrShort(metrics.aov_minor)}
               sub={`${metrics.orders_count} order${metrics.orders_count === 1 ? '' : 's'} this period`}/>
             <Stat label="MRR" value={inrShort(metrics.mrr_minor)}
               sub={`${metrics.active_members_count} active member${metrics.active_members_count === 1 ? '' : 's'}`}/>
             <Stat label="ARR" value={inrShort(metrics.arr_minor)} sub="MRR × 12"/>
-            <Stat label="Customer LTV" value={inrShort(metrics.ltv_minor)}
+            <Stat label="Customer LTV (all-time)" value={inrShort(metrics.ltv_minor)}
               sub={`avg across ${metrics.customers_count} customer${metrics.customers_count === 1 ? '' : 's'}, all-time`}/>
             <Stat label="CAC" value={metrics.cac_minor === null ? '—' : inrShort(metrics.cac_minor)}
               sub={metrics.cac_minor === null
@@ -214,7 +229,7 @@ function OverviewTab() {
                 : `₹${(metrics.marketing_spend_minor / 100).toFixed(0)} marketing ÷ ${metrics.new_customers_count} new`}/>
             <Stat label="Burn rate" value={inrShort(metrics.burn_rate_minor)}
               tone={metrics.burn_rate_minor > 0 ? 'bad' : 'good'}
-              sub={metrics.burn_rate_minor > 0 ? 'lost money this period, after cost of goods sold' : 'profitable this period'}/>
+              sub={metrics.burn_rate_minor > 0 ? 'lost money this period, after cost of goods sold and expenses' : 'profitable this period'}/>
           </div>
           <p className="text-xs text-fg-muted mt-3">
             These are the metrics that actually fit a single-location, self-funded business —
@@ -527,7 +542,9 @@ function PartnersTab() {
               <div className="font-bold text-sm">Safe to distribute right now</div>
               <div className="text-[11px] text-fg-muted mt-0.5">
                 All-time profit, minus everything ever withdrawn, minus a {distributable.reserve_months}-month
-                safety buffer — capped by actual cash on hand, not just what the books say
+                safety buffer — capped by actual cash on hand, not just what the books say.
+                Before equipment depreciation — this figure doesn't yet charge for gaming/kitchen
+                equipment wearing out, so treat it as an upper bound, not the final word.
               </div>
             </div>
             <div className={`text-2xl font-bold font-mono ${distributable.safe_to_distribute_minor > 0 ? 'text-accent-good' : ''}`}>
@@ -536,7 +553,7 @@ function PartnersTab() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs pt-3 border-t border-bg-border/60">
             <div>
-              <div className="text-fg-muted">Lifetime profit</div>
+              <div className="text-fg-muted">Lifetime profit (pre-depreciation)</div>
               <div className={`font-mono font-semibold ${distributable.lifetime_net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>
                 {inr(distributable.lifetime_net_profit_minor)}
               </div>
@@ -565,7 +582,7 @@ function PartnersTab() {
       {split && (
         <div className="card mb-3 flex justify-between items-center flex-wrap gap-2">
           <div className="text-sm text-fg-muted">
-            Net profit this month ({new Date(split.period_start).toLocaleDateString('en-IN')}
+            Operating profit this month ({new Date(split.period_start).toLocaleDateString('en-IN')}
             {' – '}{new Date(split.period_end).toLocaleDateString('en-IN')}), split by ownership share
           </div>
           <div className={`font-bold font-mono ${split.net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>

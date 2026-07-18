@@ -188,6 +188,16 @@ REWARD_CATALOG: list[RewardCatalogItem] = [
         description="Our top-tier experience, for our top-tier players",
         points_cost=500, value_minor=25000, min_rank="Legend",
     ),
+    # The big one: reaching 1000 lifetime gaming points is what unlocks Legend
+    # rank in the first place, so this is the ceiling prize a player's whole
+    # points balance can go toward — up to ₹1000 off a single bill. Priced far
+    # better per-point than the generic cash-out (₹1/point vs 10 paise/point)
+    # on purpose, same reasoning as every other named reward in this catalog.
+    RewardCatalogItem(
+        key="legend_credit_1000", name="Legend's ₹1,000 Credit",
+        description="Up to ₹1,000 off any single bill",
+        points_cost=1000, value_minor=100000, min_rank="Legend",
+    ),
 ]
 
 

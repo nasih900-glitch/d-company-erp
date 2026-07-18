@@ -84,10 +84,17 @@ export default function AnalyticsScreen() {
               icon={<ShoppingBag/>}/>
             <KPI label="Avg ticket" value={inr(data.avg_ticket_minor)}         sub="per receipt"
               icon={<TrendingUp/>}/>
-            <KPI label="Net profit (today)" value={inrShort(data.net_profit_minor)}
-              sub={inr(data.net_profit_minor)}
+            <KPI label="Operating profit (today)" value={inrShort(data.net_profit_minor)}
+              sub={`${inr(data.net_profit_minor)} · before equipment depreciation`}
               icon={<TrendingUp/>} tone={data.net_profit_minor >= 0 ? 'good' : 'bad'}/>
           </div>
+
+          {data.discounts_and_points_redeemed_minor > 0 && (
+            <div className="card mb-6 border-bg-border bg-bg-raised text-sm text-fg-muted">
+              Revenue above is already net of <b>{inr(data.discounts_and_points_redeemed_minor)}</b> in
+              discounts and loyalty-point redemptions today.
+            </div>
+          )}
 
           {/* Operations strip */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
@@ -115,6 +122,9 @@ export default function AnalyticsScreen() {
                     ? [{ name: 'Hookah', value: data.revenue_hookah_minor / 100 }]
                     : []),
                   { name: 'Events', value: data.revenue_events_minor / 100 },
+                  ...(data.revenue_manual_collections_minor > 0
+                    ? [{ name: 'Manual', value: data.revenue_manual_collections_minor / 100 }]
+                    : []),
                 ]}>
                   <XAxis dataKey="name" stroke="#999"/>
                   <YAxis stroke="#999" tickFormatter={(v) => `₹${v >= 1000 ? (v/1000).toFixed(0) + 'K' : v}`}/>

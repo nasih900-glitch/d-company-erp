@@ -15,13 +15,20 @@ import {
 
 import { inr, inrShort } from '@/lib/inr';
 import {
-  accounting, insights,
+  accounting, insights, finance,
   type AccountDTO, type TrialBalanceDTO, type BalanceSheetDTO,
   type InventoryValuationDTO, type RecipeMarginDTO, type GrowthDTO,
   type TopItemDTO, type HeatmapCellDTO, type LossesDTO, type GLEntryDTO,
+  type PartnerDTO,
 } from '@/lib/erp-api';
 
 type Tab = 'growth' | 'inventory' | 'accounting' | 'losses';
+
+function todayISO(): string {
+  const d = new Date();
+  const p = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 export default function InsightsScreen() {
   const [tab, setTab] = useState<Tab>('growth');
@@ -131,6 +138,15 @@ function GrowthTab() {
           <b>{inr(growth.current.manual_collections_minor)}</b>, previous{' '}
           <b>{inr(growth.previous.manual_collections_minor)}</b>. Order counts, average order value,
           top items, and hourly heatmap remain POS-only.
+        </div>
+      )}
+
+      {(growth.current.refunds_minor > 0 || growth.previous.refunds_minor > 0) && (
+        <div className="card mb-6 border-bg-border bg-bg-raised text-sm text-fg-muted">
+          Revenue above is already net of refunds issued: current{' '}
+          <b>-{inr(growth.current.refunds_minor)}</b>, previous{' '}
+          <b>-{inr(growth.previous.refunds_minor)}</b>. Refunded orders still count toward Orders,
+          since the service itself happened.
         </div>
       )}
 
@@ -376,24 +392,40 @@ function AccountingTab() {
   const [bs, setBs] = useState<BalanceSheetDTO | null>(null);
   const [coa, setCoa] = useState<AccountDTO[]>([]);
   const [gl, setGl] = useState<GLEntryDTO[]>([]);
+  const [partners, setPartners] = useState<PartnerDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  const [glLoading, setGlLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [view, setView] = useState<'tb' | 'bs' | 'coa' | 'gl'>('tb');
+  const [glFrom, setGlFrom] = useState(todayISO());
+  const [glTo, setGlTo] = useState(todayISO());
 
   async function load() {
     setLoading(true); setErr(null);
     try {
-      const [t, b, c, g] = await Promise.all([
+      const [t, b, c, g, p] = await Promise.all([
         accounting.trialBalance(),
         accounting.balanceSheet(),
         accounting.chartOfAccounts(),
-        accounting.generalLedger({ limit: 100 }),
+        accounting.generalLedger({ from_date: glFrom, to_date: glTo, limit: 100 }),
+        finance.listPartners(),
       ]);
-      setTb(t); setBs(b); setCoa(c); setGl(g);
+      setTb(t); setBs(b); setCoa(c); setGl(g); setPartners(p);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
+  // Load once on mount with today's date range; loadGl() below re-fetches
+  // the ledger specifically when the date pickers change, without re-running
+  // the trial balance/balance sheet/chart-of-accounts calls alongside it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
+
+  async function loadGl() {
+    setGlLoading(true); setErr(null);
+    try { setGl(await accounting.generalLedger({ from_date: glFrom, to_date: glTo, limit: 100 })); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setGlLoading(false); }
+  }
 
   if (loading) return <LoadingCard/>;
   if (err) return <ErrorCard text={err}/>;
@@ -461,6 +493,21 @@ function AccountingTab() {
           <BSSection title="Assets" section={bs.assets}/>
           <BSSection title="Liabilities" section={bs.liabilities}/>
           <BSSection title="Equity" section={bs.equity}/>
+          {partners.length > 0 && (
+            <div className="md:col-span-3 card">
+              <h4 className="font-semibold mb-3 text-fg-muted uppercase tracking-wider text-xs">
+                Partner capital breakdown
+              </h4>
+              {partners.map((p) => (
+                <div key={p.id} className="flex justify-between py-1.5 text-sm">
+                  <span>{p.name} <span className="text-fg-muted text-xs">({p.share_pct}%)</span></span>
+                  <span className={`font-mono ${p.capital_balance_minor < 0 ? 'text-accent-bad' : ''}`}>
+                    {inr(p.capital_balance_minor)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="md:col-span-3 card">
             <div className="flex justify-between items-center">
               <span className="font-semibold">Assets = Liabilities + Equity</span>
@@ -505,11 +552,25 @@ function AccountingTab() {
 
       {view === 'gl' && (
         <div className="card !p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b border-bg-border">
-            <h3 className="font-semibold">General Ledger (today, most recent 100 entries)</h3>
+          <div className="px-4 py-3 border-b border-bg-border flex flex-wrap items-center gap-2 justify-between">
+            <h3 className="font-semibold">
+              General Ledger {gl.length >= 100 && <span className="text-accent-gold font-normal text-xs">— showing first 100, narrow the date range for more</span>}
+            </h3>
+            <div className="flex items-center gap-2 text-xs">
+              <input type="date" value={glFrom} max={glTo}
+                onChange={(e) => setGlFrom(e.target.value)}
+                className="input !py-1 !px-2 !text-xs !w-auto"/>
+              <span className="text-fg-muted">to</span>
+              <input type="date" value={glTo} min={glFrom} max={todayISO()}
+                onChange={(e) => setGlTo(e.target.value)}
+                className="input !py-1 !px-2 !text-xs !w-auto"/>
+              <button className="btn btn-ghost !py-1 !px-2 !text-xs" onClick={loadGl} disabled={glLoading}>
+                {glLoading ? <Loader2 className="animate-spin" size={12}/> : 'Apply'}
+              </button>
+            </div>
           </div>
           {!gl.length ? (
-            <div className="p-4 text-fg-muted text-sm">No journal entries today.</div>
+            <div className="p-4 text-fg-muted text-sm">No journal entries in this range.</div>
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-bg-raised text-xs text-fg-muted">

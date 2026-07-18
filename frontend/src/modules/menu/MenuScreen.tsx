@@ -98,7 +98,7 @@ export default function MenuScreen() {
           {canManageMenu && (
             <>
               <button className="btn btn-ghost" onClick={() => setAddCatOpen(true)}>
-                <Plus size={14}/> Category
+                <Edit2 size={14}/> Categories
               </button>
               <button className="btn btn-primary" onClick={() => setAddItemOpen(true)} disabled={!cats.length}>
                 <Plus size={14}/> New item
@@ -258,8 +258,8 @@ export default function MenuScreen() {
           onSuccess={() => { setEditItem(null); load(); }}/>
       )}
       {canManageMenu && addCatOpen && (
-        <CategoryForm onClose={() => setAddCatOpen(false)}
-          onSuccess={() => { setAddCatOpen(false); load(); }}/>
+        <CategoryManagerModal cats={cats} onClose={() => setAddCatOpen(false)}
+          onChanged={load}/>
       )}
     </div>
   );
@@ -417,14 +417,18 @@ function ItemForm({
   );
 }
 
-// ---------------------------------------------------------------- CategoryForm
-function CategoryForm({
-  onClose, onSuccess,
-}: { onClose: () => void; onSuccess: () => void }) {
+// ---------------------------------------------------------------- CategoryManagerModal
+function CategoryManagerModal({
+  cats, onClose, onChanged,
+}: { cats: MenuCategoryDTO[]; onClose: () => void; onChanged: () => void }) {
   const [name, setName] = useState('');
   const [sortOrder, setSortOrder] = useState('0');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editSortOrder, setEditSortOrder] = useState('0');
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
@@ -433,30 +437,98 @@ function CategoryForm({
         name: name.trim(),
         sort_order: parseInt(sortOrder, 10) || 0,
       });
-      onSuccess();
+      setName(''); setSortOrder('0');
+      onChanged();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   }
 
+  function startEdit(c: MenuCategoryDTO) {
+    setEditingId(c.id); setEditName(c.name); setEditSortOrder(String(c.sort_order));
+  }
+
+  async function saveEdit(id: string) {
+    setRowBusy(id); setErr(null);
+    try {
+      await menuAdmin.updateCategory(id, {
+        name: editName.trim(),
+        sort_order: parseInt(editSortOrder, 10) || 0,
+      });
+      setEditingId(null);
+      onChanged();
+    } catch (e) { setErr((e as Error).message); }
+    finally { setRowBusy(null); }
+  }
+
+  async function remove(c: MenuCategoryDTO) {
+    if (!confirm(`Delete category "${c.name}"? Only works if it has no items in it.`)) return;
+    setRowBusy(c.id); setErr(null);
+    try {
+      await menuAdmin.deleteCategory(c.id);
+      onChanged();
+    } catch (e) { setErr((e as Error).message); }
+    finally { setRowBusy(null); }
+  }
+
   return (
-    <Modal open onClose={onClose} title="New category">
-      <form onSubmit={submit} className="space-y-3">
-        <Field label="Name (e.g. Coffee, Mocktails, Desserts)">
-          <input className="input" required value={name} onChange={(e) => setName(e.target.value)} autoFocus/>
-        </Field>
-        <Field label="Sort order (lower shows first)">
-          <input type="number" className="input font-mono" value={sortOrder}
-            onChange={(e) => setSortOrder(e.target.value)}/>
-        </Field>
+    <Modal open onClose={onClose} title="Categories">
+      <div className="space-y-4">
         {err && <ErrorRow text={err}/>}
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
-            {busy ? <Loader2 className="animate-spin" size={14}/> : null}
-            Create
-          </button>
-        </div>
-      </form>
+
+        {cats.length > 0 && (
+          <div className="space-y-2">
+            {cats.map((c) => (
+              <div key={c.id} className="flex items-center gap-2 rounded-lg border border-bg-border p-2">
+                {editingId === c.id ? (
+                  <>
+                    <input className="input !py-1.5 flex-1" value={editName}
+                      onChange={(e) => setEditName(e.target.value)} autoFocus/>
+                    <input type="number" className="input !py-1.5 !w-20 font-mono" value={editSortOrder}
+                      onChange={(e) => setEditSortOrder(e.target.value)} title="Sort order (lower shows first)"/>
+                    <button type="button" className="btn btn-primary !py-1.5 !px-2"
+                      disabled={rowBusy === c.id} onClick={() => saveEdit(c.id)}>
+                      {rowBusy === c.id ? <Loader2 className="animate-spin" size={14}/> : 'Save'}
+                    </button>
+                    <button type="button" className="btn btn-ghost !py-1.5 !px-2" onClick={() => setEditingId(null)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm font-medium">{c.name}</span>
+                    <span className="text-xs text-fg-muted font-mono">#{c.sort_order}</span>
+                    <button type="button" className="btn btn-ghost !py-1.5 !px-2" onClick={() => startEdit(c)}>
+                      <Edit2 size={13}/>
+                    </button>
+                    <button type="button" className="btn btn-ghost !py-1.5 !px-2 text-accent-bad"
+                      disabled={rowBusy === c.id} onClick={() => remove(c)}>
+                      {rowBusy === c.id ? <Loader2 className="animate-spin" size={13}/> : <Trash2 size={13}/>}
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <form onSubmit={submit} className="space-y-3 pt-2 border-t border-bg-border">
+          <p className="text-xs text-fg-muted pt-2">Add a new category</p>
+          <Field label="Name (e.g. Coffee, Mocktails, Desserts)">
+            <input className="input" required value={name} onChange={(e) => setName(e.target.value)}/>
+          </Field>
+          <Field label="Sort order (lower shows first)">
+            <input type="number" className="input font-mono" value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}/>
+          </Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Done</button>
+            <button type="submit" className="btn btn-primary" disabled={busy}>
+              {busy ? <Loader2 className="animate-spin" size={14}/> : null}
+              Create
+            </button>
+          </div>
+        </form>
+      </div>
     </Modal>
   );
 }

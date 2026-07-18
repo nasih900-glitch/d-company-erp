@@ -235,7 +235,7 @@ export default function PricingTab() {
           <KeyRound size={16} className="text-accent"/> Unlock Pricing
         </div>
         <label className="block">
-          <span className="text-xs text-fg-muted">Current password</span>
+          <span className="text-xs text-fg-muted">Your account password (re-enter it to confirm it's you before changing prices)</span>
           <input
             className="input mt-1"
             type="password"

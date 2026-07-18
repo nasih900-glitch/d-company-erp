@@ -63,7 +63,7 @@ export default function CustomersScreen() {
         <div>
           <h2 className="text-2xl font-bold">Customers</h2>
           <p className="text-fg-muted text-sm">
-            Phone-based loyalty · auto-saved at checkout · 1 point per ₹10 spent
+            Phone-based loyalty · auto-saved at checkout · 2 points per ₹10 spent on gaming
           </p>
         </div>
         <div className="flex w-full gap-2 sm:w-auto">
@@ -208,6 +208,7 @@ function CustomerForm({
     birthday: customer?.birthday ? customer.birthday.slice(0, 10) : '',
     notes: customer?.notes ?? '',
   });
+  const [phoneUnlocked, setPhoneUnlocked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -221,7 +222,11 @@ function CustomerForm({
         notes: form.notes.trim() || undefined,
       };
       if (isEdit) {
-        await customers.update(customer!.id, body);
+        const phone = form.phone.trim();
+        await customers.update(customer!.id, {
+          ...body,
+          ...(phoneUnlocked && phone && phone !== customer!.phone ? { phone } : {}),
+        });
       } else {
         await customers.upsert({ phone: form.phone.trim(), ...body });
       }
@@ -234,9 +239,23 @@ function CustomerForm({
     <Modal open onClose={onClose} title={isEdit ? `Edit ${customer!.name || customer!.phone}` : 'New customer'}>
       <form onSubmit={submit} className="space-y-3">
         <Field label="Phone (10+ digits, +country if needed)">
-          <input className="input font-mono" required disabled={isEdit} autoFocus
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
+          <div className="flex gap-2">
+            <input className="input font-mono flex-1" required disabled={isEdit && !phoneUnlocked} autoFocus={!isEdit}
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
+            {isEdit && !phoneUnlocked && (
+              <button type="button" className="btn btn-ghost shrink-0 !text-xs"
+                onClick={() => setPhoneUnlocked(true)}>
+                Fix typo
+              </button>
+            )}
+          </div>
+          {isEdit && phoneUnlocked && (
+            <p className="text-xs text-accent-gold mt-1">
+              This is the customer's loyalty identity — changing it moves their points and visit
+              history to the new number, it does not create a second customer.
+            </p>
+          )}
         </Field>
         <Field label="Name">
           <input className="input" value={form.name}

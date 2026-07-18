@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, Plus, Edit2, Trash2, AlertCircle, Loader2, RefreshCw,
-  ShoppingBag, Send, ChefHat, Minus,
+  ShoppingBag, Send, ChefHat, Minus, Settings,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
@@ -79,6 +79,7 @@ export default function TablesScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<TableDTO | null>(null);
   const [orderFor, setOrderFor] = useState<TableDTO | null>(null);
+  const [manageMode, setManageMode] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -118,9 +119,15 @@ export default function TablesScreen() {
         </div>
         <div className="flex gap-2">
           <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
-          <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
-            <Plus size={14}/> New table
+          <button className={`btn ${manageMode ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setManageMode(!manageMode)}>
+            <Settings size={14}/> {manageMode ? 'Done' : 'Manage'}
           </button>
+          {manageMode && (
+            <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+              <Plus size={14}/> New table
+            </button>
+          )}
         </div>
       </header>
 
@@ -136,7 +143,7 @@ export default function TablesScreen() {
         </div>
       ) : !rows.length ? (
         <div className="card text-fg-muted text-sm">
-          No tables yet. Click <b>New table</b> to add the first one.
+          No tables yet. Click <b>Manage</b>, then <b>New table</b>, to add the first one.
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
@@ -149,14 +156,16 @@ export default function TablesScreen() {
                     <Users size={11}/> {t.seats} seats · {t.shape}
                   </div>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <button className="text-fg-muted hover:text-accent p-1" onClick={() => setEdit(t)}>
-                    <Edit2 size={12}/>
-                  </button>
-                  <button className="text-fg-muted hover:text-accent-bad p-1" onClick={() => onDelete(t)}>
-                    <Trash2 size={12}/>
-                  </button>
-                </div>
+                {manageMode && (
+                  <div className="flex flex-col gap-1">
+                    <button className="text-fg-muted hover:text-accent p-1" onClick={() => setEdit(t)}>
+                      <Edit2 size={12}/>
+                    </button>
+                    <button className="text-fg-muted hover:text-accent-bad p-1" onClick={() => onDelete(t)}>
+                      <Trash2 size={12}/>
+                    </button>
+                  </div>
+                )}
               </div>
               <button onClick={() => cycleStatus(t)}
                 className={`chip w-full justify-center mb-2 ${STATUS_COLOR[t.status]}`}>

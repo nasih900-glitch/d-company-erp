@@ -23,6 +23,7 @@ import { auth, staff, type UserDTO, type RoleDTO } from '@/lib/erp-api';
 import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
+import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 
 const ROLE_COLOR: Record<string, string> = {
   super_owner: 'border-accent-gold/70 text-accent-gold',
@@ -57,6 +58,8 @@ export default function StaffScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [editUser, setEditUser] = useState<UserDTO | null>(null);
   const [pwdUser, setPwdUser] = useState<UserDTO | null>(null);
+  const [deleteUser, setDeleteUser] = useState<UserDTO | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const { me } = useAuth();
 
   async function load() {
@@ -84,13 +87,17 @@ export default function StaffScreen() {
 
   useEffect(() => { load(); }, []);
 
-  async function onDelete(u: UserDTO) {
-    if (!confirm(`Delete ${u.name}? This cannot be undone.`)) return;
+  async function confirmDelete() {
+    if (!deleteUser) return;
+    setDeleteBusy(true);
     try {
-      await staff.deleteUser(u.id);
+      await staff.deleteUser(deleteUser.id);
+      setDeleteUser(null);
       await load();
     } catch (e) {
       alert((e as Error).message);
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -137,7 +144,7 @@ export default function StaffScreen() {
               onEdit={() => setEditUser(u)}
               onPassword={() => setPwdUser(u)}
               onToggle={() => onToggleStatus(u)}
-              onDelete={() => onDelete(u)}
+              onDelete={() => setDeleteUser(u)}
             />
           ))}
           {!users.length && (
@@ -166,6 +173,17 @@ export default function StaffScreen() {
           user={pwdUser}
           onClose={() => setPwdUser(null)}
           onSuccess={() => setPwdUser(null)}
+        />
+      )}
+      {deleteUser && (
+        <ConfirmModal
+          title="Delete staff user"
+          message={`Delete ${deleteUser.name}? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          busy={deleteBusy}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteUser(null)}
         />
       )}
     </div>

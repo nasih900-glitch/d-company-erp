@@ -775,6 +775,7 @@ export interface TopItemDTO {
 }
 export interface GrowthPeriodDTO {
   label: string; revenue_minor: number;
+  refunds_minor: number;
   manual_collections_minor: number;
   orders_count: number; avg_ticket_minor: number;
 }
@@ -932,7 +933,7 @@ export const customers = {
   get: (id: string) => api.get<CustomerDTO>(`/customers/${id}`).then((r) => r.data),
   upsert: (body: { phone: string; name?: string; email?: string; birthday?: string; notes?: string }) =>
     api.post<CustomerDTO>('/customers', body).then((r) => r.data),
-  update: (id: string, body: Partial<{ name: string; email: string; birthday: string; notes: string }>) =>
+  update: (id: string, body: Partial<{ name: string; phone: string; email: string; birthday: string; notes: string }>) =>
     api.patch<CustomerDTO>(`/customers/${id}`, body).then((r) => r.data),
   rewardsByPhone: (phone: string) =>
     api.get<RewardDTO[]>(`/customers/by-phone/${encodeURIComponent(phone)}/rewards`).then((r) => r.data),
@@ -1071,6 +1072,8 @@ export interface DashboardKPIsDTO {
   revenue_gaming_minor: number;
   revenue_hookah_minor: number;
   revenue_events_minor: number;
+  revenue_manual_collections_minor: number;
+  discounts_and_points_redeemed_minor: number;
   revenue_total_minor: number;
   orders_count: number;
   tickets_count: number;

@@ -32,6 +32,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function OcrScreen() {
   const [rows, setRows] = useState<OcrExtractionDTO[]>([]);
   const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branchId, setBranchId] = useState('');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -46,6 +47,7 @@ export default function OcrScreen() {
         settings.listBranches().catch(() => []),
       ]);
       setRows(q); setBranches(b);
+      setBranchId((current) => current || b[0]?.id || '');
     } catch (e) {
       setErr((e as Error).message);
     } finally { setLoading(false); }
@@ -54,7 +56,6 @@ export default function OcrScreen() {
 
   async function handleFiles(files: FileList | null) {
     if (!files || !files.length) return;
-    const branchId = branches[0]?.id;
     if (!branchId) {
       alert('Add a branch in Settings → Branches first');
       return;
@@ -84,8 +85,19 @@ export default function OcrScreen() {
             Upload bills · extract vendor, date, amount · approve into expenses with one tap
           </p>
         </div>
-        <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        <div className="flex items-center gap-2">
+          {branches.length > 1 && (
+            <select className="input !py-2 !w-auto" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          )}
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        </div>
       </header>
+
+      {branches.length === 1 && (
+        <p className="text-xs text-fg-muted mb-4">Uploads are recorded against <b>{branches[0].name}</b>.</p>
+      )}
 
       {/* Upload zone */}
       <div
