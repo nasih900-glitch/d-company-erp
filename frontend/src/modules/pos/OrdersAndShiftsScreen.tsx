@@ -27,6 +27,7 @@ import Modal from '@/components/ui/Modal';
 import { useAuth } from '@/modules/auth/AuthContext';
 
 type Tab = 'orders' | 'shifts';
+const OPERATIONS_POLL_MS = 30_000;
 
 export default function OrdersAndShiftsScreen() {
   const [tab, setTab] = useState<Tab>('orders');
@@ -71,6 +72,14 @@ function OrdersTab() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  // Poll quietly (no loading spinner) so orders billed from another
+  // device/login show up here without a manual refresh.
+  useEffect(() => {
+    if (!LIVE_MODE) return;
+    const id = setInterval(() => { orders.list().then(setRows).catch(() => {}); }, OPERATIONS_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Order history is live-mode only.</div>;
   if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
@@ -231,6 +240,17 @@ function ShiftsTab() {
   }, [terminalId, terminalReady]);
   useEffect(() => { void load(); }, [load]);
 
+  // Whether a shift is open, and who has it open, is shared across every
+  // device on this terminal — poll quietly so a shift opened elsewhere
+  // shows up here without a manual refresh. This is what stops someone
+  // from trying to open a second shift on top of one that's already
+  // running, just because their screen hadn't caught up yet.
+  useEffect(() => {
+    if (!LIVE_MODE || !terminalReady || !terminalId) return;
+    const id = setInterval(() => { shifts.list().then(setRows).catch(() => {}); }, OPERATIONS_POLL_MS);
+    return () => clearInterval(id);
+  }, [terminalReady, terminalId]);
+
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Shift management is live-mode only.</div>;
   if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
 
@@ -328,7 +348,8 @@ function ShiftsTab() {
 
       {opening && <OpenShiftForm
         onClose={() => setOpening(false)}
-        onSuccess={() => { setOpening(false); load(); }}/>}
+        onSuccess={() => { setOpening(false); load(); }}
+        onError={load}/>}
       {closing && <CloseShiftForm shift={closing}
         onClose={() => setClosing(null)}
         onSuccess={() => { setClosing(null); load(); }}/>}
@@ -336,7 +357,7 @@ function ShiftsTab() {
   );
 }
 
-function OpenShiftForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+function OpenShiftForm({ onClose, onSuccess, onError }: { onClose: () => void; onSuccess: () => void; onError: () => void }) {
   const [float, setFloat] = useState('500');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -346,7 +367,13 @@ function OpenShiftForm({ onClose, onSuccess }: { onClose: () => void; onSuccess:
     try {
       await shifts.open(Math.round(parseFloat(float || '0') * 100));
       onSuccess();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) {
+      setErr((e as Error).message);
+      // Most likely cause: someone else already opened a shift here since
+      // this screen last synced. Refresh the list behind this modal so the
+      // real shift is already showing by the time this error is dismissed.
+      onError();
+    }
     finally { setBusy(false); }
   }
 

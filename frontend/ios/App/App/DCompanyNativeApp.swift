@@ -4575,6 +4575,18 @@ private struct TablesNativeView: View {
             }
         }
         .task { await load() }
+        .task { await pollForServerUpdates() }
+    }
+
+    // Table status (occupied/available/cleaning) is shared across every
+    // device on the floor — without this, a table freed on one phone stays
+    // "occupied" on everyone else's until they happen to pull-to-refresh.
+    private func pollForServerUpdates() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            if Task.isCancelled { break }
+            await load()
+        }
     }
 
     private func load() async {
@@ -5643,23 +5655,35 @@ private struct MenuItemFormSheet: View {
 // case on top.
 private enum LocalAlarmScheduler {
     private static var didRequestAuthorization = false
+    static let enabledKey = "dcompany.alarmsEnabled"
+
+    // Defaults to on — matches the always-on behavior every build before
+    // this setting existed, so upgrading the app doesn't silently go quiet.
+    static var isEnabled: Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: enabledKey) == nil ? true : defaults.bool(forKey: enabledKey)
+    }
 
     static func requestAuthorizationIfNeeded() {
-        guard !didRequestAuthorization else { return }
+        guard isEnabled, !didRequestAuthorization else { return }
         didRequestAuthorization = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     static func syncGamingOvertime(sessions: [GamingSessionDTO], stationName: (String) -> String) {
         let center = UNUserNotificationCenter.current()
-        let liveIds = Set(sessions.compactMap { gamingSession -> String? in
+        // When disabled, liveIds is empty so the cleanup pass below clears
+        // any already-scheduled ones and nothing new gets added — same
+        // self-healing sync this already did for stale sessions.
+        let liveIds: Set<String> = isEnabled ? Set(sessions.compactMap { gamingSession -> String? in
             guard let endsAt = gamingSession.timer_ends_at, endsAt > Date() else { return nil }
             return "gaming-overtime-\(gamingSession.id)"
-        })
+        }) : []
         center.getPendingNotificationRequests { requests in
             let staleIds = requests.map(\.identifier).filter { $0.hasPrefix("gaming-overtime-") && !liveIds.contains($0) }
             if !staleIds.isEmpty { center.removePendingNotificationRequests(withIdentifiers: staleIds) }
         }
+        guard isEnabled else { return }
         for gamingSession in sessions {
             guard let endsAt = gamingSession.timer_ends_at, endsAt > Date() else { continue }
             let content = UNMutableNotificationContent()
@@ -5677,14 +5701,15 @@ private enum LocalAlarmScheduler {
     static func syncHeldOrderAging(orders: [OrderListItemDTO]) {
         let center = UNUserNotificationCenter.current()
         let cutoff: TimeInterval = 15 * 60
-        let liveIds = Set(orders.compactMap { order -> String? in
+        let liveIds: Set<String> = isEnabled ? Set(orders.compactMap { order -> String? in
             guard order.created_at.addingTimeInterval(cutoff) > Date() else { return nil }
             return "held-order-\(order.id)"
-        })
+        }) : []
         center.getPendingNotificationRequests { requests in
             let staleIds = requests.map(\.identifier).filter { $0.hasPrefix("held-order-") && !liveIds.contains($0) }
             if !staleIds.isEmpty { center.removePendingNotificationRequests(withIdentifiers: staleIds) }
         }
+        guard isEnabled else { return }
         for order in orders {
             let fireAt = order.created_at.addingTimeInterval(cutoff)
             guard fireAt > Date() else { continue }
@@ -6088,7 +6113,7 @@ private struct GamingNativeView: View {
         while !Task.isCancelled {
             for gamingSession in overtimeSessions where !alarmedSessionIDs.contains(gamingSession.id) {
                 alarmedSessionIDs.insert(gamingSession.id)
-                AudioServicesPlaySystemSound(1005)
+                if LocalAlarmScheduler.isEnabled { AudioServicesPlaySystemSound(1005) }
                 Haptics.selection()
             }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -6484,7 +6509,7 @@ private struct POSNativeView: View {
         while !Task.isCancelled {
             for held in overdueHeldOrders where !alarmedHeldOrderIDs.contains(held.id) {
                 alarmedHeldOrderIDs.insert(held.id)
-                AudioServicesPlaySystemSound(1005)
+                if LocalAlarmScheduler.isEnabled { AudioServicesPlaySystemSound(1005) }
                 Haptics.selection()
             }
             try? await Task.sleep(nanoseconds: 30_000_000_000)
@@ -6891,6 +6916,13 @@ private struct POSNativeView: View {
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
+            // Most likely cause of this failing is someone else already
+            // opened a shift here since this screen last synced — refresh
+            // now so the card immediately flips to "Shift: Open" instead of
+            // still looking like nothing is open (load() clears the error
+            // above once it has the real state, which is the point: the
+            // corrected shift status is more useful here than the message).
+            await load()
         }
     }
 
@@ -11472,6 +11504,20 @@ private struct OrdersNativeView: View {
             }
         }
         .task { await load() }
+        .task { await pollForServerUpdates() }
+    }
+
+    // Whether a shift is open, and who has it open, is shared across every
+    // device on this terminal — without this, a shift opened on one phone
+    // stays invisible on everyone else's screen until they happen to
+    // pull-to-refresh, which is exactly what leads someone else to try
+    // opening a second one and hit a "already open" error out of nowhere.
+    private func pollForServerUpdates() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            if Task.isCancelled { break }
+            await load()
+        }
     }
 
     private var ordersList: some View {
@@ -12351,6 +12397,7 @@ private struct SettingsNativeView: View {
     @State private var isCreatingBranch = false
     @State private var isCreatingTerminal = false
     @State private var showAccountReset = false
+    @AppStorage(LocalAlarmScheduler.enabledKey) private var alarmsEnabled = true
 
     var body: some View {
         RefreshableScrollView(refresh: load) {
@@ -12447,6 +12494,23 @@ private struct SettingsNativeView: View {
                             .foregroundColor(Brand.softGold)
                             .background(Brand.elevated)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                    }
+
+                    BrandedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Notifications & Alarms").font(.headline).foregroundColor(.white)
+                            Toggle(isOn: $alarmsEnabled) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Alarm sounds & alerts")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white)
+                                    Text("Gaming session overtime and orders left waiting too long")
+                                        .font(.caption2)
+                                        .foregroundColor(Brand.muted)
+                                }
+                            }
+                            .tint(Brand.gold)
                         }
                     }
                 }

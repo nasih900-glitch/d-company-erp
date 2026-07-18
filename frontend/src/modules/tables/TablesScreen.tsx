@@ -71,6 +71,7 @@ const STATUS_NEXT: Record<TableDTO['status'], TableDTO['status']> = {
   reserved:  'occupied',
   merged:    'available',
 };
+const TABLES_POLL_MS = 30_000;
 
 export default function TablesScreen() {
   const [rows, setRows] = useState<TableDTO[]>([]);
@@ -90,6 +91,15 @@ export default function TablesScreen() {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  // Table status is shared across every device on the floor — poll quietly
+  // (no loading spinner) so a table freed elsewhere doesn't stay stuck
+  // "occupied" here until someone happens to hit refresh.
+  useEffect(() => {
+    if (!LIVE_MODE) return;
+    const id = setInterval(() => { tables.list().then(setRows).catch(() => {}); }, TABLES_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   async function cycleStatus(t: TableDTO) {
     try { await tables.updateStatus(t.id, STATUS_NEXT[t.status]); await load(); }

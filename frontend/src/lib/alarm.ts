@@ -6,6 +6,23 @@
 
 export const ALARM_REPEAT_MS = 30_000;
 
+const ALARMS_ENABLED_KEY = 'dcompany_alarms_enabled';
+
+// Defaults to on — matches the always-on behavior every build before this
+// setting existed, so upgrading the app doesn't silently go quiet.
+export function alarmsEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(ALARMS_ENABLED_KEY);
+    return raw === null ? true : raw === 'true';
+  } catch {
+    return true;
+  }
+}
+
+export function setAlarmsEnabled(enabled: boolean): void {
+  try { localStorage.setItem(ALARMS_ENABLED_KEY, String(enabled)); } catch { /* storage unavailable */ }
+}
+
 export function fmtClock(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
@@ -17,6 +34,7 @@ export function fmtClock(totalSeconds: number): string {
 
 // Synthesized two-tone chime — no audio file needed, works offline.
 export function playAlarmTone() {
+  if (!alarmsEnabled()) return;
   try {
     const Ctx = window.AudioContext
       || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -42,6 +60,7 @@ export function playAlarmTone() {
 }
 
 export function notifyBrowser(title: string, body: string, tag: string) {
+  if (!alarmsEnabled()) return;
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
     new Notification(title, { body, tag });

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { AlertCircle, Check, KeyRound, Loader2 } from 'lucide-react';
+import { AlertCircle, Bell, Check, KeyRound, Loader2 } from 'lucide-react';
 
 import { auth } from '@/lib/erp-api';
+import { alarmsEnabled, setAlarmsEnabled } from '@/lib/alarm';
 import { rolesLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 
@@ -14,6 +15,7 @@ export default function AccountTab() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [alarms, setAlarms] = useState(alarmsEnabled());
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -49,6 +51,26 @@ export default function AccountTab() {
         <Row label="Name" value={me?.name ?? '—'}/>
         <Row label="Email" value={me?.email ?? '—'}/>
         <Row label="Role" value={rolesLabel(me?.roles)}/>
+      </div>
+
+      <div className="card">
+        <h3 className="font-bold mb-3 flex items-center gap-2">
+          <Bell size={14}/> Notifications & alarms
+        </h3>
+        <label className="flex items-start justify-between gap-3 cursor-pointer">
+          <span>
+            <span className="block text-sm font-medium">Alarm sounds & alerts</span>
+            <span className="block text-xs text-fg-muted">
+              Gaming session overtime and orders left waiting too long, on this device/browser.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            className="mt-1 h-5 w-5 accent-accent shrink-0"
+            checked={alarms}
+            onChange={(e) => { setAlarms(e.target.checked); setAlarmsEnabled(e.target.checked); }}
+          />
+        </label>
       </div>
 
       <div className="card">
