@@ -26,7 +26,14 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.11', cache: 'pip' }
       - run: pip install -r backend/requirements.txt
-      - run: pip install ruff mypy pytest pytest-asyncio pytest-cov
+      - run: pip install ruff mypy pytest pytest-asyncio pytest-cov pip-audit
+      # Blocking: pip-audit -r backend/requirements.txt passes clean (0 known vulns) as of 2026-07-19.
+      # No severity flag exists for pip-audit (unlike npm's --audit-level); it fails on any known vuln.
+      - name: Dependency vulnerability scan (pip-audit)
+        run: pip-audit -r backend/requirements.txt
+      # NOTE: still advisory (continue-on-error) — ruff/mypy do not currently pass on this codebase
+      # (995 ruff findings, 145 mypy errors as of 2026-07-19). Flipping these to blocking now would
+      # break every CI run immediately. Fix the backlog first, then remove continue-on-error here.
       - name: Lint advisory
         continue-on-error: true
         run: cd backend && ruff check . && ruff format --check .
@@ -49,7 +56,15 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
       - run: cd frontend && npm install --no-audit --no-fund
-      - run: cd frontend && npm run lint || true
+      # Blocking: only prod dependencies are gated (--omit=dev). As of 2026-07-19, npm audit finds
+      # real high/critical CVEs in vite/vitest, but both are devDependencies used only by the local
+      # dev server and test runner — never built into or run by the shipped app. Blocking on those
+      # would make CI permanently red over an accepted, non-exploitable-in-prod risk. Revisit by
+      # upgrading vite/vitest during a routine dependency bump; `npm audit --audit-level=high`
+      # (without --omit=dev) shows the full picture.
+      - name: Dependency vulnerability scan (npm audit, prod deps)
+        run: cd frontend && npm audit --omit=dev --audit-level=high
+      - run: cd frontend && npm run lint
       - run: cd frontend && npm run typecheck
       - run: cd frontend && npm run test
       - run: cd frontend && npm run build
