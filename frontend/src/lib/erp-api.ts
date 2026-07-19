@@ -459,6 +459,48 @@ export const inventory = {
 };
 
 // =============================================================================
+// RECIPES / BOM — what a menu item consumes at checkout (drives inventory
+// deduction via app/services/inventory/deduction.py on the backend)
+// =============================================================================
+export interface RecipeLineDTO {
+  id: string;
+  ingredient_id: string;
+  qty: number;
+  wastage_pct: number; // fraction, e.g. 0.05 = 5% — not a percent
+}
+
+export interface RecipeDTO {
+  id: string;
+  menu_item_id: string;
+  name: string;
+  yield_qty: number;
+  version: number;
+  is_active: boolean;
+  cost_minor: number;
+  lines: RecipeLineDTO[];
+}
+
+export const recipes = {
+  listByMenuItem: (menu_item_id: string) =>
+    api.get<RecipeDTO[]>('/inventory/recipes', { params: { menu_item_id } }).then((r) => r.data),
+  create: (body: {
+    menu_item_id: string; name: string; yield_qty?: number;
+    lines?: Array<{ ingredient_id: string; qty: number; wastage_pct?: number }>;
+  }) => api.post<RecipeDTO>('/inventory/recipes', body).then((r) => r.data),
+  update: (id: string, body: Partial<{ name: string; yield_qty: number }>) =>
+    api.patch<RecipeDTO>(`/inventory/recipes/${id}`, body).then((r) => r.data),
+  delete: (id: string) => api.delete(`/inventory/recipes/${id}`),
+
+  addLine: (recipeId: string, body: { ingredient_id: string; qty: number; wastage_pct?: number }) =>
+    api.post<RecipeLineDTO>(`/inventory/recipes/${recipeId}/lines`, body).then((r) => r.data),
+  updateLine: (recipeId: string, lineId: string, body: Partial<{
+    ingredient_id: string; qty: number; wastage_pct: number;
+  }>) => api.patch<RecipeLineDTO>(`/inventory/recipes/${recipeId}/lines/${lineId}`, body).then((r) => r.data),
+  deleteLine: (recipeId: string, lineId: string) =>
+    api.delete(`/inventory/recipes/${recipeId}/lines/${lineId}`),
+};
+
+// =============================================================================
 // FINANCE — expenses + partners + capital + assets
 // =============================================================================
 export interface ExpenseDTO {

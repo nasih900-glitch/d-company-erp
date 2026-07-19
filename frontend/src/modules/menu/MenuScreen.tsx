@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Search, Edit2, Plus, Trash2, AlertCircle, Loader2, RefreshCw,
-  Eye, EyeOff,
+  Eye, EyeOff, ListTree,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
@@ -14,7 +14,8 @@ import { CATEGORIES, MENU } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
-  menu, menuAdmin, type MenuItemDTO, type MenuCategoryDTO,
+  menu, menuAdmin, inventory, recipes, type MenuItemDTO, type MenuCategoryDTO,
+  type IngredientDTO, type RecipeDTO, type RecipeLineDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 
@@ -39,6 +40,7 @@ export default function MenuScreen() {
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [editItem, setEditItem] = useState<MenuItemDTO | null>(null);
   const [addCatOpen, setAddCatOpen] = useState(false);
+  const [recipeItem, setRecipeItem] = useState<MenuItemDTO | null>(null);
 
   async function load() {
     setLoading(true); setError(null);
@@ -181,6 +183,10 @@ export default function MenuScreen() {
                   </td>
                   {canManageMenu && (
                     <td className="p-3 text-right pr-4 flex gap-1 justify-end">
+                      <button className="text-fg-muted hover:text-accent" title="Recipe / ingredients"
+                        onClick={() => setRecipeItem(m)}>
+                        <ListTree size={14}/>
+                      </button>
                       <button className="text-fg-muted hover:text-accent" onClick={() => setEditItem(m)}>
                         <Edit2 size={14}/>
                       </button>
@@ -227,6 +233,13 @@ export default function MenuScreen() {
                         {m.is_available ? <Eye size={14}/> : <EyeOff size={14}/>}
                       </button>
                       <button
+                        aria-label={`Recipe for ${m.name}`}
+                        onClick={() => setRecipeItem(m)}
+                        className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
+                      >
+                        <ListTree size={14}/>
+                      </button>
+                      <button
                         aria-label={`Edit ${m.name}`}
                         onClick={() => setEditItem(m)}
                         className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
@@ -260,6 +273,9 @@ export default function MenuScreen() {
       {canManageMenu && addCatOpen && (
         <CategoryManagerModal cats={cats} onClose={() => setAddCatOpen(false)}
           onChanged={load}/>
+      )}
+      {canManageMenu && recipeItem && (
+        <RecipeEditorModal item={recipeItem} onClose={() => setRecipeItem(null)}/>
       )}
     </div>
   );
@@ -530,6 +546,268 @@ function CategoryManagerModal({
         </form>
       </div>
     </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- RecipeEditorModal
+// "What does this menu item consume?" — a minimal BOM editor. Recipe carries
+// no company_id of its own on the backend (tenant scope comes from the
+// menu_item_id join), and there is at most one is_active recipe per item at
+// a time — deduct_for_order() only ever reads that one at checkout.
+function RecipeEditorModal({
+  item, onClose,
+}: { item: MenuItemDTO; onClose: () => void }) {
+  const [ingredients, setIngredients] = useState<IngredientDTO[]>([]);
+  const [recipe, setRecipe] = useState<RecipeDTO | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [ings, recipeVersions] = await Promise.all([
+        inventory.listIngredients(),
+        recipes.listByMenuItem(item.id),
+      ]);
+      setIngredients(ings);
+      setRecipe(recipeVersions.find((r) => r.is_active) ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to load recipe');
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function createRecipe() {
+    setBusy(true); setError(null);
+    try {
+      const created = await recipes.create({ menu_item_id: item.id, name: `${item.name} recipe`, yield_qty: 1, lines: [] });
+      setRecipe(created);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function removeRecipe() {
+    if (!recipe) return;
+    if (!confirm('Remove this recipe? The item will stop deducting stock at checkout until a new recipe is set up.')) return;
+    setBusy(true); setError(null);
+    try {
+      await recipes.delete(recipe.id);
+      setRecipe(null);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function addLine(ingredientId: string, qty: number, wastagePct: number) {
+    if (!recipe) return;
+    setBusy(true); setError(null);
+    try {
+      const line = await recipes.addLine(recipe.id, {
+        ingredient_id: ingredientId, qty, wastage_pct: wastagePct / 100,
+      });
+      setRecipe({ ...recipe, lines: [...recipe.lines, line] });
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function updateLine(lineId: string, patch: { ingredient_id?: string; qty?: number; wastage_pct?: number }) {
+    if (!recipe) return;
+    setBusy(true); setError(null);
+    try {
+      const updated = await recipes.updateLine(recipe.id, lineId, patch);
+      setRecipe({ ...recipe, lines: recipe.lines.map((l) => (l.id === lineId ? updated : l)) });
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function deleteLine(lineId: string) {
+    if (!recipe) return;
+    setBusy(true); setError(null);
+    try {
+      await recipes.deleteLine(recipe.id, lineId);
+      setRecipe({ ...recipe, lines: recipe.lines.filter((l) => l.id !== lineId) });
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Recipe — ${item.name}`} size="lg">
+      <div className="space-y-4">
+        <p className="text-xs text-fg-muted">
+          What one {item.name} consumes from inventory at checkout. Qty is in each ingredient&apos;s
+          stock unit; wastage % is added on top (5% wastage on 150ml deducts 157.5ml).
+        </p>
+        {error && <ErrorRow text={error}/>}
+        {loading ? (
+          <div className="flex items-center gap-3 text-fg-muted text-sm">
+            <Loader2 className="animate-spin" size={16}/> Loading…
+          </div>
+        ) : !recipe ? (
+          <div className="rounded-xl border border-bg-border p-4 text-center space-y-3">
+            <p className="text-sm text-fg-muted">No recipe yet — this item won&apos;t deduct any stock at checkout.</p>
+            <button type="button" className="btn btn-primary" disabled={busy || !ingredients.length} onClick={createRecipe}>
+              {busy ? <Loader2 className="animate-spin" size={14}/> : <Plus size={14}/>} Set up recipe
+            </button>
+            {!ingredients.length && (
+              <p className="text-xs text-accent-bad">Add ingredients in Inventory first.</p>
+            )}
+          </div>
+        ) : (
+          <>
+            <RecipeLinesList
+              lines={recipe.lines}
+              ingredients={ingredients}
+              busy={busy}
+              onUpdate={updateLine}
+              onDelete={deleteLine}
+            />
+            <AddLineForm ingredients={ingredients} busy={busy} onAdd={addLine}/>
+            <div className="pt-2 border-t border-bg-border flex justify-between items-center">
+              <span className="text-xs text-fg-muted">Version {recipe.version} · active</span>
+              <button type="button" className="btn btn-ghost text-accent-bad !py-1.5" disabled={busy} onClick={removeRecipe}>
+                <Trash2 size={13}/> Remove recipe
+              </button>
+            </div>
+          </>
+        )}
+        <div className="flex justify-end pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function RecipeLinesList({
+  lines, ingredients, busy, onUpdate, onDelete,
+}: {
+  lines: RecipeLineDTO[];
+  ingredients: IngredientDTO[];
+  busy: boolean;
+  onUpdate: (lineId: string, patch: { ingredient_id?: string; qty?: number; wastage_pct?: number }) => Promise<void>;
+  onDelete: (lineId: string) => Promise<void>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ ingredient_id: '', qty: '', wastage_pct: '' });
+
+  function startEdit(line: RecipeLineDTO) {
+    setEditingId(line.id);
+    setDraft({
+      ingredient_id: line.ingredient_id,
+      qty: String(line.qty),
+      wastage_pct: String(line.wastage_pct * 100),
+    });
+  }
+
+  async function saveEdit(lineId: string) {
+    await onUpdate(lineId, {
+      ingredient_id: draft.ingredient_id,
+      qty: parseFloat(draft.qty) || 0,
+      wastage_pct: (parseFloat(draft.wastage_pct) || 0) / 100,
+    });
+    setEditingId(null);
+  }
+
+  if (!lines.length) {
+    return <div className="text-sm text-fg-muted">No ingredients in this recipe yet — add one below.</div>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {lines.map((line) => {
+        const ing = ingredients.find((i) => i.id === line.ingredient_id);
+        return (
+          <div key={line.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-bg-border p-2">
+            {editingId === line.id ? (
+              <>
+                <select className="input !py-1.5 flex-1 min-w-[140px]" value={draft.ingredient_id}
+                  onChange={(e) => setDraft({ ...draft, ingredient_id: e.target.value })}>
+                  {ingredients.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.base_unit})</option>)}
+                </select>
+                <input type="number" min={0} step="0.01" className="input !py-1.5 !w-24 font-mono text-right"
+                  value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })}/>
+                <input type="number" min={0} max={100} step="0.1" className="input !py-1.5 !w-20 font-mono text-right"
+                  value={draft.wastage_pct} onChange={(e) => setDraft({ ...draft, wastage_pct: e.target.value })}/>
+                <button type="button" className="btn btn-primary !py-1.5 !px-2" disabled={busy}
+                  onClick={() => saveEdit(line.id)}>
+                  {busy ? <Loader2 className="animate-spin" size={14}/> : 'Save'}
+                </button>
+                <button type="button" className="btn btn-ghost !py-1.5 !px-2" onClick={() => setEditingId(null)}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="flex-1 text-sm font-medium truncate min-w-[120px]">
+                  {ing?.name ?? 'Unknown ingredient'}
+                </span>
+                <span className="text-xs font-mono text-fg-muted">{line.qty} {ing?.base_unit ?? ''}</span>
+                <span className="text-xs font-mono text-fg-muted w-16 text-right">
+                  {(line.wastage_pct * 100).toFixed(1)}% waste
+                </span>
+                <button type="button" className="btn btn-ghost !py-1.5 !px-2" onClick={() => startEdit(line)}>
+                  <Edit2 size={13}/>
+                </button>
+                <button type="button" className="btn btn-ghost !py-1.5 !px-2 text-accent-bad" disabled={busy}
+                  onClick={() => onDelete(line.id)}>
+                  <Trash2 size={13}/>
+                </button>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AddLineForm({
+  ingredients, busy, onAdd,
+}: {
+  ingredients: IngredientDTO[];
+  busy: boolean;
+  onAdd: (ingredientId: string, qty: number, wastagePct: number) => Promise<void>;
+}) {
+  const [ingredientId, setIngredientId] = useState(ingredients[0]?.id ?? '');
+  const [qty, setQty] = useState('');
+  const [wastagePct, setWastagePct] = useState('0');
+
+  useEffect(() => {
+    if (!ingredientId && ingredients.length) setIngredientId(ingredients[0].id);
+  }, [ingredients, ingredientId]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const q = parseFloat(qty);
+    if (!ingredientId || !q || q <= 0) return;
+    await onAdd(ingredientId, q, parseFloat(wastagePct) || 0);
+    setQty(''); setWastagePct('0');
+  }
+
+  if (!ingredients.length) return null;
+
+  return (
+    <form onSubmit={submit} className="pt-2 border-t border-bg-border space-y-2">
+      <p className="text-xs text-fg-muted pt-2">Add ingredient</p>
+      <div className="grid grid-cols-2 sm:grid-cols-[1fr_90px_90px_auto] gap-2 sm:items-end">
+        <Field label="Ingredient">
+          <select className="input !py-1.5" value={ingredientId} onChange={(e) => setIngredientId(e.target.value)}>
+            {ingredients.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.base_unit})</option>)}
+          </select>
+        </Field>
+        <Field label="Qty">
+          <input type="number" min={0} step="0.01" required className="input !py-1.5 font-mono text-right"
+            value={qty} onChange={(e) => setQty(e.target.value)}/>
+        </Field>
+        <Field label="Waste %">
+          <input type="number" min={0} max={100} step="0.1" className="input !py-1.5 font-mono text-right"
+            value={wastagePct} onChange={(e) => setWastagePct(e.target.value)}/>
+        </Field>
+        <button type="submit" className="btn btn-primary !py-1.5" disabled={busy}>
+          {busy ? <Loader2 className="animate-spin" size={14}/> : <Plus size={14}/>}
+        </button>
+      </div>
+    </form>
   );
 }
 

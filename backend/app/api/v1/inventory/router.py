@@ -20,8 +20,11 @@ from app.models import (
     GRN,
     GRNLine,
     Ingredient,
+    MenuItem,
     PurchaseOrder,
     PurchaseOrderLine,
+    Recipe,
+    RecipeLine,
     StockMovement,
     Supplier,
 )
@@ -48,6 +51,47 @@ async def _require_writable_branch(
     if not branch or not tenant.in_branch(branch_id):
         raise NotFoundError("branch not found")
     return branch
+
+
+async def _get_menu_item_for_tenant(
+    session: SessionDep, tenant: TenantContext, menu_item_id: UUID
+) -> MenuItem:
+    item = await session.get(MenuItem, menu_item_id)
+    if not item or item.company_id != tenant.company_id or item.deleted_at:
+        raise NotFoundError("menu item not found")
+    return item
+
+
+async def _get_ingredient_for_tenant(
+    session: SessionDep, tenant: TenantContext, ingredient_id: UUID
+) -> Ingredient:
+    ing = await session.get(Ingredient, ingredient_id)
+    if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
+        raise NotFoundError(f"ingredient {ingredient_id} not found")
+    return ing
+
+
+async def _get_active_recipe_for_tenant(
+    session: SessionDep, tenant: TenantContext, recipe_id: UUID
+) -> Recipe:
+    """Recipe carries no company_id of its own — tenant scope is proved by
+    joining through its MenuItem, same as the FK relationship deduction.py
+    relies on. Requiring is_active mirrors the deleted_at check every other
+    resource in this router does before allowing an edit: a soft-deleted
+    (is_active=False) recipe behaves like a deleted row for write purposes.
+    (Listing recipes is the one place that intentionally bypasses this, so
+    deactivated versions stay visible for history — see list_recipes.)
+    """
+    recipe = (
+        await session.execute(
+            select(Recipe)
+            .join(MenuItem, MenuItem.id == Recipe.menu_item_id)
+            .where(Recipe.id == recipe_id, MenuItem.company_id == tenant.company_id)
+        )
+    ).scalar_one_or_none()
+    if not recipe or not recipe.is_active:
+        raise NotFoundError("recipe not found")
+    return recipe
 
 
 # ---------------------------------------------------------------- DTOs
@@ -123,6 +167,51 @@ class GrnPost(BaseModel):
     received_at: datetime | None = None
     notes: str | None = None
     lines: list[GrnLineIn] = Field(min_length=1)
+
+
+class RecipeLineRead(BaseModel):
+    id: UUID
+    ingredient_id: UUID
+    qty: float
+    wastage_pct: float
+
+
+class RecipeLineIn(BaseModel):
+    ingredient_id: UUID
+    qty: float = Field(gt=0)
+    # Fraction, not a percent — 0.05 means 5% wastage. Matches the column
+    # comment/semantics in app/models/inventory.py and how deduction.py
+    # consumes it: qty * (1 + wastage_pct).
+    wastage_pct: float = Field(default=0, ge=0, le=1)
+
+
+class RecipeLineUpdate(BaseModel):
+    ingredient_id: UUID | None = None
+    qty: float | None = Field(default=None, gt=0)
+    wastage_pct: float | None = Field(default=None, ge=0, le=1)
+
+
+class RecipeRead(BaseModel):
+    id: UUID
+    menu_item_id: UUID
+    name: str
+    yield_qty: float
+    version: int
+    is_active: bool
+    cost_minor: int
+    lines: list[RecipeLineRead]
+
+
+class RecipeCreate(BaseModel):
+    menu_item_id: UUID
+    name: str = Field(min_length=1, max_length=200)
+    yield_qty: float = Field(default=1, gt=0)
+    lines: list[RecipeLineIn] = Field(default_factory=list)
+
+
+class RecipeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    yield_qty: float | None = Field(default=None, gt=0)
 
 
 # ============================================================================
@@ -223,6 +312,255 @@ async def delete_ingredient(
     if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
         raise NotFoundError("ingredient not found")
     ing.deleted_at = datetime.now(timezone.utc)
+    await session.flush()
+
+
+# ============================================================================
+# RECIPES / BOM — what a menu item consumes at checkout.
+#
+# Recipe carries no company_id of its own (see app/models/inventory.py) —
+# tenant scope is proved by joining through MenuItem, exactly like
+# deduction.py's own Recipe.menu_item_id lookups. Recipe has no deleted_at
+# either; its own is_active flag *is* the soft-delete equivalent, and
+# deduct_for_order() already filters on Recipe.is_active.is_(True), so
+# flipping it off here takes effect at the next checkout with zero changes
+# needed on the deduction side. RecipeLine has neither field — it is a pure
+# child row of Recipe, so its own delete is a hard delete.
+# ============================================================================
+def _recipe_read(recipe: Recipe, lines: list[RecipeLine]) -> RecipeRead:
+    return RecipeRead(
+        id=recipe.id,
+        menu_item_id=recipe.menu_item_id,
+        name=recipe.name,
+        yield_qty=float(recipe.yield_qty),
+        version=recipe.version,
+        is_active=recipe.is_active,
+        cost_minor=int(recipe.cost_minor or 0),
+        lines=[
+            RecipeLineRead(
+                id=ln.id, ingredient_id=ln.ingredient_id,
+                qty=float(ln.qty), wastage_pct=float(ln.wastage_pct or 0),
+            )
+            for ln in lines
+        ],
+    )
+
+
+@router.get("/recipes", response_model=list[RecipeRead])
+async def list_recipes(
+    session: SessionDep,
+    menu_item_id: UUID,
+    tenant: TenantContext = Depends(requires("inventory.read")),
+) -> list[RecipeRead]:
+    """List recipes for one menu item, newest version first.
+
+    In practice there's at most one is_active=True recipe per item at a
+    time (deduct_for_order relies on that), but older/deactivated versions
+    stay listed here for history — they just aren't editable anymore.
+    """
+    await _get_menu_item_for_tenant(session, tenant, menu_item_id)
+    recipes = (
+        await session.execute(
+            select(Recipe)
+            .where(Recipe.menu_item_id == menu_item_id)
+            .order_by(Recipe.version.desc())
+        )
+    ).scalars().all()
+    if not recipes:
+        return []
+    recipe_ids = [r.id for r in recipes]
+    all_lines = (
+        await session.execute(
+            select(RecipeLine).where(RecipeLine.recipe_id.in_(recipe_ids))
+        )
+    ).scalars().all()
+    lines_by_recipe: dict[UUID, list[RecipeLine]] = {}
+    for ln in all_lines:
+        lines_by_recipe.setdefault(ln.recipe_id, []).append(ln)
+    return [_recipe_read(r, lines_by_recipe.get(r.id, [])) for r in recipes]
+
+
+@router.post("/recipes", response_model=RecipeRead, status_code=status.HTTP_201_CREATED)
+async def create_recipe(
+    payload: RecipeCreate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.write")),
+) -> RecipeRead:
+    await _get_menu_item_for_tenant(session, tenant, payload.menu_item_id)
+
+    existing_active = (
+        await session.execute(
+            select(Recipe).where(
+                Recipe.menu_item_id == payload.menu_item_id,
+                Recipe.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_active:
+        raise ConflictError(
+            "this menu item already has an active recipe — edit it (PATCH) "
+            "or delete it first"
+        )
+
+    # Bump past any prior (now-inactive) version so uq_recipe_version never
+    # collides, same as the seed script's version=1-and-done in practice but
+    # safe if this item ever had a recipe before.
+    max_version = (
+        await session.execute(
+            select(Recipe.version)
+            .where(Recipe.menu_item_id == payload.menu_item_id)
+            .order_by(Recipe.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    next_version = (max_version or 0) + 1
+
+    for line in payload.lines:
+        await _get_ingredient_for_tenant(session, tenant, line.ingredient_id)
+
+    recipe = Recipe(
+        id=uuid4(),
+        menu_item_id=payload.menu_item_id,
+        name=payload.name,
+        yield_qty=payload.yield_qty,
+        version=next_version,
+        is_active=True,
+    )
+    session.add(recipe)
+    await session.flush()
+
+    lines = [
+        RecipeLine(
+            id=uuid4(),
+            recipe_id=recipe.id,
+            ingredient_id=line.ingredient_id,
+            qty=line.qty,
+            wastage_pct=line.wastage_pct,
+        )
+        for line in payload.lines
+    ]
+    session.add_all(lines)
+    await session.flush()
+
+    return _recipe_read(recipe, lines)
+
+
+@router.patch("/recipes/{recipe_id}", response_model=RecipeRead)
+async def update_recipe(
+    recipe_id: UUID,
+    payload: RecipeUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.write")),
+) -> RecipeRead:
+    recipe = await _get_active_recipe_for_tenant(session, tenant, recipe_id)
+    if payload.name is not None:
+        recipe.name = payload.name
+    if payload.yield_qty is not None:
+        recipe.yield_qty = payload.yield_qty
+    await session.flush()
+    lines = (
+        await session.execute(
+            select(RecipeLine).where(RecipeLine.recipe_id == recipe.id)
+        )
+    ).scalars().all()
+    return _recipe_read(recipe, list(lines))
+
+
+@router.delete("/recipes/{recipe_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_recipe(
+    recipe_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.write")),
+):
+    """Soft-delete-equivalent: deactivate the recipe.
+
+    deduct_for_order() only ever reads Recipe rows with is_active=True, so
+    this takes effect immediately — the menu item just goes back to being
+    treated as recipe-less (skipped, no error) at the next checkout.
+    """
+    recipe = await _get_active_recipe_for_tenant(session, tenant, recipe_id)
+    recipe.is_active = False
+    await session.flush()
+
+
+@router.post(
+    "/recipes/{recipe_id}/lines",
+    response_model=RecipeLineRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_recipe_line(
+    recipe_id: UUID,
+    payload: RecipeLineIn,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.write")),
+) -> RecipeLineRead:
+    recipe = await _get_active_recipe_for_tenant(session, tenant, recipe_id)
+    await _get_ingredient_for_tenant(session, tenant, payload.ingredient_id)
+    line = RecipeLine(
+        id=uuid4(),
+        recipe_id=recipe.id,
+        ingredient_id=payload.ingredient_id,
+        qty=payload.qty,
+        wastage_pct=payload.wastage_pct,
+    )
+    session.add(line)
+    await session.flush()
+    return RecipeLineRead(
+        id=line.id, ingredient_id=line.ingredient_id,
+        qty=float(line.qty), wastage_pct=float(line.wastage_pct or 0),
+    )
+
+
+@router.patch("/recipes/{recipe_id}/lines/{line_id}", response_model=RecipeLineRead)
+async def update_recipe_line(
+    recipe_id: UUID,
+    line_id: UUID,
+    payload: RecipeLineUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.write")),
+) -> RecipeLineRead:
+    await _get_active_recipe_for_tenant(session, tenant, recipe_id)
+    line = (
+        await session.execute(
+            select(RecipeLine).where(
+                RecipeLine.id == line_id, RecipeLine.recipe_id == recipe_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not line:
+        raise NotFoundError("recipe line not found")
+    if payload.ingredient_id is not None:
+        await _get_ingredient_for_tenant(session, tenant, payload.ingredient_id)
+        line.ingredient_id = payload.ingredient_id
+    if payload.qty is not None:
+        line.qty = payload.qty
+    if payload.wastage_pct is not None:
+        line.wastage_pct = payload.wastage_pct
+    await session.flush()
+    return RecipeLineRead(
+        id=line.id, ingredient_id=line.ingredient_id,
+        qty=float(line.qty), wastage_pct=float(line.wastage_pct or 0),
+    )
+
+
+@router.delete("/recipes/{recipe_id}/lines/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_recipe_line(
+    recipe_id: UUID,
+    line_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.write")),
+):
+    await _get_active_recipe_for_tenant(session, tenant, recipe_id)
+    line = (
+        await session.execute(
+            select(RecipeLine).where(
+                RecipeLine.id == line_id, RecipeLine.recipe_id == recipe_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not line:
+        raise NotFoundError("recipe line not found")
+    await session.delete(line)
     await session.flush()
 
 

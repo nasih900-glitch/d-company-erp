@@ -824,6 +824,48 @@ private struct GrnPostResponse: Decodable {
     let batch_ids: [String]
 }
 
+// Recipe/RecipeLine (BOM) — what a menu item consumes at checkout. Recipe
+// carries no company_id of its own on the backend (tenant scope comes from
+// the menu_item_id -> MenuItem join); there is at most one is_active recipe
+// per item, which is the one app/services/inventory/deduction.py reads at
+// order payment.
+private struct RecipeLineDTO: Codable, Identifiable {
+    let id: String
+    let ingredient_id: String
+    let qty: Double
+    let wastage_pct: Double // fraction, e.g. 0.05 = 5% — not a percent
+}
+
+private struct RecipeDTO: Codable, Identifiable {
+    let id: String
+    let menu_item_id: String
+    let name: String
+    let yield_qty: Double
+    let version: Int
+    let is_active: Bool
+    let cost_minor: Int
+    let lines: [RecipeLineDTO]
+}
+
+private struct RecipeLineRequest: Encodable {
+    let ingredient_id: String
+    let qty: Double
+    let wastage_pct: Double
+}
+
+private struct RecipeCreateRequest: Encodable {
+    let menu_item_id: String
+    let name: String
+    let yield_qty: Double
+    let lines: [RecipeLineRequest]
+}
+
+private struct RecipeLineUpdateRequest: Encodable {
+    let ingredient_id: String?
+    let qty: Double?
+    let wastage_pct: Double?
+}
+
 private struct MoneyBucketDTO: Codable {
     let total_minor: Int
 }
@@ -5539,6 +5581,7 @@ private struct MenuCatalogNativeView: View {
     @State private var isCreatingItem = false
     @State private var newCategoryName = ""
     @State private var showNewCategory = false
+    @State private var recipeItem: MenuItemDTO?
 
     var body: some View {
         AppNavigation {
@@ -5588,13 +5631,29 @@ private struct MenuCatalogNativeView: View {
                         BrandedCard {
                             VStack(spacing: 0) {
                                 ForEach(filteredItems) { item in
-                                    Button {
-                                        Haptics.selection()
-                                        editingItem = item
-                                    } label: {
-                                        MenuCatalogRow(item: item, categoryName: categoryName(for: item.category_id))
+                                    HStack(spacing: 4) {
+                                        Button {
+                                            Haptics.selection()
+                                            editingItem = item
+                                        } label: {
+                                            MenuCatalogRow(item: item, categoryName: categoryName(for: item.category_id))
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        // What this item consumes at checkout — separate from the
+                                        // main edit sheet since it's a different resource (Recipe/
+                                        // RecipeLine, not MenuItem) with its own CRUD lifecycle.
+                                        Button {
+                                            Haptics.selection()
+                                            recipeItem = item
+                                        } label: {
+                                            Image(systemName: "list.bullet.rectangle")
+                                                .font(.subheadline)
+                                                .foregroundColor(Brand.muted)
+                                                .frame(width: 32, height: 32)
+                                        }
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
                                     if item.id != filteredItems.last?.id {
                                         Divider().background(Brand.hairline)
                                     }
@@ -5634,6 +5693,9 @@ private struct MenuCatalogNativeView: View {
                 MenuItemFormSheet(categories: categories, existingItem: nil) { updated in
                     Task { await save(updated) }
                 } onDelete: {}
+            }
+            .sheet(item: $recipeItem) { item in
+                RecipeEditorSheet(item: item)
             }
         }
         .task { await load() }
@@ -5920,6 +5982,382 @@ private struct MenuItemFormSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.caption).foregroundColor(Brand.muted)
             content()
+        }
+    }
+}
+
+// "What does this menu item consume?" — a minimal BOM editor mirroring
+// MenuItemFormSheet/GRNReceivingSheet's patterns. Recipe carries no
+// company_id of its own on the backend (tenant scope comes from the
+// menu_item_id -> MenuItem join), and there is at most one is_active
+// recipe per item — deduct_for_order() only ever reads that one at
+// checkout, so "Remove recipe" here just deactivates it (soft-delete
+// equivalent), same as the backend endpoint.
+private struct RecipeEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let item: MenuItemDTO
+
+    @State private var ingredients: [IngredientDTO] = []
+    @State private var recipe: RecipeDTO?
+    @State private var isLoading = true
+    @State private var isBusy = false
+    @State private var error: String?
+
+    @State private var newIngredientId = ""
+    @State private var newQtyText = ""
+    @State private var newWastageText = "0"
+
+    @State private var editingLineId: String?
+    @State private var editIngredientId = ""
+    @State private var editQtyText = ""
+    @State private var editWastageText = ""
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if let error { ErrorBanner(message: error) }
+
+                        Text("What one \(item.name) consumes from inventory at checkout. Qty is in each ingredient's stock unit; wastage % is added on top.")
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+
+                        if isLoading {
+                            ProgressView().padding(.top, 24)
+                        } else if let recipe {
+                            BrandedCard {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    if recipe.lines.isEmpty {
+                                        Text("No ingredients in this recipe yet — add one below.")
+                                            .font(.caption)
+                                            .foregroundColor(Brand.muted)
+                                    } else {
+                                        ForEach(recipe.lines) { line in
+                                            recipeLineRow(line)
+                                            if line.id != recipe.lines.last?.id {
+                                                Divider().background(Brand.hairline)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            BrandedCard {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Add ingredient").font(.caption).foregroundColor(Brand.muted)
+                                    Picker("", selection: $newIngredientId) {
+                                        Text("Select ingredient").tag("")
+                                        ForEach(ingredients) { ing in
+                                            Text("\(ing.name) (\(ing.base_unit))").tag(ing.id)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .tint(Brand.gold)
+                                    HStack(spacing: 12) {
+                                        fieldLabel("Qty") {
+                                            TextField("0", text: $newQtyText)
+                                                .keyboardType(.decimalPad)
+                                                .nativeField()
+                                        }
+                                        fieldLabel("Waste %") {
+                                            TextField("0", text: $newWastageText)
+                                                .keyboardType(.decimalPad)
+                                                .nativeField()
+                                        }
+                                    }
+                                    Button {
+                                        Task { await addLine() }
+                                    } label: {
+                                        HStack {
+                                            if isBusy { ProgressView() }
+                                            Label("Add line", systemImage: "plus")
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(PressableButtonStyle())
+                                    .disabled(isBusy || newIngredientId.isEmpty || (Double(newQtyText) ?? 0) <= 0)
+                                }
+                            }
+
+                            HStack {
+                                Text("Version \(recipe.version) · active")
+                                    .font(.caption2)
+                                    .foregroundColor(Brand.muted)
+                                Spacer()
+                                Button(role: .destructive) {
+                                    Task { await removeRecipe() }
+                                } label: {
+                                    Label("Remove recipe", systemImage: "trash")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .disabled(isBusy)
+                            }
+                        } else {
+                            BrandedCard {
+                                VStack(spacing: 12) {
+                                    Text("No recipe yet — this item won't deduct any stock at checkout.")
+                                        .font(.subheadline)
+                                        .foregroundColor(Brand.muted)
+                                        .multilineTextAlignment(.center)
+                                    Button {
+                                        Task { await createRecipe() }
+                                    } label: {
+                                        HStack {
+                                            if isBusy { ProgressView() }
+                                            Label("Set up recipe", systemImage: "plus")
+                                        }
+                                    }
+                                    .buttonStyle(PressableButtonStyle())
+                                    .disabled(isBusy || ingredients.isEmpty)
+                                    if ingredients.isEmpty {
+                                        Text("Add ingredients in Inventory first.")
+                                            .font(.caption2)
+                                            .foregroundColor(Brand.danger)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Recipe")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .task { await load() }
+    }
+
+    @ViewBuilder
+    private func recipeLineRow(_ line: RecipeLineDTO) -> some View {
+        if editingLineId == line.id {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("", selection: $editIngredientId) {
+                    ForEach(ingredients) { ing in
+                        Text("\(ing.name) (\(ing.base_unit))").tag(ing.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(Brand.gold)
+                HStack(spacing: 12) {
+                    fieldLabel("Qty") {
+                        TextField("0", text: $editQtyText).keyboardType(.decimalPad).nativeField()
+                    }
+                    fieldLabel("Waste %") {
+                        TextField("0", text: $editWastageText).keyboardType(.decimalPad).nativeField()
+                    }
+                }
+                HStack {
+                    Button("Cancel") { editingLineId = nil }
+                        .foregroundColor(Brand.muted)
+                    Spacer()
+                    Button {
+                        Task { await saveLineEdit(lineId: line.id) }
+                    } label: {
+                        if isBusy { ProgressView() } else { Text("Save") }
+                    }
+                    .foregroundColor(Brand.gold)
+                    .disabled(isBusy)
+                }
+            }
+            .padding(.vertical, 4)
+        } else {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ingredientName(line.ingredient_id))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text("\(formattedNumber(line.qty)) \(ingredientUnit(line.ingredient_id)) · \(formattedNumber(line.wastage_pct * 100))% waste")
+                        .font(.caption2)
+                        .foregroundColor(Brand.muted)
+                }
+                Spacer()
+                Button {
+                    Haptics.selection()
+                    startEdit(line)
+                } label: {
+                    Image(systemName: "pencil").foregroundColor(Brand.muted)
+                }
+                Button {
+                    Task { await deleteLine(line.id) }
+                } label: {
+                    Image(systemName: "trash").foregroundColor(Brand.danger)
+                }
+                .disabled(isBusy)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func fieldLabel<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundColor(Brand.muted)
+            content()
+        }
+    }
+
+    private func ingredientName(_ id: String) -> String {
+        ingredients.first { $0.id == id }?.name ?? "Unknown ingredient"
+    }
+    private func ingredientUnit(_ id: String) -> String {
+        ingredients.first { $0.id == id }?.base_unit ?? ""
+    }
+    private func formattedNumber(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(format: "%.0f", value) : String(format: "%.2f", value)
+    }
+
+    private func startEdit(_ line: RecipeLineDTO) {
+        editingLineId = line.id
+        editIngredientId = line.ingredient_id
+        editQtyText = formattedNumber(line.qty)
+        editWastageText = formattedNumber(line.wastage_pct * 100)
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedIngredients: [IngredientDTO] = session.authorized { token in
+                try await APIClient.shared.get("inventory/ingredients", token: token)
+            }
+            async let loadedRecipes: [RecipeDTO] = session.authorized { token in
+                try await APIClient.shared.get(
+                    "inventory/recipes", token: token,
+                    queryItems: [URLQueryItem(name: "menu_item_id", value: item.id)]
+                )
+            }
+            let (freshIngredients, freshRecipes) = try await (loadedIngredients, loadedRecipes)
+            ingredients = freshIngredients
+            recipe = freshRecipes.first { $0.is_active }
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func createRecipe() async {
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        do {
+            let created: RecipeDTO = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "inventory/recipes",
+                    body: RecipeCreateRequest(menu_item_id: item.id, name: "\(item.name) recipe", yield_qty: 1, lines: []),
+                    token: token
+                )
+            }
+            recipe = created
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func removeRecipe() async {
+        guard let recipe else { return }
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        do {
+            try await session.authorized { token -> Void in
+                try await APIClient.shared.delete("inventory/recipes/\(recipe.id)", token: token)
+            }
+            self.recipe = nil
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func addLine() async {
+        guard let recipe, let qty = Double(newQtyText), qty > 0, !newIngredientId.isEmpty else { return }
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        let wastagePct = (Double(newWastageText) ?? 0) / 100
+        do {
+            let line: RecipeLineDTO = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "inventory/recipes/\(recipe.id)/lines",
+                    body: RecipeLineRequest(ingredient_id: newIngredientId, qty: qty, wastage_pct: wastagePct),
+                    token: token
+                )
+            }
+            self.recipe = RecipeDTO(
+                id: recipe.id, menu_item_id: recipe.menu_item_id, name: recipe.name,
+                yield_qty: recipe.yield_qty, version: recipe.version, is_active: recipe.is_active,
+                cost_minor: recipe.cost_minor, lines: recipe.lines + [line]
+            )
+            newIngredientId = ""
+            newQtyText = ""
+            newWastageText = "0"
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func saveLineEdit(lineId: String) async {
+        guard let recipe else { return }
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        let qty = Double(editQtyText) ?? 0
+        let wastagePct = (Double(editWastageText) ?? 0) / 100
+        do {
+            let updated: RecipeLineDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "inventory/recipes/\(recipe.id)/lines/\(lineId)",
+                    body: RecipeLineUpdateRequest(ingredient_id: editIngredientId, qty: qty, wastage_pct: wastagePct),
+                    token: token
+                )
+            }
+            self.recipe = RecipeDTO(
+                id: recipe.id, menu_item_id: recipe.menu_item_id, name: recipe.name,
+                yield_qty: recipe.yield_qty, version: recipe.version, is_active: recipe.is_active,
+                cost_minor: recipe.cost_minor,
+                lines: recipe.lines.map { $0.id == lineId ? updated : $0 }
+            )
+            editingLineId = nil
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func deleteLine(_ lineId: String) async {
+        guard let recipe else { return }
+        isBusy = true
+        defer { isBusy = false }
+        error = nil
+        do {
+            try await session.authorized { token -> Void in
+                try await APIClient.shared.delete("inventory/recipes/\(recipe.id)/lines/\(lineId)", token: token)
+            }
+            self.recipe = RecipeDTO(
+                id: recipe.id, menu_item_id: recipe.menu_item_id, name: recipe.name,
+                yield_qty: recipe.yield_qty, version: recipe.version, is_active: recipe.is_active,
+                cost_minor: recipe.cost_minor,
+                lines: recipe.lines.filter { $0.id != lineId }
+            )
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
         }
     }
 }
