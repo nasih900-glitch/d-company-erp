@@ -78,6 +78,19 @@ STAFF_ACCESS = STANDARD_ACCESS - {
     "analytics.read", "analytics.export",
 }
 
+# External CA / audit-firm title — true read-only access. Only the *.read
+# permissions (plus analytics.export, which reads/exports data rather than
+# mutating it) needed to review finance, ops, and staff records for an audit.
+# Deliberately excludes every *.write, *.void, *.refund, shift-open/close,
+# OCR upload/verify (both create or mutate bill records), and admin.system.
+# admin.audit.read is excluded too — that permission is hardcoded to
+# tenant.audit_access (super_owner only, see _has_permission) and is never
+# granted through ROLE_PERMISSIONS for any role.
+AUDITOR_ACCESS = {
+    "pos.read", "tables.read", "menu.read", "inventory.read", "gaming.read",
+    "finance.read", "staff.read", "analytics.read", "analytics.export",
+}
+
 ROLE_DESCRIPTIONS: dict[str, str] = {
     "owner": "Business owner title — all standard modules",
     "co_owner": "Co-owner — full operational access, no audit log/Access Control",
@@ -86,15 +99,17 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
     "cashier": "Cashier title — all standard modules",
     "kitchen": "Kitchen team title — all standard modules",
     "gaming_supervisor": "Gaming team title — all standard modules",
-    "auditor": "Audit staff title — all standard modules",
+    "auditor": "External auditor / CA — read-only access to finance, analytics, "
+    "and operational records; no write, refund, void, or shift permissions",
     "staff": "General staff — no Inventory or Insights/Reports access by default",
 }
 
-# D Company operates with open module access for every legacy title. "staff" is
-# the one deliberately-restricted role (see STAFF_ACCESS) — the protected
-# owner can widen or narrow any role's access live via the Access Control
-# settings panel (ROLE_PERMISSION_OVERRIDES table), which layers on top of
-# these defaults rather than replacing them.
+# D Company operates with open module access for every legacy title. "staff"
+# and "auditor" are the two deliberately-restricted roles — staff has no
+# Inventory/Insights access (see STAFF_ACCESS), auditor is read-only (see
+# AUDITOR_ACCESS) — the protected owner can widen or narrow any role's access
+# live via the Access Control settings panel (ROLE_PERMISSION_OVERRIDES
+# table), which layers on top of these defaults rather than replacing them.
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "super_owner": set(PERMISSIONS),
     "co_owner": set(STANDARD_ACCESS),
@@ -104,7 +119,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "cashier": set(STANDARD_ACCESS),
     "kitchen": set(STANDARD_ACCESS),
     "gaming_supervisor": set(STANDARD_ACCESS),
-    "auditor": set(STANDARD_ACCESS),
+    "auditor": set(AUDITOR_ACCESS),
     "staff": set(STAFF_ACCESS),
 }
 

@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.errors import AuthError
-from app.core.permissions import PERMISSIONS, ROLE_PERMISSIONS, _has_permission
+from app.core.permissions import AUDITOR_ACCESS, PERMISSIONS, ROLE_PERMISSIONS, _has_permission
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.security import issue_pricing_token
 from app.core.tenant import TenantContext
@@ -14,9 +14,9 @@ def test_super_owner_has_all_permissions() -> None:
 
 
 def test_every_legacy_title_has_every_non_audit_permission() -> None:
-    # "staff" is the one deliberate exception — see test below.
+    # "staff" and "auditor" are the deliberate exceptions — see tests below.
     expected = set(PERMISSIONS) - {"admin.audit.read"}
-    for role in ROLE_PERMISSIONS.keys() - {"super_owner", "staff"}:
+    for role in ROLE_PERMISSIONS.keys() - {"super_owner", "staff", "auditor"}:
         assert ROLE_PERMISSIONS[role] == expected
 
 
@@ -34,7 +34,32 @@ def test_audit_read_is_protected_owner_only() -> None:
     assert "admin.audit.read" in ROLE_PERMISSIONS["super_owner"]
     assert "admin.audit.read" not in ROLE_PERMISSIONS["owner"]
     assert "admin.audit.read" not in ROLE_PERMISSIONS["auditor"]
-    assert "pos.write" in ROLE_PERMISSIONS["auditor"]
+
+
+def test_auditor_role_is_read_only() -> None:
+    auditor_perms = ROLE_PERMISSIONS["auditor"]
+    assert auditor_perms == AUDITOR_ACCESS
+
+    # Read (and export) access needed to review finance/ops for an audit.
+    for perm in (
+        "finance.read", "analytics.read", "analytics.export", "pos.read",
+        "inventory.read", "staff.read", "tables.read", "menu.read", "gaming.read",
+    ):
+        assert perm in auditor_perms
+
+    # No write/refund/void/shift/admin permission of any kind survives.
+    mutating = {
+        "pos.write", "pos.void", "pos.refund", "pos.discount.large",
+        "pos.shift.open", "pos.shift.close", "tables.write",
+        "tables.reservations.write", "menu.write", "inventory.write",
+        "inventory.adjust.large", "gaming.write", "gaming.tournament.manage",
+        "finance.write", "finance.partner.write", "finance.assets.write",
+        "ocr.upload", "ocr.verify", "staff.write", "staff.attendance.write",
+        "staff.payroll.write", "admin.audit.read", "admin.system",
+    }
+    assert auditor_perms.isdisjoint(mutating)
+    # Every permission granted is declared and every mutating one accounted for.
+    assert auditor_perms | mutating == set(PERMISSIONS)
 
 
 def test_pricing_control_requires_the_current_users_unlock_token() -> None:
