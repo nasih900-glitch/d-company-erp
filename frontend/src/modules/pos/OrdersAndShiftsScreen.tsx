@@ -411,18 +411,48 @@ function OpenShiftForm({ onClose, onSuccess, onError }: { onClose: () => void; o
   );
 }
 
+// Indian note/coin denominations, largest first — used by the optional
+// denomination-breakdown entry mode below.
+const CASH_DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1];
+
 function CloseShiftForm({
   shift, onClose, onSuccess,
 }: { shift: ShiftDTO; onClose: () => void; onSuccess: () => void }) {
+  const [mode, setMode] = useState<'total' | 'denomination'>('total');
   const [counted, setCounted] = useState('');
+  const [denomCounts, setDenomCounts] = useState<Record<number, string>>({
+    500: '', 200: '', 100: '', 50: '', 20: '', 10: '', 5: '', 2: '', 1: '',
+  });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{ variance_minor: number } | null>(null);
 
+  // Sum of (denomination × count), in paise — exact integer arithmetic, no
+  // float round-trip through a rupee string.
+  const denomTotalMinor = CASH_DENOMINATIONS.reduce(
+    (sum, d) => sum + d * 100 * (parseInt(denomCounts[d] || '0', 10) || 0),
+    0,
+  );
+
+  // Keep the free-text total field mirroring the breakdown while denomination
+  // mode is active, so what's on screen always matches what will be submitted.
+  useEffect(() => {
+    if (mode === 'denomination') setCounted((denomTotalMinor / 100).toFixed(2));
+  }, [mode, denomTotalMinor]);
+
+  function setDenomCount(denom: number, value: string) {
+    setDenomCounts((prev) => ({ ...prev, [denom]: value }));
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      const r = await shifts.close(shift.id, Math.round(parseFloat(counted || '0') * 100));
+      // Denomination mode submits the exact integer sum computed above;
+      // free-text mode submits exactly as before (unchanged wire format).
+      const countedMinor = mode === 'denomination'
+        ? denomTotalMinor
+        : Math.round(parseFloat(counted || '0') * 100);
+      const r = await shifts.close(shift.id, countedMinor);
       setResult(r);
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
@@ -465,11 +495,53 @@ function CloseShiftForm({
           <input className="input font-mono text-right" disabled
             value={inr(shift.opening_float_minor)}/>
         </Field>
+
+        <div className="flex gap-1 p-1 rounded-lg bg-bg-raised">
+          <button type="button"
+            className={`flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              mode === 'total' ? 'bg-bg-surface shadow text-fg' : 'text-fg-muted'}`}
+            onClick={() => setMode('total')}>
+            Enter total
+          </button>
+          <button type="button"
+            className={`flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              mode === 'denomination' ? 'bg-bg-surface shadow text-fg' : 'text-fg-muted'}`}
+            onClick={() => setMode('denomination')}>
+            Count denominations
+          </button>
+        </div>
+
         <Field label="Counted cash (₹) — what's actually in the drawer">
-          <input type="number" required min={0} step="0.01" autoFocus
-            className="input font-mono text-right text-xl" value={counted}
+          <input type="number" required min={0} step="0.01" autoFocus={mode === 'total'}
+            disabled={mode === 'denomination'}
+            className="input font-mono text-right text-xl disabled:opacity-80" value={counted}
             onChange={(e) => setCounted(e.target.value)}/>
         </Field>
+
+        {mode === 'denomination' && (
+          <div className="rounded-xl border border-bg-border divide-y divide-bg-border overflow-hidden">
+            {CASH_DENOMINATIONS.map((d, i) => {
+              const count = parseInt(denomCounts[d] || '0', 10) || 0;
+              return (
+                <div key={d} className="flex items-center gap-3 px-3 py-2">
+                  <span className="w-12 shrink-0 font-mono text-sm text-fg-muted">₹{d}</span>
+                  <input type="number" min={0} step="1" inputMode="numeric" autoFocus={i === 0}
+                    className="input font-mono text-right flex-1" value={denomCounts[d]}
+                    placeholder="0"
+                    onChange={(e) => setDenomCount(d, e.target.value)}/>
+                  <span className="w-24 shrink-0 text-right font-mono text-sm text-fg-muted">
+                    {inr(d * 100 * count)}
+                  </span>
+                </div>
+              );
+            })}
+            <div className="flex items-center justify-between px-3 py-2 font-bold bg-bg-raised/50">
+              <span>Total counted</span>
+              <span className="font-mono">{inr(denomTotalMinor)}</span>
+            </div>
+          </div>
+        )}
+
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>

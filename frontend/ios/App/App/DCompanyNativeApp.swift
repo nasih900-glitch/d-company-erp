@@ -12021,16 +12021,36 @@ private struct ShiftHistoryRow: View {
     }
 }
 
+private enum CashCountMode: String, CaseIterable, Identifiable {
+    case total, denomination
+    var id: String { rawValue }
+    var title: String { self == .total ? "Enter total" : "Count denominations" }
+}
+
 private struct CloseShiftSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
     let shift: ShiftDTO
     let onClosed: () -> Void
 
+    // Indian note/coin denominations, largest first — used by the optional
+    // denomination-breakdown entry mode below.
+    private let denominations = [500, 200, 100, 50, 20, 10, 5, 2, 1]
+
     @State private var countedText = ""
+    @State private var countMode: CashCountMode = .total
+    @State private var denomCounts: [Int: String] = [500: "", 200: "", 100: "", 50: "", 20: "", 10: "", 5: "", 2: "", 1: ""]
     @State private var isSubmitting = false
     @State private var error: String?
     @State private var result: ShiftCloseResponseDTO?
+
+    // Sum of (denomination × count), in paise — exact integer arithmetic, no
+    // float round-trip through a rupee string.
+    private var denomTotalMinor: Int {
+        denominations.reduce(0) { sum, d in
+            sum + d * 100 * (Int(denomCounts[d] ?? "") ?? 0)
+        }
+    }
 
     var body: some View {
         NavigationView {
@@ -12088,6 +12108,13 @@ private struct CloseShiftSheet: View {
                                         .foregroundColor(.white)
                                 }
 
+                                Picker("", selection: $countMode) {
+                                    ForEach(CashCountMode.allCases) { m in
+                                        Text(m.title).tag(m)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text("Counted cash (what's actually in the drawer)")
                                         .font(.caption)
@@ -12096,6 +12123,44 @@ private struct CloseShiftSheet: View {
                                         .keyboardType(.decimalPad)
                                         .font(.title2.weight(.bold).monospacedDigit())
                                         .nativeField()
+                                        .disabled(countMode == .denomination)
+                                }
+                            }
+                        }
+
+                        if countMode == .denomination {
+                            BrandedCard {
+                                VStack(spacing: 10) {
+                                    ForEach(denominations, id: \.self) { d in
+                                        HStack {
+                                            Text("₹\(d)")
+                                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                                .foregroundColor(Brand.muted)
+                                                .frame(width: 52, alignment: .leading)
+                                            TextField("0", text: Binding(
+                                                get: { denomCounts[d] ?? "" },
+                                                set: { denomCounts[d] = $0 }
+                                            ))
+                                            .keyboardType(.numberPad)
+                                            .multilineTextAlignment(.trailing)
+                                            .font(.body.monospacedDigit())
+                                            .nativeField()
+                                            Text(inr(d * 100 * (Int(denomCounts[d] ?? "") ?? 0)))
+                                                .font(.caption.weight(.semibold).monospacedDigit())
+                                                .foregroundColor(Brand.softGold)
+                                                .frame(width: 84, alignment: .trailing)
+                                        }
+                                    }
+                                    Divider().background(Brand.hairline)
+                                    HStack {
+                                        Text("Total counted")
+                                            .font(.subheadline.weight(.bold))
+                                            .foregroundColor(.white)
+                                        Spacer()
+                                        Text(inr(denomTotalMinor))
+                                            .font(.subheadline.weight(.bold).monospacedDigit())
+                                            .foregroundColor(Brand.gold)
+                                    }
                                 }
                             }
                         }
@@ -12109,6 +12174,16 @@ private struct CloseShiftSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+            }
+            .onChange(of: countMode) { newValue in
+                if newValue == .denomination {
+                    countedText = String(format: "%.2f", Double(denomTotalMinor) / 100)
+                }
+            }
+            .onChange(of: denomCounts) { _ in
+                if countMode == .denomination {
+                    countedText = String(format: "%.2f", Double(denomTotalMinor) / 100)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -12139,7 +12214,15 @@ private struct CloseShiftSheet: View {
     }
 
     private func submit() async {
-        guard let counted = Double(countedText) else { return }
+        // Denomination mode submits the exact integer sum computed above;
+        // free-text mode submits exactly as before (unchanged wire format).
+        let countedMinor: Int
+        if countMode == .denomination {
+            countedMinor = denomTotalMinor
+        } else {
+            guard let counted = Double(countedText) else { return }
+            countedMinor = Int((counted * 100).rounded())
+        }
         isSubmitting = true
         defer { isSubmitting = false }
         error = nil
@@ -12147,7 +12230,7 @@ private struct CloseShiftSheet: View {
             let response: ShiftCloseResponseDTO = try await session.authorized { token in
                 try await APIClient.shared.post(
                     "pos/shifts/\(shift.id)/close",
-                    body: ShiftCloseRequest(counted_minor: Int((counted * 100).rounded())),
+                    body: ShiftCloseRequest(counted_minor: countedMinor),
                     token: token
                 )
             }
