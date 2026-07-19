@@ -7,11 +7,12 @@ without sending private business data to an external AI provider.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import select
 
-from app.models import Ingredient
+from app.models import Batch, Ingredient
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -21,6 +22,11 @@ if TYPE_CHECKING:
     from app.services.reports import PnLReport
 
 AlertSeverity = Literal["info", "warning", "critical"]
+
+# Early-warning window for batches nearing expiry, in the same spirit as
+# Ingredient.reorder_threshold: no company-level setting exists yet for this,
+# so a sensible fixed default is used until one is added.
+EXPIRING_SOON_DAYS = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +172,56 @@ async def build_inventory_alerts(
                 detail=(
                     f"{ing.name} is at {current:g} {ing.base_unit}; threshold is "
                     f"{threshold:g} {ing.base_unit}.{reorder_text}"
+                ),
+            )
+        )
+    return alerts
+
+
+async def build_expiring_batches_alert(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    days: int = EXPIRING_SOON_DAYS,
+    limit: int = 10,
+) -> list[BusinessAlert]:
+    now = datetime.now(UTC)
+    cutoff = now + timedelta(days=days)
+
+    rows = (
+        await session.execute(
+            select(Batch, Ingredient)
+            .join(Ingredient, Ingredient.id == Batch.ingredient_id)
+            .where(
+                Ingredient.company_id == company_id,
+                Ingredient.deleted_at.is_(None),
+                Batch.expires_at.is_not(None),
+                Batch.expires_at <= cutoff,
+                Batch.qty_on_hand > 0,
+            )
+            .order_by(Batch.expires_at)
+            .limit(limit)
+        )
+    ).all()
+
+    alerts: list[BusinessAlert] = []
+    for batch, ing in rows:
+        qty = float(batch.qty_on_hand or 0)
+        expires_at = batch.expires_at
+        days_left = (expires_at - now).days
+        if days_left < 0:
+            when_text = f"expired {expires_at.strftime('%d-%b-%Y')}"
+        elif days_left == 0:
+            when_text = "expires today"
+        else:
+            when_text = f"expires {expires_at.strftime('%d-%b-%Y')} ({days_left} day(s) left)"
+        lot_text = f" (lot {batch.lot_code})" if batch.lot_code else ""
+        alerts.append(
+            BusinessAlert(
+                severity="warning",
+                title=f"Expiring soon: {ing.name}",
+                detail=(
+                    f"{ing.name}{lot_text} has {qty:g} {ing.base_unit} on hand and {when_text}."
                 ),
             )
         )

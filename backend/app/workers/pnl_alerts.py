@@ -20,7 +20,11 @@ from sqlalchemy import select
 
 from app.core.db import AsyncSessionLocal
 from app.models import Company, Role, User, UserRole
-from app.services.alerts import build_inventory_alerts, build_pnl_alerts
+from app.services.alerts import (
+    build_expiring_batches_alert,
+    build_inventory_alerts,
+    build_pnl_alerts,
+)
 from app.services.email.mailer import Mailer, render_pnl_email
 from app.services.reports import (
     PnLReport,
@@ -224,6 +228,7 @@ async def send_reports(period: CliPeriod, *, as_of: date | None = None) -> None:
                 previous = await _previous_report(agg, company_id=company.id, spec=spec)
                 alerts = build_pnl_alerts(report, previous)
                 alerts.extend(await build_inventory_alerts(session, company_id=company.id))
+                alerts.extend(await build_expiring_batches_alert(session, company_id=company.id))
 
                 subject, html = render_pnl_email(
                     company_name=company.name,
