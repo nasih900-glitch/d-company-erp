@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
   Wallet, ScanLine, Users, BarChart3, LogOut, Tv, Settings, Menu, X, FileText,
-  ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat,
+  ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
@@ -28,6 +28,7 @@ const NAV_GROUPS = [
       { to: '/tables',     label: 'Tables',     Icon: LayoutGrid },
       { to: '/kitchen',    label: 'Kitchen',    Icon: ChefHat },
       { to: '/gaming',     label: 'Gaming',     Icon: Gamepad2 },
+      { to: '/reservations', label: 'Reservations', Icon: CalendarClock },
       { to: '/customers',  label: 'Customers',  Icon: UserCircle },
     ],
   },

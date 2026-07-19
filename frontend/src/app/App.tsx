@@ -17,6 +17,7 @@ const KitchenScreen = lazy(() => import('@/modules/kitchen/KitchenScreen'));
 const InsightsScreen = lazy(() => import('@/modules/insights/InsightsScreen'));
 const AuditScreen = lazy(() => import('@/modules/audit/AuditScreen'));
 const TablesScreen = lazy(() => import('@/modules/tables/TablesScreen'));
+const ReservationsScreen = lazy(() => import('@/modules/reservations/ReservationsScreen'));
 const MenuScreen = lazy(() => import('@/modules/menu/MenuScreen'));
 const InventoryScreen = lazy(() => import('@/modules/inventory/InventoryScreen'));
 const GamingScreen = lazy(() => import('@/modules/gaming/GamingScreen'));
@@ -86,6 +87,7 @@ export default function App() {
         <Route path="/pos" element={<Screen>{LIVE_MODE ? <LivePOSScreen /> : <POSScreen />}</Screen>} />
         <Route path="/operations" element={<Screen><OrdersAndShiftsScreen /></Screen>} />
         <Route path="/tables" element={<Screen><TablesScreen /></Screen>} />
+        <Route path="/reservations" element={<Screen><ReservationsScreen /></Screen>} />
         <Route path="/inventory" element={<Screen><InventoryScreen /></Screen>} />
         <Route path="/gaming" element={<Screen><GamingScreen /></Screen>} />
         <Route path="/events" element={<Screen><EventsScreen /></Screen>} />

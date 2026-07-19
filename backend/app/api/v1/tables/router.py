@@ -8,16 +8,18 @@ Endpoints:
   PATCH  /tables/{id}                      — rename / resize / move
   PATCH  /tables/{id}/status               — quick status change (occupied/free)
   DELETE /tables/{id}                      — soft delete
+  GET    /tables/reservations              — list reservations (date range + status filter)
   POST   /tables/reservations              — create a reservation
+  PATCH  /tables/reservations/{id}/status  — transition a reservation's status
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -25,6 +27,7 @@ from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import Branch, Floor, Order, Reservation, Table
 
 router = APIRouter()
@@ -82,6 +85,35 @@ class ReservationCreate(BaseModel):
     starts_at: datetime
     ends_at: datetime
     notes: str | None = Field(default=None, max_length=500)
+
+
+class ReservationRead(BaseModel):
+    id: UUID
+    table_id: UUID
+    table_code: str
+    guest_name: str
+    party_size: int
+    contact: str | None
+    starts_at: datetime
+    ends_at: datetime
+    notes: str | None
+    status: str
+    created_at: datetime
+
+
+class ReservationStatusUpdate(BaseModel):
+    # "held" is the creation-only state — not a valid PATCH target, so it's
+    # deliberately excluded here (see _RESERVATION_TRANSITIONS below).
+    status: Literal["seated", "no_show", "cancelled"]
+
+
+# A reservation only ever transitions once, out of "held" — every other
+# status is terminal. Keyed by *current* status so an invalid transition
+# (e.g. cancelling an already-seated/no-show/cancelled reservation) is
+# rejected instead of silently overwriting a settled outcome.
+_RESERVATION_TRANSITIONS: dict[str, set[str]] = {
+    "held": {"seated", "no_show", "cancelled"},
+}
 
 
 # ---------------------------------------------------------------- helpers
@@ -161,6 +193,31 @@ async def _tenant_table(
         .join(Branch, Branch.id == Floor.branch_id)
         .where(
             Table.id == table_id,
+            Floor.branch_id == branch_id,
+            Branch.company_id == company_id,
+            Branch.deleted_at.is_(None),
+        )
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _tenant_reservation(
+    session,
+    company_id: UUID,
+    branch_id: UUID,
+    reservation_id: UUID,
+    *,
+    for_update: bool = False,
+) -> Reservation | None:
+    stmt = (
+        select(Reservation)
+        .join(Table, Table.id == Reservation.table_id)
+        .join(Floor, Floor.id == Table.floor_id)
+        .join(Branch, Branch.id == Floor.branch_id)
+        .where(
+            Reservation.id == reservation_id,
             Floor.branch_id == branch_id,
             Branch.company_id == company_id,
             Branch.deleted_at.is_(None),
@@ -473,6 +530,56 @@ async def delete_table(
 
 
 # ---------------------------------------------------------------- RESERVATIONS
+def _reservation_read(r: Reservation, *, table_code: str) -> ReservationRead:
+    return ReservationRead(
+        id=r.id, table_id=r.table_id, table_code=table_code, guest_name=r.guest_name,
+        party_size=r.party_size, contact=r.contact, starts_at=r.starts_at, ends_at=r.ends_at,
+        notes=r.notes, status=r.status, created_at=r.created_at,
+    )
+
+
+@router.get("/reservations", response_model=list[ReservationRead])
+async def list_reservations(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("tables.read")),
+    from_date: date | None = None,
+    to_date: date | None = None,
+    status_filter: list[str] | None = Query(default=None, alias="status"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[ReservationRead]:
+    """List reservations for the current branch, soonest first.
+
+    Defaults to upcoming only (starts_at from today onward, local time) so a
+    booking made months ago doesn't clutter the staff view forever — pass an
+    explicit `from_date` to look further back. `to_date` is optional and
+    unbounded when omitted.
+    """
+    branch_id = _current_branch_id(tenant)
+    stmt = (
+        select(Reservation, Table.code)
+        .join(Table, Table.id == Reservation.table_id)
+        .join(Floor, Floor.id == Table.floor_id)
+        .join(Branch, Branch.id == Floor.branch_id)
+        .where(
+            Floor.branch_id == branch_id,
+            Branch.company_id == tenant.company_id,
+            Branch.deleted_at.is_(None),
+        )
+    )
+    if status_filter:
+        stmt = stmt.where(Reservation.status.in_(status_filter))
+    timezone_name = await company_timezone(session, tenant.company_id)
+    f_d = from_date or local_today(timezone_name)
+    f_dt, _ = local_date_bounds_utc(f_d, f_d, timezone_name)
+    stmt = stmt.where(Reservation.starts_at >= f_dt)
+    if to_date:
+        _, t_dt = local_date_bounds_utc(to_date, to_date, timezone_name)
+        stmt = stmt.where(Reservation.starts_at < t_dt)
+    stmt = stmt.order_by(Reservation.starts_at.asc()).limit(limit)
+    rows = (await session.execute(stmt)).all()
+    return [_reservation_read(r, table_code=code) for r, code in rows]
+
+
 @router.post("/reservations", status_code=status.HTTP_201_CREATED)
 async def create_reservation(
     payload: ReservationCreate,
@@ -506,3 +613,33 @@ async def create_reservation(
     session.add(r)
     await session.flush()
     return {"id": str(r.id), "status": r.status}
+
+
+@router.patch("/reservations/{reservation_id}/status", response_model=ReservationRead)
+async def update_reservation_status(
+    reservation_id: UUID,
+    payload: ReservationStatusUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("tables.reservations.write")),
+) -> ReservationRead:
+    branch_id = _current_branch_id(tenant)
+    r = await _tenant_reservation(
+        session,
+        tenant.company_id,
+        branch_id,
+        reservation_id,
+        for_update=True,
+    )
+    if not r:
+        raise NotFoundError("reservation not found")
+    allowed = _RESERVATION_TRANSITIONS.get(r.status, set())
+    if payload.status not in allowed:
+        raise ConflictError(
+            f"cannot change reservation from '{r.status}' to '{payload.status}'"
+        )
+    r.status = payload.status
+    await session.flush()
+    table_code = (
+        await session.execute(select(Table.code).where(Table.id == r.table_id))
+    ).scalar_one()
+    return _reservation_read(r, table_code=table_code)

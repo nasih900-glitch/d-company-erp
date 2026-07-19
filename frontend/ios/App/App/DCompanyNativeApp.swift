@@ -1901,6 +1901,25 @@ private struct SendToPosResponseDTO: Decodable {
     let amount_minor: Int
 }
 
+// Gaming station bookings (backend/app/api/v1/gaming/router.py — GET/PATCH /gaming/bookings)
+private struct GamingBookingDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let station_id: String
+    let station_code: String
+    let starts_at: Date
+    let ends_at: Date
+    let guest_name: String
+    let contact: String?
+    let party_size: Int
+    let deposit_minor: Int
+    let status: String
+    // held | consumed | no_show | cancelled
+}
+
+private struct BookingStatusUpdateRequest: Encodable {
+    let status: String
+}
+
 private struct GamingSessionDraft: Identifiable {
     let id = UUID()
     let station: GamingStationDTO
@@ -2176,6 +2195,25 @@ private struct TableDTO: Decodable, Identifiable, Hashable {
 }
 
 private struct TableStatusUpdateRequest: Encodable {
+    let status: String
+}
+
+// Table reservations (backend/app/api/v1/tables/router.py — GET/PATCH /tables/reservations)
+private struct ReservationDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let table_id: String
+    let table_code: String
+    let guest_name: String
+    let party_size: Int
+    let contact: String?
+    let starts_at: Date
+    let ends_at: Date
+    let notes: String?
+    let status: String
+    // held | seated | no_show | cancelled
+}
+
+private struct ReservationStatusUpdateRequest: Encodable {
     let status: String
 }
 
@@ -4441,6 +4479,13 @@ private struct DashboardNativeView: View {
                                     WorkspaceLinkRow(title: "Tables", subtitle: "Build dine-in orders, send to kitchen and POS", icon: "table.furniture")
                                 }
                             }
+                            if session.canSeeTables || session.canSeeGaming {
+                                NavigationLink {
+                                    ReservationsNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Reservations", subtitle: "Upcoming table and gaming bookings", icon: "calendar.badge.clock")
+                                }
+                            }
                             NavigationLink {
                                 KitchenNativeView()
                             } label: {
@@ -4682,6 +4727,13 @@ private struct WorkspaceNativeView: View {
                                     TablesNativeView()
                                 } label: {
                                     WorkspaceLinkRow(title: "Tables", subtitle: "Build dine-in orders, send to kitchen and POS", icon: "table.furniture")
+                                }
+                            }
+                            if session.canSeeTables || session.canSeeGaming {
+                                NavigationLink {
+                                    ReservationsNativeView()
+                                } label: {
+                                    WorkspaceLinkRow(title: "Reservations", subtitle: "Upcoming table and gaming bookings", icon: "calendar.badge.clock")
                                 }
                             }
                             NavigationLink {
@@ -6440,6 +6492,290 @@ private enum LocalAlarmScheduler {
             content.sound = .default
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, fireAt.timeIntervalSinceNow), repeats: false)
             center.add(UNNotificationRequest(identifier: "held-order-\(order.id)", content: content, trigger: trigger))
+        }
+    }
+}
+
+// Reservations — makes the two booking flows that already existed (table
+// reservations, gaming station bookings) visible after creation. Mirrors
+// OrdersNativeView's tabbed-queue pattern: a segmented picker up top, a
+// list below, real-time push + a poll fallback to stay current across
+// devices, and an inline action row on anything still pending.
+private enum ReservationsTab: String, CaseIterable, Identifiable {
+    case tables, gaming
+    var id: String { rawValue }
+    var title: String { self == .tables ? "Tables" : "Gaming" }
+}
+
+private struct ReservationsNativeView: View {
+    @EnvironmentObject private var session: AppSession
+    @State private var tab: ReservationsTab = .tables
+    @State private var tableReservations: [ReservationDTO] = []
+    @State private var bookings: [GamingBookingDTO] = []
+    @State private var isLoading = true
+    @State private var error: String?
+    @State private var busyId: String?
+    @State private var unsubscribeRealtime: [() -> Void] = []
+
+    var body: some View {
+        AppNavigation {
+            VStack(spacing: 0) {
+                Picker("", selection: $tab) {
+                    ForEach(ReservationsTab.allCases) { t in
+                        Text(t.title).tag(t)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(16)
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if let error {
+                            ErrorBanner(message: error)
+                        }
+
+                        if tab == .tables {
+                            tablesList
+                        } else {
+                            gamingList
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Reservations")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        Haptics.selection()
+                        Task { await load() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+            .background(Brand.background)
+        }
+        .task { await load() }
+        .task { await pollForServerUpdates() }
+        .onAppear {
+            unsubscribeRealtime = ["tables", "gaming"].map { resource in
+                RealtimeClient.shared.subscribe(resource) { Task { await load() } }
+            }
+        }
+        .onDisappear {
+            unsubscribeRealtime.forEach { $0() }
+            unsubscribeRealtime = []
+        }
+    }
+
+    @ViewBuilder
+    private var tablesList: some View {
+        if isLoading && tableReservations.isEmpty {
+            LoadingBlock(title: "Loading reservations")
+        } else if tableReservations.isEmpty {
+            BrandedCard {
+                InlineEmptyRow(icon: "calendar", title: "No upcoming reservations", subtitle: "New bookings taken from Tables will show up here.")
+            }
+        } else {
+            ForEach(tableReservations) { r in
+                ReservationCard(
+                    title: "Table \(r.table_code)",
+                    subtitle: "\(r.guest_name) \u{00B7} \(r.party_size) guest\(r.party_size == 1 ? "" : "s")",
+                    startsAt: r.starts_at,
+                    contact: r.contact,
+                    status: r.status,
+                    arrivedLabel: "Mark arrived",
+                    isBusy: busyId == r.id,
+                    onArrived: { Task { await actOnReservation(r, status: "seated") } },
+                    onNoShow: { Task { await actOnReservation(r, status: "no_show") } },
+                    onCancel: { Task { await actOnReservation(r, status: "cancelled") } }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var gamingList: some View {
+        if isLoading && bookings.isEmpty {
+            LoadingBlock(title: "Loading bookings")
+        } else if bookings.isEmpty {
+            BrandedCard {
+                InlineEmptyRow(icon: "gamecontroller", title: "No upcoming bookings", subtitle: "New bookings taken from Gaming will show up here.")
+            }
+        } else {
+            ForEach(bookings) { b in
+                ReservationCard(
+                    title: b.station_code,
+                    subtitle: "\(b.guest_name) \u{00B7} \(b.party_size) guest\(b.party_size == 1 ? "" : "s")",
+                    startsAt: b.starts_at,
+                    contact: b.contact,
+                    status: b.status,
+                    arrivedLabel: "Mark used",
+                    isBusy: busyId == b.id,
+                    onArrived: { Task { await actOnBooking(b, status: "consumed") } },
+                    onNoShow: { Task { await actOnBooking(b, status: "no_show") } },
+                    onCancel: { Task { await actOnBooking(b, status: "cancelled") } }
+                )
+            }
+        }
+    }
+
+    // Real-time push (see .onAppear above) is the primary mechanism; this is
+    // only a safety net for a missed/dropped push — same pattern as every
+    // other shared-state queue in this app (Tables, Kitchen, Orders).
+    private func pollForServerUpdates() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            if Task.isCancelled { break }
+            await load()
+        }
+    }
+
+    private func load() async {
+        isLoading = tableReservations.isEmpty && bookings.isEmpty
+        defer { isLoading = false }
+        error = nil
+        do {
+            async let loadedReservations: [ReservationDTO] = session.authorized { token in
+                try await APIClient.shared.get("tables/reservations", token: token)
+            }
+            async let loadedBookings: [GamingBookingDTO] = session.authorized { token in
+                try await APIClient.shared.get("gaming/bookings", token: token)
+            }
+            let (freshReservations, freshBookings) = try await (loadedReservations, loadedBookings)
+            tableReservations = freshReservations
+            bookings = freshBookings
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func actOnReservation(_ r: ReservationDTO, status: String) async {
+        busyId = r.id
+        defer { busyId = nil }
+        do {
+            let updated: ReservationDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "tables/reservations/\(r.id)/status",
+                    body: ReservationStatusUpdateRequest(status: status),
+                    token: token
+                )
+            }
+            if let index = tableReservations.firstIndex(where: { $0.id == updated.id }) {
+                tableReservations[index] = updated
+            }
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+
+    private func actOnBooking(_ b: GamingBookingDTO, status: String) async {
+        busyId = b.id
+        defer { busyId = nil }
+        do {
+            let updated: GamingBookingDTO = try await session.authorized { token in
+                try await APIClient.shared.patch(
+                    "gaming/bookings/\(b.id)/status",
+                    body: BookingStatusUpdateRequest(status: status),
+                    token: token
+                )
+            }
+            if let index = bookings.firstIndex(where: { $0.id == updated.id }) {
+                bookings[index] = updated
+            }
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
+    }
+}
+
+private struct ReservationCard: View {
+    let title: String
+    let subtitle: String
+    let startsAt: Date
+    let contact: String?
+    let status: String
+    let arrivedLabel: String
+    let isBusy: Bool
+    let onArrived: () -> Void
+    let onNoShow: () -> Void
+    let onCancel: () -> Void
+
+    // held is the only actionable state — every other status (seated /
+    // consumed / no_show / cancelled) is terminal (see the backend's
+    // _RESERVATION_TRANSITIONS / _BOOKING_TRANSITIONS), so the action row
+    // below only renders while status == "held".
+    private var statusColor: Color {
+        switch status {
+        case "seated", "consumed": return Brand.success
+        case "no_show": return Brand.danger
+        case "cancelled": return Brand.muted
+        default: return Brand.gold
+        }
+    }
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                        Text(DateFormatters.shortDateTime.string(from: startsAt) + (contact.map { " \u{00B7} \($0)" } ?? ""))
+                            .font(.caption2)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Text(status.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(statusColor)
+                }
+
+                if status == "held" {
+                    HStack(spacing: 8) {
+                        Button {
+                            Haptics.selection()
+                            onArrived()
+                        } label: {
+                            Label(arrivedLabel, systemImage: "checkmark.circle")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(isBusy)
+
+                        Button {
+                            Haptics.selection()
+                            onNoShow()
+                        } label: {
+                            Label("No-show", systemImage: "person.fill.xmark")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(isBusy)
+
+                        Button {
+                            Haptics.selection()
+                            onCancel()
+                        } label: {
+                            Label("Cancel", systemImage: "xmark.circle")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(Brand.danger)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .disabled(isBusy)
+                    }
+                }
+            }
         }
     }
 }

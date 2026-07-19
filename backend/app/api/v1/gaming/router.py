@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from math import ceil
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, status
@@ -16,6 +17,7 @@ from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
+from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
     Branch,
     Company,
@@ -160,6 +162,35 @@ class BookingCreate(BaseModel):
     deposit_minor: int = Field(default=0, ge=0)
 
 
+class BookingRead(BaseModel):
+    id: UUID
+    station_id: UUID
+    station_code: str
+    starts_at: datetime
+    ends_at: datetime
+    guest_name: str
+    contact: str | None
+    party_size: int
+    deposit_minor: int
+    status: str
+    created_at: datetime
+
+
+class BookingStatusUpdate(BaseModel):
+    # "held" is the creation-only state — not a valid PATCH target, so it's
+    # deliberately excluded here (see _BOOKING_TRANSITIONS below).
+    status: Literal["consumed", "no_show", "cancelled"]
+
+
+# A booking only ever transitions once, out of "held" — every other status
+# is terminal. Keyed by *current* status so an invalid transition (e.g.
+# cancelling an already-consumed/no-show/cancelled booking) is rejected
+# instead of silently overwriting a settled outcome.
+_BOOKING_TRANSITIONS: dict[str, set[str]] = {
+    "held": {"consumed", "no_show", "cancelled"},
+}
+
+
 def session_read(gs: GamingSession) -> SessionRead:
     timer_ends_at = (
         gs.start_at + timedelta(minutes=gs.timer_minutes) if gs.timer_minutes else None
@@ -247,6 +278,28 @@ async def _operational_station(
             Station.branch_id == branch_id,
             Branch.company_id == company_id,
             Branch.deleted_at.is_(None),
+        )
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _tenant_booking(
+    session,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    booking_id: UUID,
+    for_update: bool = False,
+) -> GamingBooking | None:
+    stmt = (
+        select(GamingBooking)
+        .join(Station, Station.id == GamingBooking.station_id)
+        .where(
+            GamingBooking.id == booking_id,
+            Station.company_id == company_id,
+            Station.branch_id == branch_id,
         )
     )
     if for_update:
@@ -986,6 +1039,54 @@ async def send_session_to_pos(
     return {"order_id": str(order.id), "amount_minor": int(order.total_minor)}
 
 
+def _booking_read(bk: GamingBooking, *, station_code: str) -> BookingRead:
+    return BookingRead(
+        id=bk.id, station_id=bk.station_id, station_code=station_code,
+        starts_at=bk.starts_at, ends_at=bk.ends_at, guest_name=bk.guest_name,
+        contact=bk.contact, party_size=bk.party_size, deposit_minor=bk.deposit_minor,
+        status=bk.status, created_at=bk.created_at,
+    )
+
+
+@router.get("/bookings", response_model=list[BookingRead])
+async def list_bookings(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.read")),
+    from_date: date | None = None,
+    to_date: date | None = None,
+    status_filter: list[str] | None = Query(default=None, alias="status"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[BookingRead]:
+    """List station bookings for the current branch, soonest first.
+
+    Defaults to upcoming only (starts_at from today onward, local time) so a
+    booking made months ago doesn't clutter the staff view forever — pass an
+    explicit `from_date` to look further back. `to_date` is optional and
+    unbounded when omitted.
+    """
+    branch_id = _current_gaming_branch_id(tenant)
+    stmt = (
+        select(GamingBooking, Station.code)
+        .join(Station, Station.id == GamingBooking.station_id)
+        .where(
+            Station.company_id == tenant.company_id,
+            Station.branch_id == branch_id,
+        )
+    )
+    if status_filter:
+        stmt = stmt.where(GamingBooking.status.in_(status_filter))
+    timezone_name = await company_timezone(session, tenant.company_id)
+    f_d = from_date or local_today(timezone_name)
+    f_dt, _ = local_date_bounds_utc(f_d, f_d, timezone_name)
+    stmt = stmt.where(GamingBooking.starts_at >= f_dt)
+    if to_date:
+        _, t_dt = local_date_bounds_utc(to_date, to_date, timezone_name)
+        stmt = stmt.where(GamingBooking.starts_at < t_dt)
+    stmt = stmt.order_by(GamingBooking.starts_at.asc()).limit(limit)
+    rows = (await session.execute(stmt)).all()
+    return [_booking_read(bk, station_code=code) for bk, code in rows]
+
+
 @router.post("/bookings", status_code=status.HTTP_201_CREATED)
 async def create_booking(
     payload: BookingCreate,
@@ -1021,3 +1122,33 @@ async def create_booking(
     session.add(bk)
     # The EXCLUDE constraint at the DB level will reject overlapping bookings.
     return {"id": str(bk.id), "status": bk.status}
+
+
+@router.patch("/bookings/{booking_id}/status", response_model=BookingRead)
+async def update_booking_status(
+    booking_id: UUID,
+    payload: BookingStatusUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> BookingRead:
+    branch_id = _current_gaming_branch_id(tenant)
+    bk = await _tenant_booking(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        booking_id=booking_id,
+        for_update=True,
+    )
+    if not bk:
+        raise NotFoundError("booking not found")
+    allowed = _BOOKING_TRANSITIONS.get(bk.status, set())
+    if payload.status not in allowed:
+        raise ConflictError(
+            f"cannot change booking from '{bk.status}' to '{payload.status}'"
+        )
+    bk.status = payload.status
+    await session.flush()
+    station_code = (
+        await session.execute(select(Station.code).where(Station.id == bk.station_id))
+    ).scalar_one()
+    return _booking_read(bk, station_code=station_code)

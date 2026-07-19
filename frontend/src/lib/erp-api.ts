@@ -1298,6 +1298,34 @@ export const tables = {
 };
 
 // =============================================================================
+// RESERVATIONS — table bookings (backed by /tables/reservations)
+// =============================================================================
+export interface ReservationDTO {
+  id: string;
+  table_id: string;
+  table_code: string;
+  guest_name: string;
+  party_size: number;
+  contact: string | null;
+  starts_at: string;
+  ends_at: string;
+  notes: string | null;
+  status: 'held' | 'seated' | 'no_show' | 'cancelled';
+  created_at: string;
+}
+
+export const reservations = {
+  list: (params?: { from_date?: string; to_date?: string; status?: ReservationDTO['status'][] }) =>
+    api.get<ReservationDTO[]>('/tables/reservations', { params }).then((r) => r.data),
+  create: (body: {
+    table_id: string; guest_name: string; party_size: number;
+    contact?: string; starts_at: string; ends_at: string; notes?: string;
+  }) => api.post<{ id: string; status: string }>('/tables/reservations', body).then((r) => r.data),
+  updateStatus: (id: string, status: 'seated' | 'no_show' | 'cancelled') =>
+    api.patch<ReservationDTO>(`/tables/reservations/${id}/status`, { status }).then((r) => r.data),
+};
+
+// =============================================================================
 // GAMING — stations + sessions
 // =============================================================================
 export interface StationDTO {
@@ -1334,6 +1362,20 @@ export interface GamingPackageDTO {
   name: string;
   duration_minutes: number;
   price_minor: number;
+}
+
+export interface GamingBookingDTO {
+  id: string;
+  station_id: string;
+  station_code: string;
+  starts_at: string;
+  ends_at: string;
+  guest_name: string;
+  contact: string | null;
+  party_size: number;
+  deposit_minor: number;
+  status: 'held' | 'consumed' | 'no_show' | 'cancelled';
+  created_at: string;
 }
 
 export const gaming = {
@@ -1377,6 +1419,16 @@ export const gaming = {
   sendToPos: (id: string) =>
     api.post<{ order_id: string; amount_minor: number }>(`/gaming/sessions/${id}/send-to-pos`)
       .then((r) => r.data),
+
+  listBookings: (params?: {
+    from_date?: string; to_date?: string; status?: GamingBookingDTO['status'][];
+  }) => api.get<GamingBookingDTO[]>('/gaming/bookings', { params }).then((r) => r.data),
+  createBooking: (body: {
+    station_id: string; starts_at: string; ends_at: string; guest_name: string;
+    contact?: string; party_size?: number; deposit_minor?: number;
+  }) => api.post<{ id: string; status: string }>('/gaming/bookings', body).then((r) => r.data),
+  updateBookingStatus: (id: string, status: 'consumed' | 'no_show' | 'cancelled') =>
+    api.patch<GamingBookingDTO>(`/gaming/bookings/${id}/status`, { status }).then((r) => r.data),
 };
 
 // =============================================================================
