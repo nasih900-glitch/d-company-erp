@@ -101,7 +101,25 @@ private enum DCompanyAPIError: Error, LocalizedError {
 private struct APIClient {
     static let shared = APIClient()
 
-    private let baseURL = URL(string: "https://dcompany.duckdns.org/api/v1/")!
+    // Production default — unchanged from before this became configurable.
+    // Kept as the fallback so an Info.plist missing/blank API_BASE_URL (e.g.
+    // an older build) behaves identically to today's hardcoded behavior.
+    private static let defaultBaseURLString = "https://dcompany.duckdns.org/api/v1/"
+
+    // Overridable via the API_BASE_URL Info.plist key (see Info.plist) so a
+    // future staging build can point elsewhere without a code change. Falls
+    // back to the production default if the key is absent or empty; if it's
+    // present but not a valid URL, the `baseURL` property below falls back
+    // to the production default instead.
+    static let baseURLString: String = {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String,
+              !value.isEmpty else {
+            return defaultBaseURLString
+        }
+        return value
+    }()
+
+    private let baseURL = URL(string: APIClient.baseURLString) ?? URL(string: APIClient.defaultBaseURLString)!
 
     func get<T: Decodable>(
         _ path: String,
@@ -391,8 +409,22 @@ private final class RealtimeClient {
     private var listeners: [String: [UUID: () -> Void]] = [:]
 
     private var wsURL: URL {
-        // Mirrors APIClient's hardcoded baseURL — same host, wss instead of https.
-        URL(string: "wss://dcompany.duckdns.org/api/v1/ws")!
+        // Derived from APIClient's (now-configurable) baseURL — https->wss,
+        // appending /ws — rather than a second independent hardcoded string,
+        // so the two can never drift out of sync. With no Info.plist
+        // override this resolves to the same value as before:
+        // wss://dcompany.duckdns.org/api/v1/ws
+        let httpBase = APIClient.baseURLString
+        var wsBase: String
+        if httpBase.hasPrefix("https://") {
+            wsBase = "wss://" + httpBase.dropFirst("https://".count)
+        } else if httpBase.hasPrefix("http://") {
+            wsBase = "ws://" + httpBase.dropFirst("http://".count)
+        } else {
+            wsBase = httpBase
+        }
+        if wsBase.hasSuffix("/") { wsBase.removeLast() }
+        return URL(string: wsBase + "/ws") ?? URL(string: "wss://dcompany.duckdns.org/api/v1/ws")!
     }
 
     func connect() {
