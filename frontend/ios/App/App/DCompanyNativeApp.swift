@@ -2075,9 +2075,8 @@ private struct PaymentCreateRequest: Encodable {
     // Additional money collected on top of the bill — never folded into
     // amount_minor, and never part of the exact-amount-due match on the
     // server (see _validate_confirmed_payment_balance in
-    // app/api/v1/pos/router.py). Defaults to 0 so the held-order billing
-    // call site above is unaffected.
-    let tip_minor: Int = 0
+    // app/api/v1/pos/router.py).
+    let tip_minor: Int
 }
 
 private struct PaymentResponseDTO: Decodable {
@@ -7920,7 +7919,8 @@ private struct POSNativeView: View {
             method: method.rawValue,
             amount_minor: order.total_minor,
             tendered_minor: tenderedMinor,
-            ref_external: nil
+            ref_external: nil,
+            tip_minor: 0
         )
         // Deterministic per-order key (not a fresh UUID every call) so
         // retrying a failed bill attempt on this same order never risks a
