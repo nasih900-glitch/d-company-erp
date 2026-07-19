@@ -85,7 +85,7 @@ export default function AnalyticsScreen() {
             <KPI label="Avg ticket" value={inr(data.avg_ticket_minor)}         sub="per receipt"
               icon={<TrendingUp/>}/>
             <KPI label="Operating profit (today)" value={inrShort(data.net_profit_minor)}
-              sub={`${inr(data.net_profit_minor)} · before equipment depreciation`}
+              sub={`${inr(data.net_profit_minor)} · after equipment depreciation`}
               icon={<TrendingUp/>} tone={data.net_profit_minor >= 0 ? 'good' : 'bad'}/>
           </div>
 

@@ -239,6 +239,7 @@ async def test_report_includes_manual_revenue_and_payments_but_not_aov() -> None
             _Result(rows=[cash, upi, voided]),
             _Result(rows=[SimpleNamespace(method="cash", amount=5_000)]),
             _Result(rows=[]),  # refunds
+            _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # expenses
         ]
     )
@@ -297,6 +298,7 @@ async def test_ledger_uses_business_date_company_timezone_and_balances() -> None
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital
             _Result(rows=[]),  # direct event tickets
+            _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
         ]
     )

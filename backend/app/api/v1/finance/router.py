@@ -42,6 +42,11 @@ from app.models import (
     User,
 )
 from app.services.accounting import build_operational_ledger
+from app.services.accounting.depreciation import (
+    STRAIGHT_LINE,
+    asset_accumulated_depreciation_minor,
+    asset_book_value_minor,
+)
 from app.services.reports import ReportsAggregator
 from app.services.reports.business_metrics import (
     compute_business_metrics,
@@ -200,6 +205,7 @@ class PLReport(BaseModel):
     cogs_minor: int
     gross_profit_minor: int
     expenses_minor: int
+    depreciation_minor: int
     net_profit_minor: int
 
 
@@ -239,7 +245,8 @@ class DistributableProfitReport(BaseModel):
     """
 
     as_of: date
-    lifetime_net_profit_minor: int
+    lifetime_net_profit_minor: int  # already net of straight-line depreciation, see lifetime_depreciation_minor
+    lifetime_depreciation_minor: int  # equipment wear-and-tear already charged against lifetime_net_profit_minor above
     lifetime_withdrawn_minor: int
     reserve_months: int
     avg_monthly_cost_minor: int  # trailing 90-day average of (cost of goods sold + running expenses)
@@ -274,6 +281,12 @@ class AssetRead(BaseModel):
     purchase_minor: int
     purchase_date: datetime
     useful_life_months: int
+    salvage_minor: int
+    depreciation_method: str
+    # Derived, recomputed live as of "now" every time this is read — never
+    # stored. See app/services/accounting/depreciation.py.
+    accumulated_depreciation_minor: int
+    book_value_minor: int
 
 
 class AssetCreate(BaseModel):
@@ -946,6 +959,18 @@ async def void_capital_entry(
 # ============================================================================
 # ASSETS (fixed assets register — PS5s, TVs, projector, espresso machine, etc.)
 # ============================================================================
+def _asset_read(a: Asset, *, as_of: datetime) -> AssetRead:
+    return AssetRead(
+        id=a.id, name=a.name, type=a.type,
+        purchase_minor=a.purchase_minor, purchase_date=a.purchase_date,
+        useful_life_months=a.useful_life_months,
+        salvage_minor=a.salvage_minor,
+        depreciation_method=a.depreciation_method,
+        accumulated_depreciation_minor=asset_accumulated_depreciation_minor(a, as_of),
+        book_value_minor=asset_book_value_minor(a, as_of),
+    )
+
+
 @router.get("/assets", response_model=list[AssetRead])
 async def list_assets(
     session: SessionDep,
@@ -959,14 +984,8 @@ async def list_assets(
             )
         )
     ).scalars().all()
-    return [
-        AssetRead(
-            id=r.id, name=r.name, type=r.type,
-            purchase_minor=r.purchase_minor, purchase_date=r.purchase_date,
-            useful_life_months=r.useful_life_months,
-        )
-        for r in rows
-    ]
+    now = datetime.now(timezone.utc)
+    return [_asset_read(r, as_of=now) for r in rows]
 
 
 @router.post("/assets", response_model=AssetRead, status_code=status.HTTP_201_CREATED)
@@ -985,15 +1004,16 @@ async def create_asset(
     a = Asset(
         id=uuid4(),
         company_id=tenant.company_id,
+        # Only straight_line is computable today (see
+        # app/services/accounting/depreciation.py); the create form has no
+        # method picker yet, so every asset is explicitly straight_line
+        # rather than relying on the column's implicit default.
+        depreciation_method=STRAIGHT_LINE,
         **payload.model_dump(),
     )
     session.add(a)
     await session.flush()
-    return AssetRead(
-        id=a.id, name=a.name, type=a.type,
-        purchase_minor=a.purchase_minor, purchase_date=a.purchase_date,
-        useful_life_months=a.useful_life_months,
-    )
+    return _asset_read(a, as_of=datetime.now(timezone.utc))
 
 
 # ============================================================================
@@ -1027,6 +1047,7 @@ async def profit_loss(
         cogs_minor=report.cogs_minor,
         gross_profit_minor=report.gross_profit_minor,
         expenses_minor=report.expense_total_minor,
+        depreciation_minor=report.depreciation_minor,
         net_profit_minor=report.net_profit_minor,
     )
 
@@ -1168,6 +1189,7 @@ async def distributable_profit(
     return DistributableProfitReport(
         as_of=today,
         lifetime_net_profit_minor=lifetime.net_profit_minor,
+        lifetime_depreciation_minor=lifetime.depreciation_minor,
         lifetime_withdrawn_minor=lifetime_withdrawn_minor,
         reserve_months=DISTRIBUTION_RESERVE_MONTHS,
         avg_monthly_cost_minor=avg_monthly_cost_minor,

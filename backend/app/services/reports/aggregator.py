@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 from uuid import UUID
@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BusinessRuleError
 from app.core.timezone import company_timezone, local_date_bounds_utc
 from app.models import (
+    Asset,
     Batch,
     Branch,
     Event,
@@ -46,6 +47,7 @@ from app.models import (
     Refund,
     StockMovement,
 )
+from app.services.accounting.depreciation import asset_depreciation_expense_minor
 from app.services.pos.pricing import split_tax_from_inclusive_minor
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
@@ -212,6 +214,10 @@ class PnLReport:
     cogs_minor: int = 0
     expenses: list[ExpenseLine] = field(default_factory=list)
     expense_total_minor: int = 0
+    # Straight-line depreciation on the Asset register for this exact
+    # period, computed analytically — never manually entered, never a stored
+    # row. See app/services/accounting/depreciation.py.
+    depreciation_minor: int = 0
 
     @property
     def gross_revenue_minor(self) -> int:
@@ -232,7 +238,12 @@ class PnLReport:
 
     @property
     def net_profit_minor(self) -> int:
-        return self.net_revenue_minor - self.cogs_minor - self.expense_total_minor
+        return (
+            self.net_revenue_minor
+            - self.cogs_minor
+            - self.expense_total_minor
+            - self.depreciation_minor
+        )
 
     @property
     def gross_profit_minor(self) -> int:
@@ -601,6 +612,33 @@ class ReportsAggregator:
             cess_minor=tax.cess_minor - refund_cess,
         )
 
+        # ---------- Depreciation ----------
+        # Never entered manually — computed analytically from the Asset
+        # register for exactly this period, using the same accumulated-diff
+        # technique as the refund tax allocation above and the operational
+        # ledger (see app/services/accounting/depreciation.py). Capped at
+        # real "now" so a future-dated period never accrues depreciation
+        # that hasn't happened yet.
+        now = datetime.now(UTC)
+        depreciation_end_as_of = min(end_at, now)
+        depreciation_start_at = min(start_at, now)
+        asset_rows = (
+            await self.session.execute(
+                select(Asset).where(
+                    Asset.company_id == company_id,
+                    Asset.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        depreciation_minor = sum(
+            asset_depreciation_expense_minor(
+                asset,
+                start_at=depreciation_start_at,
+                end_as_of=depreciation_end_as_of,
+            )
+            for asset in asset_rows
+        )
+
         # ---------- Expenses by category ----------
         exp_q = (
             select(
@@ -641,6 +679,7 @@ class ReportsAggregator:
             cogs_minor=cogs_minor,
             expenses=expense_lines,
             expense_total_minor=expense_total,
+            depreciation_minor=int(depreciation_minor),
         )
 
     async def aggregate_daily(self, *, company_id: UUID, d: date) -> PnLReport:

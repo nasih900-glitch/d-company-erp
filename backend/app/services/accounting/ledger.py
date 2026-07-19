@@ -20,6 +20,7 @@ from app.core.errors import BusinessRuleError
 from app.core.timezone import company_timezone
 from app.models import (
     Account,
+    Asset,
     Branch,
     CapitalEntry,
     Event,
@@ -37,6 +38,7 @@ from app.models import (
 )
 from app.services.accounting.accounts import (
     ACCOUNT_BY_CODE,
+    ACCUMULATED_DEPRECIATION,
     BANK,
     CARD_CLEARING,
     CASH,
@@ -44,6 +46,7 @@ from app.services.accounting.accounts import (
     CGST_PAYABLE,
     COST_OF_GOODS_SOLD,
     DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
+    DEPRECIATION_EXPENSE,
     DISCOUNTS_GIVEN,
     EVENT_REVENUE,
     HISTORICAL_FUNDS,
@@ -65,6 +68,7 @@ from app.services.accounting.accounts import (
     UPI_CLEARING,
     WALLET_CLEARING,
 )
+from app.services.accounting.depreciation import asset_depreciation_expense_minor
 from app.services.pos.pricing import split_tax_from_inclusive_minor
 
 
@@ -745,6 +749,51 @@ async def build_operational_ledger(
                         memo=memo,
                     )
                 )
+
+    # ------------------------------------------------------------------
+    # Depreciation — never manually entered or posted by a cron job.
+    # Computed analytically from the Asset register every time this ledger
+    # is built, same "derived from source data" philosophy as every section
+    # above (see module docstring and depreciation.py). Straight-line only;
+    # depreciation.py documents why other Asset.depreciation_method values
+    # are a no-op for now rather than a guess.
+    # ------------------------------------------------------------------
+    now = datetime.now(UTC)
+    depreciation_end_as_of = min(end_exclusive, now)
+    depreciation_start_at = min(start_at, now) if start_at is not None else None
+    asset_stmt = select(Asset).where(
+        Asset.company_id == company_id,
+        Asset.deleted_at.is_(None),
+    )
+    for asset in (await session.execute(asset_stmt)).scalars().all():
+        amount = asset_depreciation_expense_minor(
+            asset,
+            start_at=depreciation_start_at,
+            end_as_of=depreciation_end_as_of,
+        )
+        if amount <= 0:
+            continue
+        memo = f"Depreciation — {asset.name}"
+        lines.extend(
+            [
+                _line(
+                    occurred_at=depreciation_end_as_of,
+                    ref_type="depreciation",
+                    ref_id=asset.id,
+                    account=DEPRECIATION_EXPENSE.ledger_tuple,
+                    debit=amount,
+                    memo=memo,
+                ),
+                _line(
+                    occurred_at=depreciation_end_as_of,
+                    ref_type="depreciation",
+                    ref_id=asset.id,
+                    account=ACCUMULATED_DEPRECIATION.ledger_tuple,
+                    credit=amount,
+                    memo=memo,
+                ),
+            ]
+        )
 
     lines.extend(
         await _posted_journal_ledger_lines(

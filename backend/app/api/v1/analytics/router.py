@@ -184,6 +184,7 @@ async def export_csv(
     for expense in report.expenses:
         writer.writerow([expense.category, expense.amount_minor, f"{expense.amount_minor / 100:.2f}"])
     writer.writerow(["Total expenses", report.expense_total_minor, f"{report.expense_total_minor / 100:.2f}"])
+    writer.writerow(["Equipment depreciation", report.depreciation_minor, f"{report.depreciation_minor / 100:.2f}"])
 
     filename = f"dcompany-analytics-{period_start.isoformat()}-to-{period_end.isoformat()}.csv"
     return StreamingResponse(

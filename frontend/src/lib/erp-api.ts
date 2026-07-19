@@ -595,6 +595,7 @@ export interface DistributablePartnerShareDTO {
 export interface DistributableProfitReportDTO {
   as_of: string;
   lifetime_net_profit_minor: number;
+  lifetime_depreciation_minor: number;
   lifetime_withdrawn_minor: number;
   reserve_months: number;
   avg_monthly_cost_minor: number;
@@ -1147,6 +1148,9 @@ export interface ReportDataDTO {
   expenses: ReportExpenseLineDTO[];
   expense_total_minor: number;
   cogs_minor: number;
+  // Straight-line equipment depreciation for this period, already
+  // subtracted from net_profit_minor below.
+  depreciation_minor: number;
   gross_revenue_minor: number;
   net_revenue_minor: number;
   gross_profit_minor: number;

@@ -49,6 +49,14 @@ HISTORICAL_SETUP_COSTS = AccountDefinition(
     "1490", "Historical Setup Costs Pending Classification", "asset", "dr"
 )
 FIXED_ASSETS = AccountDefinition("1500", "Fixed Assets", "asset", "dr")
+# Contra-asset: same "asset" category as FIXED_ASSETS but a credit normal
+# side, exactly like SALES_RETURNS below is a contra-revenue with a debit
+# normal side. Its balance is always <= 0 when netted against a debit-side
+# asset total, which is what makes it a reduction of book value rather than
+# an asset in its own right.
+ACCUMULATED_DEPRECIATION = AccountDefinition(
+    "1510", "Accumulated Depreciation", "asset", "cr"
+)
 
 ACCOUNTS_PAYABLE = AccountDefinition("2000", "Accounts Payable", "liability", "cr")
 TAX_PAYABLE = AccountDefinition("2100", "Tax Payable", "liability", "cr")
@@ -80,6 +88,7 @@ LOYALTY_POINTS_REDEEMED = AccountDefinition("5220", "Loyalty Points Redeemed", "
 UTILITIES = AccountDefinition("5300", "Utilities", "expense", "dr")
 MARKETING = AccountDefinition("5400", "Marketing", "expense", "dr")
 REPAIRS_MAINTENANCE = AccountDefinition("5500", "Repairs & Maintenance", "expense", "dr")
+DEPRECIATION_EXPENSE = AccountDefinition("5600", "Depreciation Expense", "expense", "dr")
 ROUNDING_EXPENSE = AccountDefinition("5800", "Rounding Expense", "expense", "dr")
 OTHER_EXPENSES = AccountDefinition("5900", "Other Expenses", "expense", "dr")
 FURNITURES = AccountDefinition("5901", "Furnitures", "expense", "dr")
@@ -134,6 +143,7 @@ DEFAULT_CHART_OF_ACCOUNTS: tuple[AccountDefinition, ...] = (
     POS_SETTLEMENT_CLEARING,
     HISTORICAL_SETUP_COSTS,
     FIXED_ASSETS,
+    ACCUMULATED_DEPRECIATION,
     ACCOUNTS_PAYABLE,
     TAX_PAYABLE,
     CGST_PAYABLE,
@@ -161,6 +171,7 @@ DEFAULT_CHART_OF_ACCOUNTS: tuple[AccountDefinition, ...] = (
     UTILITIES,
     MARKETING,
     REPAIRS_MAINTENANCE,
+    DEPRECIATION_EXPENSE,
     ROUNDING_EXPENSE,
     OTHER_EXPENSES,
     FURNITURES,

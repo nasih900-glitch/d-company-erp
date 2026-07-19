@@ -147,7 +147,7 @@ function OverviewTab() {
         <Stat label="Revenue (gross)"   value={inrShort(rev.total_minor)} sub={inr(rev.total_minor)} tone="good"/>
         {gstRegistered && <Stat label="GST collected"     value={inrShort(totalGst)} sub="CGST + SGST + IGST"/>}
         <Stat label="Expenses"          value={inrShort(exp)} sub={inr(exp)} tone="bad"/>
-        <Stat label="Operating profit (today)" value={inrShort(net)} sub={`${inr(net)} · before depreciation`} tone={net >= 0 ? 'good' : 'bad'}/>
+        <Stat label="Operating profit (today)" value={inrShort(net)} sub={`${inr(net)} · after equipment depreciation`} tone={net >= 0 ? 'good' : 'bad'}/>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
@@ -201,8 +201,12 @@ function OverviewTab() {
       <div className="card mt-3 md:mt-4">
         <Row label="Gross profit" v={data.gross_profit_minor}/>
         <Row label="Less: total expenses" v={-exp}/>
+        {data.depreciation_minor > 0 && (
+          <Row label="Less: equipment depreciation" v={-data.depreciation_minor}
+            sub="straight-line, computed from the asset register"/>
+        )}
         <Divider/>
-        <Row label="Operating profit (today)" v={net} bold sub="before equipment depreciation"/>
+        <Row label="Operating profit (today)" v={net} bold sub="after equipment depreciation"/>
       </div>
 
       <p className="text-xs text-fg-muted mt-4">
@@ -543,8 +547,9 @@ function PartnersTab() {
               <div className="text-[11px] text-fg-muted mt-0.5">
                 All-time profit, minus everything ever withdrawn, minus a {distributable.reserve_months}-month
                 safety buffer — capped by actual cash on hand, not just what the books say.
-                Before equipment depreciation — this figure doesn't yet charge for gaming/kitchen
-                equipment wearing out, so treat it as an upper bound, not the final word.
+                Already charges straight-line depreciation on gaming/kitchen equipment wearing out
+                ({inr(distributable.lifetime_depreciation_minor)} to date), so this is the real number,
+                not an upper bound.
               </div>
             </div>
             <div className={`text-2xl font-bold font-mono ${distributable.safe_to_distribute_minor > 0 ? 'text-accent-good' : ''}`}>
@@ -553,7 +558,7 @@ function PartnersTab() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs pt-3 border-t border-bg-border/60">
             <div>
-              <div className="text-fg-muted">Lifetime profit (pre-depreciation)</div>
+              <div className="text-fg-muted">Lifetime profit (after depreciation)</div>
               <div className={`font-mono font-semibold ${distributable.lifetime_net_profit_minor < 0 ? 'text-accent-bad' : ''}`}>
                 {inr(distributable.lifetime_net_profit_minor)}
               </div>

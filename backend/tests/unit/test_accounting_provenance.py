@@ -270,6 +270,7 @@ async def test_capital_balance_and_ledger_exclude_voids_and_map_historical_funds
             _Result(rows=[]),  # expenses
             _Result(rows=[(active, _partner()), (voided, _partner())]),
             _Result(rows=[]),  # direct event tickets
+            _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
         ]
     )
@@ -409,6 +410,7 @@ async def test_order_tip_minor_posts_a_balanced_tips_payable_ledger_line() -> No
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # direct event tickets
+            _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
         ]
     )

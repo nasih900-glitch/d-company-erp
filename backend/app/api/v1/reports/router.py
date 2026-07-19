@@ -110,6 +110,10 @@ class ReportDTO(BaseModel):
     expenses: list[ExpenseLineDTO] = Field(default_factory=list)
     expense_total_minor: int
     cogs_minor: int
+    # Straight-line equipment depreciation for this period, already
+    # subtracted from net_profit_minor below — see
+    # app/services/accounting/depreciation.py.
+    depreciation_minor: int
 
     gross_revenue_minor: int
     net_revenue_minor: int
@@ -190,6 +194,7 @@ def _to_dto(r: PnLReport) -> ReportDTO:
         ],
         expense_total_minor=r.expense_total_minor,
         cogs_minor=r.cogs_minor,
+        depreciation_minor=r.depreciation_minor,
         gross_revenue_minor=r.gross_revenue_minor,
         net_revenue_minor=r.net_revenue_minor,
         gross_profit_minor=r.gross_profit_minor,
