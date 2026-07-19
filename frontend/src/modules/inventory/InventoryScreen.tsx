@@ -488,12 +488,13 @@ function GRNForm({
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<Array<{
     ingredient_id: string; qty: string; unit_cost_rupees: string;
-  }>>([{ ingredient_id: ingredients[0]?.id ?? '', qty: '', unit_cost_rupees: '' }]);
+    expires_at: string; lot_code: string;
+  }>>([{ ingredient_id: ingredients[0]?.id ?? '', qty: '', unit_cost_rupees: '', expires_at: '', lot_code: '' }]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   function addLine() {
-    setLines([...lines, { ingredient_id: ingredients[0]?.id ?? '', qty: '', unit_cost_rupees: '' }]);
+    setLines([...lines, { ingredient_id: ingredients[0]?.id ?? '', qty: '', unit_cost_rupees: '', expires_at: '', lot_code: '' }]);
   }
   function rmLine(idx: number) {
     setLines(lines.filter((_, i) => i !== idx));
@@ -511,6 +512,8 @@ function GRNForm({
         ingredient_id: ln.ingredient_id,
         qty: parseFloat(ln.qty),
         unit_cost_minor: Math.round(parseFloat(ln.unit_cost_rupees || '0') * 100),
+        expires_at: ln.expires_at ? new Date(ln.expires_at).toISOString() : undefined,
+        lot_code: ln.lot_code.trim() || undefined,
       }));
     if (!linesOut.length) { setErr('add at least one line'); return; }
     setBusy(true); setErr(null);
@@ -551,27 +554,38 @@ function GRNForm({
         </Field>
         <div>
           <div className="text-xs text-fg-muted mb-2">Lines</div>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {lines.map((ln, i) => (
-              <div key={i} className="grid grid-cols-[1fr_70px_90px_28px] gap-2 items-center">
-                <select className="input !min-h-[36px] !py-1.5" required
-                  value={ln.ingredient_id}
-                  onChange={(e) => updLine(i, { ingredient_id: e.target.value })}>
-                  <option value="">— select ingredient —</option>
-                  {ingredients.map((ing) => (
-                    <option key={ing.id} value={ing.id}>{ing.name} ({ing.base_unit})</option>
-                  ))}
-                </select>
-                <input type="number" required min={0} step="0.01" placeholder="Qty"
-                  className="input !min-h-[36px] !py-1.5 font-mono text-right"
-                  value={ln.qty} onChange={(e) => updLine(i, { qty: e.target.value })}/>
-                <input type="number" required min={0} step="0.01" placeholder="₹/unit"
-                  className="input !min-h-[36px] !py-1.5 font-mono text-right"
-                  value={ln.unit_cost_rupees}
-                  onChange={(e) => updLine(i, { unit_cost_rupees: e.target.value })}/>
-                <button type="button" onClick={() => rmLine(i)} className="text-fg-muted hover:text-accent-bad p-1">
-                  <Trash2 size={14}/>
-                </button>
+              <div key={i} className="space-y-1.5 pb-2 border-b border-bg-border/60 last:border-0 last:pb-0">
+                <div className="grid grid-cols-[1fr_70px_90px_28px] gap-2 items-center">
+                  <select className="input !min-h-[36px] !py-1.5" required
+                    value={ln.ingredient_id}
+                    onChange={(e) => updLine(i, { ingredient_id: e.target.value })}>
+                    <option value="">— select ingredient —</option>
+                    {ingredients.map((ing) => (
+                      <option key={ing.id} value={ing.id}>{ing.name} ({ing.base_unit})</option>
+                    ))}
+                  </select>
+                  <input type="number" required min={0} step="0.01" placeholder="Qty"
+                    className="input !min-h-[36px] !py-1.5 font-mono text-right"
+                    value={ln.qty} onChange={(e) => updLine(i, { qty: e.target.value })}/>
+                  <input type="number" required min={0} step="0.01" placeholder="₹/unit"
+                    className="input !min-h-[36px] !py-1.5 font-mono text-right"
+                    value={ln.unit_cost_rupees}
+                    onChange={(e) => updLine(i, { unit_cost_rupees: e.target.value })}/>
+                  <button type="button" onClick={() => rmLine(i)} className="text-fg-muted hover:text-accent-bad p-1">
+                    <Trash2 size={14}/>
+                  </button>
+                </div>
+                <div className="grid grid-cols-[1fr_1fr_28px] gap-2 items-center">
+                  <input type="date" placeholder="Expiry (optional)"
+                    className="input !min-h-[36px] !py-1.5 text-xs"
+                    value={ln.expires_at} onChange={(e) => updLine(i, { expires_at: e.target.value })}/>
+                  <input type="text" placeholder="Lot code (optional)"
+                    className="input !min-h-[36px] !py-1.5 text-xs"
+                    value={ln.lot_code} onChange={(e) => updLine(i, { lot_code: e.target.value })}/>
+                  <span/>
+                </div>
               </div>
             ))}
           </div>

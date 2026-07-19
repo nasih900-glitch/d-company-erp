@@ -786,6 +786,12 @@ private struct GrnPostRequest: Encodable {
     let lines: [GrnLineRequest]
 }
 
+private struct GrnPostResponse: Decodable {
+    let ok: Bool
+    let batches_created: Int
+    let batch_ids: [String]
+}
+
 private struct MoneyBucketDTO: Codable {
     let total_minor: Int
 }
@@ -7408,6 +7414,7 @@ private struct InventoryNativeView: View {
     @State private var adjustingIngredient: IngredientDTO?
     @State private var isCreatingIngredient = false
     @State private var showSuppliers = false
+    @State private var showGRN = false
 
     var body: some View {
         AppNavigation {
@@ -7482,6 +7489,7 @@ private struct InventoryNativeView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button { isCreatingIngredient = true } label: { Label("New ingredient", systemImage: "plus") }
+                        Button { showGRN = true } label: { Label("Receive stock (GRN)", systemImage: "tray.and.arrow.down") }
                         Button { showSuppliers = true } label: { Label("Suppliers", systemImage: "shippingbox") }
                         Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     } label: {
@@ -7509,6 +7517,11 @@ private struct InventoryNativeView: View {
             }
             .sheet(isPresented: $showSuppliers) {
                 SuppliersSheet()
+            }
+            .sheet(isPresented: $showGRN) {
+                GRNReceivingSheet(ingredients: ingredients, branches: branches) {
+                    Task { await load() }
+                }
             }
         }
         .task { await load() }
@@ -7806,6 +7819,251 @@ private struct StockAdjustmentSheet: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+}
+
+// Per-line draft for GRNReceivingSheet — expiry/lot code are both optional,
+// mirroring the web GRNForm: dry goods with no expiry tracking are posted
+// with expires_at/lot_code omitted, exactly like today's behavior.
+private struct GrnLineDraft: Identifiable {
+    let id = UUID()
+    var ingredientId: String
+    var qtyText: String = ""
+    var unitCostText: String = ""
+    var hasExpiry: Bool = false
+    var expiresAt: Date = Date()
+    var lotCode: String = ""
+}
+
+private struct GRNReceivingSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let ingredients: [IngredientDTO]
+    let branches: [BranchDTO]
+    let onSuccess: () -> Void
+
+    @State private var branchId: String
+    @State private var suppliers: [SupplierDTO] = []
+    @State private var supplierId = ""
+    @State private var invoiceNo = ""
+    @State private var notes = ""
+    @State private var lines: [GrnLineDraft]
+    @State private var isSubmitting = false
+    @State private var error: String?
+
+    init(ingredients: [IngredientDTO], branches: [BranchDTO], onSuccess: @escaping () -> Void) {
+        self.ingredients = ingredients
+        self.branches = branches
+        self.onSuccess = onSuccess
+        self._branchId = State(initialValue: branches.first?.id ?? "")
+        self._lines = State(initialValue: [GrnLineDraft(ingredientId: ingredients.first?.id ?? "")])
+    }
+
+    private var canSubmit: Bool {
+        !branchId.isEmpty && !isSubmitting
+            && lines.contains { !$0.ingredientId.isEmpty && (Double($0.qtyText) ?? 0) > 0 }
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if let error { ErrorBanner(message: error) }
+
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                fieldLabel("Branch") {
+                                    Picker("", selection: $branchId) {
+                                        Text("Select branch").tag("")
+                                        ForEach(branches) { branch in Text(branch.name).tag(branch.id) }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .tint(Brand.gold)
+                                }
+                                fieldLabel("Supplier (optional)") {
+                                    Picker("", selection: $supplierId) {
+                                        Text("None").tag("")
+                                        ForEach(suppliers) { supplier in Text(supplier.name).tag(supplier.id) }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .tint(Brand.gold)
+                                }
+                                fieldLabel("Supplier invoice no. (optional)") {
+                                    TextField("", text: $invoiceNo).nativeField()
+                                }
+                            }
+                        }
+
+                        ForEach($lines) { $line in
+                            BrandedCard {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack {
+                                        Text("Line").font(.caption).foregroundColor(Brand.muted)
+                                        Spacer()
+                                        if lines.count > 1 {
+                                            Button {
+                                                Haptics.selection()
+                                                lines.removeAll { $0.id == line.id }
+                                            } label: {
+                                                Image(systemName: "trash")
+                                                    .foregroundColor(Brand.danger)
+                                            }
+                                        }
+                                    }
+                                    fieldLabel("Ingredient") {
+                                        Picker("", selection: $line.ingredientId) {
+                                            Text("Select ingredient").tag("")
+                                            ForEach(ingredients) { ing in
+                                                Text("\(ing.name) (\(ing.base_unit))").tag(ing.id)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                        .tint(Brand.gold)
+                                    }
+                                    HStack(spacing: 12) {
+                                        fieldLabel("Qty") {
+                                            TextField("0", text: $line.qtyText)
+                                                .keyboardType(.decimalPad)
+                                                .nativeField()
+                                        }
+                                        fieldLabel("₹ / unit") {
+                                            TextField("0.00", text: $line.unitCostText)
+                                                .keyboardType(.decimalPad)
+                                                .nativeField()
+                                        }
+                                    }
+                                    Toggle("Track expiry", isOn: $line.hasExpiry)
+                                        .toggleStyle(SwitchToggleStyle(tint: Brand.gold))
+                                        .foregroundColor(.white)
+                                        .font(.caption.weight(.semibold))
+                                    if line.hasExpiry {
+                                        fieldLabel("Expiry date") {
+                                            DatePicker("", selection: $line.expiresAt, displayedComponents: [.date])
+                                                .labelsHidden()
+                                                .datePickerStyle(.compact)
+                                                .colorScheme(.dark)
+                                        }
+                                    }
+                                    fieldLabel("Lot / batch code (optional)") {
+                                        TextField("", text: $line.lotCode).nativeField()
+                                    }
+                                }
+                            }
+                        }
+
+                        Button {
+                            Haptics.selection()
+                            lines.append(GrnLineDraft(ingredientId: ingredients.first?.id ?? ""))
+                        } label: {
+                            Label("Add line", systemImage: "plus")
+                                .font(.caption.weight(.bold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(Brand.gold)
+
+                        BrandedCard {
+                            fieldLabel("Notes (optional)") {
+                                TextField("", text: $notes).nativeField()
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .padding(.bottom, 90)
+                }
+            }
+            .navigationTitle("Receive stock (GRN)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+            .task { await loadSuppliers() }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    Task { await submit() }
+                } label: {
+                    HStack {
+                        if isSubmitting { ProgressView() }
+                        Text("Record receipt").font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.black)
+                .background(canSubmit ? Brand.gold : Brand.muted.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(16)
+                .background(.ultraThinMaterial)
+                .disabled(!canSubmit)
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    @ViewBuilder
+    private func fieldLabel<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundColor(Brand.muted)
+            content()
+        }
+    }
+
+    private func loadSuppliers() async {
+        do {
+            suppliers = try await session.authorized { token in
+                try await APIClient.shared.get("inventory/suppliers", token: token)
+            }
+        } catch is CancellationError {
+        } catch {
+            // Non-fatal — the supplier picker just stays empty; a GRN can
+            // still be posted without a supplier, exactly like the web form.
+        }
+    }
+
+    private func submit() async {
+        let linesOut: [GrnLineRequest] = lines.compactMap { line in
+            guard !line.ingredientId.isEmpty, let qty = Double(line.qtyText), qty > 0 else { return nil }
+            let costRupees = Double(line.unitCostText) ?? 0
+            return GrnLineRequest(
+                ingredient_id: line.ingredientId,
+                qty: qty,
+                unit_cost_minor: Int((costRupees * 100).rounded()),
+                expires_at: line.hasExpiry ? DateFormatters.iso.string(from: line.expiresAt) : nil,
+                lot_code: line.lotCode.nilIfBlank
+            )
+        }
+        guard !branchId.isEmpty, !linesOut.isEmpty else {
+            error = "Select a branch and add at least one line."
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        do {
+            let _: GrnPostResponse = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "inventory/grn",
+                    body: GrnPostRequest(
+                        branch_id: branchId,
+                        supplier_id: supplierId.nilIfBlank,
+                        supplier_invoice_no: invoiceNo.nilIfBlank,
+                        supplier_invoice_amount_minor: nil,
+                        received_at: nil,
+                        notes: notes.nilIfBlank,
+                        lines: linesOut
+                    ),
+                    token: token
+                )
+            }
+            Haptics.success()
+            onSuccess()
+            dismiss()
+        } catch is CancellationError {
+        } catch {
+            self.error = readable(error)
+        }
     }
 }
 
