@@ -11,10 +11,13 @@ we deduct what we can and continue — the cashier still gets to charge
 the customer, but Ingredient.current_qty may go briefly negative,
 which surfaces in the low-stock alert.
 
-When an order is refunded, restock_for_refund() reverses this: recipe
-ingredients for the refunded order's lines are credited back (in full for
-a full refund, proportionally for a partial one), with a StockMovement
-('refund_restock') written as the audit trail.
+When an order is refunded, restock_for_refund() reverses this: the actual
+"sale" StockMovement rows recorded for that order are credited back onto
+the same batches (in full for a full refund, proportionally for a partial
+one), with a StockMovement ('refund_restock') written as the audit trail.
+Reversing the historical movements — rather than re-deriving from the
+menu item's current recipe — keeps this correct even if the recipe is
+edited or deactivated between the sale and a later refund.
 """
 
 from __future__ import annotations
@@ -182,75 +185,59 @@ async def restock_for_refund(
     session: AsyncSession,
     *,
     order_id: UUID,
-    order_lines: list[OrderLine],
     branch_id: UUID,
     created_by: UUID | None,
     fraction: float,
 ) -> int:
-    """Reverse recipe-ingredient deductions for a refunded order.
+    """Reverse the inventory deductions actually recorded for this order.
 
-    Mirrors deduct_for_order's recipe walk, but scales each line's ingredient
-    qty by `fraction` — the share of the order's value this particular refund
-    covers. Refunds in this system are order-level amounts, not itemized by
-    line, so a full refund (fraction == 1.0) restocks every recipe-linked
-    line back to its pre-deduction level, and a partial refund restocks the
-    matching fraction of every line uniformly.
+    Reads back the "sale" StockMovement rows deduct_for_order wrote for this
+    exact order (matched via ref_type="order", ref_id=order_id) and credits
+    each one back onto the *same batch*, scaled by `fraction` — the share of
+    the order's taxable value this particular refund covers. A full refund
+    (fraction == 1.0) restocks every consumed movement back in full, a
+    partial refund restocks the matching fraction of each one.
 
-    If a menu item has no recipe the line is skipped without error, same as
-    deduct_for_order. Returns the number of stock movements written.
+    This deliberately does NOT re-derive quantities from the menu item's
+    *current* recipe (unlike deduct_for_order): if a recipe is edited or
+    deactivated between the sale and a later refund, re-deriving would
+    restock the wrong ingredients/quantities, or silently restock nothing
+    at all. Reversing the actual historical movements is correct regardless
+    of what the recipe looks like today, and also means the reversing
+    cost_per_unit_minor exactly mirrors the original deduction's cost basis
+    (see ledger.py's stock_stmt), keeping the ledger reversal exact.
+
+    Returns the number of stock movements written.
     """
     movements_written = 0
     fraction = max(0.0, min(1.0, fraction))
     if fraction <= 0:
         return 0
 
-    menu_item_ids = list({ln.menu_item_id for ln in order_lines})
-    if not menu_item_ids:
-        return 0
-
-    recipes = (
+    sale_movements = (
         await session.execute(
-            select(Recipe).where(
-                Recipe.menu_item_id.in_(menu_item_ids), Recipe.is_active.is_(True)
+            select(StockMovement).where(
+                StockMovement.ref_type == "order",
+                StockMovement.ref_id == order_id,
+                StockMovement.type == "sale",
             )
         )
     ).scalars().all()
-    recipes_by_item = {r.menu_item_id: r for r in recipes}
-    if not recipes_by_item:
-        return 0
 
-    recipe_ids = [r.id for r in recipes]
-    recipe_lines = (
-        await session.execute(
-            select(RecipeLine).where(RecipeLine.recipe_id.in_(recipe_ids))
-        )
-    ).scalars().all()
-    lines_by_recipe: dict[UUID, list[RecipeLine]] = {}
-    for rl in recipe_lines:
-        lines_by_recipe.setdefault(rl.recipe_id, []).append(rl)
-
-    for order_line in order_lines:
-        recipe = recipes_by_item.get(order_line.menu_item_id)
-        if not recipe:
+    for movement in sale_movements:
+        qty_to_restock = abs(float(movement.qty_delta or 0)) * fraction
+        if qty_to_restock <= 0:
             continue
-        for rl in lines_by_recipe.get(recipe.id, []):
-            qty_to_restock = (
-                float(rl.qty)
-                * (1 + float(rl.wastage_pct or 0))
-                * float(order_line.qty)
-                * fraction
-            )
-            if qty_to_restock <= 0:
-                continue
-            await _restock_ingredient(
-                session,
-                ingredient_id=rl.ingredient_id,
-                branch_id=branch_id,
-                qty_to_restock=qty_to_restock,
-                order_id=order_id,
-                created_by=created_by,
-            )
-            movements_written += 1
+        await _restock_ingredient(
+            session,
+            batch_id=movement.batch_id,
+            branch_id=branch_id,
+            qty_to_restock=qty_to_restock,
+            cost_per_unit_minor=int(movement.cost_per_unit_minor or 0),
+            order_id=order_id,
+            created_by=created_by,
+        )
+        movements_written += 1
 
     return movements_written
 
@@ -258,57 +245,52 @@ async def restock_for_refund(
 async def _restock_ingredient(
     session: AsyncSession,
     *,
-    ingredient_id: UUID,
+    batch_id: UUID,
     branch_id: UUID,
     qty_to_restock: float,
+    cost_per_unit_minor: int,
     order_id: UUID,
     created_by: UUID | None,
 ) -> None:
-    """Credit qty_to_restock back onto the ingredient's newest batch.
+    """Credit qty_to_restock back onto the exact batch it was deducted from.
 
-    Which exact FIFO batch a refunded item's ingredients were originally
-    consumed from is ambiguous once batches are mixed/exhausted, so — same
-    convention as the manual positive stock-adjustment path in
-    app/api/v1/inventory/router.py's post_adjustment — we credit the most
-    recently received batch rather than trying to reconstruct the original
-    consumption. A StockMovement is written as the audit trail of the
+    Using the same batch_id and cost_per_unit_minor as the original
+    deduction (rather than guessing at "the newest batch") means the
+    resulting StockMovement is an exact mirror-image of the sale it
+    reverses. A StockMovement is written as the audit trail of the
     reversal, and Ingredient.current_qty (what the low-stock alert and
     analytics dashboard read) is always updated.
     """
     batch = (
         await session.execute(
-            select(Batch)
-            .where(Batch.ingredient_id == ingredient_id, Batch.branch_id == branch_id)
-            .order_by(Batch.received_at.desc())
-            .limit(1)
-            .with_for_update()
+            select(Batch).where(Batch.id == batch_id).with_for_update()
         )
     ).scalar_one_or_none()
+    # A batch must have existed for the original deduction to have drawn
+    # from it, so this should never be missing in practice — but if it
+    # somehow is, there's no ingredient to credit without it, so skip.
+    if not batch:
+        return
 
-    if batch:
-        batch.qty_on_hand = float(batch.qty_on_hand) + qty_to_restock
-        session.add(
-            StockMovement(
-                id=uuid4(),
-                batch_id=batch.id,
-                branch_id=branch_id,
-                type="refund_restock",
-                ref_type="order",
-                ref_id=order_id,
-                qty_delta=qty_to_restock,
-                cost_per_unit_minor=int(batch.cost_per_unit_minor),
-                created_by=created_by,
-                note=f"Restocked from refund on order {order_id}",
-            )
+    batch.qty_on_hand = float(batch.qty_on_hand) + qty_to_restock
+    session.add(
+        StockMovement(
+            id=uuid4(),
+            batch_id=batch.id,
+            branch_id=branch_id,
+            type="refund_restock",
+            ref_type="order",
+            ref_id=order_id,
+            qty_delta=qty_to_restock,
+            cost_per_unit_minor=cost_per_unit_minor,
+            created_by=created_by,
+            note=f"Restocked from refund on order {order_id}",
         )
-    # If no batch row exists at all for this ingredient/branch (shouldn't
-    # happen — a batch must have existed for the original deduction to have
-    # drawn from it), we still credit current_qty below rather than blocking
-    # the refund on an inventory audit-trail gap.
+    )
 
     ing = (
         await session.execute(
-            select(Ingredient).where(Ingredient.id == ingredient_id).with_for_update()
+            select(Ingredient).where(Ingredient.id == batch.ingredient_id).with_for_update()
         )
     ).scalar_one_or_none()
     if ing:

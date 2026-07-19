@@ -4,6 +4,11 @@ Covers the bug where refunding an order never reversed the ingredient
 deduction that ran when the order was finalized: order paid -> ingredient
 deducted -> order refunded -> ingredient restocked back to (at least close
 to) its original level.
+
+restock_for_refund reverses the actual historical "sale" StockMovement
+rows recorded for the order (not the menu item's *current* recipe), so
+these tests mock a sale-movements query rather than a Recipe/RecipeLine
+lookup — see the docstring on restock_for_refund for why.
 """
 
 from __future__ import annotations
@@ -70,6 +75,14 @@ def _batch(*, ingredient_id, branch_id, qty_on_hand: float) -> Batch:
     )
 
 
+def _sale_movement(*, batch_id, qty_delta: float, cost_per_unit_minor: int = 50):
+    # restock_for_refund only reads qty_delta / batch_id / cost_per_unit_minor
+    # off each row, so a SimpleNamespace stands in fine for a real StockMovement.
+    return SimpleNamespace(
+        batch_id=batch_id, qty_delta=qty_delta, cost_per_unit_minor=cost_per_unit_minor
+    )
+
+
 @pytest.mark.asyncio
 async def test_full_refund_restocks_ingredient_back_to_pre_deduction_level() -> None:
     branch_id = uuid4()
@@ -110,17 +123,16 @@ async def test_full_refund_restocks_ingredient_back_to_pre_deduction_level() -> 
     assert sale_movement.type == "sale"
     assert sale_movement.qty_delta == -6.0
 
-    # --- Order refunded in full: the 6ml comes back ---
+    # --- Order refunded in full: the 6ml comes back, reversing the exact
+    # sale movement just written above (same batch, same cost basis) ---
     refund_session = _Session(
-        _Result(rows=[recipe]),
-        _Result(rows=[recipe_line]),
+        _Result(rows=[_sale_movement(batch_id=batch.id, qty_delta=-6.0)]),
         _Result(scalar=batch),
         _Result(scalar=ingredient),
     )
     restocked = await restock_for_refund(
         refund_session,
         order_id=order_id,
-        order_lines=[order_line],
         branch_id=branch_id,
         created_by=created_by,
         fraction=1.0,
@@ -131,6 +143,7 @@ async def test_full_refund_restocks_ingredient_back_to_pre_deduction_level() -> 
     restock_movement = refund_session.added[0]
     assert restock_movement.type == "refund_restock"
     assert restock_movement.qty_delta == 6.0
+    assert restock_movement.cost_per_unit_minor == 50
     assert restock_movement.ref_type == "order"
     assert restock_movement.ref_id == order_id
 
@@ -139,34 +152,22 @@ async def test_full_refund_restocks_ingredient_back_to_pre_deduction_level() -> 
 async def test_partial_refund_restocks_the_proportional_share_only() -> None:
     branch_id = uuid4()
     order_id = uuid4()
-    menu_item_id = uuid4()
-    created_by = uuid4()
 
     ingredient = _ingredient(current_qty=94.0)  # already deducted by 6ml
     batch = _batch(ingredient_id=ingredient.id, branch_id=branch_id, qty_on_hand=94.0)
-    recipe = Recipe(id=uuid4(), menu_item_id=menu_item_id, name="Cola", is_active=True)
-    recipe_line = RecipeLine(
-        id=uuid4(),
-        recipe_id=recipe.id,
-        ingredient_id=ingredient.id,
-        qty=2.0,
-        wastage_pct=0,
-    )
-    order_line = SimpleNamespace(menu_item_id=menu_item_id, qty=3.0)
 
-    # Refund covers half the order's value -> half of the 6ml (3ml) comes back.
+    # Refund covers half the order's taxable value -> half of the original
+    # 6ml sale movement (3ml) comes back.
     refund_session = _Session(
-        _Result(rows=[recipe]),
-        _Result(rows=[recipe_line]),
+        _Result(rows=[_sale_movement(batch_id=batch.id, qty_delta=-6.0)]),
         _Result(scalar=batch),
         _Result(scalar=ingredient),
     )
     restocked = await restock_for_refund(
         refund_session,
         order_id=order_id,
-        order_lines=[order_line],
         branch_id=branch_id,
-        created_by=created_by,
+        created_by=uuid4(),
         fraction=0.5,
     )
     assert restocked == 1
@@ -176,20 +177,15 @@ async def test_partial_refund_restocks_the_proportional_share_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refund_restock_skips_menu_items_without_a_recipe() -> None:
-    branch_id = uuid4()
-    order_id = uuid4()
-    order_line = SimpleNamespace(menu_item_id=uuid4(), qty=1.0)
-
-    # No Recipe rows match -> restock_for_refund must bail out after the
-    # first query without touching any ingredient/batch, same as
-    # deduct_for_order does for a wholesale (recipe-less) line.
+async def test_refund_restock_is_a_noop_when_no_sale_movements_exist() -> None:
+    # No "sale" StockMovement rows are tied to this order (e.g. every line
+    # was a wholesale item with no recipe) -> restock_for_refund must bail
+    # out after the lookup query without touching any batch/ingredient.
     refund_session = _Session(_Result(rows=[]))
     restocked = await restock_for_refund(
         refund_session,
-        order_id=order_id,
-        order_lines=[order_line],
-        branch_id=branch_id,
+        order_id=uuid4(),
+        branch_id=uuid4(),
         created_by=uuid4(),
         fraction=1.0,
     )
@@ -204,10 +200,30 @@ async def test_refund_restock_is_a_noop_for_a_zero_fraction() -> None:
     restocked = await restock_for_refund(
         refund_session,
         order_id=uuid4(),
-        order_lines=[SimpleNamespace(menu_item_id=uuid4(), qty=1.0)],
         branch_id=uuid4(),
         created_by=uuid4(),
         fraction=0.0,
     )
     assert restocked == 0
+    assert refund_session.added == []
+
+
+@pytest.mark.asyncio
+async def test_refund_restock_skips_a_movement_whose_batch_no_longer_exists() -> None:
+    # Defensive edge case: the batch a sale movement pointed to is somehow
+    # gone by refund time. Nothing to credit without it, so no StockMovement
+    # or quantity change happens for this movement (the returned count is
+    # movements *attempted*, not confirmed writes — same as the pre-existing
+    # deduct_for_order/restock_for_refund convention).
+    refund_session = _Session(
+        _Result(rows=[_sale_movement(batch_id=uuid4(), qty_delta=-6.0)]),
+        _Result(scalar=None),
+    )
+    await restock_for_refund(
+        refund_session,
+        order_id=uuid4(),
+        branch_id=uuid4(),
+        created_by=uuid4(),
+        fraction=1.0,
+    )
     assert refund_session.added == []

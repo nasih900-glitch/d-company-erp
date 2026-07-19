@@ -458,16 +458,24 @@ class ReportsAggregator:
                     StockMovement.branch_id.in_(
                         select(Branch.id).where(Branch.company_id == company_id)
                     ),
-                    StockMovement.type == "sale",
+                    StockMovement.type.in_(("sale", "refund_restock")),
                     StockMovement.created_at >= start_at,
                     StockMovement.created_at < end_at,
                 )
             )
         ).all()
+        # Sale movements consume stock (negative delta) and count toward
+        # COGS; refund_restock movements reverse a prior sale (positive
+        # delta) and must net back out, or a refunded recipe-linked item
+        # permanently overstates COGS even though the stock came back.
         cogs_minor = sum(
             int(abs(Decimal(str(qty_delta))) * int(cost_per_unit_minor or 0))
             for qty_delta, cost_per_unit_minor in movement_rows
             if Decimal(str(qty_delta or 0)) < 0
+        ) - sum(
+            int(abs(Decimal(str(qty_delta))) * int(cost_per_unit_minor or 0))
+            for qty_delta, cost_per_unit_minor in movement_rows
+            if Decimal(str(qty_delta or 0)) > 0
         )
 
         revenue = RevenueBreakdown(
@@ -586,7 +594,11 @@ class ReportsAggregator:
             amount = int(refund.amount_minor or 0)
             before = running.get(order.id, 0)
             after = before + amount
-            total = int(order.total_minor or 0)
+            # order.total_minor includes any tip folded on at payment time;
+            # a tip is never part of the taxable bill, so proportioning
+            # against the tip-inclusive total would understate the tax
+            # reversal on any refund of a tipped order.
+            total = int(order.total_minor or 0) - int(order.tip_minor or 0)
             for component_name in ("cgst", "sgst", "igst", "cess"):
                 component = int(getattr(order, f"{component_name}_minor") or 0)
                 delta = _proportional_cumulative(

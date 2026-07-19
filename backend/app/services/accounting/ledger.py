@@ -494,7 +494,7 @@ async def build_operational_ledger(
         .join(Branch, Branch.id == StockMovement.branch_id)
         .where(
             Branch.company_id == company_id,
-            StockMovement.type == "sale",
+            StockMovement.type.in_(("sale", "refund_restock")),
             StockMovement.created_at < end_exclusive,
         )
         .order_by(StockMovement.created_at, StockMovement.id)
@@ -503,12 +503,23 @@ async def build_operational_ledger(
         stock_stmt = stock_stmt.where(StockMovement.created_at >= start_at)
     for movement in (await session.execute(stock_stmt)).scalars().all():
         quantity = Decimal(str(movement.qty_delta or 0))
-        if quantity >= 0:
-            continue
+        # A sale consumes stock (negative delta); a refund restock reverses
+        # that consumption (positive delta) and must post the mirror-image
+        # entry, or a refunded recipe-linked sale permanently overstates
+        # COGS and understates profit even though the stock itself is back.
+        is_restock = movement.type == "refund_restock"
+        if is_restock:
+            if quantity <= 0:
+                continue
+        else:
+            if quantity >= 0:
+                continue
         amount = int(abs(quantity) * int(movement.cost_per_unit_minor or 0))
         if amount <= 0:
             continue
-        memo = movement.note or "Inventory consumed by sale"
+        memo = movement.note or ("Inventory restocked by refund" if is_restock else "Inventory consumed by sale")
+        cogs_side = dict(credit=amount) if is_restock else dict(debit=amount)
+        inventory_side = dict(debit=amount) if is_restock else dict(credit=amount)
         lines.extend(
             [
                 _line(
@@ -516,16 +527,16 @@ async def build_operational_ledger(
                     ref_type="stock_sale",
                     ref_id=movement.id,
                     account=COST_OF_GOODS_SOLD.ledger_tuple,
-                    debit=amount,
                     memo=memo,
+                    **cogs_side,
                 ),
                 _line(
                     occurred_at=movement.created_at,
                     ref_type="stock_sale",
                     ref_id=movement.id,
                     account=INVENTORY.ledger_tuple,
-                    credit=amount,
                     memo=memo,
+                    **inventory_side,
                 ),
             ]
         )
@@ -548,6 +559,12 @@ async def build_operational_ledger(
         if start_at is not None and refund.created_at < start_at:
             continue
 
+        # order.total_minor includes any tip folded on at payment time
+        # (see PaymentCreateRequest.tip_minor / record_payment), but a tip
+        # is never part of the taxable bill — proportioning tax against the
+        # tip-inclusive total would understate every refund's tax reversal
+        # whenever the order also had a tip.
+        taxable_total = int(order.total_minor or 0) - int(order.tip_minor or 0)
         allocated_tax: list[tuple[tuple[str, str, str], int]] = []
         for account, component in (
             (CGST_PAYABLE.ledger_tuple, order.cgst_minor),
@@ -555,8 +572,8 @@ async def build_operational_ledger(
             (IGST_PAYABLE.ledger_tuple, order.igst_minor),
             (CESS_PAYABLE.ledger_tuple, order.cess_minor),
         ):
-            current = _proportional(component, cumulative, order.total_minor)
-            prior = _proportional(component, previous, order.total_minor)
+            current = _proportional(component, cumulative, taxable_total)
+            prior = _proportional(component, previous, taxable_total)
             amount = current - prior
             if amount:
                 allocated_tax.append((account, amount))
