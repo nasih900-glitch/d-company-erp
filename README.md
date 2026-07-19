@@ -1,6 +1,6 @@
 # D Company ERP — Enterprise V1
 
-Production-grade café + gaming-lounge ERP. POS, tables, menu, inventory (FIFO + recipes), gaming sessions, finance (double-entry), OCR receipts, staff, analytics. Multi-branch and multi-terminal from day one. Cloud-native, with first-class offline support for the POS.
+Production-grade café + gaming-lounge ERP. POS, tables, menu, inventory (FIFO + recipes), gaming sessions, finance (double-entry), OCR receipts, staff, analytics. Multi-branch and multi-terminal from day one. Cloud-native — the web/PWA client needs a live connection to the backend; it has no offline queue.
 
 This repository is the **scaffold-stage** baseline. Architecture, schema, auth/RBAC, audit, idempotency, eventing, Docker, and CI are wired end-to-end. Every module has working endpoints; the deep business logic (recipe deduction, journal posting, OCR worker, analytics rollups) lands in subsequent sessions per the build order.
 
@@ -76,7 +76,7 @@ d-company-erp/
 │   │   ├── app/App.tsx       Router
 │   │   ├── modules/          One folder per module
 │   │   ├── components/       Layout, UI, charts
-│   │   ├── lib/              api client, IndexedDB outbox
+│   │   ├── lib/              api client, checkout retry/draft recovery
 │   │   └── styles/           Tailwind + design tokens
 │   └── package.json
 └── infra/

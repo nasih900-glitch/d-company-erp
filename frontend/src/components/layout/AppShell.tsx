@@ -9,6 +9,7 @@ import {
 import { useAuth } from '@/modules/auth/AuthContext';
 import { rolesLabel } from '@/lib/roles';
 import InstallButton from './InstallButton';
+import ConnectivityBanner from './ConnectivityBanner';
 
 // `module` matches a key in the backend's MODULE_PERMISSIONS — used to hide
 // a tab when the caller's role/company access-control override says no.
@@ -255,6 +256,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         className="app-scroll route-frame px-3 py-4 md:p-6 min-w-0"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >
+        <ConnectivityBanner />
         {!terminalReady && terminalIssue && (
           <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
             <div className="font-semibold text-accent-gold">Terminal setup required</div>

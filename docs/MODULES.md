@@ -20,6 +20,6 @@
 
 **Admin** (`api/v1/admin`) — Audit log read, system info. Restricted to `owner` and `auditor`.
 
-Cross-cutting: **Auth/RBAC**, **Multi-tenancy** (company → branch → terminal), **Audit**, **Idempotency**, **Offline POS sync** (frontend IndexedDB outbox), **Eventing** (in-process bus, Redis-backed in V2).
+Cross-cutting: **Auth/RBAC**, **Multi-tenancy** (company → branch → terminal), **Audit**, **Idempotency**, **Checkout retry/draft recovery** (frontend localStorage — resumes an in-flight order/payment after a network blip or refresh; the web client still needs a live connection, it does not queue work offline), **Eventing** (in-process bus, Redis-backed in V2).
 
 See per-module READMEs in `docs/modules/` for endpoint lists and TODO ladders.
