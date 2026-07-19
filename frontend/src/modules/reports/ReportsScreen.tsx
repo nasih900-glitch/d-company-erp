@@ -9,7 +9,7 @@
  * tab in your sheet.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Calendar, FileSpreadsheet, Loader2, Printer, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Calendar, Download, FileSpreadsheet, Loader2, Printer, ShieldCheck } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { COMPANY, HOURLY_REVENUE, TODAY_KPI } from '@/lib/demo-data';
@@ -17,8 +17,9 @@ import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
 import { DEFAULT_BUSINESS_TIMEZONE, dateISOInTimeZone } from '@/lib/manual-collections';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
-import { settings, type BranchDTO, type CompanyDTO } from '@/lib/erp-api';
+import { analytics as analyticsApi, reports as reportsApi, settings, type BranchDTO, type CompanyDTO } from '@/lib/erp-api';
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
+import { useAuth } from '@/modules/auth/AuthContext';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
 type HalfYear = 'H1' | 'H2';
@@ -108,6 +109,13 @@ interface TaxComplianceData {
 }
 
 export default function ReportsScreen() {
+  const { me, demo } = useAuth();
+  // Same gating shape as the sidebar's insights_reports nav items (see
+  // AppShell.tsx isVisible): protected owners bypass, everyone else needs
+  // the module that analytics.read/analytics.export live under. The GSTR
+  // and analytics CSV exports below all require analytics.export, which is
+  // bundled into this same module — see backend/app/core/permissions.py.
+  const canExport = Boolean(demo || me?.protected_access || me?.accessible_modules?.includes('insights_reports'));
   const [period, setPeriod] = useState<Period>('daily');
   const [report, setReport] = useState<ReportData | null>(null);
   const [taxHealth, setTaxHealth] = useState<TaxComplianceData | null>(null);
@@ -117,6 +125,10 @@ export default function ReportsScreen() {
   const [company, setCompany] = useState<CompanyDTO | null>(null);
   const [branch, setBranch] = useState<BranchDTO | null>(null);
   const [timezoneReady, setTimezoneReady] = useState(!LIVE_MODE);
+  const [exportingPeriod, setExportingPeriod] = useState(false);
+  const [exportingGstr1, setExportingGstr1] = useState(false);
+  const [exportingGstr3b, setExportingGstr3b] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Period-specific selectors
   const today = dateISOInTimeZone(new Date(), DEFAULT_BUSINESS_TIMEZONE);
@@ -209,6 +221,45 @@ export default function ReportsScreen() {
     else alert('Failed to push to Google Sheets. Check Settings → Google Sheets.');
   }
 
+  async function exportPeriodCsv() {
+    if (!report || exportingPeriod) return;
+    setExportError(null);
+    setExportingPeriod(true);
+    try {
+      await analyticsApi.exportCsv(report.period_start, report.period_end);
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExportingPeriod(false);
+    }
+  }
+
+  async function exportGstr1() {
+    if (exportingGstr1) return;
+    setExportError(null);
+    setExportingGstr1(true);
+    try {
+      await reportsApi.gstr1Csv(month);
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExportingGstr1(false);
+    }
+  }
+
+  async function exportGstr3b() {
+    if (exportingGstr3b) return;
+    setExportError(null);
+    setExportingGstr3b(true);
+    try {
+      await reportsApi.gstr3bCsv(month);
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExportingGstr3b(false);
+    }
+  }
+
   return (
     <div className="reports-screen">
       {/* Print-only header */}
@@ -238,6 +289,12 @@ export default function ReportsScreen() {
           <button onClick={() => window.print()} className="btn btn-ghost">
             <Printer size={14}/> Print / Save PDF
           </button>
+          {LIVE_MODE && canExport && (
+            <button onClick={exportPeriodCsv} className="btn btn-ghost" disabled={!report || exportingPeriod}>
+              {exportingPeriod ? <Loader2 size={14} className="animate-spin"/> : <Download size={14}/>}
+              Export CSV
+            </button>
+          )}
           <button onClick={pushToSheets} className="btn btn-primary">
             <FileSpreadsheet size={14}/> Push to Sheets
           </button>
@@ -351,6 +408,30 @@ export default function ReportsScreen() {
             <p className="text-accent-bad text-sm mb-4 print:hidden">{taxError}</p>
           )}
           {taxHealth && <TaxHealthPanel data={taxHealth} />}
+
+          {LIVE_MODE && canExport && (
+            <section className="card mb-4 print:hidden">
+              <div className="flex items-start justify-between gap-3 flex-wrap mb-1">
+                <div>
+                  <h4 className="font-bold">GST filing exports</h4>
+                  <p className="text-xs text-fg-muted">
+                    Accountant-review CSVs for {month} · verify portal mapping before filing.
+                  </p>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={exportGstr1} className="btn btn-ghost" disabled={exportingGstr1}>
+                    {exportingGstr1 ? <Loader2 size={14} className="animate-spin"/> : <Download size={14}/>}
+                    Export GSTR-1 CSV
+                  </button>
+                  <button onClick={exportGstr3b} className="btn btn-ghost" disabled={exportingGstr3b}>
+                    {exportingGstr3b ? <Loader2 size={14} className="animate-spin"/> : <Download size={14}/>}
+                    Export GSTR-3B CSV
+                  </button>
+                </div>
+              </div>
+              {exportError && <p className="text-accent-bad text-sm mt-2">{exportError}</p>}
+            </section>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 print:grid-cols-2 print:gap-3">
             {/* Revenue */}

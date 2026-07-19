@@ -114,6 +114,26 @@ private struct APIClient {
         return try await send(request)
     }
 
+    // Raw-bytes GET — for CSV/file exports (GSTR-1, GSTR-3B, analytics
+    // export) where the response is a file download, not JSON to decode.
+    func getData(
+        _ path: String,
+        token: String? = nil,
+        queryItems: [URLQueryItem] = [],
+        headers: [String: String] = [:]
+    ) async throws -> Data {
+        var request = try makeRequest(path: path, token: token, queryItems: queryItems, headers: headers)
+        request.httpMethod = "GET"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DCompanyAPIError.badStatus(0, "No response from server.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw DCompanyAPIError.badStatus(http.statusCode, errorMessage(from: data, fallback: "Server error \(http.statusCode)."))
+        }
+        return data
+    }
+
     func post<T: Decodable, B: Encodable>(
         _ path: String,
         body: B,
@@ -490,6 +510,16 @@ private enum DateFormatters {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "Asia/Kolkata")
         formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    // yyyy_mm — the shape /reports/gstr1.csv and /reports/gstr3b.csv expect.
+    static let yearMonth: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Asia/Kolkata")
+        formatter.dateFormat = "yyyy-MM"
         return formatter
     }()
 
@@ -2402,6 +2432,43 @@ private enum ReportPrinter {
         let text = "\(label): \(sign)\(amount)"
         return bold ? text.uppercased() : text
     }
+}
+
+// A downloaded CSV export (GSTR-1, GSTR-3B, analytics period export),
+// written to a temp file so the system share sheet below can present it —
+// UIActivityViewController wants a file/URL to offer "Save to Files",
+// Mail, AirDrop, etc., not raw in-memory Data.
+private struct ShareableFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private enum CSVExporter {
+    /// Write CSV bytes to a temp file named `filename` and return it ready
+    /// for `ActivityShareSheet`. Overwrites any stale file left from a
+    /// previous export under the same name.
+    static func write(_ data: Data, filename: String) throws -> ShareableFile {
+        let directory = FileManager.default.temporaryDirectory
+        let url = directory.appendingPathComponent(filename)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        try data.write(to: url, options: .atomic)
+        return ShareableFile(url: url)
+    }
+}
+
+// Wraps UIActivityViewController (the standard iOS share sheet) for
+// SwiftUI's `.sheet(item:)` — presented the same way GSheetsWebhookSheet
+// and other sheets on this screen are.
+private struct ActivityShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 private enum ReceiptPrinter {
@@ -7856,6 +7923,10 @@ private struct ReportsNativeView: View {
     @State private var pushMessage: String?
     @State private var pushSucceeded = false
     @State private var showWebhookConfig = false
+    @State private var isExportingGstr1 = false
+    @State private var isExportingGstr3b = false
+    @State private var exportError: String?
+    @State private var shareFile: ShareableFile?
 
     var body: some View {
         AppNavigation {
@@ -7885,6 +7956,10 @@ private struct ReportsNativeView: View {
 
                     if let pushMessage {
                         pushSucceeded ? AnyView(SuccessBanner(message: pushMessage)) : AnyView(ErrorBanner(message: pushMessage))
+                    }
+
+                    if let exportError {
+                        ErrorBanner(message: exportError)
                     }
 
                     if let report {
@@ -8042,6 +8117,29 @@ private struct ReportsNativeView: View {
                                 systemImage: "link"
                             )
                         }
+
+                        // GST filing exports — same analytics.export permission as
+                        // the report itself; gated the same way canSeeInsights
+                        // gates the Insights/Analytics tabs elsewhere in the app.
+                        if session.canSeeInsights {
+                            Divider()
+
+                            Button {
+                                Haptics.selection()
+                                Task { await exportGstr1() }
+                            } label: {
+                                Label("Export GSTR-1 CSV", systemImage: "square.and.arrow.up")
+                            }
+                            .disabled(isExportingGstr1)
+
+                            Button {
+                                Haptics.selection()
+                                Task { await exportGstr3b() }
+                            } label: {
+                                Label("Export GSTR-3B CSV", systemImage: "square.and.arrow.up")
+                            }
+                            .disabled(isExportingGstr3b)
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -8050,6 +8148,9 @@ private struct ReportsNativeView: View {
             .background(Brand.background)
         }
         .task { await load() }
+        .sheet(item: $shareFile) { file in
+            ActivityShareSheet(activityItems: [file.url])
+        }
         .onChange(of: period) { _ in
             Task { await load() }
         }
@@ -8091,6 +8192,58 @@ private struct ReportsNativeView: View {
         pushSucceeded = ok
         pushMessage = ok ? "Report pushed to Google Sheets (ERP Entries tab)." : "Failed to push to Google Sheets. Check the webhook settings."
         if ok { Haptics.success() }
+    }
+
+    // GSTR-1/GSTR-3B are always a full calendar month (yyyy_mm), independent
+    // of whichever P&L period tab is currently selected — default to the
+    // current month rather than trying to derive one from `period`, which
+    // may be daily/weekly/quarterly and wouldn't map onto a single month.
+    private var currentFilingMonth: String {
+        DateFormatters.yearMonth.string(from: Date())
+    }
+
+    private func exportGstr1() async {
+        guard !isExportingGstr1 else { return }
+        isExportingGstr1 = true
+        exportError = nil
+        defer { isExportingGstr1 = false }
+        let month = currentFilingMonth
+        do {
+            let data: Data = try await session.authorized { token in
+                try await APIClient.shared.getData(
+                    "reports/gstr1.csv",
+                    token: token,
+                    queryItems: [URLQueryItem(name: "yyyy_mm", value: month)]
+                )
+            }
+            shareFile = try CSVExporter.write(data, filename: "GSTR1-\(month).csv")
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            exportError = readable(error)
+        }
+    }
+
+    private func exportGstr3b() async {
+        guard !isExportingGstr3b else { return }
+        isExportingGstr3b = true
+        exportError = nil
+        defer { isExportingGstr3b = false }
+        let month = currentFilingMonth
+        do {
+            let data: Data = try await session.authorized { token in
+                try await APIClient.shared.getData(
+                    "reports/gstr3b.csv",
+                    token: token,
+                    queryItems: [URLQueryItem(name: "yyyy_mm", value: month)]
+                )
+            }
+            shareFile = try CSVExporter.write(data, filename: "GSTR3B-\(month).csv")
+            Haptics.success()
+        } catch is CancellationError {
+        } catch {
+            exportError = readable(error)
+        }
     }
 
     private func load() async {

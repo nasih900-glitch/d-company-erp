@@ -124,13 +124,28 @@ api.interceptors.response.use(
       }
     }
 
-    const message =
-      err.response?.data?.error?.message ??
-      err.message ??
-      'Unknown error talking to the API';
+    // Requests made with `responseType: 'blob'` (CSV/file exports) still get
+    // their error body delivered as a Blob rather than parsed JSON, even on
+    // a 4xx/5xx — axios doesn't know to parse it differently. Without this,
+    // every export error would show the generic "Request failed with status
+    // code 4xx" instead of the backend's actual error message.
+    let serverMessage = err.response?.data?.error?.message;
+    let serverCode = err.response?.data?.error?.code;
+    if (!serverMessage && err.response?.data instanceof Blob) {
+      try {
+        const text = await err.response.data.text();
+        const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+        serverMessage = parsed?.error?.message;
+        serverCode = parsed?.error?.code;
+      } catch {
+        // Not JSON (e.g. a genuine CSV body on a 2xx that got here some
+        // other way) — fall through to the generic message below.
+      }
+    }
+
+    const message = serverMessage ?? err.message ?? 'Unknown error talking to the API';
     const enriched = new Error(message);
-    (enriched as Error & { code?: string }).code =
-      err.response?.data?.error?.code ?? 'network_error';
+    (enriched as Error & { code?: string }).code = serverCode ?? 'network_error';
     return Promise.reject(enriched);
   },
 );

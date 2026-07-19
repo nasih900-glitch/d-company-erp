@@ -8,6 +8,37 @@
  */
 import { api } from './api';
 
+// =============================================================================
+// CSV / file export — shared by reports.gstr1Csv / gstr3bCsv / analytics.exportCsv
+// =============================================================================
+/**
+ * GET a CSV endpoint as a Blob and trigger a browser download.
+ *
+ * The backend always sets Content-Disposition with a filename; we prefer
+ * that (it's the source of truth for exactly what was generated) and fall
+ * back to `fallbackFilename` if the header isn't readable in this runtime
+ * (e.g. a cross-origin mobile-shell deployment where the header isn't
+ * exposed via CORS).
+ */
+async function downloadCsv(
+  url: string,
+  params: Record<string, string | number>,
+  fallbackFilename: string,
+): Promise<void> {
+  const r = await api.get<Blob>(url, { params, responseType: 'blob' });
+  const disposition = r.headers?.['content-disposition'] as string | undefined;
+  const match = disposition?.match(/filename="?([^"; ]+)"?/i);
+  const filename = match?.[1] ?? fallbackFilename;
+  const blobUrl = URL.createObjectURL(r.data);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(blobUrl);
+}
+
 export interface MeResponse {
   user_id: string;
   email: string;
@@ -1061,6 +1092,11 @@ export const reports = {
     api.get<ReportDataDTO>('/reports/quarterly', { params: { fy, q } }).then((r) => r.data),
   yearly: (fy: string) =>
     api.get<ReportDataDTO>('/reports/yearly', { params: { fy } }).then((r) => r.data),
+  // Accountant-review CSV exports for GST filing (analytics.export permission).
+  gstr1Csv: (yyyy_mm: string) =>
+    downloadCsv('/reports/gstr1.csv', { yyyy_mm }, `GSTR1-${yyyy_mm}.csv`),
+  gstr3bCsv: (yyyy_mm: string) =>
+    downloadCsv('/reports/gstr3b.csv', { yyyy_mm }, `GSTR3B-${yyyy_mm}.csv`),
 };
 
 // =============================================================================
@@ -1087,6 +1123,13 @@ export interface DashboardKPIsDTO {
 export const analytics = {
   dashboard: (on_date: string) =>
     api.get<DashboardKPIsDTO>('/analytics/dashboard', { params: { on_date } }).then((r) => r.data),
+  // Full period P&L CSV export (analytics.export permission).
+  exportCsv: (period_start: string, period_end: string) =>
+    downloadCsv(
+      '/analytics/export.csv',
+      { period_start, period_end },
+      `dcompany-analytics-${period_start}-to-${period_end}.csv`,
+    ),
 };
 
 // =============================================================================
