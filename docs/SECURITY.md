@@ -29,8 +29,8 @@
 ## Secrets
 
 - Never committed. `.env` is git-ignored; `.env.example` is the documented template.
-- Production secrets live in the platform's secret manager (AWS Secrets Manager, GCP Secret Manager, Doppler).
-- JWT keys are rotated quarterly with a 24h grace window (dual-key verification).
+- Current state: all secrets, including production ones, are loaded from a plaintext `.env` file via `pydantic-settings` (`backend/app/core/config.py`). No secret manager (AWS Secrets Manager, GCP Secret Manager, Doppler, etc.) is integrated in code today — adopting one is a future hardening item, not the current state.
+- JWT signing/verification uses a single static key at a time (`jwt_secret` for HS256, or the configured `jwt_private_key`/`jwt_public_key` pair for RS256 — see `backend/app/core/security.py`). There is no key rotation mechanism, no `kid`/JWKS handling, and no dual-key grace-window verification implemented; `decode_token` will reject any token signed with a key other than the current one. Rotating the key today means every existing session is invalidated immediately. Scheduled rotation with a grace window is a future improvement, not implemented behavior.
 
 ## Transport
 
