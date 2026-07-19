@@ -99,7 +99,7 @@ class StockMovement(Base, TimestampMixin):
     branch_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False
     )
-    type: Mapped[str] = mapped_column(String(20), nullable=False)  # sale|waste|damage|transfer|adjustment|grn
+    type: Mapped[str] = mapped_column(String(20), nullable=False)  # sale|waste|damage|transfer|adjustment|grn|refund_restock
     ref_type: Mapped[str | None] = mapped_column(String(50))
     ref_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), index=True)
     qty_delta: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)

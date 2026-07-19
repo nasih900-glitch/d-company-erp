@@ -41,7 +41,7 @@ from app.models import (
     Terminal,
     User,
 )
-from app.services.inventory.deduction import deduct_for_order
+from app.services.inventory.deduction import deduct_for_order, restock_for_refund
 from app.services.pos.membership_benefits import (
     applied_benefits_for_order,
     consume_membership_benefits,
@@ -2264,6 +2264,29 @@ async def issue_refund(
         )
     if refunded_total + payload.amount_minor >= paid_total:
         order.status = "refunded"
+
+    # Reverse the recipe-ingredient deduction that ran when the order was
+    # finalized. Refunds here are order-level amounts (no per-line
+    # breakdown), so we restock every recipe-linked line proportionally to
+    # the share of the order's value this refund covers — a full refund puts
+    # ingredients back to their pre-deduction level, a partial refund puts
+    # back the matching fraction. Lines without a recipe are skipped
+    # gracefully, symmetric with deduct_for_order.
+    refund_order_lines = (
+        await session.execute(select(OrderLine).where(OrderLine.order_id == order_id))
+    ).scalars().all()
+    refund_fraction = (
+        payload.amount_minor / order.total_minor if order.total_minor > 0 else 0.0
+    )
+    await restock_for_refund(
+        session,
+        order_id=order.id,
+        order_lines=list(refund_order_lines),
+        branch_id=order.branch_id,
+        created_by=tenant.user_id,
+        fraction=refund_fraction,
+    )
+
     response = {"id": str(refund.id), "settlement_method": settlement_method}
     await store_response(
         session,

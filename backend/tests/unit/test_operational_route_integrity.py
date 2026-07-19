@@ -450,6 +450,7 @@ async def test_protected_owner_can_refund_original_non_cash_on_closed_shift(
         terminal_id=tenant.terminal_id,
         shift_id=original_shift.id,
         status="paid",
+        total_minor=5_000,
     )
     payment = SimpleNamespace(
         amount_minor=5_000,
@@ -476,6 +477,7 @@ async def test_protected_owner_can_refund_original_non_cash_on_closed_shift(
         _Result(scalar=original_shift),
         _Result(rows=[payment]),
         _Result(scalar=0),
+        _Result(rows=[]),  # order_lines fetched for refund-restock; none recipe-linked
     )
 
     response = await pos_router.issue_refund(
