@@ -2091,7 +2091,7 @@ private struct CustomerDTO: Decodable, Identifiable {
     let name: String?
     let phone: String
     let email: String?
-    let birthday: String?
+    let birthday: Date?
     let visit_count: Int
     let total_spent_minor: Int
     let loyalty_points: Int
@@ -2114,12 +2114,14 @@ private struct CustomerUpsertRequest: Encodable {
     let phone: String
     let name: String?
     let email: String?
+    let birthday: String?
     let notes: String?
 }
 
 private struct CustomerUpdateRequest: Encodable {
     let name: String?
     let email: String?
+    let birthday: String?
     let notes: String?
 }
 
@@ -13458,20 +13460,32 @@ private struct CustomerFormDraft {
     var phone: String
     var name: String
     var email: String
+    var hasBirthday: Bool
+    var birthday: Date
     var notes: String
 
-    static func blank() -> CustomerFormDraft { CustomerFormDraft(id: nil, phone: "", name: "", email: "", notes: "") }
+    static func blank() -> CustomerFormDraft {
+        CustomerFormDraft(id: nil, phone: "", name: "", email: "", hasBirthday: false, birthday: Date(), notes: "")
+    }
 
     static func editing(_ c: CustomerDTO) -> CustomerFormDraft {
-        CustomerFormDraft(id: c.id, phone: c.phone, name: c.name ?? "", email: c.email ?? "", notes: c.notes ?? "")
+        CustomerFormDraft(
+            id: c.id, phone: c.phone, name: c.name ?? "", email: c.email ?? "",
+            hasBirthday: c.birthday != nil, birthday: c.birthday ?? Date(),
+            notes: c.notes ?? ""
+        )
+    }
+
+    private var birthdayValue: String? {
+        hasBirthday ? DateFormatters.iso.string(from: birthday) : nil
     }
 
     func upsertRequest() -> CustomerUpsertRequest {
-        CustomerUpsertRequest(phone: phone, name: name.nilIfBlank, email: email.nilIfBlank, notes: notes.nilIfBlank)
+        CustomerUpsertRequest(phone: phone, name: name.nilIfBlank, email: email.nilIfBlank, birthday: birthdayValue, notes: notes.nilIfBlank)
     }
 
     func updateRequest() -> CustomerUpdateRequest {
-        CustomerUpdateRequest(name: name.nilIfBlank, email: email.nilIfBlank, notes: notes.nilIfBlank)
+        CustomerUpdateRequest(name: name.nilIfBlank, email: email.nilIfBlank, birthday: birthdayValue, notes: notes.nilIfBlank)
     }
 }
 
@@ -13505,6 +13519,19 @@ private struct CustomerFormSheet: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Email").font(.caption).foregroundColor(Brand.muted)
                                 TextField("", text: $draft.email).keyboardType(.emailAddress).autocorrectionDisabled().nativeField()
+                            }
+                            Toggle("Has birthday", isOn: $draft.hasBirthday)
+                                .toggleStyle(SwitchToggleStyle(tint: Brand.gold))
+                                .foregroundColor(.white)
+                                .font(.caption.weight(.semibold))
+                            if draft.hasBirthday {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Birthday").font(.caption).foregroundColor(Brand.muted)
+                                    DatePicker("", selection: $draft.birthday, displayedComponents: [.date])
+                                        .labelsHidden()
+                                        .datePickerStyle(.compact)
+                                        .colorScheme(.dark)
+                                }
                             }
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Notes").font(.caption).foregroundColor(Brand.muted)
