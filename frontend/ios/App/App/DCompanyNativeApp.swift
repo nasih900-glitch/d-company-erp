@@ -2075,6 +2075,32 @@ private struct StaffUserUpdateRequest: Encodable {
 
 private let staffRoleCodes = ["owner", "partner", "manager", "cashier", "kitchen", "gaming_supervisor", "auditor"]
 
+// Attendance — clock in/out + who's on shift right now (mirrors StaffScreen.tsx).
+private struct ClockInRequest: Encodable {
+    let branch_id: String
+    let notes: String?
+}
+
+private struct ClockInResponse: Decodable {
+    let id: String
+}
+
+private struct ClockOutResponse: Decodable {
+    let id: String
+    let clock_out_at: Date
+}
+
+private struct OnShiftDTO: Decodable, Identifiable {
+    let id: String
+    let user_id: String
+    let user_name: String?
+    let user_email: String?
+    let branch_id: String
+    let branch_name: String?
+    let clock_in_at: Date
+    let notes: String?
+}
+
 private struct CompanyDTO: Decodable, Identifiable {
     let id: String
     let name: String
@@ -12737,8 +12763,33 @@ private struct StaffNativeView: View {
     @State private var editingUser: StaffUserDTO?
     @State private var showAddStaff = false
 
+    @State private var onShift: [OnShiftDTO] = []
+    @State private var isLoadingAttendance = true
+    @State private var attendanceError: String?
+    @State private var isSubmittingAttendance = false
+
+    private var myAttendance: OnShiftDTO? {
+        onShift.first { $0.user_id == session.me?.user_id }
+    }
+
     var body: some View {
         List {
+            Section {
+                AttendanceCard(
+                    isClockedIn: myAttendance != nil,
+                    clockInAt: myAttendance?.clock_in_at,
+                    onShiftNames: onShift.map { $0.user_name ?? $0.user_email ?? "Staff" },
+                    isLoading: isLoadingAttendance,
+                    isSubmitting: isSubmittingAttendance,
+                    error: attendanceError,
+                    onClockIn: { Task { await clockIn() } },
+                    onClockOut: { Task { await clockOut() } }
+                )
+            }
+            .listRowBackground(Brand.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
             if let error {
                 ErrorBanner(message: error)
                     .listRowBackground(Brand.background)
@@ -12777,7 +12828,7 @@ private struct StaffNativeView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack {
                     Button { showAddStaff = true } label: { Image(systemName: "person.badge.plus") }
-                    Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                    Button { Task { await load(); await loadAttendance() } } label: { Image(systemName: "arrow.clockwise") }
                 }
             }
         }
@@ -12798,7 +12849,10 @@ private struct StaffNativeView: View {
                 Task { await load() }
             }
         }
-        .task { await load() }
+        .task {
+            await load()
+            await loadAttendance()
+        }
     }
 
     private var filteredUsers: [StaffUserDTO] {
@@ -12836,6 +12890,60 @@ private struct StaffNativeView: View {
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
+        }
+    }
+
+    private func loadAttendance() async {
+        isLoadingAttendance = true
+        defer { isLoadingAttendance = false }
+        attendanceError = nil
+        do {
+            onShift = try await session.authorized { token in
+                try await APIClient.shared.get("staff/attendance/on-shift", token: token)
+            }
+        } catch is CancellationError {
+        } catch {
+            attendanceError = readable(error)
+        }
+    }
+
+    private func clockIn() async {
+        guard let branchId = session.me?.branch_id else {
+            attendanceError = "No branch on this account — ask an owner to assign one before clocking in."
+            return
+        }
+        isSubmittingAttendance = true
+        defer { isSubmittingAttendance = false }
+        attendanceError = nil
+        do {
+            let _: ClockInResponse = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "staff/attendance/clock-in",
+                    body: ClockInRequest(branch_id: branchId, notes: nil),
+                    token: token
+                )
+            }
+            Haptics.success()
+            await loadAttendance()
+        } catch is CancellationError {
+        } catch {
+            attendanceError = readable(error)
+        }
+    }
+
+    private func clockOut() async {
+        isSubmittingAttendance = true
+        defer { isSubmittingAttendance = false }
+        attendanceError = nil
+        do {
+            let _: ClockOutResponse = try await session.authorized { token in
+                try await APIClient.shared.post("staff/attendance/clock-out", body: EmptyRequest(), token: token)
+            }
+            Haptics.success()
+            await loadAttendance()
+        } catch is CancellationError {
+        } catch {
+            attendanceError = readable(error)
         }
     }
 }
@@ -18023,6 +18131,114 @@ private struct StaffRow: View {
             }
         }
         .padding(.vertical, 8)
+    }
+}
+
+private struct AttendanceCard: View {
+    let isClockedIn: Bool
+    let clockInAt: Date?
+    let onShiftNames: [String]
+    let isLoading: Bool
+    let isSubmitting: Bool
+    let error: String?
+    let onClockIn: () -> Void
+    let onClockOut: () -> Void
+
+    var body: some View {
+        BrandedCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Attendance")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(statusSubtitle)
+                            .font(.caption)
+                            .foregroundColor(Brand.muted)
+                    }
+                    Spacer()
+                    Text(isClockedIn ? "On shift" : "Off shift")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background((isClockedIn ? Brand.success : Brand.muted).opacity(0.16))
+                        .foregroundColor(isClockedIn ? Brand.success : Brand.muted)
+                        .clipShape(Capsule())
+                }
+
+                if let error {
+                    ErrorBanner(message: error)
+                }
+
+                if isClockedIn {
+                    Button(action: onClockOut) {
+                        Label(isSubmitting ? "Please wait..." : "Clock out", systemImage: "clock.badge.xmark")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Brand.softGold)
+                    .background(Brand.elevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Brand.gold.opacity(0.35), lineWidth: 1)
+                    )
+                    .disabled(isSubmitting)
+                } else {
+                    Button(action: onClockIn) {
+                        Label(isSubmitting ? "Please wait..." : "Clock in", systemImage: "clock.badge.checkmark")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.black)
+                    .background(isSubmitting ? Brand.muted.opacity(0.45) : Brand.gold)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .disabled(isSubmitting)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(rosterTitle)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(Brand.muted)
+
+                    if !isLoading {
+                        if onShiftNames.isEmpty {
+                            Text("Nobody is clocked in right now.")
+                                .font(.caption)
+                                .foregroundColor(Brand.muted)
+                        } else {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(Array(onShiftNames.enumerated()), id: \.offset) { _, name in
+                                        Text(name)
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(Brand.gold.opacity(0.14))
+                                            .foregroundColor(Brand.softGold)
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var statusSubtitle: String {
+        guard isClockedIn else { return "You are not clocked in right now" }
+        guard let clockInAt else { return "You are clocked in" }
+        return "You clocked in at \(DateFormatters.timeOnly.string(from: clockInAt))"
+    }
+
+    private var rosterTitle: String {
+        isLoading ? "Loading on-shift roster..." : "On shift now (\(onShiftNames.count))"
     }
 }
 

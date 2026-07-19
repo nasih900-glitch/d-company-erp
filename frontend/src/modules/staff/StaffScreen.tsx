@@ -14,12 +14,12 @@
 import { useEffect, useState } from 'react';
 import {
   Phone, UserPlus, Edit2, KeyRound, ShieldOff, ShieldCheck, Trash2,
-  Mail, AlertCircle, Loader2,
+  Mail, AlertCircle, Loader2, Clock, LogIn, LogOut,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
 import { STAFF, type StaffMember } from '@/lib/demo-data';
-import { auth, staff, type UserDTO, type RoleDTO } from '@/lib/erp-api';
+import { attendance, auth, staff, type OnShiftDTO, type UserDTO, type RoleDTO } from '@/lib/erp-api';
 import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
@@ -127,6 +127,8 @@ export default function StaffScreen() {
         </button>
       </header>
 
+      {LIVE_MODE && <AttendanceWidget/>}
+
       {error && (
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
           <AlertCircle size={16}/> {error}
@@ -188,6 +190,114 @@ export default function StaffScreen() {
       )}
     </div>
   );
+}
+
+// ---------------------------------------------------------------- Attendance
+function AttendanceWidget() {
+  const { me } = useAuth();
+  const [onShift, setOnShift] = useState<OnShiftDTO[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      setOnShift(await attendance.onShift());
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'failed to load on-shift list');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const myEntry = onShift.find((s) => s.user_id === me?.user_id);
+  const clockedIn = !!myEntry;
+
+  async function handleClockIn() {
+    if (!me?.branch_id) {
+      setErr('No branch on this account — ask an owner to assign one before clocking in.');
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      await attendance.clockIn(me.branch_id);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'clock-in failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleClockOut() {
+    setBusy(true); setErr(null);
+    try {
+      await attendance.clockOut();
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'clock-out failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card mb-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <div className="font-semibold flex items-center gap-2">
+            <Clock size={15}/> Attendance
+          </div>
+          <p className="text-xs text-fg-muted mt-0.5">
+            {clockedIn
+              ? `You clocked in at ${formatClockTime(myEntry!.clock_in_at)}`
+              : 'You are not clocked in right now'}
+          </p>
+        </div>
+        <button
+          className={`btn ${clockedIn ? 'btn-ghost' : 'btn-primary'} !min-h-[36px]`}
+          onClick={clockedIn ? handleClockOut : handleClockIn}
+          disabled={busy || loading}
+        >
+          {busy
+            ? <Loader2 className="animate-spin" size={14}/>
+            : clockedIn ? <LogOut size={14}/> : <LogIn size={14}/>}
+          {clockedIn ? 'Clock out' : 'Clock in'}
+        </button>
+      </div>
+
+      {err && <div className="mt-3"><ErrorRow text={err}/></div>}
+
+      <div className="mt-4 pt-3 border-t border-bg-border/60">
+        <div className="text-xs text-fg-muted mb-2">
+          On shift now {onShift.length ? `(${onShift.length})` : ''}
+        </div>
+        {loading ? (
+          <div className="text-xs text-fg-muted flex items-center gap-2">
+            <Loader2 className="animate-spin" size={12}/> Loading…
+          </div>
+        ) : onShift.length ? (
+          <div className="flex flex-wrap gap-2">
+            {onShift.map((s) => (
+              <span key={s.id} className="chip text-xs">
+                {s.user_name ?? s.user_email ?? 'Staff'} · since {formatClockTime(s.clock_in_at)}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-fg-muted">Nobody is clocked in right now.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+function formatClockTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 // ---------------------------------------------------------------- UserCard

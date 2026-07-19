@@ -334,6 +334,31 @@ export const staff = {
 };
 
 // =============================================================================
+// ATTENDANCE — clock in / out + who's on shift
+// =============================================================================
+export interface OnShiftDTO {
+  id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  branch_id: string;
+  branch_name: string | null;
+  clock_in_at: string;
+  notes: string | null;
+}
+
+export const attendance = {
+  clockIn: (branch_id: string, notes?: string) =>
+    api.post<{ id: string }>('/staff/attendance/clock-in', { branch_id, notes })
+      .then((r) => r.data),
+  clockOut: () =>
+    api.post<{ id: string; clock_out_at: string }>('/staff/attendance/clock-out')
+      .then((r) => r.data),
+  onShift: () =>
+    api.get<OnShiftDTO[]>('/staff/attendance/on-shift').then((r) => r.data),
+};
+
+// =============================================================================
 // MENU — categories + items (CRUD)
 // =============================================================================
 export const menuAdmin = {

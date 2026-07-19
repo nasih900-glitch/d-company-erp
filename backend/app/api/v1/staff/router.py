@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -58,6 +58,17 @@ class UserRead(BaseModel):
 class ClockInRequest(BaseModel):
     branch_id: UUID
     notes: str | None = Field(default=None, max_length=500)
+
+
+class OnShiftRead(BaseModel):
+    id: UUID
+    user_id: UUID
+    user_name: str | None = None
+    user_email: str | None = None
+    branch_id: UUID
+    branch_name: str | None = None
+    clock_in_at: datetime
+    notes: str | None = None
 
 
 # ---------------------------------------------------------------- helpers
@@ -284,3 +295,67 @@ async def clock_in(
     )
     session.add(a)
     return {"id": str(a.id)}
+
+
+@router.post("/attendance/clock-out")
+async def clock_out(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("staff.attendance.write")),
+) -> dict:
+    # Most recent still-open attendance row for this user in this company.
+    # `.limit(1)` keeps this safe even if a client somehow clocked in twice
+    # without clocking out in between (clock-in does not itself guard against
+    # that) — we close the latest open session rather than erroring.
+    a = (
+        await session.execute(
+            select(Attendance)
+            .where(
+                Attendance.company_id == tenant.company_id,
+                Attendance.user_id == tenant.user_id,
+                Attendance.clock_out_at.is_(None),
+            )
+            .order_by(Attendance.clock_in_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not a:
+        raise HTTPException(
+            status_code=400,
+            detail="No open clock-in found. Clock in before clocking out.",
+        )
+    a.clock_out_at = datetime.now(timezone.utc)
+    await session.flush()
+    return {"id": str(a.id), "clock_out_at": a.clock_out_at.isoformat()}
+
+
+@router.get("/attendance/on-shift", response_model=list[OnShiftRead])
+async def list_on_shift(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("staff.read")),
+) -> list[OnShiftRead]:
+    stmt = (
+        select(Attendance, User.name, User.email, Branch.name)
+        .join(User, User.id == Attendance.user_id)
+        .join(Branch, Branch.id == Attendance.branch_id)
+        .where(
+            Attendance.company_id == tenant.company_id,
+            Attendance.clock_out_at.is_(None),
+        )
+        .order_by(Attendance.clock_in_at.asc())
+    )
+    if tenant.branch_id is not None:
+        stmt = stmt.where(Attendance.branch_id == tenant.branch_id)
+    rows = (await session.execute(stmt)).all()
+    return [
+        OnShiftRead(
+            id=a.id,
+            user_id=a.user_id,
+            user_name=user_name,
+            user_email=user_email,
+            branch_id=a.branch_id,
+            branch_name=branch_name,
+            clock_in_at=a.clock_in_at,
+            notes=a.notes,
+        )
+        for a, user_name, user_email, branch_name in rows
+    ]
