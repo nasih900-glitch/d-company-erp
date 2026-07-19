@@ -237,12 +237,34 @@ describe('POS checkout retry drafts', () => {
         amount_minor: 8000,
         expected_order_total_minor: 50000,
         expected_due_minor: 8000,
+        tip_minor: 0,
       },
     });
     expect(buildCheckoutPaymentSubmission({
       ...recording,
       paymentMethod: 'cash',
     })?.body.tendered_minor).toBe(8000);
+    // Tip is additional money on top of the bill, never folded into
+    // amount_minor — but cash tendered must cover the full collected amount.
+    expect(buildCheckoutPaymentSubmission({
+      ...recording,
+      tipMinor: 1500,
+    })).toEqual({
+      orderId: 'order-1',
+      idempotencyKey: 'payment:checkout-1',
+      body: {
+        method: 'upi',
+        amount_minor: 8000,
+        expected_order_total_minor: 50000,
+        expected_due_minor: 8000,
+        tip_minor: 1500,
+      },
+    });
+    expect(buildCheckoutPaymentSubmission({
+      ...recording,
+      paymentMethod: 'cash',
+      tipMinor: 1500,
+    })?.body.tendered_minor).toBe(9500);
     expect(buildCheckoutPaymentSubmission({
       ...recording,
       phase: 'awaiting_payment',

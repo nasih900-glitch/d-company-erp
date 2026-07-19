@@ -1528,6 +1528,11 @@ private struct CheckoutDraft: Identifiable {
     // Blind entry: the app has no live customer/points lookup at checkout
     // yet, so the server validates the customer actually has this balance.
     var pointsRedeemedText = ""
+    // Voluntary tip — additional money on top of the bill, never folded
+    // into the bill total. Sent as its own field on the payment request
+    // (see PaymentCreateRequest / _validate_confirmed_payment_balance in
+    // app/api/v1/pos/router.py).
+    var tipRupeesText = ""
 
     var discountMinor: Int {
         max(0, Int(discountRupeesText) ?? 0) * 100
@@ -1535,6 +1540,10 @@ private struct CheckoutDraft: Identifiable {
 
     var pointsRedeemed: Int {
         max(0, Int(pointsRedeemedText) ?? 0)
+    }
+
+    var tipMinor: Int {
+        max(0, Int(tipRupeesText) ?? 0) * 100
     }
 
     func tenderedMinor(totalMinor: Int) -> Int? {
@@ -1964,6 +1973,12 @@ private struct PaymentCreateRequest: Encodable {
     let amount_minor: Int
     let tendered_minor: Int?
     let ref_external: String?
+    // Additional money collected on top of the bill — never folded into
+    // amount_minor, and never part of the exact-amount-due match on the
+    // server (see _validate_confirmed_payment_balance in
+    // app/api/v1/pos/router.py). Defaults to 0 so the held-order billing
+    // call site above is unaffected.
+    let tip_minor: Int = 0
 }
 
 private struct PaymentResponseDTO: Decodable {
@@ -7261,7 +7276,7 @@ private struct POSNativeView: View {
             error = "No registered POS terminal is available for this shift."
             return
         }
-        guard draft.isCashTenderReady(totalMinor: max(0, cartTotal - draft.discountMinor - draft.pointsRedeemed * 10)) else {
+        guard draft.isCashTenderReady(totalMinor: max(0, cartTotal - draft.discountMinor - draft.pointsRedeemed * 10) + draft.tipMinor) else {
             error = "Cash received is below the bill total."
             return
         }
@@ -7347,8 +7362,9 @@ private struct POSNativeView: View {
             let paymentRequest = PaymentCreateRequest(
                 method: draft.paymentMethod.rawValue,
                 amount_minor: order.total_minor,
-                tendered_minor: draft.tenderedMinor(totalMinor: order.total_minor),
-                ref_external: nil
+                tendered_minor: draft.tenderedMinor(totalMinor: order.total_minor + draft.tipMinor),
+                ref_external: nil,
+                tip_minor: draft.tipMinor
             )
             let paymentHeaders = [
                 "Idempotency-Key": checkoutPaymentKey,
@@ -15021,12 +15037,20 @@ private struct CheckoutSheet: View {
                                             .foregroundColor(Brand.danger)
                                     }
                                 }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Tip (₹)")
+                                        .font(.caption)
+                                        .foregroundColor(Brand.muted)
+                                    TextField("0", text: $draft.tipRupeesText)
+                                        .keyboardType(.numberPad)
+                                        .nativeField()
+                                }
                                 HStack {
                                     Text("Total")
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     Spacer()
-                                    Text(inr(max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10)))
+                                    Text(inr(max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10) + draft.tipMinor))
                                         .font(.title3.weight(.bold))
                                         .foregroundColor(Brand.softGold)
                                 }
@@ -15117,10 +15141,10 @@ private struct CheckoutSheet: View {
                                 }
                                 PaymentTerminalNotice(method: draft.paymentMethod)
                                 if draft.paymentMethod == .cash {
-                                    CashTenderPad(totalMinor: max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10), tenderedMinor: $draft.cashTenderedMinor)
+                                    CashTenderPad(totalMinor: max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10) + draft.tipMinor, tenderedMinor: $draft.cashTenderedMinor)
                                 }
                                 if draft.paymentMethod == .upi || draft.paymentMethod == .qr {
-                                    UpiQRView(upiVpa: upiVpa, businessName: businessName, amountMinor: max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10))
+                                    UpiQRView(upiVpa: upiVpa, businessName: businessName, amountMinor: max(0, totalMinor - draft.discountMinor - draft.pointsRedeemed * 10) + draft.tipMinor)
                                 }
                                 Toggle(isOn: $draft.printReceiptAfterCharge) {
                                     Label("Print receipt after charge", systemImage: "printer")

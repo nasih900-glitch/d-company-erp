@@ -44,6 +44,12 @@ export interface PosCheckoutRetry {
   pendingOrderId?: string;
   orderTotalMinor?: number;
   paymentAmountMinor?: number;
+  // Voluntary tip, entered on the confirm-payment screen once the exact
+  // server bill is known. Never applied server-side ahead of time — it only
+  // travels with the final payment submission (see
+  // buildCheckoutPaymentSubmission below), additional money on top of
+  // paymentAmountMinor, never folded into it.
+  tipMinor?: number;
   // Combined membership + custom-discount + points figure — kept for the
   // final receipt/reconciliation math. For the cashier-facing "applied so
   // far" confirmation, use orderManualDiscountMinor/orderPointsRedeemedMinor
@@ -66,6 +72,7 @@ export interface CheckoutPaymentSubmission {
     tendered_minor?: number;
     expected_order_total_minor: number;
     expected_due_minor: number;
+    tip_minor: number;
   };
 }
 
@@ -254,6 +261,7 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
   }
   const amount = value.paymentAmountMinor;
   const orderTotal = value.orderTotalMinor;
+  const tip = value.tipMinor;
   const orderDiscount = value.orderDiscountMinor;
   const orderManualDiscount = value.orderManualDiscountMinor;
   const orderPointsRedeemed = value.orderPointsRedeemedMinor;
@@ -279,6 +287,9 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
     paymentAmountMinor: typeof amount === 'number' && Number.isInteger(amount) && amount >= 0
       ? amount
       : undefined,
+    ...(typeof tip === 'number' && Number.isInteger(tip) && tip >= 0
+      ? { tipMinor: tip }
+      : {}),
     ...(typeof orderDiscount === 'number'
       && Number.isInteger(orderDiscount)
       && orderDiscount >= 0
@@ -409,15 +420,24 @@ export function buildCheckoutPaymentSubmission(
   }
   const amount = retry.paymentAmountMinor;
   const total = retry.orderTotalMinor;
+  // Additional money on top of the bill, never folded into amount_minor —
+  // the server only matches amount_minor against the exact bill due (see
+  // _validate_confirmed_payment_balance in app/api/v1/pos/router.py).
+  const tip = Number.isInteger(retry.tipMinor) && (retry.tipMinor as number) >= 0
+    ? (retry.tipMinor as number)
+    : 0;
   return {
     orderId,
     idempotencyKey: `payment:${retry.key}`,
     body: {
       method: retry.paymentMethod,
       amount_minor: amount,
-      ...(retry.paymentMethod === 'cash' ? { tendered_minor: amount } : {}),
+      // Cash tendered must cover what is actually collected — bill + tip —
+      // or the server's tendered-vs-collected check rejects it.
+      ...(retry.paymentMethod === 'cash' ? { tendered_minor: amount + tip } : {}),
       expected_order_total_minor: total,
       expected_due_minor: amount,
+      tip_minor: tip,
     },
   };
 }

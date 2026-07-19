@@ -128,6 +128,7 @@ export default function LiveReceipt({
         {order.igst_minor > 0 && <Row label="IGST" v={order.igst_minor} />}
         {isPlatformDelivery && <Row label="D Company GST" v={0} />}
         {order.round_off_minor !== 0 && <Row label="Round off" v={order.round_off_minor} />}
+        {order.tip_minor > 0 && <Row label="Tip" v={order.tip_minor} />}
         <div className="border-t border-bg-border print:border-black/30 mt-1 pt-1 flex justify-between font-bold text-base">
           <span>GRAND TOTAL</span><span>{inr(order.total_minor)}</span>
         </div>

@@ -30,6 +30,7 @@ from app.services.accounting.accounts import (
     DEFAULT_CHART_OF_ACCOUNTS,
     DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
     SALES_REVENUE,
+    TIPS_PAYABLE,
 )
 from app.services.accounting.ledger import (
     _expense_account,
@@ -99,6 +100,47 @@ def _capital(
         voided_at=NOW if voided else None,
         voided_by=USER_ID if voided else None,
         void_reason="Duplicate entry" if voided else None,
+    )
+
+
+def _paid_order_with_tip(
+    *,
+    subtotal_minor: int,
+    cgst_minor: int = 0,
+    sgst_minor: int = 0,
+    tip_minor: int,
+    round_off_minor: int = 0,
+    manual_discount_minor: int = 0,
+    points_redeemed_minor: int = 0,
+) -> SimpleNamespace:
+    """A settled order the way record_payment leaves it: total_minor already
+    folds in the tip, exactly like ledger.py's TIPS_PAYABLE credit and the
+    reports balance check (app/api/v1/reports/router.py) expect."""
+    total_minor = (
+        subtotal_minor
+        + cgst_minor
+        + sgst_minor
+        + tip_minor
+        + round_off_minor
+        - manual_discount_minor
+        - points_redeemed_minor
+    )
+    return SimpleNamespace(
+        id=uuid4(),
+        invoice_no="INV-0099",
+        invoice_issued_at=NOW,
+        closed_at=NOW,
+        opened_at=NOW,
+        subtotal_minor=subtotal_minor,
+        cgst_minor=cgst_minor,
+        sgst_minor=sgst_minor,
+        igst_minor=0,
+        cess_minor=0,
+        tip_minor=tip_minor,
+        round_off_minor=round_off_minor,
+        manual_discount_minor=manual_discount_minor,
+        points_redeemed_minor=points_redeemed_minor,
+        total_minor=total_minor,
     )
 
 
@@ -345,3 +387,44 @@ async def test_whitelisted_posted_journal_is_loaded_and_validated() -> None:
 
     sql = str(session.statements[0].compile(compile_kwargs={"literal_binds": True}))
     assert "historical_setup_reconciliation" in sql
+
+
+@pytest.mark.asyncio
+async def test_order_tip_minor_posts_a_balanced_tips_payable_ledger_line() -> None:
+    """record_payment folds a tip into Order.total_minor (see
+    app/api/v1/pos/router.py); this proves the ledger side of that contract:
+    the tip shows up as its own Tips Payable credit and the whole order
+    entry still balances exactly, debit for debit."""
+    order = _paid_order_with_tip(subtotal_minor=8_000, cgst_minor=720, sgst_minor=720, tip_minor=1_500)
+    assert order.total_minor == 10_940
+
+    ledger_session = _QueuedSession(
+        [
+            _Result(rows=[]),  # payments
+            _Result(scalar="Asia/Kolkata"),
+            _Result(rows=[]),  # manual collections
+            _Result(rows=[order]),  # orders
+            _Result(rows=[]),  # stock
+            _Result(rows=[]),  # refunds
+            _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # capital entries
+            _Result(rows=[]),  # direct event tickets
+            _Result(rows=[]),  # approved posted journals
+        ]
+    )
+    lines = await build_operational_ledger(
+        ledger_session,
+        company_id=COMPANY_ID,
+        end_exclusive=datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    tips_lines = [line for line in lines if line.account_code == TIPS_PAYABLE.code]
+    assert len(tips_lines) == 1
+    assert tips_lines[0].credit_minor == 1_500
+    assert tips_lines[0].debit_minor == 0
+    assert tips_lines[0].ref_id == order.id
+    assert tips_lines[0].account_name == "Tips Payable"
+
+    order_lines = [line for line in lines if line.ref_id == order.id]
+    assert sum(line.debit_minor for line in order_lines) == order.total_minor
+    assert sum(line.credit_minor for line in order_lines) == order.total_minor

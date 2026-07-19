@@ -124,6 +124,7 @@ export interface OrderDTO {
   cess_minor: number;
   tax_minor: number;
   round_off_minor: number;
+  tip_minor: number;
   total_minor: number;
   paid_minor: number;
   due_minor: number;
@@ -267,6 +268,7 @@ export const pos = {
       ref_external?: string;
       expected_order_total_minor?: number;
       expected_due_minor?: number;
+      tip_minor?: number;
     },
     idempotencyKey: string,
   ) =>
@@ -274,6 +276,7 @@ export const pos = {
       .post<{
         id: string;
         amount_minor: number;
+        tip_minor: number;
         order_status: string;
         invoice_no: string | null;
         fiscal_year: string | null;

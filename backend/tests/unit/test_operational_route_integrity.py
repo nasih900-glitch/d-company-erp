@@ -18,7 +18,7 @@ from app.api.v1.gaming import router as gaming_router
 from app.api.v1.pos import router as pos_router
 from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
-from app.models import Order, OrderLine, Refund, Station, Table
+from app.models import Branch, Order, OrderLine, Payment, Refund, Station, Table
 
 
 class _Result:
@@ -193,6 +193,106 @@ def test_confirmed_payment_rejects_a_stale_or_partial_full_settlement() -> None:
             order_total_minor=10_000,
             due_minor=10_000,
         )
+
+
+@pytest.mark.asyncio
+async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot(
+    monkeypatch,
+) -> None:
+    """A tip is additional money collected alongside the bill.
+
+    It must never be folded into amount_minor or the exact-amount-due match
+    in _validate_confirmed_payment_balance (that check protects the bill
+    itself from stale reads/split payments, and is exercised untouched by
+    the amount_minor==due_minor path above). Instead the endpoint layers it
+    on afterward: Order.tip_minor and Order.total_minor both grow by the tip,
+    and the Payment row records what was actually collected (bill + tip) —
+    exactly what ledger.py's TIPS_PAYABLE line and the reports balance check
+    (app/api/v1/reports/router.py) already expect from order.total_minor.
+    """
+    tenant = _tenant()
+    shift = _shift(tenant, opened_by=tenant.user_id, status="open")
+    branch = SimpleNamespace(
+        id=tenant.branch_id,
+        company_id=tenant.company_id,
+        deleted_at=None,
+        timezone="Asia/Kolkata",
+        code="MN",
+    )
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=shift.id,
+        status="open",
+        total_minor=10_000,
+        tip_minor=0,
+        table_id=None,
+        customer_phone=None,
+        # Pre-set so _finalize_order skips invoice allocation — this test is
+        # about the tip/settlement math, not the invoice-numbering service.
+        invoice_no="INV-PRESET-0001",
+        fiscal_year="2026-27",
+        closed_at=None,
+        invoice_issued_at=None,
+    )
+
+    async def _reserve_idempotency(*_args, **_kwargs):
+        return None
+
+    stored: dict = {}
+
+    async def _store_response(*_args, **kwargs):
+        stored.update(kwargs)
+        return None
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve_idempotency)
+    monkeypatch.setattr(pos_router, "store_response", _store_response)
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="payment-with-tip-test",
+            idempotency_request_hash="hash",
+        )
+    )
+    session = _Session(
+        _Result(scalar=order),  # order lookup
+        _Result(scalar=shift),  # shift lookup
+        _Result(scalar=0),  # _paid_total: nothing paid yet
+        _Result(rows=[]),  # consume_membership_benefits: no reservations
+        _Result(scalar=None),  # consume_points_redemption: no redemption row
+        _Result(rows=[]),  # order_lines fetched for finalization/deduction
+        entities={(Branch, tenant.branch_id): branch},
+    )
+
+    response = await pos_router.record_payment(
+        order.id,
+        pos_router.PaymentCreate(
+            method="upi",
+            amount_minor=10_000,
+            tip_minor=1_500,
+            expected_order_total_minor=10_000,
+            expected_due_minor=10_000,
+        ),
+        session,
+        request,
+        tenant,
+    )
+
+    # The bill itself was matched exactly (amount_minor == due_minor == the
+    # pre-tip total) — the tip rode along on top without touching that check.
+    assert order.tip_minor == 1_500
+    assert order.total_minor == 11_500
+    assert order.status == "paid"
+
+    payment = next(entity for entity in session.added if isinstance(entity, Payment))
+    assert payment.amount_minor == 11_500  # bill + tip actually collected
+
+    assert response["amount_minor"] == 11_500
+    assert response["tip_minor"] == 1_500
+    assert response["order_status"] == "paid"
+    assert stored["status_code"] == 201
 
 
 def test_customer_repricing_recovers_stored_gross_without_current_menu_price() -> None:
@@ -778,6 +878,7 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
         cess_minor=0,
         tax_minor=50,
         round_off_minor=0,
+        tip_minor=0,
         total_minor=1_050,
         delivery_via=None,
         place_of_supply_state_code="32",

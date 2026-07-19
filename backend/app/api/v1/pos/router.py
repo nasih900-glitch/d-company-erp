@@ -150,6 +150,7 @@ class OrderRead(BaseModel):
     cess_minor: int = 0
     tax_minor: int
     round_off_minor: int = 0
+    tip_minor: int = 0
     total_minor: int
     paid_minor: int = 0
     due_minor: int = 0
@@ -175,6 +176,12 @@ class PaymentCreate(BaseModel):
     ref_external: str | None = Field(default=None, max_length=200)
     expected_order_total_minor: int | None = Field(default=None, ge=0)
     expected_due_minor: int | None = Field(default=None, ge=0)
+    # Voluntary tip collected alongside this payment. Additional money on top
+    # of the bill — never folded into amount_minor and never part of the
+    # exact-amount-due match in _validate_confirmed_payment_balance (that
+    # check protects the bill itself from stale reads/split payments; the
+    # tip is layered on afterward). See record_payment for how it is applied.
+    tip_minor: int = Field(default=0, ge=0)
 
 
 class OrderCustomerUpdate(BaseModel):
@@ -748,6 +755,7 @@ async def _build_order_read(session, order: Order) -> OrderRead:
         cess_minor=order.cess_minor,
         tax_minor=order.tax_minor,
         round_off_minor=order.round_off_minor,
+        tip_minor=order.tip_minor,
         total_minor=order.total_minor,
         paid_minor=paid_minor,
         due_minor=due_minor,
@@ -2094,22 +2102,34 @@ async def record_payment(
         )
     if payload.amount_minor > due_minor:
         raise BusinessRuleError("payment exceeds amount due")
+
+    # Tip is additional money collected alongside this payment — never part
+    # of the amount-due match above (that protects the bill itself from
+    # stale reads/split payments). It is folded in only from here on, into
+    # what is actually recorded as collected/banked, so order.total_minor
+    # ends up including it exactly like ledger.py and the reports balance
+    # check (app/api/v1/reports/router.py) already expect.
+    tip_minor = int(payload.tip_minor or 0)
+    collected_minor = payload.amount_minor + tip_minor
     if (
         payload.method == "cash"
         and payload.tendered_minor is not None
-        and payload.tendered_minor < payload.amount_minor
+        and payload.tendered_minor < collected_minor
     ):
         raise BusinessRuleError("cash tendered cannot be less than payment amount")
 
     now = datetime.now(timezone.utc)
+    if tip_minor:
+        order.tip_minor = int(order.tip_minor or 0) + tip_minor
+        order.total_minor = int(order.total_minor or 0) + tip_minor
     payment = Payment(
         id=uuid4(),
         order_id=order_id,
         shift_id=order.shift_id,
         method=payload.method,
-        amount_minor=payload.amount_minor,
+        amount_minor=collected_minor,
         tendered_minor=payload.tendered_minor,
-        change_minor=(payload.tendered_minor - payload.amount_minor)
+        change_minor=(payload.tendered_minor - collected_minor)
         if payload.tendered_minor and payload.method == "cash"
         else None,
         ref_external=payload.ref_external,
@@ -2117,8 +2137,8 @@ async def record_payment(
     )
     session.add(payment)
     if payload.method == "cash":
-        shift.expected_minor = int(shift.expected_minor or 0) + payload.amount_minor
-    finalized = already_paid + payload.amount_minor >= order.total_minor
+        shift.expected_minor = int(shift.expected_minor or 0) + collected_minor
+    finalized = already_paid + collected_minor >= order.total_minor
     if finalized:
         await _finalize_order(
             session,
@@ -2130,6 +2150,7 @@ async def record_payment(
     response = {
         "id": str(payment.id),
         "amount_minor": payment.amount_minor,
+        "tip_minor": tip_minor,
         "order_status": order.status,
         "invoice_no": order.invoice_no,
         "fiscal_year": order.fiscal_year,

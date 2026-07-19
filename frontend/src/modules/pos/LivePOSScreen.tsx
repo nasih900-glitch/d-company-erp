@@ -169,6 +169,12 @@ export default function LivePOSScreen() {
   const [rewards, setRewards] = useState<RewardDTO[]>([]);
   const [redeemingReward, setRedeemingReward] = useState<string | null>(null);
   const [rewardError, setRewardError] = useState<string | null>(null);
+  // Tip is never applied to the server ahead of time — unlike the discount
+  // above, it only travels with the final payment call (see
+  // buildCheckoutPaymentSubmission in retry-drafts.ts), so entering it just
+  // updates checkoutRetry.tipMinor locally.
+  const [tipInput, setTipInput] = useState('');
+  const [tipError, setTipError] = useState<string | null>(null);
   const lastHeldAlarmAtRef = useRef(0);
   const heldOrderScopeRef = useRef(draftKey);
   heldOrderScopeRef.current = draftKey;
@@ -1023,6 +1029,30 @@ export default function LivePOSScreen() {
     }
   }
 
+  // Voluntary tip, entered on the confirm-payment screen once the exact
+  // server bill is known. Unlike the discount/points above, there is no
+  // server-side "apply" call — it rides along with the final payment
+  // submission as its own field (see buildCheckoutPaymentSubmission).
+  function applyTip() {
+    const rupees = Number(tipInput);
+    if (!Number.isFinite(rupees) || rupees < 0) {
+      setTipError('Enter a valid tip amount.');
+      return;
+    }
+    if (!checkoutRetry) return;
+    const minor = Math.round(rupees * 100);
+    const updated: PosCheckoutRetry = { ...checkoutRetry, tipMinor: minor };
+    setCheckoutRetry(updated);
+    if (!persistCheckoutRetry(updated)) {
+      setError(
+        'Checkout recovery storage is unavailable. The tip was not saved; enable browser storage before trying again.',
+      );
+      return;
+    }
+    setTipInput('');
+    setTipError(null);
+  }
+
   async function redeemPoints() {
     const points = Math.trunc(Number(pointsInput));
     if (!Number.isFinite(points) || points < 0) {
@@ -1747,6 +1777,7 @@ export default function LivePOSScreen() {
         >
           {(() => {
             const amount = checkoutRetry.paymentAmountMinor;
+            const tipMinor = checkoutRetry.tipMinor ?? 0;
             const collectibleBalance = hasCollectibleCheckoutBalance(checkoutRetry);
             const benefitCoveredZero = hasBenefitCoveredZeroBalance(checkoutRetry);
             const isGenuineRestore = checkoutRetry.key === restoredRetryKey;
@@ -1757,7 +1788,7 @@ export default function LivePOSScreen() {
               && collectibleBalance
               && receiptBusiness
               && amount !== undefined
-              ? buildUpiPayLink(receiptBusiness, amount, receiptBusiness.brandName)
+              ? buildUpiPayLink(receiptBusiness, amount + tipMinor, receiptBusiness.brandName)
               : null;
             const methodLabel = benefitCoveredZero
               ? 'Membership benefit · no payment'
@@ -1785,7 +1816,10 @@ export default function LivePOSScreen() {
                 <div className="text-center text-sm text-fg-muted">
                   Method: <b className="text-fg">{methodLabel}</b>
                   {amount !== undefined && (
-                    <div className="mt-1 text-2xl font-bold text-fg">{inr(amount)}</div>
+                    <div className="mt-1 text-2xl font-bold text-fg">{inr(amount + tipMinor)}</div>
+                  )}
+                  {!!tipMinor && amount !== undefined && (
+                    <div className="mt-0.5 text-xs">Bill {inr(amount)} + tip {inr(tipMinor)}</div>
                   )}
                 </div>
                 {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && (
@@ -1817,6 +1851,37 @@ export default function LivePOSScreen() {
                       </button>
                     </div>
                     {discountError && <p className="text-xs text-accent-bad">{discountError}</p>}
+                  </div>
+                )}
+                {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && collectibleBalance && (
+                  <div className="space-y-2 rounded-xl border border-border-base px-3 py-2">
+                    <div className="flex items-center justify-between text-xs text-fg-muted">
+                      <span>Tip</span>
+                      {!!checkoutRetry.tipMinor && (
+                        <span>Added: {inr(checkoutRetry.tipMinor)}</span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        inputMode="decimal"
+                        placeholder="₹ tip"
+                        value={tipInput}
+                        onChange={(e) => setTipInput(e.target.value)}
+                        disabled={paying}
+                        className="input flex-1"
+                      />
+                      <button
+                        className="btn btn-ghost disabled:opacity-40"
+                        disabled={paying || !tipInput}
+                        onClick={applyTip}
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {tipError && <p className="text-xs text-accent-bad">{tipError}</p>}
                   </div>
                 )}
                 {checkoutRetry.phase === 'awaiting_payment' && !collectibleBalance && !benefitCoveredZero && (
