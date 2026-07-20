@@ -8864,7 +8864,11 @@ private struct GRNReceivingSheet: View {
                 ingredient_id: line.ingredientId,
                 qty: qty,
                 unit_cost_minor: Int((costRupees * 100).rounded()),
-                expires_at: line.hasExpiry ? DateFormatters.iso.string(from: line.expiresAt) : nil,
+                // Date-only value (the picker only lets staff choose a
+                // calendar day) — apiDateOnly avoids DateFormatters.iso's
+                // UTC conversion silently shifting the day back whenever
+                // this is filled in before ~05:30 IST.
+                expires_at: line.hasExpiry ? DateFormatters.apiDateOnly.string(from: line.expiresAt) : nil,
                 lot_code: line.lotCode.nilIfBlank
             )
         }
@@ -13477,7 +13481,11 @@ private struct CustomerFormDraft {
     }
 
     private var birthdayValue: String? {
-        hasBirthday ? DateFormatters.iso.string(from: birthday) : nil
+        // Date-only value (the picker only lets staff choose a calendar
+        // day) — apiDateOnly avoids DateFormatters.iso's UTC conversion
+        // silently shifting the day back whenever this is filled in
+        // before ~05:30 IST.
+        hasBirthday ? DateFormatters.apiDateOnly.string(from: birthday) : nil
     }
 
     func upsertRequest() -> CustomerUpsertRequest {
