@@ -331,7 +331,7 @@ async def test_reports_aggregator_subtracts_depreciation_from_net_profit() -> No
     session = _QueuedSession(
         [
             _Result(scalar="Asia/Kolkata"),  # company_timezone
-            _Result(one=SimpleNamespace(n=0, gross=0, cgst=0, sgst=0, igst=0, cess=0)),
+            _Result(one=SimpleNamespace(n=0, gross=0, tips=0, cgst=0, sgst=0, igst=0, cess=0)),
             _Result(scalar=0),  # delivery
             _Result(scalar=0),  # discounts / points
             _Result(rows=[]),  # revenue by menu item type

@@ -4,7 +4,9 @@ Exercises the full lifecycle by calling the router functions directly against
 a fake session (same pattern as test_inventory_deduction.py /
 test_manual_collections.py): clock in -> appears in the on-shift list ->
 clock out -> disappears from the on-shift list -> clocking out again without
-a new clock-in is rejected with a clean 400 (never a 500).
+a new clock-in is rejected cleanly (never a 500), and clocking in twice
+without clocking out in between is rejected too (guards against an orphaned
+always-open Attendance row).
 """
 
 from __future__ import annotations
@@ -12,9 +14,9 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
-from fastapi import HTTPException
 
 from app.api.v1.staff.router import ClockInRequest, clock_in, clock_out, list_on_shift
+from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
 from app.models import Attendance, Branch
 
@@ -84,7 +86,8 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     session = _Session(branch=branch)
     tenant = _tenant()
 
-    # --- clock in ---
+    # --- clock in --- (no open row yet, so the duplicate-clock-in guard passes)
+    session.queue(_Result(scalar=None))
     clock_in_result = await clock_in(
         ClockInRequest(branch_id=BRANCH_ID, notes="opening shift"),
         session,
@@ -96,6 +99,17 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     assert attendance.company_id == COMPANY_ID
     assert attendance.user_id == USER_ID
     assert attendance.clock_out_at is None
+
+    # --- clocking in again before clocking out is rejected, not silently
+    # creating a second open row ---
+    session.queue(_Result(scalar=attendance))
+    with pytest.raises(BusinessRuleError):
+        await clock_in(
+            ClockInRequest(branch_id=BRANCH_ID),
+            session,
+            tenant,
+        )
+    assert len(session.added) == 1  # nothing new added
 
     # --- appears in the on-shift list ---
     session.queue(_Result(rows=[(attendance, "Owner", "owner@test.local", "Main")]))
@@ -117,10 +131,9 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     on_shift_after = await list_on_shift(session, tenant)
     assert on_shift_after == []
 
-    # --- clocking out again without a new clock-in -> clean 400, not a 500 ---
+    # --- clocking out again without a new clock-in -> clean rejection, not a 500 ---
     session.queue(_Result(scalar=None))
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BusinessRuleError):
         await clock_out(session, tenant)
-    assert exc_info.value.status_code == 400
     # No further mutation attempted once there is nothing open to close.
     assert session.flushes == 1

@@ -269,6 +269,7 @@ async def _period_stats(
         await session.execute(
             select(
                 func.coalesce(func.sum(Order.total_minor), 0).label("rev"),
+                func.coalesce(func.sum(Order.tip_minor), 0).label("tips"),
                 func.count(Order.id).label("n"),
             ).where(
                 Order.company_id == company_id,
@@ -277,7 +278,11 @@ async def _period_stats(
             )
         )
     ).one()
-    order_revenue = int(row.rev)
+    # total_minor includes any tip folded on at payment time — a tip is
+    # money collected on the staff's behalf, not menu/service revenue, so
+    # it's excluded from the growth/AOV figures the same way it's already
+    # excluded from the refund-proportion math.
+    order_revenue = int(row.rev) - int(row.tips)
     n = int(row.n)
     # order_revenue sums total_minor for paid AND refunded orders (refunded
     # orders still represent a real service event, so they stay in the order
@@ -408,6 +413,7 @@ async def heatmap(
                 func.extract("dow", local_sale_at).label("dow"),
                 func.extract("hour", local_sale_at).label("hour"),
                 func.coalesce(func.sum(Order.total_minor), 0).label("rev"),
+                func.coalesce(func.sum(Order.tip_minor), 0).label("tips"),
                 func.count(Order.id).label("n"),
             )
             .where(
@@ -425,7 +431,10 @@ async def heatmap(
         HeatmapCellDTO(
             day_of_week=to_monday_first(int(r.dow)),
             hour=int(r.hour),
-            revenue_minor=int(r.rev or 0),
+            # total_minor includes any tip folded on at payment time — a
+            # tip is collected on the staff's behalf, not menu/service
+            # revenue, so it's excluded here too.
+            revenue_minor=int(r.rev or 0) - int(r.tips or 0),
             orders_count=int(r.n or 0),
         )
         for r in rows

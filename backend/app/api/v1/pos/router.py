@@ -389,6 +389,30 @@ async def _refunded_total(session, order_id: UUID) -> int:
     )
 
 
+def _incremental_restock_fraction(
+    *, refunded_before: int, refund_amount: int, taxable_total_minor: int
+) -> float:
+    """Share of the order's inventory to restock for *this* refund only.
+
+    An order can be refunded across several separate partial refunds, and
+    restock_for_refund always restocks against the order's *original* sale
+    movements — so passing a fraction computed only against this single
+    refund's amount would double-restock anything an earlier partial
+    refund on the same order already restocked. Mirrors the cumulative
+    current-minus-prior pattern ledger.py's _proportional already uses for
+    the analogous GST-refund tax proportion: compute the fraction of the
+    order restocked as of before this refund and as of after it, and
+    return only the incremental delta between the two.
+    """
+    if taxable_total_minor <= 0:
+        return 0.0
+    previous_fraction = min(1.0, refunded_before / taxable_total_minor)
+    cumulative_fraction = min(
+        1.0, (refunded_before + refund_amount) / taxable_total_minor
+    )
+    return max(0.0, cumulative_fraction - previous_fraction)
+
+
 def _validate_confirmed_payment_balance(
     payload: PaymentCreate,
     *,
@@ -2294,9 +2318,14 @@ async def issue_refund(
     # fraction. order.total_minor includes any tip folded on at payment
     # time (see record_payment), so the denominator here excludes it —
     # otherwise a tipped order's refund would under-restock inventory.
+    # refunded_total (computed above) is every refund already issued
+    # before this one, letting the fraction be computed cumulatively-safe
+    # across multiple partial refunds — see _incremental_restock_fraction.
     taxable_total_minor = int(order.total_minor or 0) - int(order.tip_minor or 0)
-    refund_fraction = (
-        payload.amount_minor / taxable_total_minor if taxable_total_minor > 0 else 0.0
+    refund_fraction = _incremental_restock_fraction(
+        refunded_before=refunded_total,
+        refund_amount=payload.amount_minor,
+        taxable_total_minor=taxable_total_minor,
     )
     await restock_for_refund(
         session,

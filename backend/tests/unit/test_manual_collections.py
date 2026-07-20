@@ -225,6 +225,7 @@ async def test_report_includes_manual_revenue_and_payments_but_not_aov() -> None
                 one=SimpleNamespace(
                     n=1,
                     gross=5_000,
+                    tips=0,
                     cgst=0,
                     sgst=0,
                     igst=0,

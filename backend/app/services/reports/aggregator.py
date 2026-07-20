@@ -318,6 +318,7 @@ class ReportsAggregator:
         orders_q = select(
             func.count(Order.id).label("n"),
             func.coalesce(func.sum(Order.total_minor), 0).label("gross"),
+            func.coalesce(func.sum(Order.tip_minor), 0).label("tips"),
             func.coalesce(func.sum(Order.cgst_minor), 0).label("cgst"),
             func.coalesce(func.sum(Order.sgst_minor), 0).label("sgst"),
             func.coalesce(func.sum(Order.igst_minor), 0).label("igst"),
@@ -330,7 +331,11 @@ class ReportsAggregator:
         )
         orders_row = (await self.session.execute(orders_q)).one()
         orders_count = int(orders_row.n)
-        gross_total = int(orders_row.gross)
+        # total_minor includes any tip folded on at payment time (see
+        # record_payment) — a tip isn't part of the "ticket" the average
+        # is meant to describe, so it's excluded here the same way it's
+        # already excluded from the refund-proportion math.
+        gross_total = int(orders_row.gross) - int(orders_row.tips)
         avg_ticket = gross_total // orders_count if orders_count else 0
         order_cgst = int(orders_row.cgst)
         order_sgst = int(orders_row.sgst)

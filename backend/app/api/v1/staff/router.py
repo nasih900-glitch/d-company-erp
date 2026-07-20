@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -285,6 +285,23 @@ async def clock_in(
     branch = await session.get(Branch, payload.branch_id)
     if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
         raise NotFoundError("branch not found")
+    already_open = (
+        await session.execute(
+            select(Attendance).where(
+                Attendance.company_id == tenant.company_id,
+                Attendance.user_id == tenant.user_id,
+                Attendance.clock_out_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if already_open:
+        # Without this guard, a double-tap or clocking in from a second
+        # device before the UI re-syncs creates a second open row that
+        # clock-out's "close the latest one" logic then leaves orphaned
+        # open forever, silently corrupting hours-worked data.
+        raise BusinessRuleError(
+            "already clocked in — clock out before clocking in again"
+        )
     a = Attendance(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -303,9 +320,9 @@ async def clock_out(
     tenant: TenantContext = Depends(requires("staff.attendance.write")),
 ) -> dict:
     # Most recent still-open attendance row for this user in this company.
-    # `.limit(1)` keeps this safe even if a client somehow clocked in twice
-    # without clocking out in between (clock-in does not itself guard against
-    # that) — we close the latest open session rather than erroring.
+    # clock_in() guards against a second open row, but `.limit(1)` keeps
+    # this safe regardless (e.g. against a row left over from before that
+    # guard existed).
     a = (
         await session.execute(
             select(Attendance)
@@ -319,9 +336,12 @@ async def clock_out(
         )
     ).scalar_one_or_none()
     if not a:
-        raise HTTPException(
-            status_code=400,
-            detail="No open clock-in found. Clock in before clocking out.",
+        # BusinessRuleError (not a raw HTTPException) so this reaches the
+        # client through the app's standard {"error": {...}} envelope —
+        # web's axios interceptor only reads that shape, not HTTPException's
+        # bare {"detail": ...}.
+        raise BusinessRuleError(
+            "No open clock-in found. Clock in before clocking out."
         )
     a.clock_out_at = datetime.now(timezone.utc)
     await session.flush()

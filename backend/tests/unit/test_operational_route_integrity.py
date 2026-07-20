@@ -958,3 +958,91 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
     assert tenant.company_id in order_params
     assert tenant.branch_id in order_params
     assert tenant.terminal_id in order_params
+
+
+# ---------------------------------------------------------------------------
+# _incremental_restock_fraction — cumulative-safe refund-restock proportion
+#
+# Found by re-audit: computing each refund's restock fraction against the
+# order's full taxable total (rather than cumulatively) double-restocks
+# inventory across multiple partial refunds on the same order. Repro from
+# the audit: taxable=900, tip=100 (total_minor=1000, fully paid). Two
+# sequential Rs500 partial refunds each naively computed fraction=500/900,
+# restocking 55.6% twice — 111% of what was ever deducted.
+# ---------------------------------------------------------------------------
+
+
+def test_incremental_restock_fraction_single_full_refund() -> None:
+    fraction = pos_router._incremental_restock_fraction(
+        refunded_before=0, refund_amount=900, taxable_total_minor=900
+    )
+    assert fraction == pytest.approx(1.0)
+
+
+def test_incremental_restock_fraction_single_partial_refund() -> None:
+    fraction = pos_router._incremental_restock_fraction(
+        refunded_before=0, refund_amount=450, taxable_total_minor=900
+    )
+    assert fraction == pytest.approx(0.5)
+
+
+def test_incremental_restock_fraction_two_partial_refunds_sum_to_full_not_double() -> None:
+    # Exact repro from the audit: taxable=900, tip=100. First Rs500 refund,
+    # then the remaining Rs500 — together they must restock exactly 100%
+    # of the order, not ~111%.
+    taxable_total = 900
+
+    first = pos_router._incremental_restock_fraction(
+        refunded_before=0, refund_amount=500, taxable_total_minor=taxable_total
+    )
+    assert first == pytest.approx(500 / 900)
+
+    second = pos_router._incremental_restock_fraction(
+        refunded_before=500, refund_amount=500, taxable_total_minor=taxable_total
+    )
+    # Only the remaining 400/900 should restock this time, not another 500/900.
+    assert second == pytest.approx(400 / 900)
+
+    assert first + second == pytest.approx(1.0)
+
+
+def test_incremental_restock_fraction_three_way_split_sums_to_one() -> None:
+    taxable_total = 900
+    fractions = []
+    refunded_so_far = 0
+    for amount in (300, 300, 300):
+        fractions.append(
+            pos_router._incremental_restock_fraction(
+                refunded_before=refunded_so_far,
+                refund_amount=amount,
+                taxable_total_minor=taxable_total,
+            )
+        )
+        refunded_so_far += amount
+    assert sum(fractions) == pytest.approx(1.0)
+
+
+def test_incremental_restock_fraction_clamps_when_refund_exceeds_taxable_total() -> None:
+    # A refund can legitimately exceed the taxable total if it also covers
+    # the tip (Refund.amount_minor isn't split from tip) — must clamp at
+    # 100% restocked, never go over or negative on a later call.
+    fraction = pos_router._incremental_restock_fraction(
+        refunded_before=0, refund_amount=1000, taxable_total_minor=900
+    )
+    assert fraction == pytest.approx(1.0)
+
+    # A further refund attempt after the order is already fully restocked
+    # must restock nothing more (not go negative).
+    fraction = pos_router._incremental_restock_fraction(
+        refunded_before=1000, refund_amount=100, taxable_total_minor=900
+    )
+    assert fraction == 0.0
+
+
+def test_incremental_restock_fraction_zero_taxable_total_is_a_noop() -> None:
+    assert (
+        pos_router._incremental_restock_fraction(
+            refunded_before=0, refund_amount=500, taxable_total_minor=0
+        )
+        == 0.0
+    )
