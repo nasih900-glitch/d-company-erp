@@ -285,6 +285,18 @@ async def clock_in(
     branch = await session.get(Branch, payload.branch_id)
     if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
         raise NotFoundError("branch not found")
+    # Serialize clock-ins per user: lock the user row first so a second
+    # near-simultaneous request (double-tap, or a second device before the
+    # UI re-syncs) blocks here until the first transaction commits its
+    # insert, then re-runs the already-open check below and sees the row.
+    # Same lock-the-parent-row pattern as POS's open_shift() locking
+    # Terminal before checking for an existing open Shift — putting
+    # `.with_for_update()` on the Attendance check itself wouldn't close the
+    # race, since with no open row yet there is nothing for FOR UPDATE to
+    # lock and both concurrent requests would still see zero rows.
+    await session.execute(
+        select(User).where(User.id == tenant.user_id).with_for_update()
+    )
     already_open = (
         await session.execute(
             select(Attendance).where(

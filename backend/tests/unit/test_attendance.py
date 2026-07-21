@@ -51,6 +51,7 @@ class _Session:
         self.results: list[_Result] = []
         self.added: list = []
         self.flushes = 0
+        self.statements: list = []
 
     def queue(self, result: _Result) -> None:
         self.results.append(result)
@@ -60,6 +61,7 @@ class _Session:
         return self.branch
 
     async def execute(self, statement):
+        self.statements.append(statement)
         assert self.results, f"unexpected statement: {statement}"
         return self.results.pop(0)
 
@@ -87,6 +89,9 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     tenant = _tenant()
 
     # --- clock in --- (no open row yet, so the duplicate-clock-in guard passes)
+    # First queued result is for the user-row FOR UPDATE lock, second is the
+    # already-open check.
+    session.queue(_Result())
     session.queue(_Result(scalar=None))
     clock_in_result = await clock_in(
         ClockInRequest(branch_id=BRANCH_ID, notes="opening shift"),
@@ -102,6 +107,7 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
 
     # --- clocking in again before clocking out is rejected, not silently
     # creating a second open row ---
+    session.queue(_Result())
     session.queue(_Result(scalar=attendance))
     with pytest.raises(BusinessRuleError):
         await clock_in(
@@ -137,3 +143,38 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
         await clock_out(session, tenant)
     # No further mutation attempted once there is nothing open to close.
     assert session.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_clock_in_locks_the_user_row_before_the_already_open_check() -> None:
+    """Guards against a concurrent-request race: two near-simultaneous
+    clock-ins for the same user must serialize on a real row lock rather
+    than both racing past the already-open check (which, with no open row
+    yet, has nothing for FOR UPDATE to lock by itself — see the comment in
+    clock_in()). This asserts the actual query shape: the first statement
+    clock_in() issues is a `SELECT ... FOR UPDATE` on the user row, ahead of
+    the already-open Attendance check.
+    """
+    branch = Branch(id=BRANCH_ID, company_id=COMPANY_ID, name="Main")
+    session = _Session(branch=branch)
+    tenant = _tenant()
+
+    session.queue(_Result())  # user-row lock
+    session.queue(_Result(scalar=None))  # already-open check
+    await clock_in(
+        ClockInRequest(branch_id=BRANCH_ID),
+        session,
+        tenant,
+    )
+
+    assert len(session.statements) == 2
+    user_lock_stmt = session.statements[0]
+    already_open_stmt = session.statements[1]
+
+    sql = str(user_lock_stmt)
+    assert "FOR UPDATE" in sql.upper()
+    assert "users" in sql.lower()
+    assert USER_ID in list(user_lock_stmt.compile().params.values())
+
+    # The already-open check runs after the lock is acquired, not before.
+    assert "FOR UPDATE" not in str(already_open_stmt).upper()
