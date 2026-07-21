@@ -506,6 +506,7 @@ function GRNForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!branchId) { setErr('select a branch'); return; }
+    if (!supplierId) { setErr('select a supplier'); return; }
     const linesOut = lines
       .filter((ln) => ln.ingredient_id && ln.qty)
       .map((ln) => ({
@@ -520,7 +521,7 @@ function GRNForm({
     try {
       await inventory.postGRN({
         branch_id: branchId,
-        supplier_id: supplierId || undefined,
+        supplier_id: supplierId,
         supplier_invoice_no: invoiceNo || undefined,
         notes: notes || undefined,
         lines: linesOut,
@@ -541,10 +542,10 @@ function GRNForm({
               {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </Field>
-          <Field label="Supplier (optional)">
-            <select className="input" value={supplierId}
+          <Field label="Supplier">
+            <select className="input" required value={supplierId}
               onChange={(e) => setSupplierId(e.target.value)}>
-              <option value="">— none —</option>
+              <option value="">— select —</option>
               {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </Field>

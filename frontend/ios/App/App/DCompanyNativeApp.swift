@@ -8694,7 +8694,7 @@ private struct GRNReceivingSheet: View {
     }
 
     private var canSubmit: Bool {
-        !branchId.isEmpty && !isSubmitting
+        !branchId.isEmpty && !supplierId.isEmpty && !isSubmitting
             && lines.contains { !$0.ingredientId.isEmpty && (Double($0.qtyText) ?? 0) > 0 }
     }
 
@@ -8716,9 +8716,9 @@ private struct GRNReceivingSheet: View {
                                     .pickerStyle(.menu)
                                     .tint(Brand.gold)
                                 }
-                                fieldLabel("Supplier (optional)") {
+                                fieldLabel("Supplier") {
                                     Picker("", selection: $supplierId) {
-                                        Text("None").tag("")
+                                        Text("Select supplier").tag("")
                                         ForEach(suppliers) { supplier in Text(supplier.name).tag(supplier.id) }
                                     }
                                     .pickerStyle(.menu)
@@ -8851,8 +8851,8 @@ private struct GRNReceivingSheet: View {
             }
         } catch is CancellationError {
         } catch {
-            // Non-fatal — the supplier picker just stays empty; a GRN can
-            // still be posted without a supplier, exactly like the web form.
+            // Non-fatal — the supplier picker just stays empty; the submit
+            // button stays disabled until a supplier loads and is selected.
         }
     }
 
@@ -8872,8 +8872,8 @@ private struct GRNReceivingSheet: View {
                 lot_code: line.lotCode.nilIfBlank
             )
         }
-        guard !branchId.isEmpty, !linesOut.isEmpty else {
-            error = "Select a branch and add at least one line."
+        guard !branchId.isEmpty, !supplierId.isEmpty, !linesOut.isEmpty else {
+            error = "Select a branch, a supplier, and add at least one line."
             return
         }
         isSubmitting = true
