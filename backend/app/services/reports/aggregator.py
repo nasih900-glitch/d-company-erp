@@ -211,6 +211,12 @@ class PnLReport:
     payments_received: PaymentBreakdown
     refunds_issued_minor: int = 0
     settled_refunds_issued_minor: int = 0
+    # Portion of refunds_issued_minor that was a refund of tip (never part of
+    # revenue to begin with — see net_revenue_minor below). Tracked
+    # separately so refunds_issued_minor keeps reporting the full cash amount
+    # refunded (what the "Less: refunds" UI row and net_payments_received_minor
+    # both need).
+    refunded_tips_minor: int = 0
     cogs_minor: int = 0
     expenses: list[ExpenseLine] = field(default_factory=list)
     expense_total_minor: int = 0
@@ -229,10 +235,17 @@ class PnLReport:
 
     @property
     def net_revenue_minor(self) -> int:
-        """Revenue minus GST collected (which belongs to government)."""
+        """Revenue minus GST collected (which belongs to government).
+
+        gross_revenue_minor never includes tip (see RevenueBreakdown — it's
+        built purely from OrderLine sums), so subtracting the full
+        refunds_issued_minor here — which does include any tip portion of a
+        refund — would double-penalize revenue by that tip amount. Only the
+        non-tip portion of refunds should reduce revenue.
+        """
         return (
             self.gross_revenue_minor
-            - self.refunds_issued_minor
+            - (self.refunds_issued_minor - self.refunded_tips_minor)
             - self.tax_collected.total_minor
         )
 
@@ -594,6 +607,7 @@ class ReportsAggregator:
         refunds_issued = 0
         settled_refunds_issued = 0
         refund_cgst = refund_sgst = refund_igst = refund_cess = 0
+        refund_tips = 0
         running = dict(prior_by_order)
         for refund, order in refund_rows:
             amount = int(refund.amount_minor or 0)
@@ -617,6 +631,15 @@ class ReportsAggregator:
                     refund_igst += delta
                 else:
                     refund_cess += delta
+            # Mirrors ledger.py's refund-side TIPS_PAYABLE handling: tip sits
+            # on top of `total` (subtotal + tax), so nothing is attributed to
+            # it until cumulative refunds-to-date exceed `total`; only the
+            # excess beyond that (capped at order.tip_minor, since
+            # total + tip_minor == order.total_minor) is tip.
+            order_total = int(order.total_minor or 0)
+            tip_before = max(0, min(before, order_total) - total)
+            tip_after = max(0, min(after, order_total) - total)
+            refund_tips += tip_after - tip_before
             running[order.id] = after
             refunds_issued += amount
             if refund.settlement_method != "store_credit":
@@ -693,6 +716,7 @@ class ReportsAggregator:
             payments_received=payments,
             refunds_issued_minor=refunds_issued,
             settled_refunds_issued_minor=settled_refunds_issued,
+            refunded_tips_minor=refund_tips,
             cogs_minor=cogs_minor,
             expenses=expense_lines,
             expense_total_minor=expense_total,

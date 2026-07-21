@@ -578,7 +578,22 @@ async def build_operational_ledger(
             if amount:
                 allocated_tax.append((account, amount))
         tax_total = sum(amount for _, amount in allocated_tax)
-        return_amount = max(0, refund.amount_minor - tax_total)
+
+        # A single Payment bundles bill + tip (see TIPS_PAYABLE credit of the
+        # full order.tip_minor at sale time, ~line 426 above), so a large
+        # enough refund necessarily claws back some of that tip too. The tip
+        # sits on top of taxable_total (subtotal + tax), so — mirroring the
+        # tax proportion above, which treats taxable_total as the denominator
+        # a refund is applied against first — nothing is attributed to the
+        # tip until cumulative refunds-to-date exceed taxable_total; only the
+        # excess beyond that (capped at order.tip_minor, since taxable_total +
+        # tip_minor == total_minor) is tip.
+        total_minor = int(order.total_minor or 0)
+        current_tip = max(0, min(cumulative, total_minor) - taxable_total)
+        prior_tip = max(0, min(previous, total_minor) - taxable_total)
+        tip_amount = current_tip - prior_tip
+
+        return_amount = max(0, refund.amount_minor - tax_total - tip_amount)
         memo = f"Refund for {order.invoice_no or order.id.hex[:8]}"
         if return_amount:
             lines.append(
@@ -588,6 +603,17 @@ async def build_operational_ledger(
                     ref_id=refund.id,
                     account=SALES_RETURNS.ledger_tuple,
                     debit=return_amount,
+                    memo=memo,
+                )
+            )
+        if tip_amount:
+            lines.append(
+                _line(
+                    occurred_at=refund.created_at,
+                    ref_type="refund",
+                    ref_id=refund.id,
+                    account=TIPS_PAYABLE.ledger_tuple,
+                    debit=tip_amount,
                     memo=memo,
                 )
             )
