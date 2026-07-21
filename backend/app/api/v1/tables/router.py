@@ -257,21 +257,37 @@ async def _table_has_active_or_future_reservation(
     branch_id: UUID,
     table_id: UUID,
     now: datetime | None = None,
+    starts_at: datetime | None = None,
+    ends_at: datetime | None = None,
 ) -> bool:
+    """Does this table have a conflicting held/seated reservation?
+
+    With no window (the `delete_table` guard's original use), "conflicting"
+    means "still active or upcoming" — any reservation whose `ends_at` is
+    after `now`. With a `[starts_at, ends_at)` window given (the
+    `create_reservation` double-booking guard), "conflicting" instead means
+    the window actually overlaps an existing held/seated reservation on the
+    same table, via the standard half-open interval overlap test.
+    """
+    conditions = [
+        Reservation.table_id == table_id,
+        Reservation.status.in_(("held", "seated")),
+        Floor.branch_id == branch_id,
+        Branch.company_id == company_id,
+        Branch.deleted_at.is_(None),
+    ]
+    if starts_at is not None and ends_at is not None:
+        conditions.append(Reservation.starts_at < ends_at)
+        conditions.append(Reservation.ends_at > starts_at)
+    else:
+        conditions.append(Reservation.ends_at > (now or datetime.now(UTC)))
     reservation_id = (
         await session.execute(
             select(Reservation.id)
             .join(Table, Table.id == Reservation.table_id)
             .join(Floor, Floor.id == Table.floor_id)
             .join(Branch, Branch.id == Floor.branch_id)
-            .where(
-                Reservation.table_id == table_id,
-                Reservation.status.in_(("held", "seated")),
-                Reservation.ends_at > (now or datetime.now(UTC)),
-                Floor.branch_id == branch_id,
-                Branch.company_id == company_id,
-                Branch.deleted_at.is_(None),
-            )
+            .where(*conditions)
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -598,6 +614,15 @@ async def create_reservation(
     )
     if not table:
         raise NotFoundError("table not found")
+    if await _table_has_active_or_future_reservation(
+        session,
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        table_id=payload.table_id,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+    ):
+        raise ConflictError("This table is already booked for that time slot.")
     r = Reservation(
         id=uuid4(),
         table_id=payload.table_id,

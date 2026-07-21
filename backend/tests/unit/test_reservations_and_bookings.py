@@ -20,7 +20,7 @@ from app.api.v1.gaming import router as gaming_router
 from app.api.v1.tables import router as tables_router
 from app.core.errors import ConflictError, NotFoundError
 from app.core.tenant import TenantContext
-from app.models import GamingBooking, Reservation, Station
+from app.models import GamingBooking, Reservation, Station, Table
 
 
 class _Result:
@@ -97,6 +97,21 @@ def _reservation(tenant: TenantContext, **overrides) -> Reservation:
     }
     values.update(overrides)
     return Reservation(**values)
+
+
+def _table(tenant: TenantContext, **overrides) -> Table:
+    values = {
+        "id": uuid4(),
+        "floor_id": uuid4(),
+        "code": "T1",
+        "seats": 4,
+        "x": 0,
+        "y": 0,
+        "shape": "rect",
+        "status": "available",
+    }
+    values.update(overrides)
+    return Table(**values)
 
 
 def _booking(tenant: TenantContext, **overrides) -> GamingBooking:
@@ -226,6 +241,60 @@ async def test_reservation_status_transition_404s_outside_the_caller_branch() ->
             session,
             tenant,
         )
+
+
+@pytest.mark.asyncio
+async def test_create_reservation_rejects_overlapping_time_range_on_same_table() -> None:
+    """create_reservation must reuse the double-booking guard (already used by
+    the table-deletion path) so two reservations for the same table at
+    overlapping times can't both be created."""
+    tenant = _tenant()
+    table = _table(tenant)
+    session = _Session(
+        _Result(scalar=table),   # _tenant_table lookup (for_update)
+        _Result(scalar=uuid4()), # overlap check finds a conflicting reservation
+    )
+
+    with pytest.raises(ConflictError, match="already booked"):
+        await tables_router.create_reservation(
+            tables_router.ReservationCreate(
+                table_id=table.id,
+                guest_name="Reshma",
+                party_size=2,
+                starts_at=datetime(2026, 7, 20, 19, 30, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 20, 20, 45, tzinfo=UTC),
+            ),
+            session,
+            tenant,
+        )
+
+    # Rejected before the new row was ever added/flushed.
+    assert session.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_create_reservation_succeeds_for_non_overlapping_time_range_on_same_table() -> None:
+    tenant = _tenant()
+    table = _table(tenant)
+    session = _Session(
+        _Result(scalar=table),  # _tenant_table lookup (for_update)
+        _Result(scalar=None),   # overlap check finds nothing conflicting
+    )
+
+    out = await tables_router.create_reservation(
+        tables_router.ReservationCreate(
+            table_id=table.id,
+            guest_name="Reshma",
+            party_size=2,
+            starts_at=datetime(2026, 7, 20, 21, 0, tzinfo=UTC),
+            ends_at=datetime(2026, 7, 20, 22, 0, tzinfo=UTC),
+        ),
+        session,
+        tenant,
+    )
+
+    assert out["status"] == "held"
+    assert session.flush_count == 1
 
 
 # ============================================================================
