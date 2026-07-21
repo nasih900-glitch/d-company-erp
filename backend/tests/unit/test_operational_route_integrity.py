@@ -295,6 +295,47 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     assert stored["status_code"] == 201
 
 
+@pytest.mark.asyncio
+async def test_gaming_points_ratio_excludes_tip_on_a_tipped_and_discounted_order() -> None:
+    """A tip folded into order.total_minor by record_payment (see the test
+    above) must not inflate the loyalty-points paid ratio.
+
+    Setup: a ₹1000 gaming line (200 raw points before ratio scaling), a ₹400
+    manual discount, and a ₹600 tip collected on top of the discounted ₹600
+    bill — the same 100%-of-bill tip a generous, fully-discount-covered
+    customer might leave. order.total_minor therefore already includes the
+    tip (600 bill + 600 tip = 1200), exactly as it sits post-record_payment.
+
+    Correct ratio uses the taxable (pre-tip) amounts on both sides:
+    600 / (600 + 400) = 0.6, so points = 200 * 0.6 = 120.
+
+    The pre-fix bug used order.total_minor (tip included) as the numerator
+    and folded it into the denominator too: 1200 / (1200 + 400) = 0.75,
+    over-awarding 150 points on money that was actually a tip, not bill
+    payment.
+    """
+    item_id = uuid4()
+    gaming_item = SimpleNamespace(id=item_id, type="gaming")
+    order_line = SimpleNamespace(menu_item_id=item_id, line_total_minor=100_000)
+    order = SimpleNamespace(
+        total_minor=120_000,  # 600 bill + 600 tip, in minor units (paise)
+        tip_minor=60_000,
+        manual_discount_minor=40_000,
+        points_redeemed_minor=0,
+    )
+    session = _Session(_Result(rows=[gaming_item]))
+
+    points_earned = await pos_router._compute_points_with_multiplier(
+        session,
+        order=order,
+        order_lines=[order_line],
+        membership_multiplier=1.0,
+    )
+
+    assert points_earned == 120
+    assert points_earned != 150  # the tip-inflated result the bug produced
+
+
 def test_customer_repricing_recovers_stored_gross_without_current_menu_price() -> None:
     inclusive = SimpleNamespace(
         line_total_minor=16_000,

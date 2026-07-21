@@ -248,6 +248,13 @@ async def _compute_points_with_multiplier(
     order.points_redeemed_minor (both order-level, layered on after line
     pricing). Scaling by the paid ratio stops a customer from re-earning
     points on money a discount or a points redemption already covered.
+
+    record_payment folds any tip into order.total_minor before this runs
+    (see app/api/v1/pos/router.py), so it must be excluded here from both
+    the numerator and pre_discount_total — otherwise a tipped order's ratio
+    gets pulled toward 1.0 by the tip and over-awards points on the
+    discounted/redeemed portion of the bill. The same taxable-total pattern
+    is used by issue_refund's restock-fraction math for the same reason.
     """
     if not order_lines:
         return 0  # no lines to attribute to gaming — nothing earned
@@ -267,13 +274,14 @@ async def _compute_points_with_multiplier(
         line_total = int(ol.line_total_minor or 0)
         raw_points += (line_total / 1000) * GAMING_POINTS_PER_10_RUPEES
 
+    taxable_total_minor = int(order.total_minor or 0) - int(order.tip_minor or 0)
     pre_discount_total = (
-        int(order.total_minor or 0)
+        taxable_total_minor
         + int(order.manual_discount_minor or 0)
         + int(order.points_redeemed_minor or 0)
     )
     paid_ratio = (
-        min(1.0, order.total_minor / pre_discount_total) if pre_discount_total > 0 else 0.0
+        min(1.0, taxable_total_minor / pre_discount_total) if pre_discount_total > 0 else 0.0
     )
     return int(raw_points * paid_ratio * membership_multiplier)
 
