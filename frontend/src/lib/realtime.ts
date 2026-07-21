@@ -6,10 +6,10 @@
  *
  * One shared connection for the whole app (not one per screen). Screens
  * subscribe to a resource ("shifts", "tables", "orders", "gaming",
- * "kitchen") and get called back when it changes — they already have a
- * REST fetch for that resource (the one that used to run on a timer), so
- * the callback just re-runs it. No new state-merging logic, no risk of a
- * push payload drifting out of sync with a plain GET.
+ * "kitchen", "attendance") and get called back when it changes — they
+ * already have a REST fetch for that resource (the one that used to run
+ * on a timer), so the callback just re-runs it. No new state-merging
+ * logic, no risk of a push payload drifting out of sync with a plain GET.
  *
  * Auth is a first-message handshake, not a query-string token — the token
  * would otherwise sit in plaintext in server access logs.

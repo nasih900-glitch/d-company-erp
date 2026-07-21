@@ -3,10 +3,10 @@
 Tells every connected client for a company the instant an operationally
 shared resource changes (a shift opened/closed, a table's status changed,
 an order was billed/held/voided, a gaming session started/stopped, a
-kitchen ticket advanced) — so screens update themselves the moment it
-happens instead of polling on a timer. This is what makes two logins agree
-on shift/table state immediately rather than a login showing whatever it
-last happened to fetch.
+kitchen ticket advanced, a staff member clocked in/out) — so screens
+update themselves the moment it happens instead of polling on a timer.
+This is what makes two logins agree on shift/table state immediately
+rather than a login showing whatever it last happened to fetch.
 
 Single-process deployment (see infra/docker/backend-entrypoint.sh — plain
 `uvicorn app.main:app`, no --workers) so an in-memory connection registry
@@ -32,7 +32,7 @@ from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
-RESOURCES = frozenset({"shifts", "tables", "orders", "gaming", "kitchen"})
+RESOURCES = frozenset({"shifts", "tables", "orders", "gaming", "kitchen", "attendance"})
 
 
 class ConnectionManager:
@@ -84,6 +84,7 @@ _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/gaming/sessions", "gaming"),
     ("/gaming/bookings", "gaming"),
     ("/kitchen", "kitchen"),
+    ("/staff/attendance", "attendance"),
 )
 
 

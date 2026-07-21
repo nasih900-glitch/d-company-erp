@@ -141,7 +141,7 @@ class TimingMiddleware(BaseHTTPMiddleware):
 
 class RealtimeBroadcastMiddleware(BaseHTTPMiddleware):
     """After any successful write to an operationally-shared resource
-    (shifts, tables, orders, gaming, kitchen), push a "changed" signal to
+    (shifts, tables, orders, gaming, kitchen, attendance), push a "changed" signal to
     every other connected client for that company over WebSocket — see
     app.services.realtime. This is what lets a shift opened on one login
     show up on every other login within roughly a second, instead of each

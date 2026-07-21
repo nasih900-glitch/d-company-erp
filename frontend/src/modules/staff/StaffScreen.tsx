@@ -20,6 +20,7 @@ import {
 import { LIVE_MODE } from '@/lib/demo';
 import { STAFF, type StaffMember } from '@/lib/demo-data';
 import { attendance, auth, staff, type OnShiftDTO, type UserDTO, type RoleDTO } from '@/lib/erp-api';
+import { subscribeRealtime } from '@/lib/realtime';
 import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
@@ -193,6 +194,11 @@ export default function StaffScreen() {
 }
 
 // ---------------------------------------------------------------- Attendance
+// Fallback only — the real-time push (see subscribeRealtime below) is what
+// actually keeps this in sync; this just covers the rare case of a missed
+// or dropped push (e.g. reconnecting after a network blip).
+const ATTENDANCE_POLL_MS = 120_000;
+
 function AttendanceWidget() {
   const { me } = useAuth();
   const [onShift, setOnShift] = useState<OnShiftDTO[]>([]);
@@ -212,6 +218,17 @@ function AttendanceWidget() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // On-shift roster is shared across every device. Real-time push is what
+  // actually keeps this current — the moment anyone clocks in or out,
+  // every other screen hears about it within about a second, quietly (no
+  // loading spinner). The interval below is just a safety net for a
+  // missed push, not the primary mechanism.
+  useEffect(() => {
+    const unsubscribe = subscribeRealtime('attendance', load);
+    const id = setInterval(load, ATTENDANCE_POLL_MS);
+    return () => { unsubscribe(); clearInterval(id); };
+  }, []);
 
   const myEntry = onShift.find((s) => s.user_id === me?.user_id);
   const clockedIn = !!myEntry;

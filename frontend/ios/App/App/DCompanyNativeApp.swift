@@ -393,9 +393,10 @@ private struct APIClient {
 // every N seconds, the server tells it the instant something does.
 //
 // One shared connection for the whole app. Screens subscribe to a resource
-// ("shifts", "tables", "orders", "gaming", "kitchen") and get called back
-// when it changes — they already have a load() for that resource (the one
-// that used to run on a timer), so the callback just re-runs it.
+// ("shifts", "tables", "orders", "gaming", "kitchen", "attendance") and get
+// called back when it changes — they already have a load() for that
+// resource (the one that used to run on a timer), so the callback just
+// re-runs it.
 //
 // Auth is a first-message handshake, not a query-string token — the token
 // would otherwise sit in plaintext in server access logs.
@@ -13576,6 +13577,7 @@ private struct StaffNativeView: View {
     @State private var isLoadingAttendance = true
     @State private var attendanceError: String?
     @State private var isSubmittingAttendance = false
+    @State private var unsubscribeRealtime: (() -> Void)?
 
     private var myAttendance: OnShiftDTO? {
         onShift.first { $0.user_id == session.me?.user_id }
@@ -13662,6 +13664,14 @@ private struct StaffNativeView: View {
             await load()
             await loadAttendance()
         }
+        .task { await pollForServerUpdates() }
+        .onAppear {
+            unsubscribeRealtime = RealtimeClient.shared.subscribe("attendance") { Task { await loadAttendance() } }
+        }
+        .onDisappear {
+            unsubscribeRealtime?()
+            unsubscribeRealtime = nil
+        }
     }
 
     private var filteredUsers: [StaffUserDTO] {
@@ -13699,6 +13709,18 @@ private struct StaffNativeView: View {
         } catch is CancellationError {
         } catch {
             self.error = readable(error)
+        }
+    }
+
+    // On-shift roster is shared across every device. Real-time push (see
+    // .onAppear above) is the primary mechanism; this is only a safety net
+    // for a missed/dropped push — same pattern as every other shared-state
+    // screen in this app (Tables, Kitchen, Orders).
+    private func pollForServerUpdates() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            if Task.isCancelled { break }
+            await loadAttendance()
         }
     }
 
