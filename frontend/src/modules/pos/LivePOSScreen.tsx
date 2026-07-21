@@ -175,9 +175,23 @@ export default function LivePOSScreen() {
   // updates checkoutRetry.tipMinor locally.
   const [tipInput, setTipInput] = useState('');
   const [tipError, setTipError] = useState<string | null>(null);
+  // Cash handed over by the customer, entered on the confirm-payment screen
+  // purely so the cashier can see the exact change to hand back without
+  // mental math. Display-only — it is never sent to the server, and the
+  // payment submission's tendered_minor still always mirrors amount+tip
+  // exactly as before (see buildCheckoutPaymentSubmission in
+  // retry-drafts.ts, entirely unchanged by this).
+  const [cashTenderedInput, setCashTenderedInput] = useState('');
   const lastHeldAlarmAtRef = useRef(0);
   const heldOrderScopeRef = useRef(draftKey);
   heldOrderScopeRef.current = draftKey;
+
+  // A new checkout attempt (new recovery key) must start with a blank
+  // tendered field — never let a previous bill's typed amount linger and
+  // produce a misleading change figure for a different bill.
+  useEffect(() => {
+    setCashTenderedInput('');
+  }, [checkoutRetry?.key]);
 
   // Reward menu for whichever customer is attached — their balance doesn't
   // change mid-checkout (points are only reserved, not spent, until final
@@ -1884,6 +1898,71 @@ export default function LivePOSScreen() {
                     {tipError && <p className="text-xs text-accent-bad">{tipError}</p>}
                   </div>
                 )}
+                {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && collectibleBalance
+                  && checkoutRetry.paymentMethod === 'cash' && amount !== undefined && (() => {
+                  const dueMinor = amount + tipMinor;
+                  const trimmedTendered = cashTenderedInput.trim();
+                  const tenderedRupees = trimmedTendered ? Number(trimmedTendered) : NaN;
+                  const tenderedMinor = trimmedTendered && Number.isFinite(tenderedRupees) && tenderedRupees >= 0
+                    ? Math.round(tenderedRupees * 100)
+                    : null;
+                  const changeMinor = tenderedMinor !== null ? tenderedMinor - dueMinor : null;
+                  // Dedupe — at larger due amounts, "next ₹500 above" and
+                  // "next ₹1000 above" can land on the same round number.
+                  const quickTenders = [100, 500, 1000]
+                    .map((denomination) => nextRoundTenderMinor(dueMinor, denomination))
+                    .filter((value, index, all) => all.indexOf(value) === index);
+                  return (
+                    <div className="space-y-2 rounded-xl border border-border-base px-3 py-2">
+                      <div className="text-xs text-fg-muted">Cash tendered</div>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputMode="decimal"
+                        placeholder="₹ received from customer"
+                        value={cashTenderedInput}
+                        onChange={(e) => setCashTenderedInput(e.target.value)}
+                        disabled={paying}
+                        className="input font-mono text-lg"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-ghost !min-h-[40px] !py-1.5 !px-3 text-xs disabled:opacity-40"
+                          disabled={paying}
+                          onClick={() => setCashTenderedInput((dueMinor / 100).toFixed(2))}
+                        >
+                          Exact amount
+                        </button>
+                        {quickTenders.map((quickMinor) => (
+                          <button
+                            key={quickMinor}
+                            type="button"
+                            className="btn btn-ghost !min-h-[40px] !py-1.5 !px-3 text-xs disabled:opacity-40"
+                            disabled={paying}
+                            onClick={() => setCashTenderedInput((quickMinor / 100).toFixed(2))}
+                          >
+                            {inr(quickMinor, { decimals: 0 })}
+                          </button>
+                        ))}
+                      </div>
+                      {changeMinor !== null && (
+                        changeMinor >= 0 ? (
+                          <div className="rounded-lg border border-accent-good/40 bg-accent-good/15 px-3 py-2 text-center text-accent-good">
+                            <div className="text-xs uppercase tracking-wide">Change to return</div>
+                            <div className="text-3xl font-bold">{inr(changeMinor)}</div>
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-accent-bad/40 bg-accent-bad/15 px-3 py-2 text-center text-accent-bad">
+                            <div className="text-xs uppercase tracking-wide">More needed</div>
+                            <div className="text-3xl font-bold">{inr(Math.abs(changeMinor))}</div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  );
+                })()}
                 {checkoutRetry.phase === 'awaiting_payment' && !collectibleBalance && !benefitCoveredZero && (
                   <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 px-3 py-2 text-xs text-accent-bad">
                     This saved bill has no valid positive server balance. Do not collect money; ask a protected owner to reconcile it.
@@ -2147,6 +2226,15 @@ function discountRateForItem(item: MenuItemDTO, tier: MembershipTierDTO): number
   if (item.type === 'gaming' || item.type === 'streaming') return tier.gaming_discount_pct;
   if (item.type === 'hookah') return tier.hookah_discount_pct;
   return 0;
+}
+
+// Smallest amount, strictly greater than dueMinor, that is an exact multiple
+// of `denominationRupees` — used for the cash quick-tender round-up
+// shortcuts (e.g. "next ₹100 above the amount due"). Pure integer (paise)
+// arithmetic throughout, no floating-point division of money.
+function nextRoundTenderMinor(dueMinor: number, denominationRupees: number): number {
+  const stepMinor = denominationRupees * 100;
+  return (Math.floor(dueMinor / stepMinor) + 1) * stepMinor;
 }
 
 function PayButton({ icon, label, sub, onClick, disabled }: { icon: React.ReactNode; label: string; sub: string; onClick: () => void; disabled?: boolean }) {
