@@ -13,6 +13,7 @@ from sqlalchemy import String, cast, distinct, or_, select
 from app.core.db import SessionDep
 from app.core.errors import AuthError, BusinessRuleError, NotFoundError
 from app.core.permissions import (
+    AUDITOR_ACCESS,
     MODULE_PERMISSIONS,
     ROLE_DESCRIPTIONS,
     ROLE_PERMISSIONS,
@@ -402,6 +403,18 @@ async def update_access_control(
         raise NotFoundError(f"unknown role: {payload.role_code}")
     if payload.module not in MODULE_PERMISSIONS:
         raise NotFoundError(f"unknown module: {payload.module}")
+    if payload.role_code == "auditor" and payload.allowed:
+        write_shaped = sorted(MODULE_PERMISSIONS[payload.module] - AUDITOR_ACCESS)
+        if write_shaped:
+            # Defense in depth for this same rule also lives in
+            # _has_permission (permissions.py), which never lets 'auditor'
+            # resolve true for anything outside AUDITOR_ACCESS regardless of
+            # what this endpoint accepts. This check exists purely to give
+            # the owner a clear error instead of a silent no-op.
+            raise BusinessRuleError(
+                f"'{payload.module}' cannot be granted to the read-only 'auditor' "
+                f"role: it includes non-read permission(s) {write_shaped}",
+            )
 
     existing = (
         await session.execute(

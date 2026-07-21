@@ -1,3 +1,4 @@
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -60,6 +61,33 @@ def test_auditor_role_is_read_only() -> None:
     assert auditor_perms.isdisjoint(mutating)
     # Every permission granted is declared and every mutating one accounted for.
     assert auditor_perms | mutating == set(PERMISSIONS)
+
+
+async def test_auditor_role_module_override_cannot_grant_write_access() -> None:
+    """Enforcement-layer check for the Access Control escalation gap: even if
+    role_permission_overrides somehow contains a row granting the 'auditor'
+    role the full 'pos' module (which bundles pos.read together with
+    pos.write/void/refund/shift-open/close — see MODULE_PERMISSIONS), a
+    module override must never let _has_permission resolve true for any
+    write-shaped permission in that bundle for the 'auditor' role. Effective
+    auditor permissions are always (defaults + overrides) ∩ AUDITOR_ACCESS,
+    never a superset of it."""
+    auditor = _tenant(protected_access=False, roles=("auditor",))
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=True),
+    ):
+        for perm in (
+            "pos.write", "pos.void", "pos.refund",
+            "pos.discount.large", "pos.shift.open", "pos.shift.close",
+        ):
+            assert await _has_permission(None, auditor, perm) is False
+
+        # Read-shaped permission in the very same overridden module still
+        # resolves true — the override legitimately grants the module, it's
+        # only the write-shaped permissions bundled inside it that get
+        # clamped for 'auditor'.
+        assert await _has_permission(None, auditor, "pos.read") is True
 
 
 def test_pricing_control_requires_the_current_users_unlock_token() -> None:

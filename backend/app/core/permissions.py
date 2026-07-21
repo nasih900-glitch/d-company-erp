@@ -192,6 +192,18 @@ async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
             session, company_id=tenant.company_id, role=role, module=module,
         )
         allowed = default_allowed if override is None else override
+        # Hard ceiling, enforced at check-time regardless of what the
+        # override table contains: MODULE_PERMISSIONS bundles read AND write
+        # permissions together per module (e.g. 'pos' = pos.read + pos.write
+        # + pos.void + ...), so a module override can otherwise turn on an
+        # entire bundle for a role. For 'auditor' specifically that must
+        # never happen — its whole purpose is read-only access. Effective
+        # auditor permissions are always (role defaults + overrides) ∩
+        # AUDITOR_ACCESS, never a superset of it, no matter what row exists
+        # in role_permission_overrides (defense in depth alongside the
+        # write-time validation in update_access_control).
+        if role == "auditor" and perm not in AUDITOR_ACCESS:
+            allowed = False
         if allowed:
             return True
     return False
