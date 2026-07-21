@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -10,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.v1.accounting.router import _trial_balance_lines
-from app.api.v1.reports.router import _allocated_component
+from app.api.v1.reports.router import _allocated_component, _refund_adjustments_by_rate
 from app.core.config import Settings
 from app.core.errors import BusinessRuleError
 from app.core.middleware import RequestBodyLimitMiddleware
@@ -86,6 +87,80 @@ def test_refund_component_allocation_has_no_final_rounding_drift() -> None:
     assert _allocated_component(5, 33, 100) == 2
     assert _allocated_component(5, 66, 100) == 3
     assert _allocated_component(5, 100, 100) == 5
+
+
+class _RefundQueryResult:
+    def __init__(self, rows: list) -> None:
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+    def scalars(self):
+        return self
+
+
+class _RefundQuerySession:
+    def __init__(self, *results: _RefundQueryResult) -> None:
+        self.results = list(results)
+
+    async def execute(self, statement):
+        assert self.results, f"unexpected extra statement: {statement}"
+        return self.results.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_refund_adjustments_by_rate_excludes_tip_from_taxable_denominator() -> None:
+    """Same tip-exclusion bug already fixed in ledger.py's build_operational_ledger
+    (taxable_total = total_minor - tip_minor) and aggregator.py's refund
+    cgst/sgst/igst/cess loop (total = total_minor - tip_minor): a refund on a
+    tipped order must proportion the GST reversal against the taxable total,
+    never order.total_minor, which includes the tip folded on at payment time.
+    """
+    order_id = uuid4()
+    # Taxable bill: Rs800 taxable + Rs72 CGST + Rs72 SGST = Rs944. A Rs200 tip
+    # is folded into total_minor at payment time (total_minor = 944 + 200 =
+    # 1144), but a tip is never part of the tax base.
+    order = SimpleNamespace(id=order_id, total_minor=1_144, tip_minor=200)
+    # Refund is exactly half of the *taxable* total (472 of 944) — a clean
+    # round split only if tip_minor is correctly excluded from the
+    # denominator. Against the buggy tip-inclusive 1144, 472 is ~41.3% and
+    # would instead yield taxable=330, cgst=30, sgst=30.
+    refund = SimpleNamespace(
+        order_id=order_id,
+        amount_minor=472,
+        created_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+    )
+    line = SimpleNamespace(
+        order_id=order_id,
+        tax_rate=0.18,
+        taxable_value_minor=800,
+        cgst_minor=72,
+        sgst_minor=72,
+        igst_minor=0,
+        cess_minor=0,
+        line_total_minor=944,
+    )
+    session = _RefundQuerySession(
+        _RefundQueryResult(rows=[(refund, order)]),
+        _RefundQueryResult(rows=[line]),
+    )
+
+    adjustments = await _refund_adjustments_by_rate(
+        session,
+        company_id=uuid4(),
+        start_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        end_exclusive=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        eco=False,
+    )
+
+    assert adjustments[0.18] == {
+        "taxable": 400,
+        "cgst": 36,
+        "sgst": 36,
+        "igst": 0,
+        "cess": 0,
+    }
 
 
 def test_trial_balance_groups_to_equal_debits_and_credits() -> None:

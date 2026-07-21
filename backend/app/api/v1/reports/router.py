@@ -821,7 +821,11 @@ async def _refund_adjustments_by_rate(
         running[order.id] = after
         if refund.created_at < start_at:
             continue
-        total = int(order.total_minor or 0)
+        # order.total_minor includes any tip folded on at payment time;
+        # a tip is never part of the taxable bill, so proportioning
+        # against the tip-inclusive total would understate the tax
+        # reversal on any refund of a tipped order.
+        total = int(order.total_minor or 0) - int(order.tip_minor or 0)
         for rate, values in components.get(order.id, {}).items():
             slot = adjustments.setdefault(
                 rate,
