@@ -388,6 +388,20 @@ async def create_recipe(
 ) -> RecipeRead:
     await _get_menu_item_for_tenant(session, tenant, payload.menu_item_id)
 
+    # Serialize recipe creation per menu item: lock the menu item row first
+    # so a second near-simultaneous "create recipe" request for the same
+    # item blocks here until the first transaction commits its insert, then
+    # correctly sees the row via the existing-active check below and
+    # rejects with ConflictError. Locking the Recipe check itself would not
+    # close the race — with no active recipe row yet, FOR UPDATE has
+    # nothing to lock and both requests would still see zero rows. Same
+    # lock-the-parent-row pattern as clock_in() locking User before
+    # checking Attendance, and _require_writable_branch() locking Branch
+    # before checking for an existing open Shift.
+    await session.execute(
+        select(MenuItem).where(MenuItem.id == payload.menu_item_id).with_for_update()
+    )
+
     existing_active = (
         await session.execute(
             select(Recipe).where(
