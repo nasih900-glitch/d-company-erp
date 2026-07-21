@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Header, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
@@ -1120,7 +1121,17 @@ async def create_booking(
         created_by=tenant.user_id,
     )
     session.add(bk)
-    # The EXCLUDE constraint at the DB level will reject overlapping bookings.
+    try:
+        # The EXCLUDE constraint at the DB level rejects overlapping bookings.
+        # Flushing here (rather than letting it surface at the implicit
+        # request-boundary commit) lets us turn that into a clean 409 instead
+        # of an unhandled IntegrityError reaching the generic 500 handler.
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError(
+            "This station is already booked for that time slot."
+        ) from exc
     return {"id": str(bk.id), "status": bk.status}
 
 

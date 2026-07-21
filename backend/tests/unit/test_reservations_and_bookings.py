@@ -14,12 +14,13 @@ from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.gaming import router as gaming_router
 from app.api.v1.tables import router as tables_router
 from app.core.errors import ConflictError, NotFoundError
 from app.core.tenant import TenantContext
-from app.models import GamingBooking, Reservation
+from app.models import GamingBooking, Reservation, Station
 
 
 class _Result:
@@ -41,10 +42,12 @@ class _Result:
 
 
 class _Session:
-    def __init__(self, *results: _Result) -> None:
+    def __init__(self, *results: _Result, flush_error: Exception | None = None) -> None:
         self.results = list(results)
         self.statements = []
         self.flush_count = 0
+        self.rollback_count = 0
+        self.flush_error = flush_error
 
     async def execute(self, statement):
         self.statements.append(statement)
@@ -52,8 +55,16 @@ class _Session:
             raise AssertionError(f"unexpected database statement: {statement}")
         return self.results.pop(0)
 
+    def add(self, _obj) -> None:
+        pass
+
     async def flush(self) -> None:
         self.flush_count += 1
+        if self.flush_error is not None:
+            raise self.flush_error
+
+    async def rollback(self) -> None:
+        self.rollback_count += 1
 
 
 def _statement_values(statement) -> list[object]:
@@ -285,3 +296,45 @@ async def test_booking_status_transition_rejects_cancelling_an_already_completed
 
     assert bk.status == "consumed"
     assert session.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_create_booking_converts_exclude_constraint_violation_to_conflict() -> None:
+    """A real double-booking trips the DB's EXCLUDE constraint on overlapping
+    (station_id, [starts_at, ends_at)) ranges. That must surface as a clean
+    409 ConflictError, not an unhandled IntegrityError bubbling up to the
+    generic 500 handler."""
+    tenant = _tenant()
+    station = Station(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        code="PS5-1",
+        name="PS5 #1",
+        type="ps5",
+        rate_per_hour_minor=30_000,
+        is_active=True,
+    )
+    session = _Session(
+        _Result(scalar=station),  # _operational_station lookup
+        flush_error=IntegrityError(
+            "INSERT INTO gaming_bookings ...", {}, Exception("exclude constraint violation")
+        ),
+    )
+
+    with pytest.raises(ConflictError, match="already booked"):
+        await gaming_router.create_booking(
+            gaming_router.BookingCreate(
+                station_id=station.id,
+                starts_at=datetime(2026, 7, 20, 19, 0, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 20, 20, 0, tzinfo=UTC),
+                guest_name="Sana",
+            ),
+            session,
+            tenant,
+        )
+
+    # The overlap was only discoverable at flush time (DB-enforced), and the
+    # failed transaction must be rolled back rather than left dangling.
+    assert session.flush_count == 1
+    assert session.rollback_count == 1
