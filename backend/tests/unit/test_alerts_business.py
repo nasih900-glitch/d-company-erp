@@ -76,6 +76,22 @@ async def test_batch_expiring_within_window_is_reported() -> None:
 
 
 @pytest.mark.asyncio
+async def test_already_expired_batch_is_reported_as_critical() -> None:
+    company_id = uuid4()
+    ingredient = _ingredient(company_id=company_id)
+    already_expired = datetime.now(UTC) - timedelta(days=3)
+    batch = _batch(ingredient_id=ingredient.id, expires_at=already_expired, qty_on_hand=6.0)
+
+    session = _Session(_Result(rows=[(batch, ingredient)]))
+    alerts = await build_expiring_batches_alert(session, company_id=company_id)
+
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.severity == "critical"
+    assert "expired" in alert.detail
+
+
+@pytest.mark.asyncio
 async def test_no_qualifying_rows_yields_no_alerts() -> None:
     # The actual expires_at/qty_on_hand filtering happens in the SQL WHERE
     # clause (see tests/integration/test_expiring_batches_alert.py for a

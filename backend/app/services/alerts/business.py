@@ -211,14 +211,17 @@ async def build_expiring_batches_alert(
         days_left = (expires_at - now).days
         if days_left < 0:
             when_text = f"expired {expires_at.strftime('%d-%b-%Y')}"
+            severity: AlertSeverity = "critical"
         elif days_left == 0:
             when_text = "expires today"
+            severity = "warning"
         else:
             when_text = f"expires {expires_at.strftime('%d-%b-%Y')} ({days_left} day(s) left)"
+            severity = "warning"
         lot_text = f" (lot {batch.lot_code})" if batch.lot_code else ""
         alerts.append(
             BusinessAlert(
-                severity="warning",
+                severity=severity,
                 title=f"Expiring soon: {ing.name}",
                 detail=(
                     f"{ing.name}{lot_text} has {qty:g} {ing.base_unit} on hand and {when_text}."
