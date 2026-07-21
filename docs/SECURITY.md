@@ -24,7 +24,7 @@
 
 - Every mutation writes an `audit_log` row with actor, action, entity, before/after, IP, UA.
 - Append-only. No updates. No deletes (except by retention sweeper, never per-row).
-- Auditor role has read-only access via `/api/v1/admin/audit`.
+- The `auditor` role has read-only access to finance, ops, and staff records (`AUDITOR_ACCESS` in `backend/app/core/permissions.py`), but **not** to the audit log itself: `admin.audit.read` (the permission gating `/api/v1/admin/audit`) is hardcoded to `tenant.audit_access`, which only `super_owner` (the protected owner) holds, and is explicitly excluded from `AUDITOR_ACCESS` and from `ROLE_PERMISSION_OVERRIDES`. The auditor role has zero access to the audit-log endpoint.
 
 ## Secrets
 
