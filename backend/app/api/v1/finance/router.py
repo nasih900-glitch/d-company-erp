@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
@@ -20,6 +20,7 @@ from sqlalchemy.orm import aliased
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
+from app.core.logging import get_logger
 from app.core.money import apportion
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
@@ -47,11 +48,14 @@ from app.services.accounting.depreciation import (
     asset_accumulated_depreciation_minor,
     asset_book_value_minor,
 )
+from app.services.integrations.google_sheets import push_manual_collection_to_sheet
 from app.services.reports import ReportsAggregator
 from app.services.reports.business_metrics import (
     compute_business_metrics,
     compute_distributable_capacity,
 )
+
+log = get_logger(__name__)
 
 router = APIRouter()
 
@@ -537,6 +541,58 @@ async def list_manual_collections(
     ]
 
 
+def _schedule_manual_collection_push(
+    background_tasks: BackgroundTasks,
+    *,
+    webhook_url: str | None,
+    row_id: UUID,
+    company_id: UUID,
+    branch_name: str | None,
+    business_date: date,
+    method: str,
+    amount_minor: int,
+    source_kind: str,
+    source_ref: str,
+    note: str | None,
+) -> None:
+    """Mirror a manual (off-POS) collection to the company's Google Sheet.
+
+    Scheduled via BackgroundTasks — same reasoning as the POS OrderPaid
+    mirror in app/api/v1/pos/router.py: it runs only after the response has
+    been sent, i.e. after this request's SessionDep has already committed,
+    so a webhook failure or slow retry can never delay or fail the actual
+    collection write. No DB session is required here (unlike the OrderPaid
+    handler) — every field the sheet needs is already in hand from this
+    request, so this calls the sheets service directly rather than going
+    through the event bus.
+    """
+    if not webhook_url:
+        return  # not every company has this configured — silent no-op
+
+    async def _push() -> None:
+        try:
+            await push_manual_collection_to_sheet(
+                url=webhook_url,
+                row_id=row_id,
+                company_id=company_id,
+                branch_name=branch_name,
+                business_date=business_date,
+                method=method,
+                amount_minor=amount_minor,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                note=note,
+            )
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "finance.manual_collection_push.failed",
+                manual_collection_id=str(row_id),
+                exc_info=True,
+            )
+
+    background_tasks.add_task(_push)
+
+
 @router.post(
     "/manual-collections",
     response_model=ManualCollectionRead,
@@ -546,6 +602,7 @@ async def create_manual_collection(
     payload: ManualCollectionCreate,
     session: SessionDep,
     request: Request,
+    background_tasks: BackgroundTasks,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ManualCollectionRead:
     """Record tax-unsplit daily revenue that bypassed itemized POS billing.
@@ -633,6 +690,19 @@ async def create_manual_collection(
     )
     session.add(row)
     await session.flush()
+    _schedule_manual_collection_push(
+        background_tasks,
+        webhook_url=company.google_sheets_webhook_url,
+        row_id=row.id,
+        company_id=tenant.company_id,
+        branch_name=branch.name,
+        business_date=row.business_date,
+        method=row.method,
+        amount_minor=row.amount_minor,
+        source_kind=row.source_kind,
+        source_ref=row.source_ref,
+        note=row.note,
+    )
     creator = await session.get(User, tenant.user_id)
     response = _manual_collection_read(
         row,

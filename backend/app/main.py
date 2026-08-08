@@ -26,7 +26,10 @@ from app.core.middleware import (
     RequestContextMiddleware,
     TimingMiddleware,
 )
+from app.events.bus import get_event_bus
+from app.events.events import OrderPaid
 from app.services.audit.recorder import install_audit_listeners
+from app.services.integrations.google_sheets import on_order_paid
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -40,8 +43,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — startup and shutdown hooks."""
     configure_logging(settings)
     install_audit_listeners()
+    get_event_bus().subscribe(OrderPaid, on_order_paid)
     logger.info("erp.startup", env=settings.env, version=app.version)
-    # Future: open redis pool, warm caches, register event subscribers.
+    # Future: open redis pool, warm caches.
     yield
     logger.info("erp.shutdown")
 

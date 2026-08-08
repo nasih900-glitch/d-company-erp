@@ -21,10 +21,12 @@ Resilient by design:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from uuid import UUID
 
 import httpx
+from sqlalchemy import select
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -32,8 +34,10 @@ from tenacity import (
     wait_exponential,
 )
 
+from app.core.db import AsyncSessionLocal
 from app.core.logging import get_logger
-from app.events.events import DomainEvent, OrderPaid
+from app.events.events import OrderPaid
+from app.models import Company, MenuItem, Order, OrderLine, User
 
 log = get_logger(__name__)
 
@@ -118,23 +122,107 @@ async def push_order_to_sheet(
         )
 
 
+async def push_manual_collection_to_sheet(
+    *,
+    url: str,
+    row_id: UUID,
+    company_id: UUID,
+    branch_name: str | None,
+    business_date: date,
+    method: str,
+    amount_minor: int,
+    source_kind: str,
+    source_ref: str,
+    note: str | None,
+) -> None:
+    """Push a single manual (off-POS) collection. Failures are logged, never raised."""
+    payload = {
+        "id": str(row_id),
+        "company_id": str(company_id),
+        "branch": branch_name or "",
+        "date": business_date.isoformat(),
+        "method": method,
+        "amount_minor": amount_minor,
+        "source_kind": source_kind,
+        "source_ref": source_ref,
+        "note": note or "",
+    }
+    try:
+        await _post(url, "manual_collection", payload)
+        log.info("gsheets.push.ok", kind="manual_collection", row_id=str(row_id))
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "gsheets.push.failed",
+            kind="manual_collection",
+            row_id=str(row_id),
+            error=str(exc),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Event-bus wiring
 # ---------------------------------------------------------------------------
-async def on_order_paid(_event: DomainEvent) -> None:
-    """OrderPaid handler — looks up the company's webhook URL and forwards.
+async def on_order_paid(event: OrderPaid) -> None:
+    """OrderPaid handler — resolves the full order and forwards it to the
+    company's Google Sheets webhook, if one is configured.
 
-    Stubbed in V1: the OrderPaid event carries only ids, and resolving
-    company.google_sheets_webhook_url requires a DB session. The full wiring
-    lands when the POS payment endpoint emits OrderPaid (currently emits
-    nothing — see backend/app/api/v1/pos/router.py record_payment).
-
-    To enable later:
-      from app.events.bus import get_event_bus
-      bus = get_event_bus()
-      bus.subscribe(OrderPaid, on_order_paid)
-    in the lifespan handler.
+    Runs outside the request's session lifecycle (the event is published
+    from a FastAPI BackgroundTask, after the payment request's own session
+    has already committed — see record_payment in
+    app/api/v1/pos/router.py), so it opens its own short-lived session to
+    read the now-committed order in its final "paid" state.
     """
-    # See docstring — full implementation requires the OrderPaid event +
-    # session injection pattern (next session).
-    del _event
+    async with AsyncSessionLocal() as session:
+        company = await session.get(Company, event.company_id)
+        if not company or not company.google_sheets_webhook_url:
+            return  # not every company has this configured — silent no-op
+
+        order = await session.get(Order, event.order_id)
+        if not order:
+            log.warning("gsheets.on_order_paid.order_missing", order_id=str(event.order_id))
+            return
+
+        line_rows = (
+            await session.execute(
+                select(OrderLine, MenuItem.name)
+                .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+                .where(OrderLine.order_id == order.id)
+            )
+        ).all()
+
+        def _fmt_qty(qty: float) -> str:
+            q = float(qty)
+            return f"{q:g}"
+
+        items_text = ", ".join(f"{_fmt_qty(ol.qty)}x {name}" for ol, name in line_rows)
+        items_count = int(sum(float(ol.qty or 0) for ol, _ in line_rows))
+        taxable_minor = sum(int(ol.taxable_value_minor or 0) for ol, _ in line_rows)
+
+        cashier_name: str | None = None
+        if order.opened_by:
+            opener = await session.get(User, order.opened_by)
+            cashier_name = opener.name if opener else None
+
+        at = order.invoice_issued_at or event.occurred_at
+
+        await push_order_to_sheet(
+            url=company.google_sheets_webhook_url,
+            invoice_no=order.invoice_no or "",
+            fiscal_year=order.fiscal_year,
+            company_id=event.company_id,
+            gstin=company.gstin,
+            place_of_supply=order.place_of_supply_state_code,
+            order_type=order.type,
+            items_text=items_text,
+            items_count=items_count,
+            taxable_minor=taxable_minor,
+            cgst_minor=int(order.cgst_minor or 0),
+            sgst_minor=int(order.sgst_minor or 0),
+            igst_minor=int(order.igst_minor or 0),
+            cess_minor=int(order.cess_minor or 0),
+            round_off_minor=int(order.round_off_minor or 0),
+            total_minor=int(order.total_minor or 0),
+            method=event.method,
+            at_iso=at.isoformat(),
+            cashier=cashier_name,
+        )

@@ -57,7 +57,7 @@ export default function SheetsTab() {
             <h3 className="text-lg font-bold">Google Sheets</h3>
             <p className="text-sm text-fg-muted">
               Every order, ticket, event, and P&amp;L report automatically appears as
-              a row in your sheet's <b>Operations</b> tab. Your other tabs stay untouched.
+              a row in your sheet's <b>ERP Entries</b> tab. Your other tabs stay untouched.
             </p>
           </div>
           <Status connected={!!settings.url} lastSync={settings.last_sync_at}/>
@@ -114,12 +114,12 @@ export default function SheetsTab() {
           <FileText size={16}/> What appears in your sheet
         </h3>
         <p className="text-xs text-fg-muted leading-relaxed">
-          All entries land in a single tab called <b>Operations</b> with 17 columns:
+          All entries land in a single tab called <b>ERP Entries</b> with 17 columns:
           Date · Time · Type · ID · Description · Customer · Qty · Taxable · CGST · SGST · IGST ·
           Round-off · Total · Method · Cashier · GSTIN · Place of supply.
           <br/><br/>
           The <b>Type</b> column tells you what each row is: <b>Order</b>, <b>Ticket</b>, <b>Event</b>,
-          <b> Daily Report</b>, <b>Monthly Report</b>, <b>Quarterly Report</b>, <b>Yearly Report</b>.
+          <b> Manual Collection</b>, <b>Daily Report</b>, <b>Monthly Report</b>, <b>Quarterly Report</b>, <b>Yearly Report</b>.
           Rows are idempotent on the ID column — if the same invoice arrives twice, the existing row is overwritten in place.
         </p>
       </div>
@@ -153,7 +153,7 @@ function Wizard({ apps_script, copied, onCopy }: {
         Use the existing sheet you already have, or create a new blank one at{' '}
         <a href="https://sheets.new" target="_blank" rel="noreferrer" className="text-accent inline-flex items-center gap-1">
           sheets.new <ExternalLink size={12}/>
-        </a>. A new tab called <b>Operations</b> will be added automatically; your other tabs stay untouched.
+        </a>. A new tab called <b>ERP Entries</b> will be added automatically; your other tabs stay untouched.
       </Step>
       <Step n={2} title="Open the script editor">
         In the menu bar: <b>Extensions → Apps Script</b>. A new tab opens with an empty <code>Code.gs</code>.

@@ -17,8 +17,9 @@
  *   8. In D Company ERP open Settings → Google Sheets and paste the URL.
  *
  * BEHAVIOR
- *   • Every order, ticket, event, and report is appended as ONE row in the
- *     single tab named "Operations" (the name is configurable below).
+ *   • Every order, ticket, event, manual collection, and report is appended
+ *     as ONE row in the single tab named "ERP Entries" (the name is
+ *     configurable below).
  *   • Your existing tabs in this Sheet are NEVER touched.
  *   • Rows are idempotent on the unique id column: if the same invoice/ticket
  *     id arrives twice, the existing row is overwritten in place — no dupes.
@@ -27,11 +28,11 @@
  *   Date | Time | Type | ID | Description | Customer | Qty | Taxable | CGST |
  *   SGST | IGST | Round-off | Total | Method | Cashier | GSTIN | Place of supply
  *
- *   "Type" is one of: Order, Ticket, Event, Daily Report, Monthly Report,
- *   Quarterly Report, Yearly Report.
+ *   "Type" is one of: Order, Ticket, Event, Manual Collection, Daily Report,
+ *   Monthly Report, Quarterly Report, Yearly Report.
  */
 
-const TAB_NAME = "Operations";
+const TAB_NAME = "ERP Entries";
 
 const HEADERS = [
   "Date", "Time", "Type", "ID", "Description", "Customer",
@@ -44,6 +45,7 @@ const TYPE_LABEL = {
   order:             "Order",
   ticket:            "Ticket",
   event:             "Event",
+  manual_collection: "Manual Collection",
   daily_report:      "Daily Report",
   monthly_report:    "Monthly Report",
   quarterly_report:  "Quarterly Report",
@@ -123,6 +125,23 @@ function projectRow(kind, p) {
       money(0), money(0), money(0),
       money(0), money(0), money(p.base_ticket_price_minor),
       "", "", "", "",
+    ];
+  }
+
+  // Manual collections are the owner's off-POS safety net (cash/UPI totals
+  // that bypassed itemized billing). No GST split is available for these —
+  // the whole amount lands in Taxable and Total, and the branch + source
+  // reference go into Description since there's no dedicated column.
+  if (kind === "manual_collection") {
+    const desc = [p.branch, p.source_ref, p.note].filter(Boolean).join(" — ");
+    return [
+      date, time, label, p.id || "",
+      desc, "",
+      1,
+      money(p.amount_minor), money(0), money(0),
+      money(0), money(0), money(p.amount_minor),
+      p.method || "", "",
+      "", "",
     ];
   }
 

@@ -12,16 +12,19 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
+from app.core.logging import get_logger
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
+from app.events.bus import get_event_bus
+from app.events.events import OrderPaid
 from app.models import (
     Branch,
     Customer,
@@ -72,6 +75,8 @@ from app.services.pos.shift_validation import (
     require_operational_shift_scope,
     require_shift_opener,
 )
+
+log = get_logger(__name__)
 
 router = APIRouter()
 _KITCHEN_ITEM_TYPES = {"food", "drink", "dessert"}
@@ -2062,12 +2067,62 @@ async def finalize_zero_total_order(
     return response
 
 
+def _schedule_order_paid_event(
+    background_tasks: BackgroundTasks,
+    *,
+    company_id: UUID,
+    branch_id: UUID,
+    order_id: UUID,
+    total_minor: int,
+    method: str,
+    occurred_at: datetime,
+) -> None:
+    """Fire OrderPaid on the event bus once the response has been sent.
+
+    Scheduled via FastAPI's BackgroundTasks rather than awaited (or even
+    asyncio.create_task'd) inline: Starlette only runs background tasks
+    after the response body has been sent, which is after this request's
+    SessionDep has already committed (see app/core/db.py get_session). That
+    matters here — handlers like the Google Sheets mirror
+    (app/services/integrations/google_sheets.py on_order_paid) open their
+    own DB session and must see the order in its final committed "paid"
+    state, not a pre-commit snapshot that could still roll back.
+
+    Wrapped in its own try/except so a failure constructing or publishing
+    the event can never surface to the client — the payment itself already
+    succeeded by the time this runs. Mirrors how RealtimeBroadcastMiddleware
+    treats its own non-critical side effect (see app/core/middleware.py).
+    """
+
+    async def _publish() -> None:
+        try:
+            await get_event_bus().publish(
+                OrderPaid(
+                    occurred_at=occurred_at,
+                    company_id=company_id,
+                    branch_id=branch_id,
+                    order_id=order_id,
+                    total_minor=total_minor,
+                    method=method,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "pos.order_paid_event.publish_failed",
+                order_id=str(order_id),
+                exc_info=True,
+            )
+
+    background_tasks.add_task(_publish)
+
+
 @router.post("/orders/{order_id}/payments", status_code=status.HTTP_201_CREATED)
 async def record_payment(
     order_id: UUID,
     payload: PaymentCreate,
     session: SessionDep,
     request: Request,
+    background_tasks: BackgroundTasks,
     tenant: TenantContext = Depends(requires("pos.write")),
 ) -> dict:
     if tenant.terminal_id is None:
@@ -2178,6 +2233,15 @@ async def record_payment(
             company_id=tenant.company_id,
             actor_user_id=tenant.user_id,
             at=now,
+        )
+        _schedule_order_paid_event(
+            background_tasks,
+            company_id=tenant.company_id,
+            branch_id=order.branch_id,
+            order_id=order.id,
+            total_minor=int(order.total_minor or 0),
+            method=payload.method,
+            occurred_at=now,
         )
     response = {
         "id": str(payment.id),

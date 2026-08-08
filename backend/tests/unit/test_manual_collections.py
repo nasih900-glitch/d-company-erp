@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -377,6 +378,7 @@ async def test_create_is_idempotent_on_exact_replay(monkeypatch) -> None:
         ),
         _NoMutationSession(),
         _request(),
+        BackgroundTasks(),
         _tenant(),
     )
     assert response == existing
@@ -409,8 +411,200 @@ async def test_registered_gst_company_rejects_aggregate_collection(monkeypatch) 
             ),
             _RegisteredCompanySession(),
             _request(),
+            BackgroundTasks(),
             _tenant(),
         )
+
+
+@pytest.mark.asyncio
+async def test_create_schedules_a_google_sheets_push_when_webhook_is_configured(
+    monkeypatch,
+) -> None:
+    """A freshly-recorded manual collection must queue a mirror push — the
+    same safety-net the owner already relies on for POS orders — but must
+    never let that push block or fail the actual write.
+    """
+
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    async def store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(finance_router, "store_response", store)
+
+    company = SimpleNamespace(
+        id=COMPANY_ID,
+        deleted_at=None,
+        gst_registration_type="unregistered",
+        google_sheets_webhook_url="https://script.google.com/macros/s/xyz/exec",
+    )
+    branch = SimpleNamespace(
+        id=BRANCH_ID,
+        company_id=COMPANY_ID,
+        deleted_at=None,
+        name="Main Branch",
+    )
+
+    class _CreateSession:
+        def __init__(self, results: list[_Result]) -> None:
+            self.results = list(results)
+            self.added: list = []
+            self.flushes = 0
+
+        async def get(self, model, key):
+            if model is Company:
+                return company
+            if model is User:
+                return SimpleNamespace(id=key, name="Owner")
+            raise AssertionError(f"unexpected get({model}, {key})")
+
+        async def execute(self, statement):
+            assert self.results, f"unexpected extra statement: {statement}"
+            return self.results.pop(0)
+
+        def add(self, entity) -> None:
+            self.added.append(entity)
+            # Mimic the server_default=func.now() a real Postgres insert
+            # would populate — this double never actually hits the DB.
+            if isinstance(entity, ManualCollection) and entity.created_at is None:
+                entity.created_at = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+
+        async def flush(self) -> None:
+            self.flushes += 1
+
+    session = _CreateSession(
+        [
+            _Result(scalar="Asia/Kolkata"),  # company_timezone
+            _Result(scalar=branch),  # locked branch lookup
+            _Result(scalar=None),  # existing_source check — none
+        ]
+    )
+
+    captured: dict = {}
+
+    async def _fake_push(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(finance_router, "push_manual_collection_to_sheet", _fake_push)
+
+    background_tasks = BackgroundTasks()
+    response = await create_manual_collection(
+        ManualCollectionCreate(
+            branch_id=BRANCH_ID,
+            business_date=date(2026, 7, 16),
+            method="cash",
+            amount_minor=21_000,
+            source_ref="owner-confirmed:2026-07-16",
+            note="Till count",
+        ),
+        session,
+        _request(),
+        background_tasks,
+        _tenant(),
+    )
+    assert response.amount_minor == 21_000
+
+    assert captured == {}  # not fired inline — only queued so far
+    await background_tasks()  # simulate Starlette running it post-response
+
+    assert captured["url"] == company.google_sheets_webhook_url
+    assert captured["company_id"] == COMPANY_ID
+    assert captured["branch_name"] == "Main Branch"
+    assert captured["business_date"] == date(2026, 7, 16)
+    assert captured["method"] == "cash"
+    assert captured["amount_minor"] == 21_000
+    assert captured["source_kind"] == "manual_daily"
+    assert captured["source_ref"] == "owner-confirmed:2026-07-16"
+    assert captured["note"] == "Till count"
+
+
+@pytest.mark.asyncio
+async def test_create_does_not_schedule_a_push_when_webhook_is_not_configured(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    async def store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(finance_router, "store_response", store)
+
+    company = SimpleNamespace(
+        id=COMPANY_ID,
+        deleted_at=None,
+        gst_registration_type="unregistered",
+        google_sheets_webhook_url=None,
+    )
+    branch = SimpleNamespace(
+        id=BRANCH_ID,
+        company_id=COMPANY_ID,
+        deleted_at=None,
+        name="Main Branch",
+    )
+
+    class _CreateSession:
+        def __init__(self, results: list[_Result]) -> None:
+            self.results = list(results)
+            self.added: list = []
+            self.flushes = 0
+
+        async def get(self, model, key):
+            if model is Company:
+                return company
+            if model is User:
+                return SimpleNamespace(id=key, name="Owner")
+            raise AssertionError(f"unexpected get({model}, {key})")
+
+        async def execute(self, statement):
+            assert self.results, f"unexpected extra statement: {statement}"
+            return self.results.pop(0)
+
+        def add(self, entity) -> None:
+            self.added.append(entity)
+            if isinstance(entity, ManualCollection) and entity.created_at is None:
+                entity.created_at = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+
+        async def flush(self) -> None:
+            self.flushes += 1
+
+    session = _CreateSession(
+        [
+            _Result(scalar="Asia/Kolkata"),
+            _Result(scalar=branch),
+            _Result(scalar=None),
+        ]
+    )
+
+    called = False
+
+    async def _fake_push(**_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(finance_router, "push_manual_collection_to_sheet", _fake_push)
+
+    background_tasks = BackgroundTasks()
+    await create_manual_collection(
+        ManualCollectionCreate(
+            branch_id=BRANCH_ID,
+            business_date=date(2026, 7, 16),
+            method="cash",
+            amount_minor=21_000,
+            source_ref="owner-confirmed:2026-07-16-nosink",
+        ),
+        session,
+        _request(),
+        background_tasks,
+        _tenant(),
+    )
+    assert len(background_tasks.tasks) == 0
+
+    await background_tasks()
+    assert called is False
 
 
 @pytest.mark.asyncio

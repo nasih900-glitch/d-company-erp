@@ -12,12 +12,14 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.v1.gaming import router as gaming_router
 from app.api.v1.pos import router as pos_router
 from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
+from app.events.events import OrderPaid
 from app.models import Branch, Order, OrderLine, Payment, Refund, Station, Table
 
 
@@ -266,6 +268,7 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
         entities={(Branch, tenant.branch_id): branch},
     )
 
+    background_tasks = BackgroundTasks()
     response = await pos_router.record_payment(
         order.id,
         pos_router.PaymentCreate(
@@ -277,6 +280,7 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
         ),
         session,
         request,
+        background_tasks,
         tenant,
     )
 
@@ -293,6 +297,191 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     assert response["tip_minor"] == 1_500
     assert response["order_status"] == "paid"
     assert stored["status_code"] == 201
+
+    # A fully-settled payment must queue exactly one OrderPaid publish as a
+    # BackgroundTask — never awaited inline (that would delay the response
+    # on a slow webhook) and never fired before the response, since
+    # BackgroundTasks only run after this request's session has committed.
+    assert len(background_tasks.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_payment_schedules_order_paid_event_with_correct_shape(
+    monkeypatch,
+) -> None:
+    """The queued background task must publish OrderPaid with the real
+    order/company/branch ids, the settled total, and the payment method —
+    and must never raise even if the bus itself blows up.
+    """
+    tenant = _tenant()
+    shift = _shift(tenant, opened_by=tenant.user_id, status="open")
+    branch = SimpleNamespace(
+        id=tenant.branch_id,
+        company_id=tenant.company_id,
+        deleted_at=None,
+        timezone="Asia/Kolkata",
+        code="MN",
+    )
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=shift.id,
+        status="open",
+        total_minor=5_000,
+        tip_minor=0,
+        table_id=None,
+        customer_phone=None,
+        invoice_no="INV-PRESET-0002",
+        fiscal_year="2026-27",
+        closed_at=None,
+        invoice_issued_at=None,
+    )
+
+    async def _reserve_idempotency(*_args, **_kwargs):
+        return None
+
+    async def _store_response(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve_idempotency)
+    monkeypatch.setattr(pos_router, "store_response", _store_response)
+
+    published: list[OrderPaid] = []
+
+    class _FakeBus:
+        async def publish(self, event):
+            published.append(event)
+
+    monkeypatch.setattr(pos_router, "get_event_bus", lambda: _FakeBus())
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="payment-event-shape-test",
+            idempotency_request_hash="hash",
+        )
+    )
+    session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=shift),
+        _Result(scalar=0),
+        _Result(rows=[]),
+        _Result(scalar=None),
+        _Result(rows=[]),
+        entities={(Branch, tenant.branch_id): branch},
+    )
+
+    background_tasks = BackgroundTasks()
+    await pos_router.record_payment(
+        order.id,
+        pos_router.PaymentCreate(
+            method="cash",
+            amount_minor=5_000,
+            expected_order_total_minor=5_000,
+            expected_due_minor=5_000,
+        ),
+        session,
+        request,
+        background_tasks,
+        tenant,
+    )
+
+    assert published == []  # not fired inline — only queued so far
+    await background_tasks()  # simulate Starlette running it post-response
+
+    assert len(published) == 1
+    event = published[0]
+    assert event.order_id == order.id
+    assert event.company_id == tenant.company_id
+    assert event.branch_id == tenant.branch_id
+    assert event.total_minor == 5_000
+    assert event.method == "cash"
+
+
+@pytest.mark.asyncio
+async def test_record_payment_order_paid_publish_failure_never_raises(
+    monkeypatch,
+) -> None:
+    """A broken/unreachable event bus must not surface as an error — the
+    payment already succeeded and the response was already sent by the time
+    this background task runs.
+    """
+    tenant = _tenant()
+    shift = _shift(tenant, opened_by=tenant.user_id, status="open")
+    branch = SimpleNamespace(
+        id=tenant.branch_id,
+        company_id=tenant.company_id,
+        deleted_at=None,
+        timezone="Asia/Kolkata",
+        code="MN",
+    )
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=shift.id,
+        status="open",
+        total_minor=5_000,
+        tip_minor=0,
+        table_id=None,
+        customer_phone=None,
+        invoice_no="INV-PRESET-0003",
+        fiscal_year="2026-27",
+        closed_at=None,
+        invoice_issued_at=None,
+    )
+
+    async def _reserve_idempotency(*_args, **_kwargs):
+        return None
+
+    async def _store_response(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve_idempotency)
+    monkeypatch.setattr(pos_router, "store_response", _store_response)
+
+    class _ExplodingBus:
+        async def publish(self, _event):
+            raise RuntimeError("event bus is down")
+
+    monkeypatch.setattr(pos_router, "get_event_bus", lambda: _ExplodingBus())
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="payment-event-failure-test",
+            idempotency_request_hash="hash",
+        )
+    )
+    session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=shift),
+        _Result(scalar=0),
+        _Result(rows=[]),
+        _Result(scalar=None),
+        _Result(rows=[]),
+        entities={(Branch, tenant.branch_id): branch},
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await pos_router.record_payment(
+        order.id,
+        pos_router.PaymentCreate(
+            method="cash",
+            amount_minor=5_000,
+            expected_order_total_minor=5_000,
+            expected_due_minor=5_000,
+        ),
+        session,
+        request,
+        background_tasks,
+        tenant,
+    )
+    assert response["order_status"] == "paid"
+
+    # Must not raise even though the bus explodes.
+    await background_tasks()
 
 
 @pytest.mark.asyncio
