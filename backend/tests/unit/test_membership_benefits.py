@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 
 from app.api.v1.memberships import router as memberships_router
 from app.api.v1.pos import router as pos_router
@@ -572,15 +573,22 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
         )
     )
 
+    background_tasks = BackgroundTasks()
     response = await pos_router.finalize_zero_total_order(
         order.id,
         session,
         request,
+        background_tasks,
         tenant,
     )
 
     assert len(finalized) == 1
     assert finalized[0]["actor_user_id"] == tenant.user_id
+    assert len(background_tasks.tasks) == 1, (
+        "finalize-zero must schedule the same OrderPaid mirror event as "
+        "record_payment, or membership-covered visits never reach the "
+        "owner's Google Sheets reconciliation mirror"
+    )
     assert response == {
         "order_id": str(order.id),
         "amount_minor": 0,
@@ -601,6 +609,7 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
             order.id,
             replay_session,
             request,
+            BackgroundTasks(),
             tenant,
         )
         == response
@@ -729,5 +738,6 @@ async def test_zero_total_finalization_keeps_shift_opener_accountability(monkeyp
             order.id,
             session,
             request,
+            BackgroundTasks(),
             tenant,
         )

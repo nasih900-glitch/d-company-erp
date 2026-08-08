@@ -1966,6 +1966,7 @@ async def finalize_zero_total_order(
     order_id: UUID,
     session: SessionDep,
     request: Request,
+    background_tasks: BackgroundTasks,
     tenant: TenantContext = Depends(requires("pos.write")),
 ) -> dict:
     """Settle an exact-zero bill without inventing a zero-value payment.
@@ -2049,12 +2050,22 @@ async def finalize_zero_total_order(
             raise BusinessRuleError(
                 f"cannot finalize an order in status={order.status}"
             )
+        now = datetime.now(timezone.utc)
         await _finalize_order(
             session,
             order=order,
             company_id=tenant.company_id,
             actor_user_id=tenant.user_id,
-            at=datetime.now(timezone.utc),
+            at=now,
+        )
+        _schedule_order_paid_event(
+            background_tasks,
+            company_id=tenant.company_id,
+            branch_id=order.branch_id,
+            order_id=order.id,
+            total_minor=0,
+            method="zero_total",
+            occurred_at=now,
         )
 
     response = _zero_total_finalization_response(order)
