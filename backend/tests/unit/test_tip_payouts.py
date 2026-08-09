@@ -186,6 +186,30 @@ def test_financial_and_provenance_fields_are_immutable_but_first_void_is_allowed
 # ============================================================================
 # Create — success + validation
 # ============================================================================
+def _fake_ledger_with_tips_payable_balance(balance_minor: int):
+    """A minimal fake build_operational_ledger returning just enough for
+    the TIPS_PAYABLE-balance check: one credit line netting to balance_minor
+    (liability normal side is credit, so balance = credit - debit)."""
+    from app.services.accounting.ledger import LedgerLine
+
+    async def fake(*_args, **_kwargs):
+        if balance_minor <= 0:
+            return []
+        return [
+            LedgerLine(
+                occurred_at=datetime(2026, 8, 1, tzinfo=UTC),
+                ref_type="order",
+                ref_id=None,
+                account_code=TIPS_PAYABLE.code,
+                account_name=TIPS_PAYABLE.name,
+                account_type=TIPS_PAYABLE.type,
+                credit_minor=balance_minor,
+            )
+        ]
+
+    return fake
+
+
 @pytest.mark.asyncio
 async def test_create_tip_payout_persists_correct_fields(monkeypatch) -> None:
     async def reserve(*_args, **_kwargs):
@@ -196,6 +220,11 @@ async def test_create_tip_payout_persists_correct_fields(monkeypatch) -> None:
 
     monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
     monkeypatch.setattr(finance_router, "store_response", store)
+    monkeypatch.setattr(
+        finance_router,
+        "build_operational_ledger",
+        _fake_ledger_with_tips_payable_balance(100_000),
+    )
 
     branch = _branch()
 
@@ -234,6 +263,70 @@ async def test_create_tip_payout_persists_correct_fields(monkeypatch) -> None:
     assert result.method == "cash"
     assert result.created_by_name == "Owner"
     assert result.is_voided is False
+
+
+@pytest.mark.asyncio
+async def test_create_tip_payout_rejects_a_payout_larger_than_the_outstanding_balance(
+    monkeypatch,
+) -> None:
+    """A cashier (finance.write is broad, not owner-only) must not be able
+    to pay out more in tips than TIPS_PAYABLE actually owes — that would
+    silently overpay real cash out of the till against a liability that
+    was never owed, misstating the balance sheet."""
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(
+        finance_router,
+        "build_operational_ledger",
+        _fake_ledger_with_tips_payable_balance(5_000),
+    )
+
+    session = _QueuedSession([_Result(scalar=_branch())])
+    payload = _create_payload(amount_minor=50_000)
+
+    with pytest.raises(BusinessRuleError, match="exceeds the"):
+        await create_tip_payout(payload, session, _request(), _tenant())
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_create_tip_payout_allows_a_payout_exactly_equal_to_the_outstanding_balance(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    async def store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(finance_router, "store_response", store)
+    monkeypatch.setattr(
+        finance_router,
+        "build_operational_ledger",
+        _fake_ledger_with_tips_payable_balance(50_000),
+    )
+
+    class _CreateSession(_QueuedSession):
+        async def get(self, model, key):
+            from app.models import User
+            if model is User:
+                return SimpleNamespace(id=key, name="Owner")
+            raise AssertionError(f"unexpected get({model}, {key})")
+
+        def add(self, entity) -> None:
+            super().add(entity)
+            if isinstance(entity, TipPayout) and entity.created_at is None:
+                entity.created_at = datetime(2026, 8, 9, 21, 0, tzinfo=UTC)
+
+    session = _CreateSession([_Result(scalar=_branch())])
+    payload = _create_payload(amount_minor=50_000)
+
+    result = await create_tip_payout(payload, session, _request(), _tenant())
+    assert result.amount_minor == 50_000
+    assert len(session.added) == 1
 
 
 @pytest.mark.asyncio

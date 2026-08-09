@@ -362,7 +362,7 @@ function TipPayoutForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy || exceedsBalance}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <HandCoins size={14}/>}
             Record payout
           </button>

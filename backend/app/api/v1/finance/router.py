@@ -44,6 +44,7 @@ from app.models import (
     User,
 )
 from app.services.accounting import build_operational_ledger
+from app.services.accounting.accounts import TIPS_PAYABLE
 from app.services.accounting.depreciation import (
     STRAIGHT_LINE,
     asset_accumulated_depreciation_minor,
@@ -928,6 +929,20 @@ async def create_tip_payout(
     note = payload.note.strip()
     if len(note) < 3:
         raise BusinessRuleError("note must contain at least 3 characters")
+
+    ledger = await build_operational_ledger(
+        session, company_id=tenant.company_id, end_exclusive=datetime.now(timezone.utc)
+    )
+    outstanding_tips_minor = sum(
+        line.credit_minor - line.debit_minor
+        for line in ledger
+        if line.account_code == TIPS_PAYABLE.code
+    )
+    if payload.amount_minor > outstanding_tips_minor:
+        raise BusinessRuleError(
+            f"Payout of {payload.amount_minor / 100:.2f} exceeds the "
+            f"{outstanding_tips_minor / 100:.2f} currently owed to staff in Tips Payable."
+        )
 
     row = TipPayout(
         id=uuid4(),
