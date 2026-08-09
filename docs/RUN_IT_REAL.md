@@ -93,19 +93,58 @@ Run these in Terminal, inside the project folder.
 
 ## Backups
 
+### Local Mac (manual)
+
 Your data lives in a Docker volume named `d-company-erp_pgdata`. To back it up to a `.sql.gz` file in your Downloads folder:
 
 ```bash
 docker compose exec postgres pg_dump -U erp erp | gzip > ~/Downloads/dcompany-backup-$(date +%F).sql.gz
 ```
 
-To restore from a backup:
+To restore from one of these backups:
 
 ```bash
 gunzip < ~/Downloads/dcompany-backup-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U erp erp
 ```
 
-For real production, set up a cron job that does the above weekly and uploads to Google Drive / iCloud Drive.
+This `gunzip | psql` restore only works for backups made with the plain-SQL command directly above. It will **not** work on the production off-site backups described below — those are a different (custom) dump format that `psql` can't read.
+
+### Production VPS (automated, already running)
+
+Real production doesn't need a cron job set up — it already has one. `ops/backup_to_b2.py` runs nightly via a systemd timer (`dcompany-backup.timer`) on the VPS and:
+
+- Runs `pg_dump -F c` (Postgres **custom format**, not plain SQL) inside the `postgres` container
+- Uploads the resulting `.dump` file to the Backblaze B2 bucket `dcompany-erp-backups` (S3-compatible endpoint `https://s3.us-east-005.backblazeb2.com`), named `dcompany-erp-<UTC timestamp>.dump` (e.g. `dcompany-erp-2026-08-08T020000Z.dump`)
+- Keeps 30 days of history both locally (`/opt/d-company-erp/backups/auto/`) and in B2, pruning anything older
+- Emails the account-security address if a nightly run fails
+
+Because these are **custom-format** dumps, restoring them needs `pg_restore`, not `psql`/`gunzip` — `psql` cannot parse a `-F c` file at all.
+
+**To restore a production backup** (run on the VPS, from `/opt/d-company-erp`):
+
+1. Download the `.dump` file you want from B2. The credentials are the same `B2_KEY_ID` / `B2_APPLICATION_KEY` already in `/opt/d-company-erp/.env` (the ones `backup_to_b2.py` uses):
+
+   ```bash
+   # list available backups
+   AWS_ACCESS_KEY_ID=<B2_KEY_ID> AWS_SECRET_ACCESS_KEY=<B2_APPLICATION_KEY> \
+     aws s3 --endpoint-url https://s3.us-east-005.backblazeb2.com ls s3://dcompany-erp-backups/
+
+   # download the one you want
+   AWS_ACCESS_KEY_ID=<B2_KEY_ID> AWS_SECRET_ACCESS_KEY=<B2_APPLICATION_KEY> \
+     aws s3 --endpoint-url https://s3.us-east-005.backblazeb2.com \
+     cp s3://dcompany-erp-backups/dcompany-erp-2026-08-08T020000Z.dump ./dcompany-erp-2026-08-08T020000Z.dump
+   ```
+
+   (Requires the AWS CLI — `brew install awscli` — pointed at B2's S3-compatible API; no separate Backblaze tool needed since `backup_to_b2.py` talks to B2 over the same S3 protocol.)
+
+2. Restore it into the `postgres` container using the **production** compose file and env file (same pattern `backup_to_b2.py` itself uses to run `pg_dump`):
+
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env exec -T postgres \
+     pg_restore --clean --if-exists -U erp -d erp < dcompany-erp-2026-08-08T020000Z.dump
+   ```
+
+   `--clean --if-exists` drops existing objects before recreating them, so this **overwrites current production data**. Coordinate with the other partners first, and consider `docker compose -f docker-compose.prod.yml --env-file .env stop backend` beforehand so nothing writes to the database mid-restore.
 
 ---
 
