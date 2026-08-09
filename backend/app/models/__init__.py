@@ -29,6 +29,7 @@ from app.models.finance import (
     ExpenseCategory,
     ManualCollection,
     Asset,
+    TipPayout,
 )
 from app.models.ocr import OcrUpload, OcrExtraction, OcrVerification
 from app.models.audit import AuditLog
@@ -117,6 +118,7 @@ __all__ = [
     "TenantMixin",
     "Terminal",
     "TimestampMixin",
+    "TipPayout",
     "Tournament",
     "User",
     "UserRole",

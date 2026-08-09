@@ -413,6 +413,129 @@ def _guard_manual_collection_update(_mapper, _connection, row: ManualCollection)
         raise ValueError("a manual collection void must be populated atomically")
 
 
+class TipPayout(Base, TenantMixin):
+    """Money actually paid out to staff against the TIPS_PAYABLE liability.
+
+    TIPS_PAYABLE (ledger.py) is credited whenever a tipped order is paid and
+    debited on refund of a tipped order, but neither of those ever clears it
+    back out — this is the only record that does.  Deliberately standalone:
+    it does not model who on staff received what share, which shift they
+    worked, or any roster/payroll link.  `note` is the only place that
+    detail is captured (e.g. "split among staff on shift") until the full
+    Payroll feature exists.  Corrections are represented by a void plus a
+    replacement row; the original amount and provenance are never
+    overwritten — same pattern as ManualCollection.
+    """
+
+    __tablename__ = "tip_payouts"
+    __table_args__ = (
+        CheckConstraint(
+            "method IN ('cash', 'upi', 'card', 'bank')",
+            name="ck_tip_payout_method",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_tip_payout_positive_amount",
+        ),
+        CheckConstraint(
+            "length(trim(note)) >= 3",
+            name="ck_tip_payout_note_present",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0",
+            name="ck_tip_payout_idempotency_key_present",
+        ),
+        CheckConstraint(
+            "(voided_at IS NULL AND voided_by IS NULL AND void_reason IS NULL) "
+            "OR (voided_at IS NOT NULL AND voided_by IS NOT NULL "
+            "AND length(trim(void_reason)) >= 3)",
+            name="ck_tip_payout_void_state",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "idempotency_key",
+            name="uq_tip_payout_company_idempotency",
+        ),
+        Index(
+            "ix_tip_payout_company_paid_at",
+            "company_id",
+            "paid_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    branch_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    method: Mapped[str] = mapped_column(String(20), nullable=False)  # cash|upi|card|bank
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    note: Mapped[str] = mapped_column(String(500), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    voided_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    void_reason: Mapped[str | None] = mapped_column(String(500))
+
+
+@event.listens_for(TipPayout, "before_update")
+def _guard_tip_payout_update(_mapper, _connection, row: TipPayout) -> None:
+    """Only permit the first one-way transition from active to voided."""
+    state = inspect(row)
+    immutable_fields = {
+        "company_id",
+        "branch_id",
+        "amount_minor",
+        "method",
+        "paid_at",
+        "note",
+        "idempotency_key",
+        "created_by",
+        "created_at",
+    }
+    changed_immutable = sorted(
+        field
+        for field in immutable_fields
+        if state.attrs[field].history.has_changes()
+    )
+    if changed_immutable:
+        raise ValueError(
+            "tip payout financial/provenance fields are immutable: "
+            + ", ".join(changed_immutable)
+        )
+
+    for field in ("voided_at", "voided_by", "void_reason"):
+        history = state.attrs[field].history
+        if history.has_changes() and history.deleted and history.deleted[0] is not None:
+            raise ValueError("a tip payout void cannot be changed or reversed")
+    void_changed = any(
+        state.attrs[field].history.has_changes()
+        for field in ("voided_at", "voided_by", "void_reason")
+    )
+    if void_changed and (
+        row.voided_at is None
+        or row.voided_by is None
+        or row.void_reason is None
+        or len(row.void_reason.strip()) < 3
+    ):
+        raise ValueError("a tip payout void must be populated atomically")
+
+
 class Asset(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     __tablename__ = "assets"
 

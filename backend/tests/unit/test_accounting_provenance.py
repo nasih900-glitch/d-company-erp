@@ -267,6 +267,7 @@ async def test_capital_balance_and_ledger_exclude_voids_and_map_historical_funds
             _Result(rows=[]),  # orders
             _Result(rows=[]),  # stock
             _Result(rows=[]),  # refunds
+            _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[(active, _partner()), (voided, _partner())]),
             _Result(rows=[]),  # direct event tickets
@@ -287,7 +288,7 @@ async def test_capital_balance_and_ledger_exclude_voids_and_map_historical_funds
     assert {(line.account_code, line.credit_minor) for line in lines} >= {
         ("3000", active.amount_minor)
     }
-    capital_sql = str(ledger_session.statements[7])
+    capital_sql = str(ledger_session.statements[8])
     assert "capital_entries.voided_at IS NULL" in capital_sql
 
 
@@ -407,6 +408,7 @@ async def test_order_tip_minor_posts_a_balanced_tips_payable_ledger_line() -> No
             _Result(rows=[order]),  # orders
             _Result(rows=[]),  # stock
             _Result(rows=[]),  # refunds
+            _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # direct event tickets

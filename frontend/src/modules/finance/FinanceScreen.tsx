@@ -14,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   TrendingUp, TrendingDown, Receipt, Users, Plus, Trash2,
   Loader2, AlertCircle, Wallet, Banknote, RefreshCw, BookOpen,
-  Ban, Package,
+  Ban, Package, HandCoins,
 } from 'lucide-react';
 
 import { inr, inrShort } from '@/lib/inr';
@@ -33,8 +33,9 @@ import {
 import Modal from '@/components/ui/Modal';
 import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
+import TipPayoutsTab from './TipPayoutsTab';
 
-type Tab = 'overview' | 'expenses' | 'collections' | 'partners' | 'assets';
+type Tab = 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
 
 export default function FinanceScreen() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -43,7 +44,7 @@ export default function FinanceScreen() {
       <header className="mb-6">
         <h2 className="text-2xl font-bold">Finance</h2>
         <p className="text-fg-muted text-sm">
-          P&amp;L · expenses · manual collections · partner capital · fixed assets
+          P&amp;L · expenses · manual collections · tip payouts · partner capital · fixed assets
         </p>
       </header>
 
@@ -57,6 +58,9 @@ export default function FinanceScreen() {
         <TabBtn active={tab === 'collections'} onClick={() => setTab('collections')}>
           <BookOpen size={14}/> Manual collections
         </TabBtn>
+        <TabBtn active={tab === 'tips'} onClick={() => setTab('tips')}>
+          <HandCoins size={14}/> Tip payouts
+        </TabBtn>
         <TabBtn active={tab === 'partners'} onClick={() => setTab('partners')}>
           <Users size={14}/> Partners
         </TabBtn>
@@ -68,6 +72,7 @@ export default function FinanceScreen() {
       {tab === 'overview' && <OverviewTab/>}
       {tab === 'expenses' && <ExpensesTab/>}
       {tab === 'collections' && <ManualCollectionsTab/>}
+      {tab === 'tips' && <TipPayoutsTab/>}
       {tab === 'partners' && <PartnersTab/>}
       {tab === 'assets' && <AssetsTab/>}
     </div>

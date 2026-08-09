@@ -266,6 +266,7 @@ def _empty_ledger_session(*, asset_rows: list) -> _QueuedSession:
             _Result(rows=[]),  # orders
             _Result(rows=[]),  # stock
             _Result(rows=[]),  # refunds
+            _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital entries
             _Result(rows=[]),  # direct event tickets

@@ -568,6 +568,27 @@ export interface ManualCollectionDTO {
   is_voided: boolean;
 }
 
+export type TipPayoutMethod = 'cash' | 'upi' | 'card' | 'bank';
+
+export interface TipPayoutDTO {
+  id: string;
+  company_id: string;
+  branch_id: string;
+  amount_minor: number;
+  method: TipPayoutMethod;
+  paid_at: string;
+  note: string;
+  idempotency_key: string;
+  created_by: string;
+  created_by_name: string | null;
+  created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  voided_by_name: string | null;
+  void_reason: string | null;
+  is_voided: boolean;
+}
+
 export interface PartnerProfitShareDTO {
   partner_id: string;
   name: string;
@@ -699,6 +720,25 @@ export const finance = {
     }).then((r) => r.data),
   voidManualCollection: (id: string, reason: string) =>
     api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/void`, { reason })
+      .then((r) => r.data),
+
+  listTipPayouts: (params?: {
+    branch_id?: string;
+    include_voided?: boolean;
+    limit?: number;
+  }) => api.get<TipPayoutDTO[]>('/finance/tip-payouts', { params }).then((r) => r.data),
+  createTipPayout: (body: {
+    branch_id: string;
+    amount_minor: number;
+    method: TipPayoutMethod;
+    paid_at: string;
+    note: string;
+  }, idempotencyKey: string) =>
+    api.post<TipPayoutDTO>('/finance/tip-payouts', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  voidTipPayout: (id: string, reason: string) =>
+    api.post<TipPayoutDTO>(`/finance/tip-payouts/${id}/void`, { reason })
       .then((r) => r.data),
 
   listAssets: () => api.get<AssetDTO[]>('/finance/assets').then((r) => r.data),

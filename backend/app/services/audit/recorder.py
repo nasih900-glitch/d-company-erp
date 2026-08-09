@@ -77,6 +77,7 @@ from app.models import (
     Supplier,
     Table,
     Terminal,
+    TipPayout,
     Tournament,
     User,
     UserRole,
@@ -120,7 +121,7 @@ TRACKED: set[type] = {
     Payment, PayrollEntry, PurchaseOrder, PurchaseOrderLine,
     Recipe, RecipeLine, Refund, Reservation,
     Shift, Station, StockMovement, Supplier,
-    Table, Terminal, Tournament, User, UserRole,
+    Table, Terminal, TipPayout, Tournament, User, UserRole,
 }
 
 

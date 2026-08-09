@@ -40,6 +40,7 @@ from app.models import (
     OcrUpload,
     Partner,
     Supplier,
+    TipPayout,
     User,
 )
 from app.services.accounting import build_operational_ledger
@@ -135,6 +136,37 @@ class ManualCollectionRead(BaseModel):
     source_kind: str
     source_ref: str
     note: str | None
+    idempotency_key: str
+    created_by: UUID
+    created_by_name: str | None = None
+    created_at: datetime
+    voided_at: datetime | None
+    voided_by: UUID | None
+    voided_by_name: str | None = None
+    void_reason: str | None
+    is_voided: bool
+
+
+class TipPayoutCreate(BaseModel):
+    branch_id: UUID
+    amount_minor: int = Field(gt=0)
+    method: Literal["cash", "upi", "card", "bank"]
+    paid_at: datetime
+    note: str = Field(min_length=3, max_length=500)
+
+
+class TipPayoutVoid(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class TipPayoutRead(BaseModel):
+    id: UUID
+    company_id: UUID
+    branch_id: UUID
+    amount_minor: int
+    method: str
+    paid_at: datetime
+    note: str
     idempotency_key: str
     created_by: UUID
     created_by_name: str | None = None
@@ -761,6 +793,206 @@ async def void_manual_collection(
     creator = await session.get(User, row.created_by)
     voider = await session.get(User, row.voided_by) if row.voided_by else None
     return _manual_collection_read(
+        row,
+        created_by_name=creator.name if creator else None,
+        voided_by_name=voider.name if voider else None,
+    )
+
+
+# ============================================================================
+# TIP PAYOUTS
+#
+# The only write path that ever debits TIPS_PAYABLE outside a refund (see
+# ledger.py). Deliberately standalone — not the Payroll feature: it records
+# "we paid out ₹X in tips to staff" as one lump sum with a note, not a
+# per-staff-member breakdown or shift/roster link.
+# ============================================================================
+def _require_tip_payout_idempotency(request: Request) -> tuple[str, str]:
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not str(key).strip() or not request_hash:
+        raise BusinessRuleError("Idempotency-Key header required for tip payout writes")
+    return str(key), str(request_hash)
+
+
+def _tip_payout_read(
+    row: TipPayout,
+    *,
+    created_by_name: str | None = None,
+    voided_by_name: str | None = None,
+) -> TipPayoutRead:
+    return TipPayoutRead(
+        id=row.id,
+        company_id=row.company_id,
+        branch_id=row.branch_id,
+        amount_minor=int(row.amount_minor),
+        method=row.method,
+        paid_at=row.paid_at,
+        note=row.note,
+        idempotency_key=row.idempotency_key,
+        created_by=row.created_by,
+        created_by_name=created_by_name,
+        created_at=row.created_at,
+        voided_at=row.voided_at,
+        voided_by=row.voided_by,
+        voided_by_name=voided_by_name,
+        void_reason=row.void_reason,
+        is_voided=row.voided_at is not None,
+    )
+
+
+@router.get("/tip-payouts", response_model=list[TipPayoutRead])
+async def list_tip_payouts(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+    branch_id: UUID | None = None,
+    include_voided: bool = True,
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[TipPayoutRead]:
+    scoped_branch_id = branch_id or tenant.branch_id
+    if scoped_branch_id is not None:
+        if not tenant.in_branch(scoped_branch_id):
+            raise NotFoundError("branch not found")
+        branch = await session.get(Branch, scoped_branch_id)
+        if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+            raise NotFoundError("branch not found")
+
+    creator = aliased(User)
+    voider = aliased(User)
+    stmt = (
+        select(TipPayout, creator.name, voider.name)
+        .outerjoin(creator, creator.id == TipPayout.created_by)
+        .outerjoin(voider, voider.id == TipPayout.voided_by)
+        .where(TipPayout.company_id == tenant.company_id)
+    )
+    if scoped_branch_id is not None:
+        stmt = stmt.where(TipPayout.branch_id == scoped_branch_id)
+    if not include_voided:
+        stmt = stmt.where(TipPayout.voided_at.is_(None))
+    stmt = stmt.order_by(
+        TipPayout.paid_at.desc(),
+        TipPayout.created_at.desc(),
+        TipPayout.id.desc(),
+    ).limit(limit)
+
+    rows = (await session.execute(stmt)).all()
+    return [
+        _tip_payout_read(row, created_by_name=created_by_name, voided_by_name=voided_by_name)
+        for row, created_by_name, voided_by_name in rows
+    ]
+
+
+@router.post(
+    "/tip-payouts",
+    response_model=TipPayoutRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_tip_payout(
+    payload: TipPayoutCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> TipPayoutRead:
+    """Record tips actually paid out to staff, debiting TIPS_PAYABLE.
+
+    This does not attribute the payout to individual staff members or
+    shifts — `note` (e.g. "split among staff on shift") is the only record
+    of how it was distributed until the full Payroll feature exists.
+    """
+    idempotency_key, request_hash = _require_tip_payout_idempotency(request)
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return TipPayoutRead.model_validate(replay["body"])
+
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
+
+    branch = (
+        await session.execute(
+            select(Branch).where(
+                Branch.id == payload.branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not branch:
+        raise NotFoundError("branch not found")
+
+    note = payload.note.strip()
+    if len(note) < 3:
+        raise BusinessRuleError("note must contain at least 3 characters")
+
+    row = TipPayout(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        amount_minor=payload.amount_minor,
+        method=payload.method,
+        paid_at=payload.paid_at,
+        note=note,
+        idempotency_key=idempotency_key,
+        created_by=tenant.user_id,
+    )
+    session.add(row)
+    await session.flush()
+
+    creator = await session.get(User, tenant.user_id)
+    response = _tip_payout_read(row, created_by_name=creator.name if creator else None)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.post(
+    "/tip-payouts/{payout_id}/void",
+    response_model=TipPayoutRead,
+)
+async def void_tip_payout(
+    payout_id: UUID,
+    payload: TipPayoutVoid,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> TipPayoutRead:
+    """Void a tip payout without deleting or overwriting its original data."""
+    row = (
+        await session.execute(
+            select(TipPayout)
+            .where(
+                TipPayout.id == payout_id,
+                TipPayout.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not row or not tenant.in_branch(row.branch_id):
+        raise NotFoundError("tip payout not found")
+
+    reason = payload.reason.strip()
+    if len(reason) < 3:
+        raise BusinessRuleError("void reason must contain at least 3 characters")
+    if row.voided_at is not None:
+        if row.void_reason != reason:
+            raise BusinessRuleError("tip payout is already voided with a different reason")
+    else:
+        row.voided_at = datetime.now(timezone.utc)
+        row.voided_by = tenant.user_id
+        row.void_reason = reason
+        await session.flush()
+
+    creator = await session.get(User, row.created_by)
+    voider = await session.get(User, row.voided_by) if row.voided_by else None
+    return _tip_payout_read(
         row,
         created_by_name=creator.name if creator else None,
         voided_by_name=voider.name if voider else None,

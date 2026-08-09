@@ -297,6 +297,7 @@ async def test_ledger_uses_business_date_company_timezone_and_balances() -> None
             _Result(rows=[]),  # orders
             _Result(rows=[]),  # stock movements
             _Result(rows=[]),  # refunds
+            _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital
             _Result(rows=[]),  # direct event tickets

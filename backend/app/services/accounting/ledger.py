@@ -35,6 +35,7 @@ from app.models import (
     Payment,
     Refund,
     StockMovement,
+    TipPayout,
 )
 from app.services.accounting.accounts import (
     ACCOUNT_BY_CODE,
@@ -648,6 +649,42 @@ async def build_operational_ledger(
                 credit=refund.amount_minor,
                 memo=memo,
             )
+        )
+
+    # Tip payouts clear TIPS_PAYABLE back out to staff. TIPS_PAYABLE is
+    # credited at payment time and debited on refund (above); this is the
+    # only entry that ever debits it outside a refund, mirroring the
+    # Expense pattern (a discrete, timestamped cash movement) rather than
+    # ManualCollection's date-only daily aggregate.
+    tip_payout_stmt = select(TipPayout).where(
+        TipPayout.company_id == company_id,
+        TipPayout.voided_at.is_(None),
+        TipPayout.paid_at < end_exclusive,
+    )
+    if start_at is not None:
+        tip_payout_stmt = tip_payout_stmt.where(TipPayout.paid_at >= start_at)
+    tip_payout_stmt = tip_payout_stmt.order_by(TipPayout.paid_at, TipPayout.id)
+    for payout in (await session.execute(tip_payout_stmt)).scalars().all():
+        memo = payout.note or "Tip payout"
+        lines.extend(
+            [
+                _line(
+                    occurred_at=payout.paid_at,
+                    ref_type="tip_payout",
+                    ref_id=payout.id,
+                    account=TIPS_PAYABLE.ledger_tuple,
+                    debit=payout.amount_minor,
+                    memo=memo,
+                ),
+                _line(
+                    occurred_at=payout.paid_at,
+                    ref_type="tip_payout",
+                    ref_id=payout.id,
+                    account=_method_account(payout.method),
+                    credit=payout.amount_minor,
+                    memo=memo,
+                ),
+            ]
         )
 
     expense_stmt = (
