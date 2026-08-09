@@ -1921,6 +1921,24 @@ private struct BookingStatusUpdateRequest: Encodable {
     let status: String
 }
 
+private struct GamingBookingCreateRequest: Encodable {
+    let station_id: String
+    let starts_at: String
+    let ends_at: String
+    let guest_name: String
+    let contact: String?
+    let party_size: Int
+    let deposit_minor: Int
+}
+
+// POST /tables/reservations and POST /gaming/bookings both return a raw
+// {"id": ..., "status": "held"} dict, not the full DTO — same shape as
+// SendToPosResponseDTO above.
+private struct CreateResultDTO: Decodable {
+    let id: String
+    let status: String
+}
+
 private struct GamingSessionDraft: Identifiable {
     let id = UUID()
     let station: GamingStationDTO
@@ -2217,6 +2235,16 @@ private struct ReservationDTO: Decodable, Identifiable, Hashable {
 
 private struct ReservationStatusUpdateRequest: Encodable {
     let status: String
+}
+
+private struct ReservationCreateRequest: Encodable {
+    let table_id: String
+    let guest_name: String
+    let party_size: Int
+    let contact: String?
+    let starts_at: String
+    let ends_at: String
+    let notes: String?
 }
 
 // Kitchen / KDS (backend/app/api/v1/kitchen/router.py)
@@ -6518,6 +6546,8 @@ private struct ReservationsNativeView: View {
     @State private var error: String?
     @State private var busyId: String?
     @State private var unsubscribeRealtime: [() -> Void] = []
+    @State private var showingNewReservation = false
+    @State private var showingNewBooking = false
 
     var body: some View {
         AppNavigation {
@@ -6555,6 +6585,15 @@ private struct ReservationsNativeView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        Haptics.selection()
+                        if tab == .tables { showingNewReservation = true }
+                        else { showingNewBooking = true }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
             }
             .background(Brand.background)
         }
@@ -6569,6 +6608,16 @@ private struct ReservationsNativeView: View {
             unsubscribeRealtime.forEach { $0() }
             unsubscribeRealtime = []
         }
+        .sheet(isPresented: $showingNewReservation) {
+            ReservationFormSheet {
+                Task { await load() }
+            }
+        }
+        .sheet(isPresented: $showingNewBooking) {
+            BookingFormSheet {
+                Task { await load() }
+            }
+        }
     }
 
     @ViewBuilder
@@ -6577,7 +6626,7 @@ private struct ReservationsNativeView: View {
             LoadingBlock(title: "Loading reservations")
         } else if tableReservations.isEmpty {
             BrandedCard {
-                InlineEmptyRow(icon: "calendar", title: "No upcoming reservations", subtitle: "New bookings taken from Tables will show up here.")
+                InlineEmptyRow(icon: "calendar", title: "No upcoming reservations", subtitle: "Tap the + button to take one.")
             }
         } else {
             ForEach(tableReservations) { r in
@@ -6603,7 +6652,7 @@ private struct ReservationsNativeView: View {
             LoadingBlock(title: "Loading bookings")
         } else if bookings.isEmpty {
             BrandedCard {
-                InlineEmptyRow(icon: "gamecontroller", title: "No upcoming bookings", subtitle: "New bookings taken from Gaming will show up here.")
+                InlineEmptyRow(icon: "gamecontroller", title: "No upcoming bookings", subtitle: "Tap the + button to take one.")
             }
         } else {
             ForEach(bookings) { b in
@@ -6778,6 +6827,333 @@ private struct ReservationCard: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// New table reservation — mirrors EventFormSheet's date-picker layout and
+// GRNReceivingSheet's dynamic-list Picker (table_id comes from GET /tables,
+// loaded once when the sheet appears).
+private struct ReservationFormSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let onDone: () -> Void
+
+    @State private var tables: [TableDTO] = []
+    @State private var tablesError: String?
+    @State private var tableId = ""
+    @State private var guestName = ""
+    @State private var partySizeText = "2"
+    @State private var contact = ""
+    @State private var startsAt = Date().addingTimeInterval(3600)
+    @State private var endsAt = Date().addingTimeInterval(3600 + 5400)
+    @State private var notes = ""
+    @State private var isSubmitting = false
+    @State private var error: String?
+
+    private var partySize: Int? {
+        guard let value = Int(partySizeText), value > 0 else { return nil }
+        return value
+    }
+
+    private var canSubmit: Bool {
+        !tableId.isEmpty
+            && !guestName.trimmingCharacters(in: .whitespaces).isEmpty
+            && partySize != nil
+            && endsAt > startsAt
+            && !isSubmitting
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if let error { ErrorBanner(message: error) }
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                field("Table") {
+                                    if let tablesError {
+                                        Text(tablesError).font(.caption).foregroundColor(Brand.danger)
+                                    } else {
+                                        Picker("", selection: $tableId) {
+                                            Text("Select a table").tag("")
+                                            ForEach(tables) { t in
+                                                Text("\(t.code) \u{00B7} \(t.seats) seats").tag(t.id)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                        .tint(Brand.gold)
+                                    }
+                                }
+                                field("Guest name") {
+                                    TextField("Name", text: $guestName).nativeField()
+                                }
+                                field("Party size") {
+                                    TextField("2", text: $partySizeText)
+                                        .keyboardType(.numberPad)
+                                        .nativeField()
+                                }
+                                field("Contact") {
+                                    TextField("Optional", text: $contact)
+                                        .keyboardType(.phonePad)
+                                        .nativeField()
+                                }
+                                field("Starts at") {
+                                    DatePicker("", selection: $startsAt)
+                                        .labelsHidden()
+                                        .datePickerStyle(.compact)
+                                        .colorScheme(.dark)
+                                }
+                                field("Ends at") {
+                                    DatePicker("", selection: $endsAt)
+                                        .labelsHidden()
+                                        .datePickerStyle(.compact)
+                                        .colorScheme(.dark)
+                                }
+                                field("Notes") {
+                                    TextField("Optional", text: $notes).nativeField()
+                                }
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("New Reservation")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { Task { await submit() } }
+                        .disabled(!canSubmit)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .task { await loadTables() }
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundColor(Brand.muted)
+            content()
+        }
+    }
+
+    private func loadTables() async {
+        do {
+            let rows: [TableDTO] = try await session.authorized { token in
+                try await APIClient.shared.get("tables", token: token)
+            }
+            tables = rows.sorted { $0.code < $1.code }
+            if tableId.isEmpty { tableId = tables.first?.id ?? "" }
+        } catch is CancellationError {
+        } catch {
+            tablesError = readable(error)
+        }
+    }
+
+    private func submit() async {
+        guard let partySize else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        do {
+            let _: CreateResultDTO = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "tables/reservations",
+                    body: ReservationCreateRequest(
+                        table_id: tableId,
+                        guest_name: guestName.trimmingCharacters(in: .whitespaces),
+                        party_size: partySize,
+                        contact: contact.trimmingCharacters(in: .whitespaces).nilIfBlank,
+                        starts_at: DateFormatters.iso.string(from: startsAt),
+                        ends_at: DateFormatters.iso.string(from: endsAt),
+                        notes: notes.trimmingCharacters(in: .whitespaces).nilIfBlank
+                    ),
+                    token: token
+                )
+            }
+            Haptics.success()
+            onDone()
+            dismiss()
+        } catch is CancellationError {
+        } catch {
+            // The backend's double-booking guard returns a 409 with a clear
+            // message ("This table is already booked for that time slot.")
+            // — readable(error) surfaces it verbatim, same as every other
+            // API error in this app (see DCompanyAPIError.badStatus above).
+            self.error = readable(error)
+        }
+    }
+}
+
+// New gaming station booking — same shape as ReservationFormSheet above,
+// with station_id coming from GET /gaming/stations instead of /tables, and
+// an optional deposit amount matching GamingBookingDTO.deposit_minor.
+private struct BookingFormSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: AppSession
+    let onDone: () -> Void
+
+    @State private var stations: [GamingStationDTO] = []
+    @State private var stationsError: String?
+    @State private var stationId = ""
+    @State private var guestName = ""
+    @State private var partySizeText = "1"
+    @State private var contact = ""
+    @State private var startsAt = Date().addingTimeInterval(3600)
+    @State private var endsAt = Date().addingTimeInterval(3600 + 3600)
+    @State private var depositText = ""
+    @State private var isSubmitting = false
+    @State private var error: String?
+
+    private var partySize: Int? {
+        guard let value = Int(partySizeText), value > 0 else { return nil }
+        return value
+    }
+    private var depositMinor: Int? {
+        if depositText.trimmingCharacters(in: .whitespaces).isEmpty { return 0 }
+        guard let value = Double(depositText), value >= 0 else { return nil }
+        return Int((value * 100).rounded())
+    }
+
+    private var canSubmit: Bool {
+        !stationId.isEmpty
+            && !guestName.trimmingCharacters(in: .whitespaces).isEmpty
+            && partySize != nil
+            && depositMinor != nil
+            && endsAt > startsAt
+            && !isSubmitting
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Brand.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if let error { ErrorBanner(message: error) }
+                        BrandedCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                field("Station") {
+                                    if let stationsError {
+                                        Text(stationsError).font(.caption).foregroundColor(Brand.danger)
+                                    } else {
+                                        Picker("", selection: $stationId) {
+                                            Text("Select a station").tag("")
+                                            ForEach(stations) { s in
+                                                Text("\(s.code) \u{00B7} \(s.name)").tag(s.id)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                        .tint(Brand.gold)
+                                    }
+                                }
+                                field("Guest name") {
+                                    TextField("Name", text: $guestName).nativeField()
+                                }
+                                field("Party size") {
+                                    TextField("1", text: $partySizeText)
+                                        .keyboardType(.numberPad)
+                                        .nativeField()
+                                }
+                                field("Contact") {
+                                    TextField("Optional", text: $contact)
+                                        .keyboardType(.phonePad)
+                                        .nativeField()
+                                }
+                                field("Starts at") {
+                                    DatePicker("", selection: $startsAt)
+                                        .labelsHidden()
+                                        .datePickerStyle(.compact)
+                                        .colorScheme(.dark)
+                                }
+                                field("Ends at") {
+                                    DatePicker("", selection: $endsAt)
+                                        .labelsHidden()
+                                        .datePickerStyle(.compact)
+                                        .colorScheme(.dark)
+                                }
+                                field("Deposit (\u{20B9})") {
+                                    TextField("Optional", text: $depositText)
+                                        .keyboardType(.decimalPad)
+                                        .nativeField()
+                                }
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("New Booking")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { Task { await submit() } }
+                        .disabled(!canSubmit)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .task { await loadStations() }
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundColor(Brand.muted)
+            content()
+        }
+    }
+
+    private func loadStations() async {
+        do {
+            let rows: [GamingStationDTO] = try await session.authorized { token in
+                try await APIClient.shared.get("gaming/stations", token: token)
+            }
+            stations = rows.filter { $0.is_active }.sorted { $0.code < $1.code }
+            if stationId.isEmpty { stationId = stations.first?.id ?? "" }
+        } catch is CancellationError {
+        } catch {
+            stationsError = readable(error)
+        }
+    }
+
+    private func submit() async {
+        guard let partySize, let depositMinor else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        error = nil
+        do {
+            let _: CreateResultDTO = try await session.authorized { token in
+                try await APIClient.shared.post(
+                    "gaming/bookings",
+                    body: GamingBookingCreateRequest(
+                        station_id: stationId,
+                        starts_at: DateFormatters.iso.string(from: startsAt),
+                        ends_at: DateFormatters.iso.string(from: endsAt),
+                        guest_name: guestName.trimmingCharacters(in: .whitespaces),
+                        contact: contact.trimmingCharacters(in: .whitespaces).nilIfBlank,
+                        party_size: partySize,
+                        deposit_minor: depositMinor
+                    ),
+                    token: token
+                )
+            }
+            Haptics.success()
+            onDone()
+            dismiss()
+        } catch is CancellationError {
+        } catch {
+            // The backend rejects an overlapping slot with a 409 ("This
+            // station is already booked for that time slot.") via a DB
+            // EXCLUDE constraint — readable(error) surfaces it verbatim.
+            self.error = readable(error)
         }
     }
 }

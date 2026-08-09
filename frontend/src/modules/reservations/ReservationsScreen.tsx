@@ -16,16 +16,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   CalendarClock, LayoutGrid, Gamepad2, Loader2, AlertCircle, RefreshCw,
-  UserCheck, UserX, Ban,
+  UserCheck, UserX, Ban, Plus,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
-  reservations, gaming,
-  type ReservationDTO, type GamingBookingDTO,
+  reservations, gaming, tables,
+  type ReservationDTO, type GamingBookingDTO, type TableDTO, type StationDTO,
 } from '@/lib/erp-api';
 import { subscribeRealtime } from '@/lib/realtime';
+import Modal from '@/components/ui/Modal';
 
 type Tab = 'tables' | 'gaming';
 // Fallback only — real-time push (see subscribeRealtime below) is what
@@ -66,6 +68,7 @@ function TableReservationsTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!LIVE_MODE) { setLoading(false); return; }
@@ -102,7 +105,12 @@ function TableReservationsTab() {
         <p className="text-sm text-fg-muted">
           {rows.length} upcoming reservation{rows.length === 1 ? '' : 's'}
         </p>
-        <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        <div className="flex gap-2">
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+          <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+            <Plus size={14}/> New reservation
+          </button>
+        </div>
       </div>
 
       {err && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
@@ -111,7 +119,7 @@ function TableReservationsTab() {
 
       {!rows.length ? (
         <div className="card text-fg-muted text-sm">
-          No upcoming reservations. New bookings taken from <b>Tables</b> will show up here.
+          No upcoming reservations. Click <b>New reservation</b> to take one, or bookings taken from <b>Tables</b> will show up here.
         </div>
       ) : (
         <div className="space-y-3">
@@ -142,6 +150,13 @@ function TableReservationsTab() {
           ))}
         </div>
       )}
+
+      {addOpen && (
+        <ReservationForm
+          onClose={() => setAddOpen(false)}
+          onSuccess={() => { setAddOpen(false); load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -154,6 +169,7 @@ function GamingBookingsTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!LIVE_MODE) { setLoading(false); return; }
@@ -190,7 +206,12 @@ function GamingBookingsTab() {
         <p className="text-sm text-fg-muted">
           {rows.length} upcoming booking{rows.length === 1 ? '' : 's'}
         </p>
-        <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        <div className="flex gap-2">
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+          <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+            <Plus size={14}/> New booking
+          </button>
+        </div>
       </div>
 
       {err && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
@@ -199,7 +220,7 @@ function GamingBookingsTab() {
 
       {!rows.length ? (
         <div className="card text-fg-muted text-sm">
-          No upcoming station bookings. New bookings taken from <b>Gaming</b> will show up here.
+          No upcoming station bookings. Click <b>New booking</b> to take one, or bookings taken from <b>Gaming</b> will show up here.
         </div>
       ) : (
         <div className="space-y-3">
@@ -230,7 +251,262 @@ function GamingBookingsTab() {
           ))}
         </div>
       )}
+
+      {addOpen && (
+        <BookingForm
+          onClose={() => setAddOpen(false)}
+          onSuccess={() => { setAddOpen(false); load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+// ============================================================================
+// Create forms
+// ============================================================================
+function ReservationForm({ onClose, onSuccess }: {
+  onClose: () => void; onSuccess: () => void;
+}) {
+  const [tableRows, setTableRows] = useState<TableDTO[]>([]);
+  const [tablesLoading, setTablesLoading] = useState(true);
+  const [tablesErr, setTablesErr] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await tables.list();
+        if (!cancelled) setTableRows(rows);
+      } catch (e) {
+        if (!cancelled) setTablesErr((e as Error).message);
+      } finally {
+        if (!cancelled) setTablesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const [form, setForm] = useState({
+    table_id: '',
+    guest_name: '',
+    party_size: '2',
+    contact: '',
+    starts_at: '',
+    ends_at: '',
+    notes: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try {
+      if (!form.table_id) throw new Error('Select a table.');
+      await reservations.create({
+        table_id: form.table_id,
+        guest_name: form.guest_name.trim(),
+        party_size: parseInt(form.party_size, 10),
+        contact: form.contact.trim() || undefined,
+        starts_at: new Date(form.starts_at).toISOString(),
+        ends_at: new Date(form.ends_at).toISOString(),
+        notes: form.notes.trim() || undefined,
+      });
+      onSuccess();
+    } catch (e) {
+      // The backend returns a 409 with a clear message ("This table is
+      // already booked for that time slot.") when the double-booking guard
+      // rejects the slot — surfaced verbatim like any other API error here.
+      setErr((e as Error).message);
+    } finally { setBusy(false); }
+  }
+
+  const sortedTables = [...tableRows].sort((a, b) => a.code.localeCompare(b.code));
+
+  return (
+    <Modal open onClose={onClose} title="New reservation">
+      <form onSubmit={submit} className="space-y-3">
+        <Field label="Table">
+          {tablesLoading ? (
+            <div className="text-sm text-fg-muted flex items-center gap-2 py-2">
+              <Loader2 className="animate-spin" size={14}/> Loading tables…
+            </div>
+          ) : tablesErr ? (
+            <div className="text-sm text-accent-bad">{tablesErr}</div>
+          ) : !sortedTables.length ? (
+            <div className="text-sm text-fg-muted">No tables yet — add one in Tables first.</div>
+          ) : (
+            <select className="input" required autoFocus value={form.table_id}
+              onChange={(e) => setForm({ ...form, table_id: e.target.value })}>
+              <option value="" disabled>Select a table…</option>
+              {sortedTables.map((t) => (
+                <option key={t.id} value={t.id}>{t.code} · {t.seats} seats</option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Guest name">
+          <input className="input" required value={form.guest_name}
+            onChange={(e) => setForm({ ...form, guest_name: e.target.value })}/>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Party size">
+            <input type="number" min={1} required className="input font-mono"
+              value={form.party_size}
+              onChange={(e) => setForm({ ...form, party_size: e.target.value })}/>
+          </Field>
+          <Field label="Contact (optional)">
+            <input className="input" value={form.contact}
+              onChange={(e) => setForm({ ...form, contact: e.target.value })}/>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Starts at">
+            <input type="datetime-local" required className="input" value={form.starts_at}
+              onChange={(e) => setForm({ ...form, starts_at: e.target.value })}/>
+          </Field>
+          <Field label="Ends at">
+            <input type="datetime-local" required className="input" value={form.ends_at}
+              onChange={(e) => setForm({ ...form, ends_at: e.target.value })}/>
+          </Field>
+        </div>
+        <Field label="Notes (optional)">
+          <input className="input" value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}/>
+        </Field>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || tablesLoading}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : null} Create
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BookingForm({ onClose, onSuccess }: {
+  onClose: () => void; onSuccess: () => void;
+}) {
+  const [stationRows, setStationRows] = useState<StationDTO[]>([]);
+  const [stationsLoading, setStationsLoading] = useState(true);
+  const [stationsErr, setStationsErr] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await gaming.listStations();
+        if (!cancelled) {
+          setStationRows(rows.filter((s) => s.is_active && isAppStoreAllowedType(s.type)));
+        }
+      } catch (e) {
+        if (!cancelled) setStationsErr((e as Error).message);
+      } finally {
+        if (!cancelled) setStationsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const [form, setForm] = useState({
+    station_id: '',
+    guest_name: '',
+    party_size: '1',
+    contact: '',
+    starts_at: '',
+    ends_at: '',
+    deposit_rupees: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try {
+      if (!form.station_id) throw new Error('Select a station.');
+      await gaming.createBooking({
+        station_id: form.station_id,
+        guest_name: form.guest_name.trim(),
+        party_size: parseInt(form.party_size, 10),
+        contact: form.contact.trim() || undefined,
+        starts_at: new Date(form.starts_at).toISOString(),
+        ends_at: new Date(form.ends_at).toISOString(),
+        deposit_minor: form.deposit_rupees
+          ? Math.round(parseFloat(form.deposit_rupees) * 100)
+          : undefined,
+      });
+      onSuccess();
+    } catch (e) {
+      // The backend's EXCLUDE constraint turns an overlapping slot into a
+      // clean 409 ("This station is already booked for that time slot.") —
+      // surfaced verbatim like any other API error here.
+      setErr((e as Error).message);
+    } finally { setBusy(false); }
+  }
+
+  const sortedStations = [...stationRows].sort((a, b) => a.code.localeCompare(b.code));
+
+  return (
+    <Modal open onClose={onClose} title="New booking">
+      <form onSubmit={submit} className="space-y-3">
+        <Field label="Station">
+          {stationsLoading ? (
+            <div className="text-sm text-fg-muted flex items-center gap-2 py-2">
+              <Loader2 className="animate-spin" size={14}/> Loading stations…
+            </div>
+          ) : stationsErr ? (
+            <div className="text-sm text-accent-bad">{stationsErr}</div>
+          ) : !sortedStations.length ? (
+            <div className="text-sm text-fg-muted">No active stations — add one in Gaming first.</div>
+          ) : (
+            <select className="input" required autoFocus value={form.station_id}
+              onChange={(e) => setForm({ ...form, station_id: e.target.value })}>
+              <option value="" disabled>Select a station…</option>
+              {sortedStations.map((s) => (
+                <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Guest name">
+          <input className="input" required value={form.guest_name}
+            onChange={(e) => setForm({ ...form, guest_name: e.target.value })}/>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Party size">
+            <input type="number" min={1} required className="input font-mono"
+              value={form.party_size}
+              onChange={(e) => setForm({ ...form, party_size: e.target.value })}/>
+          </Field>
+          <Field label="Contact (optional)">
+            <input className="input" value={form.contact}
+              onChange={(e) => setForm({ ...form, contact: e.target.value })}/>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Starts at">
+            <input type="datetime-local" required className="input" value={form.starts_at}
+              onChange={(e) => setForm({ ...form, starts_at: e.target.value })}/>
+          </Field>
+          <Field label="Ends at">
+            <input type="datetime-local" required className="input" value={form.ends_at}
+              onChange={(e) => setForm({ ...form, ends_at: e.target.value })}/>
+          </Field>
+        </div>
+        <Field label="Deposit (₹, optional)">
+          <input type="number" min={0} step="0.01" className="input font-mono text-right"
+            value={form.deposit_rupees}
+            onChange={(e) => setForm({ ...form, deposit_rupees: e.target.value })}/>
+        </Field>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || stationsLoading}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : null} Create
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -275,5 +551,21 @@ function TabBtn({ active, onClick, children }: {
         ${active ? 'border-accent text-accent' : 'border-transparent text-fg-muted hover:text-fg'}`}>
       {children}
     </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="text-xs text-fg-muted">{label}</span>
+      <div className="mt-1">{children}</div>
+    </label>
+  );
+}
+function ErrorRow({ text }: { text: string }) {
+  return (
+    <div className="p-2.5 rounded-lg bg-accent-bad/10 border border-accent-bad/40 text-accent-bad text-sm flex items-center gap-2">
+      <AlertCircle size={14}/> {text}
+    </div>
   );
 }
