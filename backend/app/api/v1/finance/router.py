@@ -280,6 +280,7 @@ class BusinessMetricsRead(BaseModel):
 
 class AssetRead(BaseModel):
     id: UUID
+    branch_id: UUID
     name: str
     type: str
     purchase_minor: int
@@ -287,6 +288,7 @@ class AssetRead(BaseModel):
     useful_life_months: int
     salvage_minor: int
     depreciation_method: str
+    notes: str | None
     # Derived, recomputed live as of "now" every time this is read — never
     # stored. See app/services/accounting/depreciation.py.
     accumulated_depreciation_minor: int
@@ -301,6 +303,7 @@ class AssetCreate(BaseModel):
     purchase_date: datetime
     useful_life_months: int = Field(default=60, gt=0, le=1200)
     salvage_minor: int = Field(default=0, ge=0)
+    notes: str | None = Field(default=None, max_length=500)
 
 
 async def _validate_expense_references(
@@ -1031,11 +1034,12 @@ async def void_capital_entry(
 # ============================================================================
 def _asset_read(a: Asset, *, as_of: datetime) -> AssetRead:
     return AssetRead(
-        id=a.id, name=a.name, type=a.type,
+        id=a.id, branch_id=a.branch_id, name=a.name, type=a.type,
         purchase_minor=a.purchase_minor, purchase_date=a.purchase_date,
         useful_life_months=a.useful_life_months,
         salvage_minor=a.salvage_minor,
         depreciation_method=a.depreciation_method,
+        notes=a.notes,
         accumulated_depreciation_minor=asset_accumulated_depreciation_minor(a, as_of),
         book_value_minor=asset_book_value_minor(a, as_of),
     )
@@ -1062,7 +1066,12 @@ async def list_assets(
 async def create_asset(
     payload: AssetCreate,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("finance.write")),
+    # finance.assets.write is the dedicated scope for this ("Add / depreciate
+    # assets" in permissions.py) — matching the specific-over-generic pattern
+    # create_partner/create_capital_entry already use (finance.partner.write,
+    # not the generic finance.write) rather than reusing the expense-record
+    # scope for an unrelated register.
+    tenant: TenantContext = Depends(requires("finance.assets.write")),
 ) -> AssetRead:
     if not tenant.in_branch(payload.branch_id):
         raise NotFoundError("branch not found")

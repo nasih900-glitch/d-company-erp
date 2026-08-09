@@ -5,6 +5,7 @@
  *  Expenses     list, add, delete expenses (live)
  *  Collections  immutable off-POS / legacy daily collection register
  *  Partners     list partners + contributed-capital movements (invest / withdraw)
+ *  Assets       fixed asset register (equipment) — straight-line depreciated
  *
  * In demo mode the write-oriented tabs show empty states; live mode
  * hits /api/v1/finance/* and /api/v1/settings/*.
@@ -13,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   TrendingUp, TrendingDown, Receipt, Users, Plus, Trash2,
   Loader2, AlertCircle, Wallet, Banknote, RefreshCw, BookOpen,
-  Ban,
+  Ban, Package,
 } from 'lucide-react';
 
 import { inr, inrShort } from '@/lib/inr';
@@ -30,9 +31,10 @@ import {
   rupeesToMinor,
 } from '@/lib/manual-collections';
 import Modal from '@/components/ui/Modal';
+import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
 
-type Tab = 'overview' | 'expenses' | 'collections' | 'partners';
+type Tab = 'overview' | 'expenses' | 'collections' | 'partners' | 'assets';
 
 export default function FinanceScreen() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -41,7 +43,7 @@ export default function FinanceScreen() {
       <header className="mb-6">
         <h2 className="text-2xl font-bold">Finance</h2>
         <p className="text-fg-muted text-sm">
-          P&amp;L · expenses · manual collections · partner capital
+          P&amp;L · expenses · manual collections · partner capital · fixed assets
         </p>
       </header>
 
@@ -58,12 +60,16 @@ export default function FinanceScreen() {
         <TabBtn active={tab === 'partners'} onClick={() => setTab('partners')}>
           <Users size={14}/> Partners
         </TabBtn>
+        <TabBtn active={tab === 'assets'} onClick={() => setTab('assets')}>
+          <Package size={14}/> Fixed assets
+        </TabBtn>
       </div>
 
       {tab === 'overview' && <OverviewTab/>}
       {tab === 'expenses' && <ExpensesTab/>}
       {tab === 'collections' && <ManualCollectionsTab/>}
       {tab === 'partners' && <PartnersTab/>}
+      {tab === 'assets' && <AssetsTab/>}
     </div>
   );
 }

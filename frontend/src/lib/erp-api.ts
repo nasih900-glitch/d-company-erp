@@ -607,6 +607,22 @@ export interface DistributableProfitReportDTO {
   partners: DistributablePartnerShareDTO[];
 }
 
+export interface AssetDTO {
+  id: string;
+  branch_id: string;
+  name: string;
+  type: string;
+  purchase_minor: number;
+  purchase_date: string;
+  useful_life_months: number;
+  salvage_minor: number;
+  depreciation_method: string;
+  notes: string | null;
+  // Derived, recomputed live as of "now" by the backend — never stored.
+  accumulated_depreciation_minor: number;
+  book_value_minor: number;
+}
+
 export interface BusinessMetricsDTO {
   period_start: string;
   period_end: string;
@@ -684,6 +700,13 @@ export const finance = {
   voidManualCollection: (id: string, reason: string) =>
     api.post<ManualCollectionDTO>(`/finance/manual-collections/${id}/void`, { reason })
       .then((r) => r.data),
+
+  listAssets: () => api.get<AssetDTO[]>('/finance/assets').then((r) => r.data),
+  createAsset: (body: {
+    branch_id: string; name: string; type: string;
+    purchase_minor: number; purchase_date: string;
+    useful_life_months?: number; salvage_minor?: number; notes?: string;
+  }) => api.post<AssetDTO>('/finance/assets', body).then((r) => r.data),
 };
 
 // =============================================================================
