@@ -49,7 +49,12 @@ const config: CapacitorConfig = {
       splashImmersive: true,
     },
     StatusBar: {
-      style: 'dark',
+      // MUST be uppercase. The Android plugin does
+      // `setAppearanceLightStatusBars(!style.equals("DARK"))` — a
+      // case-sensitive compare — so a lowercase 'dark' silently falls
+      // through to light-appearance icons, i.e. dark icons on our dark
+      // bar, which renders the clock and battery all but invisible.
+      style: 'DARK',
       backgroundColor: '#050403',
       overlay: false,
     },
