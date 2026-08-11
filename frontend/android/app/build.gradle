@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+// Release signing. The keystore and its passwords are deliberately NOT in
+// version control (see the repo .gitignore) — this app is sideloaded onto
+// D Company's own devices, and Android requires the SAME key to sign every
+// future update, so losing dcompany-release.keystore means every device
+// has to uninstall/reinstall. Keep a backup of it somewhere safe.
+// Without the keystore present, release builds fall back to unsigned so a
+// fresh clone still builds debug fine.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "cloud.dcompany.erp"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +21,10 @@ android {
         applicationId "cloud.dcompany.erp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        // Kept in step with the iOS app's marketing version so the three
+        // partners see the same number on whichever device they pick up.
         versionCode 1
-        versionName "1.0"
+        versionName "3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +32,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
