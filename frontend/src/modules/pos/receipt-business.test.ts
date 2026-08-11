@@ -90,6 +90,21 @@ describe('receipt business details', () => {
     expect(receiptConfigurationIssue(details)).toContain('GST setup is incomplete');
   });
 
+  it('blocks payment when the timezone would throw while printing the receipt', () => {
+    const details = buildReceiptBusinessDetails(
+      { ...company, timezone: 'Asia/Kolkatta' },
+      { ...branch, timezone: null },
+    );
+
+    expect(receiptConfigurationIssue(details)).toContain('Business timezone is invalid');
+  });
+
+  it('blocks payment when the branch overrides the company with a bad timezone', () => {
+    const details = buildReceiptBusinessDetails(company, { ...branch, timezone: 'GMT+5:30' });
+
+    expect(receiptConfigurationIssue(details)).toContain('Business timezone is invalid');
+  });
+
   it('labels composition documents as bills of supply', () => {
     const details = buildReceiptBusinessDetails(
       { ...company, gst_registration_type: 'composition', is_composition: true },

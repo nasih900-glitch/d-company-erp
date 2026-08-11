@@ -5,6 +5,7 @@
  */
 import { inr, inrInWords } from '@/lib/inr';
 import type { OrderDTO } from '@/lib/erp-api';
+import { DEFAULT_BUSINESS_TIMEZONE, isValidTimeZone } from '@/lib/manual-collections';
 import {
   formatPlaceOfSupply,
   receiptDocumentTitle,
@@ -12,8 +13,11 @@ import {
 } from './receipt-business';
 
 const invoiceDateTime = (iso: string, timezone: string) => {
+  // A legacy bad value in Settings must not throw here — this renders after
+  // the money is taken, and an unhandled RangeError blanks the whole till.
+  const zone = isValidTimeZone(timezone) ? timezone.trim() : DEFAULT_BUSINESS_TIMEZONE;
   const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: timezone,
+    timeZone: zone,
     day: '2-digit',
     month: 'short',
     year: 'numeric',

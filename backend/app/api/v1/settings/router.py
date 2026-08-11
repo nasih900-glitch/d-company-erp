@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
+from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -21,6 +22,20 @@ from app.core.tenant import TenantContext
 from app.models import Branch, Company, ExpenseCategory, Terminal
 
 router = APIRouter()
+
+# Resolved once at import. Anything that is not an IANA zone name (e.g. "IST")
+# makes Intl.DateTimeFormat throw in the POS webview while printing a receipt,
+# so a bad timezone must never be allowed to persist.
+_IANA_TIMEZONES = available_timezones()
+
+
+def _require_iana_timezone(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if normalized not in _IANA_TIMEZONES:
+        raise ValueError("timezone must be a valid IANA name like Asia/Kolkata")
+    return normalized
 
 
 # ---------------------------------------------------------------- DTOs
@@ -64,6 +79,11 @@ class CompanyUpdate(BaseModel):
         pattern=r"^$|^[A-Za-z0-9.\-_]{2,256}@[A-Za-z]{2,64}$",
     )
 
+    @field_validator("timezone")
+    @classmethod
+    def require_iana_timezone(cls, value: str | None) -> str | None:
+        return _require_iana_timezone(value)
+
 
 class BranchRead(BaseModel):
     id: UUID
@@ -91,6 +111,11 @@ class BranchCreate(BaseModel):
     trade_license_no: str | None = Field(default=None, max_length=50)
     branch_gstin: str | None = Field(default=None, min_length=15, max_length=15)
 
+    @field_validator("timezone")
+    @classmethod
+    def require_iana_timezone(cls, value: str | None) -> str | None:
+        return _require_iana_timezone(value)
+
 
 class BranchUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -103,6 +128,11 @@ class BranchUpdate(BaseModel):
     fssai_license_no: str | None = Field(default=None, pattern=r"^\d{14}$")
     trade_license_no: str | None = Field(default=None, max_length=50)
     branch_gstin: str | None = Field(default=None, min_length=15, max_length=15)
+
+    @field_validator("timezone")
+    @classmethod
+    def require_iana_timezone(cls, value: str | None) -> str | None:
+        return _require_iana_timezone(value)
 
 
 class TerminalRead(BaseModel):

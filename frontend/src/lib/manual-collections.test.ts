@@ -4,6 +4,7 @@ import type { ManualCollectionDTO } from './erp-api';
 import {
   defaultManualCollectionReference,
   dateISOInTimeZone,
+  isValidTimeZone,
   manualCollectionTotals,
   rupeesToMinor,
 } from './manual-collections';
@@ -54,6 +55,17 @@ describe('manual collection dates and references', () => {
     expect(dateISOInTimeZone(instant, 'Asia/Kolkata')).toBe('2026-07-16');
     expect(dateISOInTimeZone(instant, 'Europe/London')).toBe('2026-07-15');
     expect(dateISOInTimeZone(instant, 'America/Los_Angeles')).toBe('2026-07-15');
+  });
+
+  it('falls back to the house timezone instead of throwing on a bad stored value', () => {
+    const instant = new Date('2026-07-15T20:00:00Z');
+
+    expect(isValidTimeZone('Asia/Kolkata')).toBe(true);
+    expect(isValidTimeZone('Asia/Kolkatta')).toBe(false);
+    expect(isValidTimeZone('GMT+5:30')).toBe(false);
+    expect(isValidTimeZone('')).toBe(false);
+    expect(isValidTimeZone(null)).toBe(false);
+    expect(dateISOInTimeZone(instant, 'Asia/Kolkatta')).toBe('2026-07-16');
   });
 
   it('creates an auditable default reference', () => {

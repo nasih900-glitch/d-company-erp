@@ -12,9 +12,31 @@ export const MANUAL_COLLECTION_METHODS: ReadonlyArray<{
 
 export const DEFAULT_BUSINESS_TIMEZONE = 'Asia/Kolkata';
 
+/**
+ * Intl.DateTimeFormat throws a RangeError on a timezone it cannot resolve,
+ * which unmounts the React tree and leaves the till on a white screen.
+ * Constructing a formatter is the check that matches what actually happens at
+ * render time: Intl.supportedValuesOf is missing on the older Android WebViews
+ * these tablets ship with, and it lists canonical names only — it would reject
+ * legacy aliases such as "IST" that ICU resolves and prints perfectly well.
+ */
+export function isValidTimeZone(timeZone: string | null | undefined): boolean {
+  const candidate = timeZone?.trim();
+  if (!candidate) return false;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: candidate });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function dateISOInTimeZone(date: Date, timeZone: string): string {
+  // A bad value already saved in Settings must degrade to the house timezone
+  // rather than blank the screen.
+  const zone = isValidTimeZone(timeZone) ? timeZone.trim() : DEFAULT_BUSINESS_TIMEZONE;
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
+    timeZone: zone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -24,7 +46,7 @@ export function dateISOInTimeZone(date: Date, timeZone: string): string {
   const month = values.get('month');
   const day = values.get('day');
   if (!year || !month || !day) {
-    throw new Error(`Unable to resolve business date in timezone ${timeZone}`);
+    throw new Error(`Unable to resolve business date in timezone ${zone}`);
   }
   return `${year}-${month}-${day}`;
 }

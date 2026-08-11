@@ -1,4 +1,5 @@
 import type { BranchDTO, CompanyDTO } from '@/lib/erp-api';
+import { isValidTimeZone } from '@/lib/manual-collections';
 
 export interface ReceiptBusinessDetails {
   brandName: string;
@@ -78,6 +79,9 @@ export function receiptConfigurationIssue(business: ReceiptBusinessDetails): str
   }
   if ((business.gstRegistrationType === 'composition') !== business.isComposition) {
     return 'GST composition settings disagree. Correct the registration type in Settings before charging an order.';
+  }
+  if (!isValidTimeZone(business.timezone)) {
+    return 'Business timezone is invalid, so the receipt date cannot be printed. Set a valid timezone like Asia/Kolkata in Settings before charging an order.';
   }
   return null;
 }
