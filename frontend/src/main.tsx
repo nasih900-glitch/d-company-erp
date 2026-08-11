@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from '@/app/App';
 import { AuthProvider } from '@/modules/auth/AuthContext';
 import { registerServiceWorker } from '@/registerServiceWorker';
+import { initAlarms } from '@/lib/alarm';
 import './styles/index.css';
 
 const queryClient = new QueryClient({
@@ -33,3 +34,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 
 registerServiceWorker();
+
+// Register the high-importance alarm notification channel up front (native
+// builds only; a no-op in the browser).
+initAlarms();

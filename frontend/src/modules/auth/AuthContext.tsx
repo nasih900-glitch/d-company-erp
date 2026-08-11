@@ -10,6 +10,7 @@ import {
   terminalResolutionMessage,
 } from '@/lib/operational-context';
 import { connectRealtime, disconnectRealtime } from '@/lib/realtime';
+import { alarmPermission, requestAlarmPermission } from '@/lib/alarm';
 
 interface Me {
   user_id: string;
@@ -98,19 +99,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (GamingScreen.tsx also asks, but only if a staff member happens to open
   // it — someone who lands straight on POS and never visits Gaming would
   // otherwise never be prompted, and the held-order aging alarm's
-  // notifyBrowser() call silently no-ops without granted permission).
+  // notifyAlarm() call silently no-ops without granted permission).
+  //
+  // Goes through lib/alarm's platform-aware helpers: on the Android tablet
+  // this raises the real OS POST_NOTIFICATIONS dialog, where the old
+  // browser-only `Notification.requestPermission()` was simply undefined
+  // inside the WebView and every alarm notification quietly never fired.
   useEffect(() => {
     if (!me) return;
-    if (typeof Notification === 'undefined' || Notification.permission !== 'default') return;
-    // This is a shared-terminal app — the same browser sees many staff log
-    // in/out across a shift. If the OS dialog is left undecided (some
-    // browsers allow dismissing without an explicit Allow/Block), a naive
+    // This is a shared-terminal app — the same device sees many staff log
+    // in/out across a shift. If the OS dialog is left undecided, a naive
     // [me]-keyed effect would re-prompt on every single login. Only ever
-    // ask once per browser; if that first ask goes undecided, we don't nag
-    // again until the browser itself resets the permission.
+    // ask once per device; if that first ask goes undecided, we don't nag
+    // again until the OS itself resets the permission.
     if (localStorage.getItem('notif_permission_asked')) return;
-    localStorage.setItem('notif_permission_asked', '1');
-    void Notification.requestPermission();
+    void (async () => {
+      if ((await alarmPermission()) !== 'default') return;
+      localStorage.setItem('notif_permission_asked', '1');
+      await requestAlarmPermission();
+    })();
   }, [me]);
 
   // One shared real-time connection for the whole app, live for as long as

@@ -16,7 +16,10 @@ import {
   Ban,
 } from 'lucide-react';
 
-import { ALARM_REPEAT_MS, fmtClock, notifyBrowser, playAlarmTone } from '@/lib/alarm';
+import {
+  ALARM_REPEAT_MS, fmtClock, notifyAlarm, playAlarmTone,
+  alarmPermission, requestAlarmPermission, type AlarmPermission,
+} from '@/lib/alarm';
 import { LIVE_MODE } from '@/lib/demo';
 import { STATIONS, type Station as DemoStation } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
@@ -78,7 +81,7 @@ const DURATION_PRESETS = [
 const GAMING_SESSIONS_POLL_MS = 120_000;
 
 function notifyTimerExpired(stationName: string) {
-  notifyBrowser(
+  notifyAlarm(
     `⏰ ${stationName} — time's up`,
     'The session timer has ended. Stop the session or extend the timer.',
     `dcompany-timer-${stationName}`,
@@ -107,9 +110,10 @@ export default function GamingScreen() {
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(
-    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
-  );
+  // Resolved asynchronously: on the native tablet build this comes from the
+  // OS via Capacitor rather than the WebView's (absent) Notification API.
+  const [notifPermission, setNotifPermission] = useState<AlarmPermission>('default');
+  useEffect(() => { void alarmPermission().then(setNotifPermission); }, []);
 
   // Refs so the 1s alarm-check interval (subscribed once) always sees fresh data
   // without re-subscribing every render.
@@ -217,8 +221,7 @@ export default function GamingScreen() {
   }, []);
 
   function enableAlarmNotifications() {
-    if (typeof Notification === 'undefined') return;
-    Notification.requestPermission().then((perm) => setNotifPermission(perm));
+    void requestAlarmPermission().then(setNotifPermission);
   }
 
   function toggleMute(stationId: string) {
@@ -516,7 +519,7 @@ export default function GamingScreen() {
 
       {notifPermission === 'default' && (
         <div className="card mb-4 border-accent/40 bg-accent/10 text-sm flex items-center justify-between gap-3 flex-wrap">
-          <span className="flex items-center gap-2"><Bell size={14}/> Turn on browser alerts so staff get notified the moment a session's timer ends.</span>
+          <span className="flex items-center gap-2"><Bell size={14}/> Turn on alerts so staff get notified the moment a session's timer ends.</span>
           <button className="btn btn-ghost !py-1.5" onClick={enableAlarmNotifications}>Enable notifications</button>
         </div>
       )}

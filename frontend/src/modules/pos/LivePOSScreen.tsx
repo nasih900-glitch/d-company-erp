@@ -20,7 +20,7 @@ import {
   Search, UserRound, Crown, AlertCircle, Inbox, XCircle, BellOff, Bell,
 } from 'lucide-react';
 
-import { ALARM_REPEAT_MS, notifyBrowser, playAlarmTone } from '@/lib/alarm';
+import { ALARM_REPEAT_MS, notifyAlarm, playAlarmTone } from '@/lib/alarm';
 import { clearDraft, loadDraft, saveDraft } from '@/lib/draft-storage';
 import { inr } from '@/lib/inr';
 import {
@@ -479,7 +479,7 @@ export default function LivePOSScreen() {
       if (now - lastHeldAlarmAtRef.current < ALARM_REPEAT_MS) return;
       lastHeldAlarmAtRef.current = now;
       playAlarmTone();
-      notifyBrowser(
+      notifyAlarm(
         '⏰ Incoming orders waiting',
         'One or more sent or recovered orders have been unbilled for a while. Bill or void them.',
         'dcompany-held-orders',
