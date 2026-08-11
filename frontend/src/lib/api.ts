@@ -1,5 +1,5 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
-import { clearStoredTerminal, readStoredTerminalId } from './operational-context';
+import { readStoredTerminalId } from './operational-context';
 
 /**
  * Base URL resolution order (most specific wins):
@@ -71,6 +71,52 @@ api.interceptors.request.use((config) => {
 // and then retry with the new token.
 let refreshPromise: Promise<string> | null = null;
 
+// This module lives outside React, so it cannot clear AuthContext state or
+// navigate on its own. AuthProvider registers a handler here on mount; a
+// forced logout then goes through exactly the same path as a manual logout
+// (auth state cleared → RequireAuth renders <Navigate to="/login">), which
+// works under BOTH HashRouter and BrowserRouter. Writing window.location.hash
+// only ever worked under the former, so on the Android/web BrowserRouter build
+// the cashier was left on a fully rendered POS with no login screen.
+type ForcedLogoutHandler = () => void;
+let forcedLogoutHandler: ForcedLogoutHandler | null = null;
+
+export function setForcedLogoutHandler(handler: ForcedLogoutHandler | null): void {
+  forcedLogoutHandler = handler;
+}
+
+function forceLogout(): void {
+  // Credentials only. The terminal ID and the open-shift context are device
+  // identity, not credentials — wiping them here stranded the POS behind a
+  // terminal-selection prompt (2+ terminals) with an apparently vanished cart.
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  localStorage.removeItem('pricing_token');
+  localStorage.removeItem('pricing_token_expires_at');
+  if (forcedLogoutHandler) {
+    forcedLogoutHandler();
+    return;
+  }
+  // No provider mounted (yet) to clear — reload so the app boots tokenless and
+  // lands on the login route under either router mode. Tokens are already gone,
+  // so this cannot loop.
+  if (typeof window !== 'undefined') window.location.reload();
+}
+
+/**
+ * Was the refresh token *definitively* rejected, or did we merely fail to ask?
+ * The backend answers an invalid/expired/revoked refresh token with 401 (and a
+ * forbidden one with 403). A timeout, a dropped connection or a 5xx says
+ * nothing about whether the still-valid 7-day token is good — discarding it on
+ * those turned ~20s of bad cafe wifi into a permanent hard logout.
+ */
+function isRefreshRejection(error: unknown): boolean {
+  // Nothing left to preserve (e.g. "no refresh token") — treat as definitive.
+  if (!localStorage.getItem('refresh_token')) return true;
+  const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+  return status === 401 || status === 403;
+}
+
 async function refreshAccessToken(): Promise<string> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
@@ -111,15 +157,18 @@ api.interceptors.response.use(
         cfg._retried = true;
         cfg.headers = { ...(cfg.headers || {}), Authorization: `Bearer ${newToken}` };
         return api.request(cfg);
-      } catch {
-        // Refresh failed — wipe creds and let the original 401 bubble up.
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        clearStoredTerminal();
-        localStorage.removeItem('pricing_token');
-        localStorage.removeItem('pricing_token_expires_at');
-        if (typeof window !== 'undefined' && !window.location.hash.includes('/login')) {
-          window.location.hash = '/login';
+      } catch (refreshError) {
+        if (isRefreshRejection(refreshError)) {
+          // The server really did reject this session — log out for real.
+          forceLogout();
+        } else {
+          // Bad link, not a bad token: keep the refresh token and report a
+          // retryable failure instead of the misleading original 401.
+          const retryable: ApiError = new Error(
+            'Could not reach the server to renew this session. Check the connection and try again.',
+          );
+          retryable.code = 'network_error';
+          return Promise.reject(retryable);
         }
       }
     }
@@ -144,10 +193,14 @@ api.interceptors.response.use(
     }
 
     const message = serverMessage ?? err.message ?? 'Unknown error talking to the API';
-    const enriched = new Error(message);
-    (enriched as Error & { code?: string }).code = serverCode ?? 'network_error';
+    const enriched: ApiError = new Error(message);
+    enriched.code = serverCode ?? 'network_error';
+    // Callers need to tell "the server rejected this session" (401/403) apart
+    // from "we never got an answer" (timeout/offline, no status at all) — only
+    // the former may destroy a stored session.
+    enriched.status = err.response?.status;
     return Promise.reject(enriched);
   },
 );
 
-export type ApiError = Error & { code?: string };
+export type ApiError = Error & { code?: string; status?: number };

@@ -55,6 +55,13 @@ export function storeTerminalId(terminalId: string): void {
   }
 }
 
+/**
+ * Drops this device's terminal identity and the shift context bound to it.
+ * Call this ONLY when the server has proven the stored terminal is not usable
+ * for the current branch — never on an auth failure or a failed request. The
+ * terminal ID is device identity, not a credential: clearing it there left a
+ * multi-terminal branch unable to open POS and made the saved cart look lost.
+ */
 export function clearStoredTerminal(): void {
   try {
     storage()?.removeItem(TERMINAL_KEY);

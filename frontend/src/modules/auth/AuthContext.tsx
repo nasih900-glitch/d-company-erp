@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api } from '@/lib/api';
+import { api, setForcedLogoutHandler, type ApiError } from '@/lib/api';
 import { DEMO_MODE, DEMO_USER } from '@/lib/demo';
 import type { TerminalDTO } from '@/lib/erp-api';
 import {
@@ -25,6 +25,20 @@ interface Me {
 }
 
 const AUTH_BOOT_TIMEOUT_MS = 8000;
+// Congested cafe wifi regularly blows the 8s cold-start budget. One more try on
+// a longer budget beats sending a cashier back to the login screen with a
+// customer waiting — see the boot effect below.
+const AUTH_BOOT_RETRY_TIMEOUT_MS = 20_000;
+
+/**
+ * Only the server may invalidate a session. A 401/403 is that answer; an abort,
+ * a timeout, an offline device or a 5xx is not — those must never clear stored
+ * credentials.
+ */
+function isAuthRejection(error: unknown): boolean {
+  const status = (error as ApiError | null)?.status;
+  return status === 401 || status === 403;
+}
 
 interface TerminalClaim {
   terminalId: string | null;
@@ -50,7 +64,8 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
       issue: terminalResolutionMessage(resolution),
     };
   } catch (error) {
-    clearStoredTerminal();
+    // The request failed — that is not proof the stored terminal is wrong, so
+    // the device keeps its identity and this load simply reports the issue.
     return {
       terminalId: null,
       options: [],
@@ -59,10 +74,14 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
   }
 }
 
+// Credentials only. The terminal ID and its open-shift context belong to the
+// device, not to the signed-in staff member: clearing them here made a branch
+// with 2+ terminals refuse to open POS after any logout, and made the saved
+// cart look lost. resolveTerminalClaim revalidates the stored terminal against
+// the server on every login, so keeping it is not a trust shortcut.
 function clearStoredSession() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
-  clearStoredTerminal();
   localStorage.removeItem('pricing_token');
   localStorage.removeItem('pricing_token_expires_at');
 }
@@ -129,6 +148,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else disconnectRealtime();
   }, [me]);
 
+  // The axios layer can detect a definitively rejected session but cannot clear
+  // React state or route anywhere. Registered before the boot effect below so a
+  // 401 raised during boot is handled here too.
+  useEffect(() => {
+    setForcedLogoutHandler(() => {
+      clearStoredSession();
+      setTerminalId(null);
+      setTerminalOptions([]);
+      setTerminalIssue(null);
+      setMe(null);
+    });
+    return () => setForcedLogoutHandler(null);
+  }, []);
+
   useEffect(() => {
     // Demo mode: skip the network entirely, auto-login as owner.
     if (DEMO_MODE) {
@@ -137,39 +170,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => {
-      controller.abort();
-    }, AUTH_BOOT_TIMEOUT_MS);
+    let controller: AbortController | null = null;
+    let timeout = 0;
 
     const token = localStorage.getItem('access_token');
     if (!token) {
-      window.clearTimeout(timeout);
       setLoading(false);
       return () => {
         cancelled = true;
-        controller.abort();
       };
     }
-    api
-      .get<Me>('/auth/me', { signal: controller.signal })
-      .then(async (r) => {
-        if (cancelled) return;
-        const claim = await resolveTerminalClaim(r.data, controller.signal);
-        if (cancelled) return;
-        applyTerminalClaim(claim);
-        setMe(r.data);
-      })
-      .catch(() => clearStoredSession())
-      .finally(() => {
+
+    async function loadSession(budgetMs: number): Promise<Me> {
+      const active = new AbortController();
+      controller = active;
+      timeout = window.setTimeout(() => active.abort(), budgetMs);
+      try {
+        const r = await api.get<Me>('/auth/me', { signal: active.signal });
+        const claim = await resolveTerminalClaim(r.data, active.signal);
+        if (!cancelled) applyTerminalClaim(claim);
+        return r.data;
+      } finally {
         window.clearTimeout(timeout);
+      }
+    }
+
+    void (async () => {
+      try {
+        let data: Me;
+        try {
+          data = await loadSession(AUTH_BOOT_TIMEOUT_MS);
+        } catch (error) {
+          if (cancelled || isAuthRejection(error)) throw error;
+          // Slow boot, not a dead session — one retry on a longer budget.
+          data = await loadSession(AUTH_BOOT_RETRY_TIMEOUT_MS);
+        }
+        if (!cancelled) setMe(data);
+      } catch (error) {
+        // Aborting the cold-start budget used to land here and delete the
+        // session, force-logging the tablet out exactly when the wifi was
+        // congested. Only a real rejection may do that; otherwise the tokens
+        // stay put and the next boot (or the next request once the link is
+        // back) restores the session without anyone retyping a password.
+        if (isAuthRejection(error)) clearStoredSession();
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
-      controller.abort();
+      controller?.abort();
     };
   }, []);
 
