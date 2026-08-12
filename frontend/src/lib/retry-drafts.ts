@@ -91,6 +91,16 @@ export interface PosRetryDraft {
   deliveryStateCode: string;
   customerName: string;
   customerPhone: string;
+  // A custom discount / points redemption the cashier entered at cart-review
+  // time, before any order existed to carry it. Until prepareCheckout()
+  // creates the order and applies it server-side there is no other record of
+  // it anywhere, so it must ride along with the cart it was entered against —
+  // losing it on a reload silently rebills the customer at full price.
+  // Optional and absent when zero: an older stored draft simply restores as
+  // "nothing pending", which is exactly the pre-upgrade behaviour, so the
+  // draft version stays 2 rather than orphaning in-flight version-2 recoveries.
+  pendingCartDiscountMinor?: number;
+  pendingCartPointsMinor?: number;
   retry?: PosCheckoutRetry;
 }
 
@@ -118,6 +128,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+// Money is whole paise: a stored draft carrying a float, a negative, or
+// anything non-numeric is corrupt and restores as "nothing pending".
+function positiveMinor(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 export function createOperationKey(): string {
@@ -322,6 +338,8 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
 export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
   if (!isRecord(value)) return null;
   const cart = normalizeDraftLines(value.cart);
+  const pendingCartDiscountMinor = positiveMinor(value.pendingCartDiscountMinor);
+  const pendingCartPointsMinor = positiveMinor(value.pendingCartPointsMinor);
   const normalized: PosRetryDraft = {
     version: 2,
     shiftId: nonEmptyString(value.shiftId),
@@ -332,6 +350,11 @@ export function normalizePosRetryDraft(value: unknown): PosRetryDraft | null {
     deliveryStateCode: typeof value.deliveryStateCode === 'string' ? value.deliveryStateCode : '32',
     customerName: typeof value.customerName === 'string' ? value.customerName : '',
     customerPhone: typeof value.customerPhone === 'string' ? value.customerPhone : '',
+    // Absent on every draft written before this field existed, which restores
+    // as "nothing pending" — the same result those drafts produced before the
+    // upgrade, so no version bump is needed to read them safely.
+    ...(pendingCartDiscountMinor ? { pendingCartDiscountMinor } : {}),
+    ...(pendingCartPointsMinor ? { pendingCartPointsMinor } : {}),
   };
   if (value.version === 2) normalized.retry = normalizeCheckoutRetry(value.retry);
   return normalized;
@@ -464,6 +487,39 @@ export function isAmbiguousApiError(error: unknown): boolean {
   return code === 'network_error'
     || code === 'internal_error'
     || code === 'idempotency_in_progress';
+}
+
+/**
+ * A deterministic server refusal (an oversized discount, a redemption larger
+ * than the bill, …). Unlike an ambiguous failure, replaying the exact same
+ * request can only fail the exact same way.
+ */
+export function isBusinessRuleApiError(error: unknown): boolean {
+  return (error as Error & { code?: string } | null)?.code === 'business_rule';
+}
+
+// The two stale-bill guards in _validate_confirmed_payment_balance
+// (app/api/v1/pos/router.py). Both are raised before the Payment row is
+// created, and the request session rolls back on any error, so a payment
+// refused this way recorded nothing at all — not even its idempotency
+// reservation. Matched on the exact server message because every domain
+// refusal shares the generic `business_rule` code; if the backend ever
+// rewords them this stops matching and the caller falls back to the strict
+// "result unknown" lock, never the other way around.
+const STALE_CHECKOUT_BALANCE_MESSAGES = new Set([
+  'Order total changed before payment. Reload the exact bill before collecting money.',
+  'Order balance changed before payment. Reload the exact amount due before collecting money.',
+]);
+
+/**
+ * A definitive refusal to record the payment because the submitted expected
+ * bill no longer matches the server's. No money was taken, nothing is in
+ * flight, and the same key can be replayed once the balance is refreshed.
+ */
+export function isStaleCheckoutBalanceRejection(error: unknown): boolean {
+  const err = error as (Error & { code?: string }) | null;
+  if (!err || !isBusinessRuleApiError(err)) return false;
+  return STALE_CHECKOUT_BALANCE_MESSAGES.has(err.message);
 }
 
 export function shouldPreserveCheckoutRetry(

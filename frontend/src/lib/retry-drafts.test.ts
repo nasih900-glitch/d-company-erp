@@ -9,6 +9,7 @@ import {
   hasLockedTableRetryOperation,
   hasBenefitCoveredZeroBalance,
   hasCollectibleCheckoutBalance,
+  isStaleCheckoutBalanceRejection,
   isTableDraftHydratedForKey,
   normalizePosRetryDraft,
   normalizeTableCartDraft,
@@ -157,6 +158,38 @@ describe('POS checkout retry drafts', () => {
     expect(normalizePosRetryDraft(JSON.parse(JSON.stringify(retryDraft)))).toEqual(retryDraft);
   });
 
+  it('round-trips a discount and points entered before the order existed', () => {
+    const cartStageDraft: PosRetryDraft = {
+      ...retryDraft,
+      resumingOrderId: undefined,
+      retry: undefined,
+      pendingCartDiscountMinor: 5000,
+      pendingCartPointsMinor: 2500,
+    };
+
+    expect(normalizePosRetryDraft(JSON.parse(JSON.stringify(cartStageDraft))))
+      .toEqual(cartStageDraft);
+  });
+
+  it('restores a draft saved before cart-stage benefits were journalled', () => {
+    const restored = normalizePosRetryDraft(JSON.parse(JSON.stringify(retryDraft)));
+
+    expect(restored?.pendingCartDiscountMinor).toBeUndefined();
+    expect(restored?.pendingCartPointsMinor).toBeUndefined();
+    expect(restored?.retry?.key).toBe('checkout-1');
+  });
+
+  it('drops a corrupt cart-stage discount instead of restoring bad money', () => {
+    const corrupt = normalizePosRetryDraft({
+      ...JSON.parse(JSON.stringify(retryDraft)),
+      pendingCartDiscountMinor: 12.5,
+      pendingCartPointsMinor: -2500,
+    });
+
+    expect(corrupt?.pendingCartDiscountMinor).toBeUndefined();
+    expect(corrupt?.pendingCartPointsMinor).toBeUndefined();
+  });
+
   it('treats an older interrupted one-step checkout as payment-confirmed recovery', () => {
     const legacyRetry = JSON.parse(JSON.stringify(retryDraft));
     delete legacyRetry.retry.phase;
@@ -186,6 +219,31 @@ describe('POS checkout retry drafts', () => {
       ...retryDraft.retry!,
       pendingOrderId: undefined,
     })).toBe(false);
+  });
+
+  it('recognises only the stale-bill refusals that recorded no payment', () => {
+    const staleTotal = Object.assign(
+      new Error('Order total changed before payment. Reload the exact bill before collecting money.'),
+      { code: 'business_rule' },
+    );
+    const staleDue = Object.assign(
+      new Error('Order balance changed before payment. Reload the exact amount due before collecting money.'),
+      { code: 'business_rule' },
+    );
+    const otherRefusal = Object.assign(new Error('cannot pay an order in status=paid'), {
+      code: 'business_rule',
+    });
+    const ambiguous = Object.assign(new Error('connection lost'), { code: 'network_error' });
+
+    expect(isStaleCheckoutBalanceRejection(staleTotal)).toBe(true);
+    expect(isStaleCheckoutBalanceRejection(staleDue)).toBe(true);
+    expect(isStaleCheckoutBalanceRejection(otherRefusal)).toBe(false);
+    expect(isStaleCheckoutBalanceRejection(ambiguous)).toBe(false);
+    // Same text, but a transport failure never proves the server rejected it.
+    expect(isStaleCheckoutBalanceRejection(
+      Object.assign(new Error(staleTotal.message), { code: 'network_error' }),
+    )).toBe(false);
+    expect(isStaleCheckoutBalanceRejection(null)).toBe(false);
   });
 
   it('uses a fresh canonical balance before collection but never rewrites a confirmed attempt', () => {

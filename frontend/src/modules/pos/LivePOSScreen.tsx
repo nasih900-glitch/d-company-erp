@@ -49,6 +49,8 @@ import {
   hasBenefitCoveredZeroBalance,
   hasCollectibleCheckoutBalance,
   isAmbiguousApiError,
+  isBusinessRuleApiError,
+  isStaleCheckoutBalanceRejection,
   normalizePosRetryDraft,
   shouldPreserveCheckoutRetry,
   type CheckoutDeliveryVia,
@@ -97,6 +99,17 @@ function posDraftKey(
   terminalId: string,
 ) {
   return `pos-draft:${companyId}:${branchId}:${userId}:${terminalId}`;
+}
+
+// Phases where a server order exists but no money has been collected yet, so
+// the locked recovery can safely be cancelled and the terminal freed for the
+// next customer. 'recording_payment' / 'finalizing_zero' stay strictly locked,
+// because a payment may genuinely be in flight there.
+function canAbandonCheckoutRetry(retry: PosCheckoutRetry | null): boolean {
+  return Boolean(
+    retry?.pendingOrderId
+    && (retry.phase === 'awaiting_payment' || retry.phase === 'preparing_order'),
+  );
 }
 
 export default function LivePOSScreen() {
@@ -215,6 +228,8 @@ export default function LivePOSScreen() {
     setHydratedDraftKey(null);
     setItems([]);
     setCart([]);
+    setPendingCartDiscountMinor(0);
+    setPendingCartPointsMinor(0);
     setResumingOrder(null);
     setHeldOrders([]);
     setHeldError(null);
@@ -307,6 +322,10 @@ export default function LivePOSScreen() {
 
           let retry = storedDraft.retry;
           let pendingOrder: OrderDTO | null = null;
+          // Set when the saved cart is thrown away below. A cart-stage
+          // discount/points redemption belongs to that exact cart, so it must
+          // go with it instead of reattaching to whatever is billed next.
+          let savedCartDiscarded = false;
           if (retry?.pendingOrderId) {
             try {
               pendingOrder = await orders.get(retry.pendingOrderId);
@@ -375,6 +394,7 @@ export default function LivePOSScreen() {
                 // It was paid/cleared elsewhere and there is no interrupted
                 // checkout to recover, so the ordinary stale draft can go.
                 setCart([]);
+                savedCartDiscarded = true;
                 clearDraft(activeDraftKey);
               }
             } catch (e) {
@@ -383,9 +403,24 @@ export default function LivePOSScreen() {
                 setError(`${(e as Error).message} The interrupted checkout remains saved for a safe retry.`);
               } else {
                 setCart([]);
+                savedCartDiscarded = true;
                 clearDraft(activeDraftKey);
               }
             }
+          }
+          if (!savedCartDiscarded) {
+            // Entered on the cart-review screen before any order existed, so
+            // the draft is the only record of it anywhere — restoring the cart
+            // without it silently rebills the customer at full price. Values
+            // are re-checked against the live bill when prepareCheckout()
+            // applies them, exactly like a freshly typed one.
+            setPendingCartDiscountMinor(storedDraft.pendingCartDiscountMinor ?? 0);
+            // Points were counted against one specific customer's balance, so
+            // they must not come back without that customer attached — the
+            // same invariant clearCustomer() enforces.
+            setPendingCartPointsMinor(
+              storedDraft.customerPhone.trim() ? (storedDraft.pendingCartPointsMinor ?? 0) : 0,
+            );
           }
           setCheckoutRetry(retry ?? null);
         }
@@ -654,14 +689,30 @@ export default function LivePOSScreen() {
       resumingOrderId: resumingOrder?.id,
       cart: cart.map((l) => ({ itemId: l.item.id, qty: l.qty })),
       orderType, deliveryVia, deliveryStateCode, customerName, customerPhone,
+      ...(pendingCartDiscountMinor ? { pendingCartDiscountMinor } : {}),
+      ...(pendingCartPointsMinor ? { pendingCartPointsMinor } : {}),
       retry: checkoutRetry ?? undefined,
     });
   }, [
     draftKey, draftHydrated, cart, resumingOrder, orderType, deliveryVia,
     deliveryStateCode, customerName, customerPhone, checkoutRetry, shiftId,
+    pendingCartDiscountMinor, pendingCartPointsMinor,
   ]);
 
-  function buildPosDraft(retry: PosCheckoutRetry | null): PosRetryDraft {
+  // A caller that has just consumed or dropped the cart-stage benefits must say
+  // so explicitly. setPendingCart*Minor(0) does not update the value captured by
+  // this render's closure, so without an override the synchronous save below
+  // would write the stale amount straight back into the draft and a reload
+  // would resurrect a discount that is already on the bill — or one the server
+  // has just refused.
+  interface PendingCartBenefits { discountMinor: number; pointsMinor: number }
+
+  function buildPosDraft(
+    retry: PosCheckoutRetry | null,
+    benefits?: PendingCartBenefits,
+  ): PosRetryDraft {
+    const discountMinor = benefits ? benefits.discountMinor : pendingCartDiscountMinor;
+    const pointsMinor = benefits ? benefits.pointsMinor : pendingCartPointsMinor;
     return {
       version: 2,
       shiftId: retry?.snapshot.shiftId ?? shiftId ?? undefined,
@@ -672,14 +723,22 @@ export default function LivePOSScreen() {
       deliveryStateCode,
       customerName,
       customerPhone,
+      // Written straight through from state: this synchronous save runs before
+      // the next API call, so a cart-stage discount survives even a crash
+      // between entering it and the order being created.
+      ...(discountMinor ? { pendingCartDiscountMinor: discountMinor } : {}),
+      ...(pointsMinor ? { pendingCartPointsMinor: pointsMinor } : {}),
       retry: retry ?? undefined,
     };
   }
 
-  function persistCheckoutRetry(retry: PosCheckoutRetry | null): boolean {
+  function persistCheckoutRetry(
+    retry: PosCheckoutRetry | null,
+    benefits?: PendingCartBenefits,
+  ): boolean {
     setCheckoutRetry(retry);
     if (!draftKey) return retry === null;
-    const draft = buildPosDraft(retry);
+    const draft = buildPosDraft(retry, benefits);
     if (!draft.cart.length && !draft.resumingOrderId && !retry) {
       clearDraft(draftKey);
       return true;
@@ -896,7 +955,11 @@ export default function LivePOSScreen() {
       if (order.due_minor <= 0 && !hasBenefitCoveredZeroBalance(retry)) {
         throw new Error('The server reports no amount due, but no final invoice is available. Ask a protected owner to reconcile this order.');
       }
-      if (!persistCheckoutRetry(retry)) {
+      // Both cart-stage benefits are now either untouched-at-zero or applied to
+      // the order above, so the draft must record none pending. Persisting the
+      // pre-apply closure values instead would restore them on reload and show
+      // the discount subtracted twice.
+      if (!persistCheckoutRetry(retry, { discountMinor: 0, pointsMinor: 0 })) {
         setError(
           'The exact server bill was prepared, but recovery storage failed. Keep this page open and restore browser storage before collecting payment.',
         );
@@ -904,16 +967,38 @@ export default function LivePOSScreen() {
       }
       setError(null);
     } catch (e) {
+      // The server refused a rule outright, so resuming this same preparation
+      // would replay the identical rejection forever. Drop the cart-stashed
+      // discount/points that caused it instead of leaving them in state.
+      const clearedCartBenefits = isBusinessRuleApiError(e)
+        && (pendingCartDiscountMinor > 0 || pendingCartPointsMinor > 0);
+      if (clearedCartBenefits) {
+        setPendingCartDiscountMinor(0);
+        setPendingCartPointsMinor(0);
+      }
+      // Deliberately not worded as "refused": the same clearing runs when the
+      // discount applied cleanly and a later step (the points redemption) was
+      // the one refused. Telling the cashier to check the bill's own total is
+      // true in both cases; telling them it was rejected would not be.
+      const clearedNote = clearedCartBenefits
+        ? ' The discount/points entered on the cart have been cleared — check the prepared bill\'s total before re-entering them.'
+        : '';
+      // Same stale-closure hazard as the success path: the setState above has
+      // not landed yet, so the cleared values must be passed explicitly or the
+      // refused amount is written back and re-armed on the next reload.
+      const clearedBenefits = clearedCartBenefits
+        ? { discountMinor: 0, pointsMinor: 0 }
+        : undefined;
       if (shouldPreserveCheckoutRetry(e, retry)) {
-        persistCheckoutRetry(retry);
+        persistCheckoutRetry(retry, clearedBenefits);
         const recoveryHint = isAmbiguousApiError(e)
           ? 'The server result is unknown. Resume the same preparation key; do not start another bill.'
           : 'The prepared order remains saved and must be reconciled.';
-        setError(`${(e as Error).message} ${recoveryHint}`);
+        setError(`${(e as Error).message} ${recoveryHint}${clearedNote}`);
       } else {
-        persistCheckoutRetry(null);
+        persistCheckoutRetry(null, clearedBenefits);
         setShowPay(true);
-        setError((e as Error).message);
+        setError(`${(e as Error).message}${clearedNote}`);
       }
     } finally {
       setPaying(false);
@@ -992,6 +1077,34 @@ export default function LivePOSScreen() {
       }
       finishCheckout(paidOrder);
     } catch (e) {
+      // A stale-bill refusal is decided before the server writes anything —
+      // no Payment row, no shift movement, and the whole request (including
+      // its idempotency reservation) rolls back. Treating it as an unresolved
+      // in-flight payment would falsely tell the cashier money was taken and
+      // freeze the terminal on a total that can never be refreshed. Reopen
+      // the confirm-payment screen on the current server balance instead; the
+      // payment key is deliberately kept, so a submission that did commit
+      // still replays as itself rather than charging twice.
+      if (paymentSubmission && isStaleCheckoutBalanceRejection(e)) {
+        let reopened: PosCheckoutRetry = { ...retry, phase: 'awaiting_payment' };
+        let refreshed = false;
+        try {
+          const currentOrder = await pos.getOrder(paymentSubmission.orderId);
+          reopened = applyCanonicalCheckoutBalance(reopened, currentOrder);
+          refreshed = true;
+        } catch {
+          // The refusal is still definitive, so the recovery stays unlocked
+          // and self-heals: this screen refreshes the balance on reload, and
+          // re-submitting the stale amount can only be refused the same way.
+        }
+        persistCheckoutRetry(reopened);
+        setError(`${(e as Error).message} No money was recorded for this attempt.${
+          refreshed
+            ? ' The amount below is the refreshed server balance; confirm it with the customer and collect again.'
+            : ' The refreshed balance could not be loaded — do not collect against the amount below until it reloads.'
+        }`);
+        return;
+      }
       persistCheckoutRetry(retry);
       setError(zeroFinalization
         ? `${(e as Error).message} The no-payment membership settlement remains locked to the same key. Resume it; do not collect money.`
@@ -1016,6 +1129,14 @@ export default function LivePOSScreen() {
     // amount and prepareCheckout() applies it the moment the order exists.
     const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
     if (!targetOrderId) {
+      // Nothing exists server-side yet to reject an oversized amount, so clamp
+      // it here against the same estimate the cart shows. Otherwise the bill is
+      // prepared first and only then rejected, locking the checkout.
+      const roomMinor = Math.max(0, estimatedPayable - pendingCartPointsMinor);
+      if (minor > roomMinor) {
+        setDiscountError(`Discount cannot exceed the order total (${inr(roomMinor)}).`);
+        return;
+      }
       setPendingCartDiscountMinor(minor);
       setDiscountInput('');
       setDiscountError(null);
@@ -1081,6 +1202,16 @@ export default function LivePOSScreen() {
 
     const targetOrderId = resumingOrder?.id ?? checkoutRetry?.pendingOrderId;
     if (!targetOrderId) {
+      // Same reasoning as the discount above: with no order yet, this is the
+      // only place a redemption larger than the bill can be caught before it
+      // gets stashed and then permanently rejected at bill preparation.
+      const roomMinor = Math.max(0, estimatedPayable - pendingCartDiscountMinor);
+      if (minor > roomMinor) {
+        setPointsError(
+          `This bill can only absorb ${Math.floor(roomMinor / 10).toLocaleString('en-IN')} points (${inr(roomMinor)}).`,
+        );
+        return;
+      }
       setPendingCartPointsMinor(minor);
       setPointsInput('');
       setPointsError(null);
@@ -1135,14 +1266,14 @@ export default function LivePOSScreen() {
 
   function startAbandonPreparedCheckout() {
     const retry = checkoutRetry;
-    if (!retry?.pendingOrderId || retry.phase !== 'awaiting_payment') return;
+    if (!canAbandonCheckoutRetry(retry) || !retry) return;
     setAbandonConfirmVariant(hasBenefitCoveredZeroBalance(retry) ? 'benefit_covered' : 'no_payment');
   }
 
   async function abandonPreparedCheckout() {
     setAbandonConfirmVariant(null);
     const retry = checkoutRetry;
-    if (!retry?.pendingOrderId || retry.phase !== 'awaiting_payment') return;
+    if (!canAbandonCheckoutRetry(retry) || !retry?.pendingOrderId) return;
     setPaying(true);
     setError(null);
     try {
@@ -1155,6 +1286,8 @@ export default function LivePOSScreen() {
       if (order.status === 'void') {
         setCheckoutRetry(null);
         setCart([]);
+        setPendingCartDiscountMinor(0);
+        setPendingCartPointsMinor(0);
         setResumingOrder(null);
         clearCustomer();
         if (draftKey) clearDraft(draftKey);
@@ -1164,6 +1297,8 @@ export default function LivePOSScreen() {
       if (order.status === 'refunded') {
         setCheckoutRetry(null);
         setCart([]);
+        setPendingCartDiscountMinor(0);
+        setPendingCartPointsMinor(0);
         setResumingOrder(null);
         clearCustomer();
         setReceipt(order);
@@ -1994,6 +2129,24 @@ export default function LivePOSScreen() {
                     <button className="btn btn-primary disabled:opacity-40"
                       disabled={paying || (!collectibleBalance && !benefitCoveredZero)} onClick={completeCheckout}>
                       {paying ? <Loader2 size={16} className="animate-spin"/> : <Check size={16}/>} {benefitCoveredZero ? 'Complete member benefit' : 'Payment received'}
+                    </button>
+                  </div>
+                ) : canAbandonCheckoutRetry(checkoutRetry) ? (
+                  // Nothing has been collected at this phase, so the cashier
+                  // must always be able to walk away — a resume that the server
+                  // keeps refusing would otherwise trap this terminal.
+                  <div className="grid grid-cols-2 gap-3">
+                    <button className="btn btn-ghost disabled:opacity-40"
+                      disabled={paying} onClick={startAbandonPreparedCheckout}>
+                      No payment · Cancel
+                    </button>
+                    <button
+                      className="btn btn-primary disabled:opacity-40"
+                      disabled={paying}
+                      onClick={() => prepareCheckout(checkoutRetry.paymentMethod)}
+                    >
+                      {paying ? <Loader2 size={16} className="animate-spin"/> : <RefreshCwIcon/>}
+                      {paying ? 'Reconciling safely…' : 'Resume same attempt'}
                     </button>
                   </div>
                 ) : (
