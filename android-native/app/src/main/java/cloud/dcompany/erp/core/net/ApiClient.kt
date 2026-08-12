@@ -43,6 +43,18 @@ object ApiClient {
     lateinit var api: ErpApi
         private set
 
+    /**
+     * Shared Retrofit. Each feature declares its own endpoint interface and
+     * builds it with [create], instead of everything piling into one giant
+     * ErpApi — that keeps unrelated features from colliding in the same file.
+     */
+    private lateinit var retrofit: Retrofit
+
+    /** `val api = ApiClient.create<GamingApi>()` */
+    inline fun <reified T> create(): T = createApi(T::class.java)
+
+    fun <T> createApi(service: Class<T>): T = retrofit.create(service)
+
     private lateinit var tokens: TokenStore
 
     /** Set by the app when the server definitively rejects the session. */
@@ -63,12 +75,12 @@ object ApiClient {
             .addInterceptor(ErrorInterceptor(json))
             .build()
 
-        api = Retrofit.Builder()
+        retrofit = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
             .client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-            .create(ErpApi::class.java)
+        api = retrofit.create(ErpApi::class.java)
     }
 
     /**

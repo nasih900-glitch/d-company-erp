@@ -33,6 +33,10 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.AuthState
 import cloud.dcompany.erp.ui.SessionViewModel
+import cloud.dcompany.erp.ui.Destination
+import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
+import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
 import cloud.dcompany.erp.ui.screens.PosScreen
 import cloud.dcompany.erp.ui.screens.PosViewModel
@@ -123,16 +127,22 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                 },
             ) { padding ->
                 Box(Modifier.padding(padding)) {
-                    PosScreen(
-                        state = posState,
-                        onAdd = pos::add,
-                        onRemove = pos::remove,
-                        onSelectCategory = pos::selectCategory,
-                        onClearCart = pos::clearCart,
-                        onRefresh = pos::refresh,
-                        onCapture = pos::captureSale,
-                        onDismissNotice = pos::dismissNotice,
-                    )
+                    WorkspaceScaffold(header = {}) { destination ->
+                        when (destination) {
+                            Destination.Pos -> PosScreen(
+                                state = posState,
+                                onAdd = pos::add,
+                                onRemove = pos::remove,
+                                onSelectCategory = pos::selectCategory,
+                                onClearCart = pos::clearCart,
+                                onRefresh = pos::refresh,
+                                onCapture = pos::captureSale,
+                                onDismissNotice = pos::dismissNotice,
+                            )
+                            Destination.Gaming -> GamingScreen()
+                            Destination.Shift -> ShiftScreen()
+                        }
+                    }
                 }
             }
         }
