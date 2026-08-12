@@ -5,8 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import androidx.room.Room
+import cloud.dcompany.erp.core.auth.ShiftCache
 import cloud.dcompany.erp.core.auth.TokenStore
+import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.sync.ConnectivityObserver
+import cloud.dcompany.erp.core.sync.SyncEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 
 class DCompanyApp : Application() {
@@ -18,18 +25,47 @@ class DCompanyApp : Application() {
          * needs to change, the id must change with it.
          */
         const val ALARM_CHANNEL_ID = "dcompany_alarms_v1"
+
+        lateinit var instance: DCompanyApp
+            private set
     }
 
     lateinit var tokens: TokenStore
         private set
+    lateinit var shiftCache: ShiftCache
+        private set
+    lateinit var db: ErpDatabase
+        private set
+    lateinit var sync: SyncEngine
+        private set
+    lateinit var connectivity: ConnectivityObserver
+        private set
+
+    private val appScope = CoroutineScope(SupervisorJob())
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
+
         tokens = TokenStore(this)
-        // Blocking here is deliberate and bounded: it is a single small disk
-        // read, and every screen downstream assumes the session is known.
+        shiftCache = ShiftCache(this)
+        // Blocking here is deliberate and bounded: a single small disk read,
+        // and every screen downstream assumes the session is known.
         runBlocking { tokens.load() }
         ApiClient.init(tokens)
+
+        db = Room.databaseBuilder(this, ErpDatabase::class.java, "dcompany.db")
+            // No destructive fallback: this database holds captured sales that
+            // exist nowhere else until they sync. Wiping it on a schema change
+            // would destroy real money. Any future version needs a migration.
+            .build()
+
+        sync = SyncEngine(db, appScope)
+        connectivity = ConnectivityObserver(this)
+        // Draining the queue the instant the link returns is the whole point:
+        // staff should never have to remember to press a sync button.
+        connectivity.start { if (tokens.hasSession()) sync.requestSync() }
+
         createAlarmChannel()
     }
 

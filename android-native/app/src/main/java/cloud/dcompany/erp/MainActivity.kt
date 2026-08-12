@@ -129,7 +129,9 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                         onRemove = pos::remove,
                         onSelectCategory = pos::selectCategory,
                         onClearCart = pos::clearCart,
-                        onRetry = pos::load,
+                        onRefresh = pos::refresh,
+                        onCapture = pos::captureSale,
+                        onDismissNotice = pos::dismissNotice,
                     )
                 }
             }
