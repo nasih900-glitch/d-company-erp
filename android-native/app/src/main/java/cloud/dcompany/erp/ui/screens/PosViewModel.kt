@@ -32,6 +32,8 @@ data class PosUiState(
     val syncing: Boolean = false,
     val notice: String? = null,
     val menuEmpty: Boolean = false,
+    /** A sync has completed at least once on this device. */
+    val everSynced: Boolean = false,
 ) {
     val visibleItems: List<MenuItemEntity>
         get() = if (selectedCategoryId == null) items
@@ -67,7 +69,8 @@ class PosViewModel : ViewModel() {
         combine(selectedCategory, cart, notice, ::Triple),
         combine(app.connectivity.online, app.sync.syncing, ::Pair),
         combine(app.sync.pendingCount, app.sync.rejectedCount, ::Pair),
-    ) { menu, ui, net, queue ->
+        db.syncMetaDao().observe("menu"),
+    ) { menu, ui, net, queue, meta ->
         PosUiState(
             items = menu.first,
             categories = menu.second,
@@ -79,6 +82,7 @@ class PosViewModel : ViewModel() {
             pendingCount = queue.first,
             rejectedCount = queue.second,
             menuEmpty = menu.first.isEmpty(),
+            everSynced = meta != null,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PosUiState())
 

@@ -69,12 +69,27 @@ fun PosScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.padding(24.dp),
                 ) {
-                    Text("No menu on this tablet yet", color = Brand.Foreground)
-                    Text(
-                        "Connect once to download the menu. After that the till works offline.",
-                        color = Brand.ForegroundMuted,
-                    )
-                    Button(onClick = onRefresh) { Text("Download menu") }
+                    // "Nothing downloaded yet" and "downloaded fine, the menu
+                    // is genuinely empty" look identical on screen but need
+                    // opposite actions. Conflating them sends a cashier tapping
+                    // a Download button forever against a server that has no
+                    // items to give.
+                    if (state.everSynced) {
+                        Text("The menu is empty", color = Brand.Foreground)
+                        Text(
+                            "This tablet is up to date — there are no menu items set up in " +
+                                "the ERP yet. Add items on the Menu screen, then sync.",
+                            color = Brand.ForegroundMuted,
+                        )
+                        Button(onClick = onRefresh) { Text("Check again") }
+                    } else {
+                        Text("No menu on this tablet yet", color = Brand.Foreground)
+                        Text(
+                            "Connect once to download the menu. After that the till works offline.",
+                            color = Brand.ForegroundMuted,
+                        )
+                        Button(onClick = onRefresh) { Text("Download menu") }
+                    }
                 }
             }
             return@Column
