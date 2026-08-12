@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- D Company brand palette. These names were already referenced by
+         styles.xml but were never defined here, so they silently resolved to
+         capacitor-android's library defaults (a light blue/teal) — which is
+         why the status bar rendered white above a near-black app. -->
+    <color name="brandBackground">#050403</color>
+    <color name="brandGold">#D2B36D</color>
+
+    <color name="colorPrimary">#050403</color>
+    <color name="colorPrimaryDark">#050403</color>
+    <color name="colorAccent">#D2B36D</color>
+</resources>

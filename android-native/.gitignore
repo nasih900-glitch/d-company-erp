@@ -1,0 +1,11 @@
+# Gradle / AGP build output
+.gradle/
+build/
+app/build/
+local.properties
+
+# Signing material. The release keystore is shared with frontend/android and
+# is copied in locally — it must never be committed.
+*.keystore
+*.jks
+keystore.properties

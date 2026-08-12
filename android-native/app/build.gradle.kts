@@ -1,3 +1,9 @@
+// Explicit imports: inside a Kotlin DSL build script the Gradle `java`
+// extension shadows the `java.*` package, so `java.util.Properties` fails to
+// resolve without these.
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -10,10 +16,10 @@ plugins {
 // while it shares cloud.dcompany.erp would make it refuse to install over the
 // existing app on the partners' tablets.
 val keystorePropertiesFile = rootProject.file("keystore.properties")
-val keystoreProperties = java.util.Properties()
+val keystoreProperties = Properties()
 val hasReleaseKeystore = keystorePropertiesFile.exists()
 if (hasReleaseKeystore) {
-    keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {

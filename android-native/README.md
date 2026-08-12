@@ -1,24 +1,37 @@
-# android-native — incomplete scaffold, does not build yet
+# android-native — real Kotlin/Compose app, core working
 
 A ground-up Kotlin/Compose rewrite of the Android app, intended to replace the
-Capacitor WebView shell in `frontend/android`.
+Capacitor WebView shell in `frontend/android`. No WebView, no HTML, no
+JavaScript: Compose renders every pixel.
 
-**Status: foundation only. This module does not compile and produces no APK.**
-It is committed so the design decisions below are not lost, not because it runs.
+**Status: builds, installs, runs, and talks to live production.** Verified on an
+Android 15 tablet emulator (2560×1600): the app launches, raises the real OS
+notification-permission dialog, renders the Compose login screen, and a sign-in
+attempt returns the backend's own `invalid credentials` message through the
+error interceptor. No crashes in logcat.
 
-## What exists
+Not yet a replacement for the shipping app — see "What is missing" below.
 
-| File | What it is |
+## What works
+
+| Area | State |
 | --- | --- |
-| `build.gradle.kts`, `settings.gradle.kts`, `app/build.gradle.kts` | AGP 8.7.3 / Kotlin 2.0.21, Compose BOM, Retrofit + kotlinx-serialization, DataStore |
-| `app/src/main/java/.../ui/theme/Theme.kt` | Brand palette and Material3 dark scheme, shared with the web and iOS apps |
-| `app/src/main/java/.../core/net/Dtos.kt` | Auth wire models, field-for-field against the FastAPI Pydantic schemas |
+| Gradle / AGP 8.7.3, Kotlin 2.0.21, Compose BOM | builds `assembleDebug` and `assembleRelease` |
+| `ui/theme/Theme.kt` | brand palette, Material3 dark scheme, forced light system-bar icons |
+| `core/net/ApiClient.kt` | OkHttp + Retrofit + kotlinx-serialization, auth interceptor, single-flight 401 refresh, error-envelope unwrapping |
+| `core/auth/TokenStore.kt` | DataStore-backed tokens, cleared only on a definitive 401/403 |
+| `core/alarm/AlarmReceiver.kt` | `setExactAndAllowWhileIdle` via AlarmManager + IMPORTANCE_HIGH channel |
+| `ui/screens/LoginScreen.kt` | Compose sign-in, real server errors surfaced |
+| `ui/screens/PosScreen.kt` | live menu grid + cart with Indian-format ₹ money |
 
-## What is missing before it builds
+## What is missing
 
-`AndroidManifest.xml`, `MainActivity`, the Retrofit/OkHttp client and auth
-interceptor, token storage, and every screen. In short: everything but the
-foundation.
+Everything except POS browsing: bill preparation, payment capture and the
+idempotent-retry recovery, shift open/close, gaming timers, tables, kitchen
+display, inventory, customers, finance, reports, analytics, settings. Order
+creation and payment endpoints are declared in `ErpApi` but not yet wired to a
+checkout flow — the "Prepare bill" button is intentionally inert rather than
+half-wired, because a partially-correct payment path is worse than none.
 
 ## Two decisions worth keeping
 
