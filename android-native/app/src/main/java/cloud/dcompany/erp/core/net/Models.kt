@@ -80,12 +80,19 @@ data class PaymentRequest(
     @SerialName("tip_minor") val tipMinor: Long = 0,
 )
 
+/**
+ * Every field is optional. An order line has NO `id` in the payload, and `qty`
+ * comes back as a float ("qty": 1.0) — declaring them as a required String and
+ * an Int made kotlinx throw mid-sync, and because nothing caught it the whole
+ * app crashed while sending a captured sale. A wire model on a till should
+ * degrade, never take the process down.
+ */
 @Serializable
 data class OrderLine(
-    val id: String,
     @SerialName("menu_item_id") val menuItemId: String? = null,
-    val name: String,
-    val qty: Int,
+    val name: String = "",
+    val sku: String? = null,
+    val qty: Double = 0.0,
     @SerialName("unit_price_minor") val unitPriceMinor: Long = 0,
     @SerialName("line_total_minor") val lineTotalMinor: Long = 0,
 )
@@ -94,8 +101,10 @@ data class OrderLine(
 data class Order(
     val id: String,
     @SerialName("invoice_no") val invoiceNo: String? = null,
-    val status: String,
-    val type: String,
+    // Defaulted for the same reason as OrderLine: an unexpected payload must
+    // surface as a handled error, not kill the process mid-sale.
+    val status: String = "",
+    val type: String = "",
     @SerialName("subtotal_minor") val subtotalMinor: Long = 0,
     @SerialName("discount_minor") val discountMinor: Long = 0,
     @SerialName("manual_discount_minor") val manualDiscountMinor: Long = 0,

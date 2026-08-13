@@ -149,11 +149,23 @@ class SyncEngine(
         for (order in dao.byState(SyncState.PENDING)) {
             try {
                 pushOne(order)
-            } catch (e: ApiException) {
+            } catch (e: Exception) {
                 // Surface it either way. The trial run left a sale sitting in
                 // the outbox with syncState=pending and no message anywhere —
                 // from the till it looked identical to a completed sale.
                 _lastError.value = e.message
+                if (e !is ApiException) {
+                    // Not a server answer at all — a bug on our side, e.g. a
+                    // DTO that does not match the payload. This used to escape
+                    // as an uncaught SerializationException and CRASH the app
+                    // mid-sync, which is how a captured sale ended up stranded
+                    // with the process dead. Park it visibly and keep going.
+                    dao.markRejected(
+                        order.localId,
+                        "Could not send this sale (app error): ${e.message}",
+                    )
+                    continue
+                }
                 if (e.isAmbiguous) {
                     // No answer, or the server is mid-flight. The sale stays
                     // pending and the same idempotency key is replayed later,
