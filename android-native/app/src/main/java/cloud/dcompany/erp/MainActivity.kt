@@ -40,6 +40,7 @@ import cloud.dcompany.erp.ui.screens.finance.FinanceScreen
 import cloud.dcompany.erp.ui.screens.inventory.InventoryScreen
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenScreen
 import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
+import cloud.dcompany.erp.ui.screens.tables.TablesScreen
 import cloud.dcompany.erp.ui.screens.settings.SettingsScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
@@ -146,6 +147,7 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                                 onDismissNotice = pos::dismissNotice,
                             )
                             Destination.Gaming -> GamingScreen()
+                            Destination.Tables -> TablesScreen()
                             Destination.Kitchen -> KitchenScreen()
                             Destination.Shift -> ShiftScreen()
                             Destination.Customers -> CustomersScreen()

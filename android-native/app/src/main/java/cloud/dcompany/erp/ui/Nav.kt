@@ -35,6 +35,7 @@ import cloud.dcompany.erp.ui.theme.Brand
 enum class Destination(val label: String) {
     Pos("POS"),
     Gaming("Gaming"),
+    Tables("Tables"),
     Kitchen("Kitchen"),
     Shift("Shift"),
     Customers("Customers"),
