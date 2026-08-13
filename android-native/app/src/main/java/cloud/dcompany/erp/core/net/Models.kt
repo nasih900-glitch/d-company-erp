@@ -134,3 +134,22 @@ fun Long.asRupees(): String {
     val sign = if (negative) "-" else ""
     return "$sign₹$grouped.${frac.toString().padStart(2, '0')}"
 }
+
+/**
+ * POST /pos/orders/{id}/payments returns the *Payment*, not the Order.
+ * Declaring it as Order made kotlinx throw MissingFieldException for `status`
+ * and `type` — and because that is a SerializationException rather than an
+ * ApiException it escaped every catch in the sync engine, leaving the sale
+ * stranded as "pending" with no error recorded anywhere. The order was created
+ * and left unpaid on the server while the till showed nothing wrong.
+ */
+@Serializable
+data class PaymentResult(
+    val id: String,
+    @SerialName("amount_minor") val amountMinor: Long = 0,
+    @SerialName("tip_minor") val tipMinor: Long = 0,
+    @SerialName("order_status") val orderStatus: String? = null,
+    @SerialName("invoice_no") val invoiceNo: String? = null,
+    @SerialName("fiscal_year") val fiscalYear: String? = null,
+    @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
+)

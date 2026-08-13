@@ -222,9 +222,10 @@ class SyncEngine(
 
         dao.markSynced(
             localId = order.localId,
-            serverId = paid.id,
+            // The order id, not the payment id — paid.id identifies the Payment.
+            serverId = created.id,
             invoiceNo = paid.invoiceNo,
-            totalMinor = paid.totalMinor,
+            totalMinor = created.totalMinor,
         )
     }
 }

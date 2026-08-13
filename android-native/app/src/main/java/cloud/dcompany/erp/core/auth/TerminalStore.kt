@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 
 private val Context.terminalDataStore by preferencesDataStore(name = "dcompany_terminal")
 
@@ -32,12 +31,16 @@ class TerminalStore(private val context: Context) {
         cached = context.terminalDataStore.data.first()[key]
     }
 
-    fun remember(id: String?) {
+    /**
+     * Suspending, not runBlocking. The first version blocked the main thread
+     * on a DataStore write from inside a coroutine and the value never reached
+     * disk — the cache file simply never appeared, so the header was still
+     * missing after a restart. ShiftCache had it right; this now matches.
+     */
+    suspend fun remember(id: String?) {
         cached = id
-        runBlocking {
-            context.terminalDataStore.edit {
-                if (id == null) it.remove(key) else it[key] = id
-            }
+        context.terminalDataStore.edit {
+            if (id == null) it.remove(key) else it[key] = id
         }
     }
 }

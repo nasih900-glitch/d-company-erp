@@ -51,7 +51,7 @@ interface ErpApi {
         @Path("id") id: String,
         @Body body: PaymentRequest,
         @Header("Idempotency-Key") idempotencyKey: String,
-    ): Order
+    ): PaymentResult
 
     @GET("settings/terminals")
     suspend fun terminals(@Query("branch_id") branchId: String? = null): List<Terminal>
