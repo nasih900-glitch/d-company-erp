@@ -7,6 +7,7 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import androidx.room.Room
 import cloud.dcompany.erp.core.auth.ShiftCache
+import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.net.ApiClient
@@ -34,6 +35,8 @@ class DCompanyApp : Application() {
         private set
     lateinit var shiftCache: ShiftCache
         private set
+    lateinit var terminalStore: TerminalStore
+        private set
     lateinit var db: ErpDatabase
         private set
     lateinit var sync: SyncEngine
@@ -51,8 +54,9 @@ class DCompanyApp : Application() {
         shiftCache = ShiftCache(this)
         // Blocking here is deliberate and bounded: a single small disk read,
         // and every screen downstream assumes the session is known.
-        runBlocking { tokens.load() }
-        ApiClient.init(tokens)
+        terminalStore = TerminalStore(this)
+        runBlocking { tokens.load(); terminalStore.load() }
+        ApiClient.init(tokens, terminalStore)
 
         db = Room.databaseBuilder(this, ErpDatabase::class.java, "dcompany.db")
             // No destructive fallback: this database holds captured sales that

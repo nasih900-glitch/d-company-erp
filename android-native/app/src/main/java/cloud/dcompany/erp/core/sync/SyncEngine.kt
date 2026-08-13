@@ -42,23 +42,29 @@ class ConnectivityObserver(context: Context) {
     fun start(onBackOnline: () -> Unit) {
         onRegained = onBackOnline
         _online.value = currentlyValidated()
-        manager?.registerNetworkCallback(
-            NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                .build(),
+        // registerDefaultNetworkCallback, NOT a capability-filtered request.
+        // The filtered form only reports networks that already match, so in the
+        // trial run toggling airplane mode never produced a callback: the
+        // banner stayed hidden and the queue never drained. The default
+        // callback reports every transition, and onCapabilitiesChanged is what
+        // actually fires when a link becomes validated.
+        manager?.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    val wasOffline = !_online.value
-                    _online.value = true
-                    if (wasOffline) onRegained?.invoke()
-                }
-
-                override fun onLost(network: Network) {
-                    _online.value = currentlyValidated()
-                }
+                override fun onAvailable(network: Network) = refresh()
+                override fun onLost(network: Network) = refresh()
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    caps: NetworkCapabilities,
+                ) = refresh()
             },
         )
+    }
+
+    private fun refresh() {
+        val nowOnline = currentlyValidated()
+        val wasOffline = !_online.value
+        _online.value = nowOnline
+        if (nowOnline && wasOffline) onRegained?.invoke()
     }
 
     private fun currentlyValidated(): Boolean {
@@ -144,13 +150,16 @@ class SyncEngine(
             try {
                 pushOne(order)
             } catch (e: ApiException) {
+                // Surface it either way. The trial run left a sale sitting in
+                // the outbox with syncState=pending and no message anywhere —
+                // from the till it looked identical to a completed sale.
+                _lastError.value = e.message
                 if (e.isAmbiguous) {
                     // No answer, or the server is mid-flight. The sale stays
                     // pending and the same idempotency key is replayed later,
                     // so a request that did land is never duplicated. Stop the
                     // whole drain: the link is bad, and hammering it with the
                     // rest of the queue only makes it worse.
-                    _lastError.value = e.message
                     return
                 }
                 // A definitive refusal. Retrying cannot change the answer, so

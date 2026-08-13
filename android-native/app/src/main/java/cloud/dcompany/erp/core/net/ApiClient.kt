@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.core.net
 
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor
@@ -56,12 +57,14 @@ object ApiClient {
     fun <T> createApi(service: Class<T>): T = retrofit.create(service)
 
     private lateinit var tokens: TokenStore
+    private lateinit var terminals: TerminalStore
 
     /** Set by the app when the server definitively rejects the session. */
     var onForcedLogout: (() -> Unit)? = null
 
-    fun init(tokenStore: TokenStore) {
+    fun init(tokenStore: TokenStore, terminalStore: TerminalStore) {
         tokens = tokenStore
+        terminals = terminalStore
 
         val client = OkHttpClient.Builder()
             // Cafe wifi is congested, not dead. These are deliberately generous:
@@ -71,6 +74,7 @@ object ApiClient {
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .addInterceptor(TerminalInterceptor())
             .addInterceptor(AuthInterceptor())
             .addInterceptor(ErrorInterceptor(json))
             .build()
@@ -81,6 +85,21 @@ object ApiClient {
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
         api = retrofit.create(ErpApi::class.java)
+    }
+
+    /**
+     * Every POS write is refused by the backend without this header, and the
+     * refusal is a business_rule 422 rather than an auth error — which is why
+     * the first build's offline queue filled up with sales that could never be
+     * delivered. Attached globally so no future endpoint can forget it.
+     */
+    private class TerminalInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val id = terminals.terminalId() ?: return chain.proceed(chain.request())
+            return chain.proceed(
+                chain.request().newBuilder().header("X-Terminal-Id", id).build(),
+            )
+        }
     }
 
     /**

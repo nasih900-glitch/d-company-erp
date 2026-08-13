@@ -1,11 +1,14 @@
 package cloud.dcompany.erp.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
@@ -32,7 +35,12 @@ import cloud.dcompany.erp.ui.theme.Brand
 enum class Destination(val label: String) {
     Pos("POS"),
     Gaming("Gaming"),
+    Kitchen("Kitchen"),
     Shift("Shift"),
+    Customers("Customers"),
+    Inventory("Stock"),
+    Reports("Reports"),
+    Finance("Finance"),
 }
 
 @Composable
@@ -48,14 +56,16 @@ fun WorkspaceScaffold(
         header()
         Row(Modifier.fillMaxSize()) {
             Column(
-                Modifier.width(120.dp).fillMaxHeight().background(Brand.Surface).padding(8.dp),
+                Modifier.width(120.dp).fillMaxHeight().background(Brand.Surface)
+                    .verticalScroll(rememberScrollState()).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Destination.entries.forEach { dest ->
                     val selected = dest == current
                     Box(
-                        Modifier.fillMaxSize(fraction = 0f)
-                            .width(104.dp)
+                        // fillMaxSize(0f) collapsed these to zero height, so the
+                        // whole rail rendered invisible in the trial run.
+                        Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(if (selected) Brand.Gold else Brand.SurfaceRaised)
                             .clickable { current = dest }

@@ -35,6 +35,11 @@ import cloud.dcompany.erp.ui.AuthState
 import cloud.dcompany.erp.ui.SessionViewModel
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
+import cloud.dcompany.erp.ui.screens.finance.FinanceScreen
+import cloud.dcompany.erp.ui.screens.inventory.InventoryScreen
+import cloud.dcompany.erp.ui.screens.kitchen.KitchenScreen
+import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
@@ -140,7 +145,12 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                                 onDismissNotice = pos::dismissNotice,
                             )
                             Destination.Gaming -> GamingScreen()
+                            Destination.Kitchen -> KitchenScreen()
                             Destination.Shift -> ShiftScreen()
+                            Destination.Customers -> CustomersScreen()
+                            Destination.Inventory -> InventoryScreen()
+                            Destination.Reports -> ReportsScreen()
+                            Destination.Finance -> FinanceScreen()
                         }
                     }
                 }
