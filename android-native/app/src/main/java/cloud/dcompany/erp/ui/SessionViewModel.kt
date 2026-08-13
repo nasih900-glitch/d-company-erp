@@ -26,6 +26,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     private val tokens = (app as DCompanyApp).tokens
     private val cache = (app as DCompanyApp).shiftCache
+    private val terminals = (app as DCompanyApp).terminalStore
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val _state = MutableStateFlow<AuthState>(AuthState.Loading)
@@ -58,6 +59,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val me = ApiClient.api.me()
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
+                resolveTerminal(me)
                 _state.value = AuthState.SignedIn(me)
             } catch (e: ApiException) {
                 if (e.status == 401 || e.status == 403) {
@@ -94,12 +96,34 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 tokens.save(pair.accessToken, pair.refreshToken)
                 val me = ApiClient.api.me()
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
+                resolveTerminal(me)
                 _state.value = AuthState.SignedIn(me)
             } catch (e: ApiException) {
                 _loginError.value = e.message
             } finally {
                 _signingIn.value = false
             }
+        }
+    }
+
+
+    /**
+     * Resolve which till this tablet is, and cache it.
+     *
+     * Every POS write is refused without an X-Terminal-Id header, so without
+     * this the whole offline queue fills with sales the server will never
+     * accept — which is exactly what the first trial run produced. Failure here
+     * is non-fatal and deliberately silent: an already-cached id keeps working
+     * offline, and a tablet that has never resolved one will retry on the next
+     * sign-in rather than blocking the till.
+     */
+    private suspend fun resolveTerminal(me: MeResponse) {
+        try {
+            val list = ApiClient.api.terminals(me.branchId)
+            val chosen = list.firstOrNull { it.branchId == me.branchId } ?: list.firstOrNull()
+            if (chosen != null) terminals.remember(chosen.id)
+        } catch (e: ApiException) {
+            // Offline or refused — keep whatever was cached before.
         }
     }
 
