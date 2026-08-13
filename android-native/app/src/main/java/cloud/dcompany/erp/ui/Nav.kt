@@ -41,6 +41,7 @@ enum class Destination(val label: String) {
     Inventory("Stock"),
     Reports("Reports"),
     Finance("Finance"),
+    Settings("Settings"),
 }
 
 @Composable
