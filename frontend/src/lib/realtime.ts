@@ -24,6 +24,22 @@ let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let intentionallyClosed = false;
 
+/**
+ * A TCP connection can die without either end being told — a wifi blip, a
+ * laptop sleeping, a NAT or proxy dropping an idle mapping. The browser keeps
+ * reporting readyState === OPEN, onclose never fires, and the app goes on
+ * believing it is live while receiving nothing. On a POS that shows a table as
+ * free while somebody is sitting at it, which is worse than showing an error.
+ *
+ * The server already pings every 20s (see backend app/api/v1/ws/router.py), so
+ * silence longer than a couple of those is proof the link is gone no matter
+ * what readyState claims.
+ */
+let lastMessageAt = 0;
+let watchdog: ReturnType<typeof setInterval> | null = null;
+const SERVER_PING_INTERVAL_MS = 20_000;
+const SILENCE_LIMIT_MS = SERVER_PING_INTERVAL_MS * 2.5;
+
 function wsUrl(): string {
   if (/^https?:\/\//i.test(BASE_URL)) {
     return BASE_URL.replace(/^http/i, 'ws').replace(/\/$/, '') + '/ws';
@@ -36,6 +52,53 @@ function wsUrl(): string {
 function notify(resource: string) {
   listeners.get(resource)?.forEach((cb) => {
     try { cb(); } catch { /* one screen's refetch failing shouldn't break others */ }
+  });
+}
+
+/** Every subscribed screen re-runs its fetch. Used after a gap in the stream. */
+function refetchEverything() {
+  listeners.forEach((set) => {
+    set.forEach((cb) => {
+      try { cb(); } catch { /* one screen's refetch failing shouldn't break others */ }
+    });
+  });
+}
+
+/**
+ * Tears down a socket the browser still thinks is fine. close() is called for
+ * tidiness but is not relied on: a half-open socket may never fire onclose, so
+ * the reference is dropped and the reconnect scheduled here rather than from
+ * the handler.
+ */
+function dropAndReconnect() {
+  stopWatchdog();
+  const dead = socket;
+  socket = null;
+  try { dead?.close(); } catch { /* already gone */ }
+  if (!intentionallyClosed) scheduleReconnect();
+}
+
+function checkLiveness() {
+  if (intentionallyClosed || !socket) return;
+  if (Date.now() - lastMessageAt > SILENCE_LIMIT_MS) dropAndReconnect();
+}
+
+function startWatchdog() {
+  stopWatchdog();
+  watchdog = setInterval(checkLiveness, SERVER_PING_INTERVAL_MS / 2);
+}
+
+function stopWatchdog() {
+  if (watchdog) { clearInterval(watchdog); watchdog = null; }
+}
+
+if (typeof window !== 'undefined') {
+  // A sleeping laptop or a backgrounded tab is the classic way to end up with
+  // a socket that is dead but still reads as OPEN. Both of these are moments
+  // where the answer is knowable immediately, so don't wait for the interval.
+  window.addEventListener('online', () => { checkLiveness(); connectRealtime(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { checkLiveness(); connectRealtime(); }
   });
 }
 
@@ -73,15 +136,28 @@ export function connectRealtime(): void {
   }
 
   socket.onopen = () => {
+    const wasReconnect = reconnectAttempt > 0;
     reconnectAttempt = 0;
+    lastMessageAt = Date.now();
     socket?.send(JSON.stringify({ token: localStorage.getItem('access_token') }));
+    startWatchdog();
+    // Anything that changed while we were disconnected produced a "changed"
+    // frame nobody was listening to. Without this every screen keeps showing
+    // whatever it had before the drop until the next unrelated change — the
+    // connection looks healthy again while the data on screen is stale.
+    if (wasReconnect) refetchEverything();
   };
 
   socket.onmessage = (event) => {
+    lastMessageAt = Date.now();
     try {
       const msg = JSON.parse(event.data);
       if (msg?.type === 'changed' && typeof msg.resource === 'string') {
         notify(msg.resource);
+      } else if (msg?.type === 'ping') {
+        // Replying is not required by the server, but a send that throws is a
+        // second, earlier signal that this socket is no longer usable.
+        try { socket?.send(JSON.stringify({ type: 'pong' })); } catch { dropAndReconnect(); }
       }
     } catch {
       // Non-JSON or unrecognized frame — ignore, the connection itself is what matters.
@@ -90,6 +166,7 @@ export function connectRealtime(): void {
 
   socket.onclose = () => {
     socket = null;
+    stopWatchdog();
     if (!intentionallyClosed) scheduleReconnect();
   };
 
@@ -102,6 +179,7 @@ export function disconnectRealtime(): void {
   intentionallyClosed = true;
   reconnectAttempt = 0;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  stopWatchdog();
   socket?.close();
   socket = null;
 }
