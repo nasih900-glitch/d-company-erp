@@ -2378,7 +2378,12 @@ async def issue_refund(
         ).scalars().all()
         if len(open_shifts) != 1:
             raise BusinessRuleError(
-                "cash refund requires exactly one open shift for this terminal"
+                "A cash refund needs an open shift on this terminal so it "
+                "comes out of a real drawer — open a shift first, then "
+                "retry the refund."
+                if not open_shifts
+                else "More than one open shift is on this terminal — close "
+                "the extra one, then retry the refund."
             )
         cash_shift = open_shifts[0]
         require_shift_opener(

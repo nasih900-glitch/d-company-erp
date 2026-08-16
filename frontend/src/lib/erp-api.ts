@@ -1100,6 +1100,7 @@ export const customers = {
     api.post<CustomerDTO>('/customers', body).then((r) => r.data),
   update: (id: string, body: Partial<{ name: string; phone: string; email: string; birthday: string; notes: string }>) =>
     api.patch<CustomerDTO>(`/customers/${id}`, body).then((r) => r.data),
+  remove: (id: string) => api.delete<void>(`/customers/${id}`).then(() => undefined),
   rewardsByPhone: (phone: string) =>
     api.get<RewardDTO[]>(`/customers/by-phone/${encodeURIComponent(phone)}/rewards`).then((r) => r.data),
 };

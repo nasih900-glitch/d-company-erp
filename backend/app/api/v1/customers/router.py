@@ -6,11 +6,12 @@ Endpoints:
   GET    /customers/{id}                — detail
   POST   /customers                     — upsert by phone (create or fetch)
   PATCH  /customers/{id}                — edit name/phone/email/birthday/notes
+  DELETE /customers/{id}                — soft-delete + anonymise
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
@@ -249,3 +250,34 @@ async def update_customer(
         setattr(c, f, v)
     await session.flush()
     return _to_read(c)
+
+
+@router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_customer(
+    customer_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> None:
+    """Soft-delete and anonymise — added by mistake, a duplicate, or a
+    customer asking to have their data removed.
+
+    Not a hard delete: PointsRedemption.customer_id is ON DELETE RESTRICT
+    (any customer who's ever redeemed a reward would block a real row
+    delete), and order history references customers by phone string, not by
+    this row, so nothing needs the row gone — just gone from view and
+    stripped of anything identifying. total_spent_minor / loyalty_points /
+    visit_count are left as-is: aggregate numbers, not personal data, and
+    deleting them would quietly corrupt any period report that already
+    included this customer. The phone is overwritten (not just nulled) so
+    it immediately frees up for a new customer — see the partial unique
+    index in the customers migration.
+    """
+    c = await session.get(Customer, customer_id)
+    if not c or c.company_id != tenant.company_id or c.deleted_at:
+        raise NotFoundError("customer not found")
+    c.deleted_at = datetime.now(timezone.utc)
+    c.name = None
+    c.email = None
+    c.birthday = None
+    c.notes = None
+    c.phone = f"deleted-{uuid4().hex[:16]}"

@@ -327,7 +327,17 @@ class ReportsAggregator:
         sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
 
         # ---------- Orders aggregation ----------
-        # Total orders + average ticket
+        # Total orders + average ticket. Deliberately "paid" only, NOT
+        # "paid, refunded" — Order.status only becomes "refunded" once the
+        # order has been refunded down to zero (see pos/router.py's refund
+        # endpoint), meaning it kept no revenue at all. Counting it as a
+        # completed sale would inflate both the order count and the average
+        # ticket size with money that was handed back. A *partial* refund
+        # leaves status="paid", so that order still counts here — correctly,
+        # since it's still substantially a real sale. This is intentionally
+        # narrower than the revenue/tax/payments queries below, which stay
+        # gross-inclusive-of-refunds by design (net_revenue_minor is where
+        # refunds get subtracted, in aggregate rather than per-category).
         orders_q = select(
             func.count(Order.id).label("n"),
             func.coalesce(func.sum(Order.total_minor), 0).label("gross"),
@@ -340,7 +350,7 @@ class ReportsAggregator:
             Order.company_id == company_id,
             sale_at >= start_at,
             sale_at < end_at,
-            Order.status.in_(("paid", "refunded")),
+            Order.status == "paid",
         )
         orders_row = (await self.session.execute(orders_q)).one()
         orders_count = int(orders_row.n)

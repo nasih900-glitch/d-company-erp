@@ -15,9 +15,11 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -28,7 +30,16 @@ from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin, 
 class Customer(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     __tablename__ = "customers"
     __table_args__ = (
-        UniqueConstraint("company_id", "phone", name="uq_customer_phone_per_company"),
+        # Scoped to live rows only — a deleted customer's phone number must
+        # be free for reuse (see DELETE /customers/{id}). A plain
+        # UniqueConstraint here would keep blocking it forever, since it
+        # doesn't know about deleted_at.
+        Index(
+            "uq_customer_phone_per_company_live",
+            "company_id", "phone",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()

@@ -873,7 +873,7 @@ async def test_cash_refund_still_requires_a_current_open_drawer_shift(
 
     with pytest.raises(
         BusinessRuleError,
-        match="cash refund requires exactly one open shift for this terminal",
+        match="needs an open shift on this terminal",
     ):
         await pos_router.issue_refund(
             order.id,

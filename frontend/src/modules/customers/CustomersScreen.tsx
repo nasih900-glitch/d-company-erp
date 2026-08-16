@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   UserPlus, Edit2, Search, Loader2, AlertCircle, RefreshCw,
-  Phone, Award, ShoppingBag, Trophy,
+  Phone, Award, ShoppingBag, Trophy, Trash2,
 } from 'lucide-react';
 
 import { inr } from '@/lib/inr';
@@ -49,6 +49,16 @@ export default function CustomersScreen() {
   useEffect(() => { void load(); }, [load]);
 
   const onSearch = (e: React.FormEvent) => { e.preventDefault(); void load(q); };
+
+  async function onDelete(c: CustomerDTO) {
+    if (!confirm(
+      `Delete ${c.name || c.phone}? This removes their name, phone and notes — ` +
+      `their visit/spend history stays on past orders and reports, but they'll ` +
+      `no longer be found by search or auto-filled at checkout.`
+    )) return;
+    try { await customers.remove(c.id); await load(q); }
+    catch (e) { setErr((e as Error).message); }
+  }
 
   const totals = {
     customers: rows.length,
@@ -136,6 +146,13 @@ export default function CustomersScreen() {
                     <button className="text-fg-muted hover:text-accent" onClick={() => setEdit(c)}>
                       <Edit2 size={14}/>
                     </button>
+                    <button
+                      aria-label={`Delete ${c.name || c.phone}`}
+                      className="text-fg-muted hover:text-accent-bad ml-2"
+                      onClick={() => onDelete(c)}
+                    >
+                      <Trash2 size={14}/>
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -153,13 +170,22 @@ export default function CustomersScreen() {
                       <Phone size={11}/> <span className="truncate">{c.phone}</span>
                     </div>
                   </div>
-                  <button
-                    aria-label={`Edit ${c.name || c.phone}`}
-                    className="btn btn-ghost shrink-0 !min-h-[32px] !min-w-[32px] !px-2 !py-1"
-                    onClick={() => setEdit(c)}
-                  >
-                    <Edit2 size={14}/>
-                  </button>
+                  <div className="flex shrink-0 gap-1.5">
+                    <button
+                      aria-label={`Edit ${c.name || c.phone}`}
+                      className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
+                      onClick={() => setEdit(c)}
+                    >
+                      <Edit2 size={14}/>
+                    </button>
+                    <button
+                      aria-label={`Delete ${c.name || c.phone}`}
+                      className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 text-accent-bad"
+                      onClick={() => onDelete(c)}
+                    >
+                      <Trash2 size={14}/>
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                   <div>
