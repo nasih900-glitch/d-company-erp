@@ -15,10 +15,14 @@ if (hasReleaseKeystore) {
 }
 
 android {
+    // namespace stays cloud.dcompany.erp (matches the Java source layout);
+    // applicationId below is the actual unique app identity and deliberately
+    // differs so this can be installed alongside android-native's build,
+    // which owns the bare cloud.dcompany.erp id.
     namespace = "cloud.dcompany.erp"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "cloud.dcompany.erp"
+        applicationId "cloud.dcompany.erp.web"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Kept in step with the iOS app's marketing version so the three

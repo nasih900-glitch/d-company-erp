@@ -3,21 +3,26 @@ import type { CapacitorConfig } from '@capacitor/cli';
 /**
  * D Company ERP — Capacitor (mobile) config.
  *
- * - The React build in `dist/` is bundled into the app, so the UI loads
- *   instantly without a network round-trip.
- * - All API traffic goes to `VITE_API_URL` (set at build time).
- * - `androidScheme: 'https'` ensures cookies and CORS behave like the web.
+ * This is the full web app in a native shell, deliberately NOT bundled:
+ * `server.url` points straight at production, so the WebView always shows
+ * whatever is currently deployed — no separate app build/redistribution
+ * needed when the web app changes. The real native till app (android-native/)
+ * is the offline-capable, pad-optimised experience; this is "the ERP,
+ * as an app icon" for anyone who just wants the full site without a
+ * browser tab. Different applicationId (see android/app/build.gradle) so
+ * it can be installed alongside the native app without a package collision.
+ * All API/WS traffic still goes to the same origin `server.url` points at.
  */
 const config: CapacitorConfig = {
-  appId: 'cloud.dcompany.erp',
+  appId: 'cloud.dcompany.erp.web',
   appName: 'D Company ERP',
   webDir: 'dist',
   bundledWebRuntime: false,
 
   server: {
+    url: 'https://dcompany.duckdns.org',
     androidScheme: 'https',
     iosScheme: 'https',
-    // Allow http only in dev builds (cleartext)
     cleartext: false,
   },
 
