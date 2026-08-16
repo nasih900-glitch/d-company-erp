@@ -280,4 +280,5 @@ async def delete_customer(
     c.email = None
     c.birthday = None
     c.notes = None
-    c.phone = f"deleted-{uuid4().hex[:16]}"
+    # phone is String(20) — "deleted-" (8) + 12 hex chars fits exactly.
+    c.phone = f"deleted-{uuid4().hex[:12]}"
