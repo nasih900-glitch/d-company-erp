@@ -1232,6 +1232,8 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
         _Result(rows=[order]),
         _Result(rows=[(order.id, 1)]),
         _Result(rows=[(order.id, "PS5 1")]),
+        _Result(rows=[]),  # paid_by_order — nothing paid on a held order
+        _Result(rows=[]),  # refunded_by_order
     )
 
     response = await pos_router.list_orders(
@@ -1242,10 +1244,43 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
 
     assert response[0].held_at == held_at
     assert response[0].source_label == "PS5 1"
+    assert response[0].paid_minor == 0
+    assert response[0].refundable_minor == 0
     order_params = session.statements[0].compile().params.values()
     assert tenant.company_id in order_params
     assert tenant.branch_id in order_params
     assert tenant.terminal_id in order_params
+
+
+@pytest.mark.asyncio
+async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> None:
+    """The Refunds screen trusts refundable_minor as its ceiling — it must be
+    paid minus every refund already issued, never the raw paid figure, or a
+    second partial refund could be entered for more than is actually left."""
+    tenant = _tenant()
+    order = SimpleNamespace(
+        id=uuid4(),
+        invoice_no="D/MN/26-27/00099",
+        type="dine_in",
+        status="paid",
+        table_id=None,
+        total_minor=1_000,
+        customer_name=None,
+        created_at=datetime(2026, 7, 15, 10, tzinfo=UTC),
+        held_at=None,
+    )
+    session = _Session(
+        _Result(rows=[order]),
+        _Result(rows=[(order.id, 3)]),  # counts_by_order
+        _Result(rows=[]),  # station_by_order
+        _Result(rows=[(order.id, 1_000)]),  # paid_by_order
+        _Result(rows=[(order.id, 400)]),  # refunded_by_order — one prior partial refund
+    )
+
+    response = await pos_router.list_orders(session, tenant, status_filter=["paid"])
+
+    assert response[0].paid_minor == 1_000
+    assert response[0].refundable_minor == 600
 
 
 # ---------------------------------------------------------------------------

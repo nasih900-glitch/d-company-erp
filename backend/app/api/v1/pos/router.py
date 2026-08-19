@@ -1772,6 +1772,12 @@ class OrderListItem(BaseModel):
     customer_name: str | None
     created_at: datetime
     held_at: datetime | None = None
+    # What was actually collected, and what's still left to give back after
+    # every refund already issued — the Refunds screen is the only consumer
+    # of these two, added so it has something real to net against instead of
+    # trusting a raw gross figure across repeat partial refunds.
+    paid_minor: int = 0
+    refundable_minor: int = 0
 
 
 @router.get("/orders", response_model=list[OrderListItem])
@@ -1851,6 +1857,24 @@ async def list_orders(
             )
         ).all()
     )
+    paid_by_order = dict(
+        (
+            await session.execute(
+                select(Payment.order_id, func.coalesce(func.sum(Payment.amount_minor), 0))
+                .where(Payment.order_id.in_(order_ids))
+                .group_by(Payment.order_id)
+            )
+        ).all()
+    )
+    refunded_by_order = dict(
+        (
+            await session.execute(
+                select(Refund.order_id, func.coalesce(func.sum(Refund.amount_minor), 0))
+                .where(Refund.order_id.in_(order_ids))
+                .group_by(Refund.order_id)
+            )
+        ).all()
+    )
 
     out: list[OrderListItem] = []
     for o in rows:
@@ -1858,6 +1882,8 @@ async def list_orders(
             label = f"Table {codes_by_table[o.table_id]}"
         else:
             label = station_by_order.get(o.id)
+        paid = int(paid_by_order.get(o.id, 0))
+        refunded = int(refunded_by_order.get(o.id, 0))
         out.append(OrderListItem(
             id=o.id,
             invoice_no=o.invoice_no,
@@ -1870,6 +1896,8 @@ async def list_orders(
             customer_name=o.customer_name,
             created_at=o.created_at,
             held_at=o.held_at,
+            paid_minor=paid,
+            refundable_minor=max(0, paid - refunded),
         ))
     return out
 

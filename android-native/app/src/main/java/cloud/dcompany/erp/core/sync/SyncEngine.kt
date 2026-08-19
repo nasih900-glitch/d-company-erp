@@ -17,9 +17,11 @@ import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalShiftEntity
+import cloud.dcompany.erp.core.db.LocalRefundEntity
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.SyncMetaEntity
 import cloud.dcompany.erp.core.db.SyncState
@@ -33,6 +35,8 @@ import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenApi
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenStateUpdate
+import cloud.dcompany.erp.ui.screens.refunds.RefundBody
+import cloud.dcompany.erp.ui.screens.refunds.RefundsApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
@@ -113,6 +117,7 @@ class SyncEngine(
     private val gamingApi = ApiClient.create<GamingApi>()
     private val kitchenApi = ApiClient.create<KitchenApi>()
     private val tablesApi = ApiClient.create<TablesApi>()
+    private val refundsApi = ApiClient.create<RefundsApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -137,8 +142,15 @@ class SyncEngine(
         db.shiftDao().observeRejectedCount(),
         db.gamingDao().observeRejectedCount(),
         db.kitchenDao().observeRejectedCount(),
-        db.tablesDao().observeRejectedCount(),
-    ) { orders, shifts, gaming, kitchen, tables -> orders + shifts + gaming + kitchen + tables }
+        // Kotlin's combine() only has typed overloads up to 5 flows — nest
+        // the last two into a Pair rather than adding a 6th argument, or it
+        // silently falls back to the untyped vararg overload (see the same
+        // fix in TablesViewModel.state).
+        combine(db.tablesDao().observeRejectedCount(), db.refundDao().observeRejectedCount(), ::Pair),
+    ) { orders, shifts, gaming, kitchen, tablesAndRefunds ->
+        val (tables, refunds) = tablesAndRefunds
+        orders + shifts + gaming + kitchen + tables + refunds
+    }
 
     /**
      * Pull-only resources, fetched when a screen using them opens or a
@@ -151,6 +163,12 @@ class SyncEngine(
         "gaming" to ::pullGamingData,
         "kitchen" to ::pullKitchenData,
         "tables" to ::pullTablesData,
+        // "orders" is the same realtime resource POS/Kitchen already broadcast
+        // on (backend _PATH_RESOURCE_MAP maps /pos/orders, including the
+        // nested /refunds route, to "orders") — reusing it means another
+        // terminal issuing a refund or taking a payment already wakes this
+        // pull, no new backend resource needed.
+        "orders" to ::pullRefundableOrders,
     )
 
     /**
@@ -201,6 +219,7 @@ class SyncEngine(
             pushGamingSessions()
             pushKitchenAdvances()
             pushTableOrders()
+            pushRefunds()
             pullMenu()
             db.syncMetaDao().put(SyncMetaEntity("menu", System.currentTimeMillis()))
         } catch (e: ApiException) {
@@ -509,6 +528,77 @@ class SyncEngine(
             },
         )
         db.syncMetaDao().put(SyncMetaEntity("tables", System.currentTimeMillis()))
+    }
+
+    /**
+     * No shift id to resolve — a refund always targets an order the server
+     * already knows about (this app never creates or shows an order that
+     * isn't already synced, see [RefundOrderCacheEntity]), so unlike
+     * orders/gaming/tables there's nothing here to wait on. A cash refund
+     * does still need an open shift on THIS terminal at the moment it's
+     * pushed (the backend checks the terminal, not a specific shift id) —
+     * pushShifts() runs earlier in sync() so this device's own shift-open,
+     * if it too happened offline, has already had a chance to resolve
+     * within the same pass.
+     */
+    private suspend fun pushRefunds() {
+        val dao = db.refundDao()
+        drainOutbox(
+            rows = dao.pushableRefunds(),
+            markRejected = { row, msg -> dao.markRefundRejected(row.localId, msg) },
+            push = ::pushRefundOne,
+        )
+    }
+
+    private suspend fun pushRefundOne(row: LocalRefundEntity) {
+        val result = refundsApi.refund(
+            row.orderId,
+            RefundBody(
+                reasonCode = row.reasonCode,
+                amountMinor = row.amountMinor,
+                mode = "cash",
+                note = row.note,
+            ),
+            "refund:${row.localId}",
+        )
+        db.refundDao().markRefundSynced(row.localId, result.settlementMethod)
+        // The row leaving 'pending' drops it out of the local netting the
+        // instant this returns — refresh the cache's server-computed balance
+        // right away so a second refund queued in this same drain (or right
+        // after) checks a current figure, not the pre-refund one.
+        pullRefundableOrders()
+    }
+
+    /**
+     * Paid orders eligible for a refund, for every terminal — a shared view
+     * like Gaming's sessions. On-demand only (see onDemandPulls): opening
+     * Refunds, an "orders" realtime event, or this device's own refund
+     * finishing (see pushRefundOne) triggers it, not every sync().
+     *
+     * Passing status=paid explicitly (rather than the unfiltered call the
+     * pre-offline screen made) matters for two reasons: it skips the
+     * backend's default same-day date window, so an order paid yesterday is
+     * still refundable today, and it's what makes the backend compute and
+     * return refundable_minor at all (see OrderListItem/list_orders) —
+     * unfiltered list_orders calls exist elsewhere in this app for today's
+     * order history and don't need that figure.
+     */
+    private suspend fun pullRefundableOrders() {
+        val orders = refundsApi.orders(status = "paid")
+        db.refundDao().replaceOrderCache(
+            orders.map {
+                RefundOrderCacheEntity(
+                    id = it.id,
+                    invoiceNo = it.invoiceNo,
+                    status = it.status,
+                    type = it.type,
+                    totalMinor = it.totalMinor,
+                    paidMinor = it.paidMinor,
+                    refundableMinor = it.refundableMinor,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("orders", System.currentTimeMillis()))
     }
 
     private suspend fun pullMenu() {

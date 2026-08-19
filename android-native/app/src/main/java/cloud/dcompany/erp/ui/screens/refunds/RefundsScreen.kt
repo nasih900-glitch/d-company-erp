@@ -54,6 +54,28 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                 "collected. The server decides — its answer is shown as-is.",
             color = Brand.ForegroundMuted,
         )
+        if (state.rejected.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(Brand.Danger.copy(alpha = 0.15f)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "${state.rejected.size} refund(s) could not be sent — the cash is already " +
+                        "given, this needs reconciling:",
+                    color = Brand.Danger,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                state.rejected.forEach {
+                    Text(
+                        "${it.invoiceNo ?: "order"} · ${it.amountMinor.asRupees()} — ${it.reason}",
+                        color = Brand.Danger,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = state.query,
@@ -65,17 +87,18 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
         Spacer(Modifier.height(12.dp))
 
         when {
-            state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
-            }
-            state.error != null && state.orders.isEmpty() ->
+            // Still shown even on a never-synced device: a bare spinner with
+            // no way out is what this replaced — offline on the very first
+            // open must not be a dead end (see Gaming/Tables for the same fix).
+            state.orders.isEmpty() && !state.everSynced ->
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(state.error!!, color = MaterialTheme.colorScheme.error)
-                        Button(onClick = vm::load) { Text("Try again") }
+                        CircularProgressIndicator(color = Brand.Gold)
+                        Text("Waiting for the first sync", color = Brand.Foreground)
+                        Button(onClick = vm::load) { Text("Refresh") }
                     }
                 }
             state.visible.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -128,16 +151,19 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
 
 @Composable
 private fun RefundDialog(order: Order, busy: Boolean, vm: RefundsViewModel) {
-    // Defaults to the full paid amount, which is the common case, but stays
-    // editable for a partial refund.
-    var amount by remember { mutableStateOf((order.paidMinor / 100.0).toString()) }
+    // Defaults to whatever's still refundable (paid minus every refund
+    // already issued, minus anything this device already has queued), which
+    // is the common case for a first refund but correctly starts lower for
+    // a second partial one — stays editable regardless.
+    var amount by remember(order.id) { mutableStateOf((order.refundableMinor / 100.0).toString()) }
     var reason by remember { mutableStateOf(REFUND_REASONS.first().first) }
     var note by remember { mutableStateOf("") }
     var confirming by remember { mutableStateOf(false) }
 
     val amountMinor = remember(amount) { Math.round((amount.toDoubleOrNull() ?: 0.0) * 100) }
-    val overRefund = amountMinor > order.paidMinor
+    val overRefund = amountMinor > order.refundableMinor
     val valid = amountMinor > 0 && !overRefund
+    val alreadyRefunded = order.paidMinor - order.refundableMinor
 
     AlertDialog(
         onDismissRequest = { if (!busy) vm.select(null) },
@@ -147,6 +173,12 @@ private fun RefundDialog(order: Order, busy: Boolean, vm: RefundsViewModel) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Collected on this order", color = Brand.ForegroundMuted)
                     Text(order.paidMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                }
+                if (alreadyRefunded > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Already refunded", color = Brand.ForegroundMuted)
+                        Text(alreadyRefunded.asRupees(), color = Brand.ForegroundMuted)
+                    }
                 }
                 OutlinedTextField(
                     value = amount,
@@ -159,7 +191,7 @@ private fun RefundDialog(order: Order, busy: Boolean, vm: RefundsViewModel) {
                 )
                 if (overRefund) {
                     Text(
-                        "That is more than was collected on this order.",
+                        "That is more than is still refundable on this order.",
                         color = Brand.Danger,
                     )
                 }
@@ -183,7 +215,7 @@ private fun RefundDialog(order: Order, busy: Boolean, vm: RefundsViewModel) {
                 }
                 OutlinedTextField(
                     value = note,
-                    onValueChange = { note = it },
+                    onValueChange = { note = it.take(500) },
                     label = { Text("Note (optional)") },
                     modifier = Modifier.fillMaxWidth(),
                 )

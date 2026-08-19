@@ -172,4 +172,43 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `refund_order_cache` (
+                `id` TEXT NOT NULL,
+                `invoiceNo` TEXT,
+                `status` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `totalMinor` INTEGER NOT NULL,
+                `paidMinor` INTEGER NOT NULL,
+                `refundableMinor` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_refunds` (
+                `localId` TEXT NOT NULL,
+                `orderId` TEXT NOT NULL,
+                `invoiceNo` TEXT,
+                `reasonCode` TEXT NOT NULL,
+                `amountMinor` INTEGER NOT NULL,
+                `note` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `settlementMethod` TEXT,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_refunds_state` ON `local_refunds` (`state`)",
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)

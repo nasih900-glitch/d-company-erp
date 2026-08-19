@@ -112,4 +112,42 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate3To4_preservesExistingDataAndAddsRefundTables() {
+        // v3 already has a Phase 2 table (gaming_stations) — seed one row
+        // there plus a v1 row, so this test also proves the Phase 3
+        // migration doesn't disturb earlier phases' tables.
+        helper.createDatabase(dbName, 3).apply {
+            execSQL(
+                "INSERT INTO menu_items (id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1)",
+            )
+            execSQL(
+                "INSERT INTO gaming_stations (id, code, name, type, ratePerHourMinor, isActive) " +
+                    "VALUES ('station-1', 'PS5-01', 'PS5 Station 1', 'ps5', 15000, 1)",
+            )
+            close()
+        }
+
+        // MIGRATION_3_4 adds the 2 Phase 3 tables (Refunds) — validated
+        // against the real, Room-generated v4 schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 4, true, MIGRATION_3_4)
+
+        migrated.query("SELECT id, name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(1) == "Cold Coffee")
+        }
+        migrated.query("SELECT id, name FROM gaming_stations WHERE id = 'station-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "gaming_stations row lost across the migration" }
+            assert(cursor.getString(1) == "PS5 Station 1")
+        }
+        for (table in listOf("refund_order_cache", "local_refunds")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.close()
+    }
 }

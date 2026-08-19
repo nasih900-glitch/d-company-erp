@@ -98,6 +98,12 @@ data class Order(
     @SerialName("total_minor") val totalMinor: Long = 0,
     @SerialName("paid_minor") val paidMinor: Long = 0,
     @SerialName("due_minor") val dueMinor: Long = 0,
+    // Only populated by GET /pos/orders (the list endpoint) for the Refunds
+    // screen — paidMinor minus every refund already issued anywhere, so a
+    // second partial refund can't be entered for more than is actually left.
+    // Defaults to 0 for every other consumer of this shared model, which is
+    // the safe failure mode (blocks a refund rather than risking an over-refund).
+    @SerialName("refundable_minor") val refundableMinor: Long = 0,
     val lines: List<OrderLine> = emptyList(),
 )
 
