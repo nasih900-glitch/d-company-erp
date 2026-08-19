@@ -9,6 +9,7 @@ import androidx.room.Room
 import cloud.dcompany.erp.core.auth.ShiftCache
 import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
+import cloud.dcompany.erp.core.db.ALL_MIGRATIONS
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.sync.ConnectivityObserver
@@ -62,6 +63,7 @@ class DCompanyApp : Application() {
             // No destructive fallback: this database holds captured sales that
             // exist nowhere else until they sync. Wiping it on a schema change
             // would destroy real money. Any future version needs a migration.
+            .addMigrations(*ALL_MIGRATIONS)
             .build()
 
         sync = SyncEngine(db, appScope)

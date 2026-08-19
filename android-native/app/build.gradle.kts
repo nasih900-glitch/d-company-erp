@@ -37,6 +37,8 @@ android {
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
         buildConfigField("String", "API_BASE_URL", "\"https://dcompany.duckdns.org/api/v1/\"")
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -75,6 +77,15 @@ android {
     }
 }
 
+// Room schema history — needed for MigrationTestHelper to replay old schemas
+// against real Migration objects. ErpDatabase forbids destructive fallback
+// because it holds captured sales that exist nowhere else until synced, so a
+// wrong migration is a hard crash on every installed device, not a lint nit.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.generateKotlin", "true")
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
@@ -109,6 +120,10 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

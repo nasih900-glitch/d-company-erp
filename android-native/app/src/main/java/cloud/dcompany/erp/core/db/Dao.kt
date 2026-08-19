@@ -117,12 +117,14 @@ interface SyncMetaDao {
         LocalOrderEntity::class,
         LocalOrderLineEntity::class,
         SyncMetaEntity::class,
+        LocalShiftEntity::class,
     ],
-    version = 1,
-    exportSchema = false,
+    version = 2,
+    exportSchema = true,
 )
 abstract class ErpDatabase : RoomDatabase() {
     abstract fun menuDao(): MenuDao
     abstract fun orderDao(): OrderDao
     abstract fun syncMetaDao(): SyncMetaDao
+    abstract fun shiftDao(): ShiftDao
 }

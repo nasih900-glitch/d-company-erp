@@ -7,13 +7,11 @@ import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalOrderLineEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.SyncState
-import cloud.dcompany.erp.core.net.ApiClient
-import cloud.dcompany.erp.core.net.ApiException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -34,6 +32,14 @@ data class PosUiState(
     val menuEmpty: Boolean = false,
     /** A sync has completed at least once on this device. */
     val everSynced: Boolean = false,
+    /**
+     * `serverShiftId` once the shift's open leg has synced, its `localId`
+     * while still offline-pending — either way, what an order should be
+     * captured against. Null once a close has been requested, even before
+     * that close reaches the server: billing must stop the instant staff
+     * say "close", not whenever the network happens to confirm it.
+     */
+    val activeShiftId: String? = null,
 ) {
     val visibleItems: List<MenuItemEntity>
         get() = if (selectedCategoryId == null) items
@@ -57,20 +63,21 @@ class PosViewModel : ViewModel() {
     private val cart = MutableStateFlow<List<CartLine>>(emptyList())
     private val notice = MutableStateFlow<String?>(null)
 
-    private val _shiftId = MutableStateFlow<String?>(null)
-    val shiftId: StateFlow<String?> = _shiftId.asStateFlow()
-
     /**
      * The UI reads Room, never the network. That is what makes the screen work
-     * offline: a dropped link changes the banner, not the till.
+     * offline: a dropped link changes the banner, not the till. This includes
+     * the shift — ShiftViewModel writes the same `local_shifts` table this
+     * reads, so a shift opened offline is immediately billable here too,
+     * with no live "am I on a shift" round trip of its own.
      */
     val state: StateFlow<PosUiState> = combine(
         combine(db.menuDao().observeItems(), db.menuDao().observeCategories(), ::Pair),
         combine(selectedCategory, cart, notice, ::Triple),
-        combine(app.connectivity.online, app.sync.syncing, ::Pair),
+        combine(app.connectivity.online, app.sync.syncing, db.shiftDao().observeCurrent(), ::Triple),
         combine(app.sync.pendingCount, app.sync.rejectedCount, ::Pair),
         db.syncMetaDao().observe("menu"),
     ) { menu, ui, net, queue, meta ->
+        val billableShift = net.third?.takeIf { it.state != ShiftState.CLOSE_PENDING }
         PosUiState(
             items = menu.first,
             categories = menu.second,
@@ -79,6 +86,7 @@ class PosViewModel : ViewModel() {
             notice = ui.third,
             online = net.first,
             syncing = net.second,
+            activeShiftId = billableShift?.let { it.serverShiftId ?: it.localId },
             pendingCount = queue.first,
             rejectedCount = queue.second,
             menuEmpty = menu.first.isEmpty(),
@@ -88,31 +96,6 @@ class PosViewModel : ViewModel() {
 
     init {
         app.sync.requestSync()
-        loadShift()
-    }
-
-    /**
-     * The open shift must survive going offline, or the till refuses every
-     * sale exactly when offline mode is supposed to save it: the id is only
-     * knowable from the server, so a cold start with no link would leave it
-     * null and every checkout would abort with "no open shift".
-     *
-     * So the last known open shift is cached and used as the fallback. This is
-     * safe because the server revalidates it on sync — a sale against a shift
-     * that has since been closed comes back as a definitive refusal and lands
-     * in the rejected queue for an owner, rather than being silently lost.
-     */
-    private fun loadShift() {
-        viewModelScope.launch {
-            _shiftId.value = app.shiftCache.cachedShiftId()
-            try {
-                val open = ApiClient.api.shifts(onlyOpen = true).firstOrNull()?.id
-                _shiftId.value = open
-                app.shiftCache.remember(open)
-            } catch (e: ApiException) {
-                // Offline: keep the cached value loaded above.
-            }
-        }
     }
 
     fun refresh() = app.sync.requestSync()
@@ -148,7 +131,7 @@ class PosViewModel : ViewModel() {
      * cosmetic one. The number is therefore filled in when the sale syncs.
      */
     fun captureSale(method: String, tenderedMinor: Long) {
-        val shift = _shiftId.value
+        val shift = state.value.activeShiftId
         if (shift == null) {
             notice.value = "No open shift on this terminal. Open a shift before billing."
             return

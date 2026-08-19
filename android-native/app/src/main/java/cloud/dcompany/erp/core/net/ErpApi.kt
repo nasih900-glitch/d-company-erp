@@ -31,12 +31,6 @@ interface ErpApi {
     @GET("menu/categories")
     suspend fun menuCategories(): List<MenuCategory>
 
-    @GET("pos/shifts")
-    suspend fun shifts(@Query("only_open") onlyOpen: Boolean = true): List<Shift>
-
-    @POST("pos/shifts/open")
-    suspend fun openShift(@Body body: OpenShiftRequest): ShiftOpened
-
     @GET("pos/orders/{id}")
     suspend fun order(@Path("id") id: String): Order
 

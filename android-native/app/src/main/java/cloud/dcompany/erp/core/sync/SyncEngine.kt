@@ -5,10 +5,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.LocalOrderEntity
+import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.SyncMetaEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.ApiClient
@@ -17,10 +20,14 @@ import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.screens.shift.ShiftApi
+import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
+import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -87,6 +94,7 @@ class SyncEngine(
     private val scope: CoroutineScope,
 ) {
 
+    private val shiftApi = ApiClient.create<ShiftApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -98,20 +106,34 @@ class SyncEngine(
     val pendingCount = db.orderDao().observePendingCount()
     val rejectedCount = db.orderDao().observeRejectedCount()
 
+    /**
+     * Every outbox's rejected count combined, so a rejected row on a resource
+     * nobody currently has open (e.g. a shift, once other resources join this
+     * later) is never invisible. A *pending* row isn't included the same way —
+     * it will sync on its own given time and doesn't need cross-screen
+     * attention the way a stuck, rejected one does. Grows as more resources
+     * gain an outbox — see the plan this phase started from.
+     */
+    val totalRejectedCount = combine(rejectedCount, db.shiftDao().observeRejectedCount()) { a, b -> a + b }
+
     fun requestSync() {
         scope.launch { sync() }
     }
 
     /**
      * A single-flight guard, not a queue: two overlapping syncs would push the
-     * same pending orders twice. The idempotency key makes that harmless on
-     * the server, but it still wastes a congested link.
+     * same pending rows twice. The idempotency key makes that harmless on the
+     * server, but it still wastes a congested link.
      */
     suspend fun sync() {
         if (!mutex.tryLock()) return
         try {
             _syncing.value = true
             _lastError.value = null
+            // Shifts before orders: an order captured against a shift that
+            // hasn't synced yet has nothing to attach to until the shift's
+            // open leg resolves (see pushPendingOrders).
+            pushShifts()
             pushPendingOrders()
             pullMenu()
             db.syncMetaDao().put(SyncMetaEntity("menu", System.currentTimeMillis()))
@@ -120,6 +142,81 @@ class SyncEngine(
         } finally {
             _syncing.value = false
             mutex.unlock()
+        }
+    }
+
+    /**
+     * One unit of outbox work per row: `push` either fully succeeds or throws.
+     * A non-`ApiException` is a bug on our side (e.g. a DTO mismatch) — reject
+     * visibly rather than let it crash the app mid-sync, same reasoning as the
+     * order push below. An ambiguous `ApiException` (no answer, or the server
+     * is mid-flight) stops the whole drain so a bad link isn't hammered
+     * further; a definitive refusal is parked for a human, since retrying
+     * cannot change the answer.
+     *
+     * Returns false if the drain stopped early on an ambiguous failure.
+     */
+    private suspend fun <T> drainOutbox(
+        rows: List<T>,
+        markRejected: suspend (T, String) -> Unit,
+        push: suspend (T) -> Unit,
+    ): Boolean {
+        for (row in rows) {
+            try {
+                push(row)
+            } catch (e: Exception) {
+                _lastError.value = e.message
+                if (e !is ApiException) {
+                    markRejected(row, "Could not sync this (app error): ${e.message}")
+                    continue
+                }
+                if (e.isAmbiguous) return false
+                markRejected(row, e.message ?: "Server refused this.")
+            }
+        }
+        return true
+    }
+
+    private suspend fun pushShifts() {
+        val dao = db.shiftDao()
+        drainOutbox(
+            rows = dao.pushable(),
+            markRejected = { row, msg -> dao.markRejected(row.localId, msg) },
+            push = ::pushShiftOne,
+        )
+    }
+
+    /**
+     * Open, then close if requested — in that order, since a close can't be
+     * sent until the shift it refers to has a real server id. A close
+     * requested before the open has synced is not a special case here: it's
+     * already `state = close_pending` on this same row (see
+     * ShiftViewModel.closeShift), so the check below just finds it waiting.
+     */
+    private suspend fun pushShiftOne(row: LocalShiftEntity) {
+        val dao = db.shiftDao()
+        var serverShiftId = row.serverShiftId
+        if (serverShiftId == null) {
+            val opened = shiftApi.open(
+                ShiftOpenBody(row.openingFloatMinor),
+                "shift-open:${row.localId}",
+            )
+            serverShiftId = opened.id
+            dao.setServerShiftId(row.localId, serverShiftId)
+            dao.transitionState(row.localId, fromState = ShiftState.OPEN_PENDING, toState = ShiftState.OPEN_SYNCED)
+            // Legacy synchronous readers (e.g. Gaming's session-start) still
+            // read this cache directly rather than observing Room — keep it
+            // in step now that a real id exists, instead of a local placeholder.
+            DCompanyApp.instance.shiftCache.remember(serverShiftId)
+        }
+        val current = dao.byLocalId(row.localId) ?: return
+        if (current.state == ShiftState.CLOSE_PENDING) {
+            val result = shiftApi.close(
+                serverShiftId,
+                ShiftCloseBody(current.countedMinor ?: 0L),
+                "shift-close:${row.localId}",
+            )
+            dao.markClosed(row.localId, result.varianceMinor)
         }
     }
 
@@ -144,46 +241,36 @@ class SyncEngine(
         )
     }
 
+    /**
+     * An order captured while its shift was still `open_pending` carries that
+     * shift's `localId`, which the server has never heard of — pushShifts()
+     * runs first, but a shift can itself be waiting on an ambiguous retry, so
+     * this still has to check rather than assume the shift resolved. Orders
+     * held back this way are simply left untouched (not rejected, not an
+     * error): the next sync() call retries them once their shift catches up.
+     */
     private suspend fun pushPendingOrders() {
         val dao = db.orderDao()
-        for (order in dao.byState(SyncState.PENDING)) {
-            try {
-                pushOne(order)
-            } catch (e: Exception) {
-                // Surface it either way. The trial run left a sale sitting in
-                // the outbox with syncState=pending and no message anywhere —
-                // from the till it looked identical to a completed sale.
-                _lastError.value = e.message
-                if (e !is ApiException) {
-                    // Not a server answer at all — a bug on our side, e.g. a
-                    // DTO that does not match the payload. This used to escape
-                    // as an uncaught SerializationException and CRASH the app
-                    // mid-sync, which is how a captured sale ended up stranded
-                    // with the process dead. Park it visibly and keep going.
-                    dao.markRejected(
-                        order.localId,
-                        "Could not send this sale (app error): ${e.message}",
-                    )
-                    continue
-                }
-                if (e.isAmbiguous) {
-                    // No answer, or the server is mid-flight. The sale stays
-                    // pending and the same idempotency key is replayed later,
-                    // so a request that did land is never duplicated. Stop the
-                    // whole drain: the link is bad, and hammering it with the
-                    // rest of the queue only makes it worse.
-                    return
-                }
-                // A definitive refusal. Retrying cannot change the answer, so
-                // park it for a human instead of looping forever.
-                dao.markRejected(order.localId, e.message ?: "Server refused this sale.")
-            }
+        val shiftDao = db.shiftDao()
+        val ready = dao.byState(SyncState.PENDING).filter { order ->
+            val localShift = shiftDao.byLocalId(order.shiftId)
+            localShift == null || localShift.serverShiftId != null
         }
+        drainOutbox(
+            rows = ready,
+            markRejected = { row, msg -> dao.markRejected(row.localId, msg) },
+            push = ::pushOne,
+        )
     }
 
     private suspend fun pushOne(order: LocalOrderEntity) {
         val dao = db.orderDao()
         val lines = dao.linesFor(order.localId)
+        // If order.shiftId is a local shift's id, resolve it to the real
+        // server id (guaranteed non-null here — pushPendingOrders only lets
+        // resolved orders through). Otherwise it was already a real server
+        // shift id (the common case: shift opened while online).
+        val resolvedShiftId = db.shiftDao().byLocalId(order.shiftId)?.serverShiftId ?: order.shiftId
 
         // Deterministic keys derived from the local id: replaying this whole
         // function after a crash reuses them and the server returns the stored
@@ -191,7 +278,7 @@ class SyncEngine(
         val created = ApiClient.api.createOrder(
             CreateOrderRequest(
                 type = order.type,
-                shiftId = order.shiftId,
+                shiftId = resolvedShiftId,
                 lines = lines.map { OrderLineRequest(it.menuItemId, it.qty) },
                 customerName = order.customerName,
                 customerPhone = order.customerPhone,

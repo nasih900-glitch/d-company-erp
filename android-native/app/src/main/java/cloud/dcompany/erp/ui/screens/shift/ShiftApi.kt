@@ -30,6 +30,16 @@ data class ShiftDetail(
 @Serializable
 data class ShiftOpenBody(@SerialName("opening_float_minor") val openingFloatMinor: Long)
 
+/**
+ * `POST /pos/shifts/open` returns a bare `{"id": ..., "status": ...}` dict —
+ * no `response_model` is declared for it in pos/router.py, unlike GET
+ * /shifts (ShiftRead). Typing this call's result as `ShiftDetail` throws
+ * MissingFieldException for branch_id/opened_at on every single open, since
+ * neither is ever in this particular response.
+ */
+@Serializable
+data class ShiftOpenResult(val id: String, val status: String)
+
 @Serializable
 data class ShiftCloseBody(@SerialName("counted_minor") val countedMinor: Long)
 
@@ -49,7 +59,7 @@ interface ShiftApi {
     suspend fun open(
         @Body body: ShiftOpenBody,
         @Header("Idempotency-Key") key: String,
-    ): ShiftDetail
+    ): ShiftOpenResult
 
     @POST("pos/shifts/{id}/close")
     suspend fun close(

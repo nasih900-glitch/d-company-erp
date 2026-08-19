@@ -24,11 +24,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,42 +37,31 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.db.LocalShiftEntity
+import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ShiftScreen(vm: ShiftViewModel = viewModel()) {
     val state by vm.state.collectAsState()
 
-    when {
-        state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            CircularProgressIndicator(color = Brand.Gold)
+    Row(Modifier.fillMaxSize().padding(16.dp)) {
+        Column(Modifier.weight(1f)) {
+            if (state.open == null) OpenShiftCard(state, vm) else CloseShiftCard(state, vm)
         }
-        state.error != null && state.open == null && state.history.isEmpty() ->
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(24.dp),
-                ) {
-                    Text(state.error!!, color = MaterialTheme.colorScheme.error)
-                    Button(onClick = vm::load) { Text("Try again") }
-                }
-            }
-        else -> Row(Modifier.fillMaxSize().padding(16.dp)) {
-            Column(Modifier.weight(1f)) {
-                if (state.open == null) OpenShiftCard(state, vm) else CloseShiftCard(state, vm)
-            }
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.width(360.dp)) {
-                Text("Past shifts", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Spacer(Modifier.height(8.dp))
-                if (state.history.isEmpty()) {
-                    Text("No closed shifts yet.", color = Brand.ForegroundMuted)
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(state.history, key = { it.id }) { s -> HistoryRow(s) }
-                    }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.width(360.dp)) {
+            Text("Past shifts", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
+            Spacer(Modifier.height(8.dp))
+            if (state.history.isEmpty()) {
+                Text("No closed shifts yet.", color = Brand.ForegroundMuted)
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(state.history, key = { it.localId }) { s -> HistoryRow(s) }
                 }
             }
         }
@@ -86,6 +75,8 @@ fun ShiftScreen(vm: ShiftViewModel = viewModel()) {
             text = {
                 Text(
                     when {
+                        r.varianceMinor == null -> "Closed. The drawer count is with the server — variance " +
+                            "will show here once it syncs."
                         r.varianceMinor == 0L -> "The drawer balanced exactly."
                         r.varianceMinor > 0 -> "Over by ${r.varianceMinor.asRupees()} — more cash than expected."
                         else -> "Short by ${(-r.varianceMinor).asRupees()} — less cash than expected."
@@ -112,6 +103,14 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
                 "drawer at the start of this shift.",
             color = Brand.ForegroundMuted,
         )
+        if (!state.online) {
+            Text(
+                "No connection — the shift opens on this tablet now and reaches the " +
+                    "server once you're back online.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
         OutlinedTextField(
             value = float,
             onValueChange = { float = it.filter { c -> c.isDigit() || c == '.' } },
@@ -120,14 +119,11 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
-        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Button(
             onClick = { vm.openShift(floatMinor) },
-            enabled = !state.busy,
             modifier = Modifier.fillMaxWidth().height(52.dp),
         ) {
-            if (state.busy) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp, color = Brand.Background)
-            else Text("Open shift with ${floatMinor.asRupees()}")
+            Text("Open shift with ${floatMinor.asRupees()}")
         }
     }
 }
@@ -135,6 +131,7 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
 @Composable
 private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
     val shift = state.open!!
+    val closing = shift.state == ShiftState.CLOSE_PENDING
     // Staff count notes, not totals. Typing a single number invites both
     // arithmetic slips and a "close enough" fudge; counting by denomination
     // makes the total fall out of the count itself.
@@ -157,9 +154,18 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Expected in drawer", color = Brand.ForegroundMuted)
             Text(
-                shift.expectedMinor?.asRupees() ?: "not yet available",
+                state.expectedMinor?.asRupees() ?: "not available offline",
                 color = Brand.Foreground,
                 fontWeight = FontWeight.Bold,
+            )
+        }
+
+        if (closing) {
+            Text(
+                "Close sent — waiting to reach the server" +
+                    (if (!state.online) " (no connection right now)" else "") + ".",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
             )
         }
 
@@ -175,6 +181,7 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
                         value = counts[note] ?: "",
                         onValueChange = { counts[note] = it.filter { c -> c.isDigit() } },
                         singleLine = true,
+                        enabled = !closing,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.width(120.dp),
                     )
@@ -187,7 +194,7 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
             }
         }
 
-        val variance = shift.expectedMinor?.let { countedMinor - it }
+        val variance = state.expectedMinor?.let { countedMinor - it }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Counted", color = Brand.ForegroundMuted)
             Text(countedMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
@@ -207,14 +214,16 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
             }
         }
 
-        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = vm::load, enabled = !state.busy) { Text("Refresh") }
+            OutlinedButton(onClick = vm::load, enabled = !closing) { Text("Refresh") }
             Button(
                 onClick = { confirming = true },
-                enabled = !state.busy && countedMinor > 0,
+                enabled = !closing && countedMinor > 0,
                 modifier = Modifier.weight(1f).height(52.dp),
-            ) { Text("Close shift") }
+            ) {
+                if (closing) CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp, color = Brand.Background)
+                else Text("Close shift")
+            }
         }
     }
 
@@ -238,20 +247,22 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
     }
 }
 
+private val historyDateFormat = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
+
 @Composable
-private fun HistoryRow(s: ShiftDetail) {
+private fun HistoryRow(s: LocalShiftEntity) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
             .background(Brand.SurfaceRaised).padding(10.dp),
     ) {
-        Text(s.openedAt.take(16).replace('T', ' '), color = Brand.Foreground)
+        Text(historyDateFormat.format(Date(s.openedAtMillis)), color = Brand.Foreground)
         Text(
             "counted ${s.countedMinor?.asRupees() ?: "—"} · " +
                 when {
-                    s.varianceMinor == null -> "no variance recorded"
+                    s.varianceMinor == null -> "not synced yet"
                     s.varianceMinor == 0L -> "balanced"
                     s.varianceMinor > 0 -> "over ${s.varianceMinor.asRupees()}"
-                    else -> "short ${(-s.varianceMinor!!).asRupees()}"
+                    else -> "short ${(-s.varianceMinor).asRupees()}"
                 },
             style = MaterialTheme.typography.labelSmall,
             color = if (s.varianceMinor == 0L) Brand.Good else Brand.ForegroundMuted,

@@ -32,24 +32,6 @@ data class MenuItem(
 )
 
 @Serializable
-data class Shift(
-    val id: String,
-    val status: String,
-    @SerialName("opening_float_minor") val openingFloatMinor: Long = 0,
-    @SerialName("expected_minor") val expectedMinor: Long = 0,
-    @SerialName("opened_by_user_id") val openedByUserId: String? = null,
-    @SerialName("terminal_id") val terminalId: String? = null,
-)
-
-@Serializable
-data class OpenShiftRequest(
-    @SerialName("opening_float_minor") val openingFloatMinor: Long,
-)
-
-@Serializable
-data class ShiftOpened(val id: String, val status: String)
-
-@Serializable
 data class Terminal(
     val id: String,
     val name: String,
