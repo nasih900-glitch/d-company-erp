@@ -8,13 +8,14 @@ from math import ceil
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -250,6 +251,14 @@ def _current_gaming_branch_id(tenant: TenantContext) -> UUID:
     if tenant.branch_id is None:
         raise BusinessRuleError("select a branch or terminal before managing gaming stations")
     return tenant.branch_id
+
+
+def _require_idempotency(request: Request) -> tuple[str, str]:
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not request_hash:
+        raise BusinessRuleError("Idempotency-Key header required for gaming session writes")
+    return str(key), str(request_hash)
 
 
 def _requested_gaming_branch_id(
@@ -498,8 +507,20 @@ async def list_sessions(
 async def start_session(
     payload: SessionStart,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return SessionRead.model_validate(existing_response["body"])
+
     # Serialise starts per station so concurrent devices cannot both pass the
     # availability check and create overlapping/unbilled sessions.
     station = (
@@ -593,7 +614,14 @@ async def start_session(
     )
     session.add(gs)
     await session.flush()
-    return session_read(gs)
+    response = session_read(gs)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.patch("/sessions/{session_id}/timer", response_model=SessionRead)
@@ -693,8 +721,20 @@ async def extend_session_with_package(
 async def stop_session(
     session_id: UUID,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return SessionRead.model_validate(existing_response["body"])
+
     gs = (
         await session.execute(
             select(GamingSession).where(GamingSession.id == session_id).with_for_update()
@@ -723,7 +763,14 @@ async def stop_session(
         # Response-loss retry: validate the exact operational scope first,
         # then return the already-computed result.
         # The original shift may have been closed after the successful stop.
-        return session_read(gs)
+        response = session_read(gs)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_200_OK,
+            body=response.model_dump(mode="json"),
+        )
+        return response
     if gs.status == "cancelled":
         raise BusinessRuleError("session was cancelled")
     if gs.status not in ("active", "paused"):
@@ -744,7 +791,14 @@ async def stop_session(
     # paid extensions) and never changes based on how long they actually
     # played — billable_minutes above is still recorded for the audit trail.
     gs.status = "ended"
-    return session_read(gs)
+    response = session_read(gs)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.post("/sessions/{session_id}/cancel", response_model=SessionRead)

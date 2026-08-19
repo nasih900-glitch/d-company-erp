@@ -1089,6 +1089,64 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
 
 
 @pytest.mark.asyncio
+async def test_start_session_replay_returns_stored_response_without_recreating() -> None:
+    """A dropped-response retry of session start must replay the stored
+    response, not re-run the "station already has an active session" check
+    against the session it itself just created — that false rejection is
+    exactly what the idempotency wiring in start_session fixes. Only the
+    idempotency-key lookup should touch the database on a replay; no second
+    GamingSession may be added.
+    """
+    tenant = _tenant()
+    station = _station(tenant)
+    shift = _shift(tenant)
+    stored_body = {
+        "id": str(uuid4()),
+        "station_id": str(station.id),
+        "status": "active",
+        "start_at": datetime.now(UTC).isoformat(),
+        "end_at": None,
+        "timer_minutes": None,
+        "timer_ends_at": None,
+        "billable_minutes": None,
+        "amount_minor": None,
+        "customer_name": None,
+        "customer_phone": None,
+        "rate_per_hour_minor": 20_000,
+        "order_id": None,
+        "cancel_reason": None,
+        "package_id": None,
+        "extra_controllers": 0,
+    }
+    stored_key_row = SimpleNamespace(
+        request_hash="same-hash",
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        response_status=201,
+        response_body=stored_body,
+    )
+    session = _Session(_Result(scalar=stored_key_row))
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="session-start-retry-key",
+            idempotency_request_hash="same-hash",
+        )
+    )
+
+    response = await gaming_router.start_session(
+        gaming_router.SessionStart(station_id=station.id, shift_id=shift.id),
+        session,
+        request,
+        tenant,
+    )
+
+    assert response.id == UUID(stored_body["id"])
+    assert response.status == "active"
+    assert session.added == []
+    assert len(session.statements) == 1
+
+
+@pytest.mark.asyncio
 async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -> None:
     table_id = uuid4()
     held_at = datetime(2026, 7, 15, 11, 30, tzinfo=UTC)

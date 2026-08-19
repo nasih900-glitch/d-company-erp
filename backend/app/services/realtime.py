@@ -32,7 +32,11 @@ from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
-RESOURCES = frozenset({"shifts", "tables", "orders", "gaming", "kitchen", "attendance"})
+RESOURCES = frozenset({
+    "shifts", "tables", "orders", "gaming", "kitchen", "attendance",
+    "menu", "customers", "inventory", "finance", "staff", "events",
+    "memberships", "access_control", "ocr",
+})
 
 
 class ConnectionManager:
@@ -84,7 +88,21 @@ _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/gaming/sessions", "gaming"),
     ("/gaming/bookings", "gaming"),
     ("/kitchen", "kitchen"),
+    # Must precede the bare "/staff" row below — the substring match returns
+    # on first hit, so attendance writes would otherwise resolve to "staff".
     ("/staff/attendance", "attendance"),
+    ("/menu", "menu"),
+    ("/customers", "customers"),
+    ("/inventory", "inventory"),
+    ("/finance", "finance"),
+    ("/staff", "staff"),
+    ("/events", "events"),
+    ("/memberships", "memberships"),
+    # Narrow on purpose — NOT a bare "/admin" row, which would also swallow
+    # /admin/pricing/unlock and /admin/audit/*, neither of which is a
+    # resource anything should be pull-refreshing on.
+    ("/admin/access-control", "access_control"),
+    ("/ocr", "ocr"),
 )
 
 
