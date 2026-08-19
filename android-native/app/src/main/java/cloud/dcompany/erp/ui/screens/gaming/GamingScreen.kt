@@ -47,17 +47,20 @@ fun GamingScreen(vm: GamingViewModel = viewModel()) {
     var starting by remember { mutableStateOf<Station?>(null) }
 
     when {
-        state.loading && state.stations.isEmpty() ->
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
-            }
         state.stations.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.padding(24.dp),
             ) {
-                Text("No gaming stations set up", color = Brand.Foreground)
+                // Still shown even on a never-synced device: a bare spinner
+                // with no way out is what this replaced — offline on the
+                // very first open must not be a dead end.
+                if (!state.everSynced) CircularProgressIndicator(color = Brand.Gold)
+                Text(
+                    if (state.everSynced) "No gaming stations set up" else "Waiting for the first sync",
+                    color = Brand.Foreground,
+                )
                 Text(
                     state.error ?: "Add stations in the ERP, then refresh.",
                     color = Brand.ForegroundMuted,

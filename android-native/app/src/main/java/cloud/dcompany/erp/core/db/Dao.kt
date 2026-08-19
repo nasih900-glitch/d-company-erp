@@ -7,6 +7,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.TypeConverters
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -118,13 +119,25 @@ interface SyncMetaDao {
         LocalOrderLineEntity::class,
         SyncMetaEntity::class,
         LocalShiftEntity::class,
+        GamingStationEntity::class,
+        GamingSessionCacheEntity::class,
+        LocalGamingSessionEntity::class,
+        KitchenOrderCacheEntity::class,
+        LocalKitchenAdvanceEntity::class,
+        FloorEntity::class,
+        CafeTableEntity::class,
+        LocalTableOrderEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
+@TypeConverters(KitchenLineListConverter::class, TableOrderLineListConverter::class)
 abstract class ErpDatabase : RoomDatabase() {
     abstract fun menuDao(): MenuDao
     abstract fun orderDao(): OrderDao
     abstract fun syncMetaDao(): SyncMetaDao
     abstract fun shiftDao(): ShiftDao
+    abstract fun gamingDao(): GamingDao
+    abstract fun kitchenDao(): KitchenDao
+    abstract fun tablesDao(): TablesDao
 }

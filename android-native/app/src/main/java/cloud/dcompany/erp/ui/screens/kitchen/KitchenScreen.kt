@@ -101,7 +101,7 @@ fun KitchenScreen(vm: KitchenViewModel = viewModel()) {
         }
 
         when {
-            state.loading && state.orders.isEmpty() ->
+            !state.everSynced && state.orders.isEmpty() && state.error == null ->
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
                     CircularProgressIndicator(color = Brand.Gold)
                 }

@@ -70,4 +70,46 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate2To3_preservesExistingDataAndAddsPhase2Tables() {
+        // v2 already has local_shifts (from MIGRATION_1_2) — seed one real
+        // open shift plus the same v1 rows, so this test also proves the
+        // Phase 2 migration doesn't disturb Phase 1's table.
+        helper.createDatabase(dbName, 2).apply {
+            execSQL(
+                "INSERT INTO menu_items (id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1)",
+            )
+            execSQL(
+                "INSERT INTO local_shifts (localId, openingFloatMinor, openedAtMillis, state) " +
+                    "VALUES ('shift-1', 100000, 1000, 'open_synced')",
+            )
+            close()
+        }
+
+        // MIGRATION_2_3 adds the 8 Phase 2 tables (gaming/kitchen/tables) in
+        // one pass — validated against the real, Room-generated v3 schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 3, true, MIGRATION_2_3)
+
+        migrated.query("SELECT id, name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(1) == "Cold Coffee")
+        }
+        migrated.query("SELECT localId, state FROM local_shifts WHERE localId = 'shift-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "local_shifts row lost across the migration" }
+            assert(cursor.getString(1) == "open_synced")
+        }
+        for (table in listOf(
+            "gaming_stations", "gaming_session_cache", "local_gaming_sessions",
+            "kitchen_order_cache", "local_kitchen_advances",
+            "cafe_floors", "cafe_tables", "local_table_orders",
+        )) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.close()
+    }
 }

@@ -27,6 +27,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private val tokens = (app as DCompanyApp).tokens
     private val cache = (app as DCompanyApp).shiftCache
     private val terminals = (app as DCompanyApp).terminalStore
+    private val realtime = (app as DCompanyApp).realtime
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val _state = MutableStateFlow<AuthState>(AuthState.Loading)
@@ -39,7 +40,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
     init {
-        ApiClient.onForcedLogout = { _state.value = AuthState.SignedOut }
+        ApiClient.onForcedLogout = { _state.value = AuthState.SignedOut; realtime.disconnect() }
         restore()
     }
 
@@ -61,6 +62,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
                 resolveTerminal(me)
                 _state.value = AuthState.SignedIn(me)
+                realtime.connect()
             } catch (e: ApiException) {
                 if (e.status == 401 || e.status == 403) {
                     // The server itself rejected this session. That is the only
@@ -68,6 +70,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     tokens.clear()
                     cache.rememberProfile(null)
                     _state.value = AuthState.SignedOut
+                    realtime.disconnect()
                     return@launch
                 }
                 // Unreachable, not rejected. If this device has signed in
@@ -80,6 +83,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _state.value = if (cached != null) AuthState.SignedIn(cached)
                     else AuthState.Unreachable(e.message ?: "Could not reach the server.")
+                // Harmless no-op if genuinely offline — connect() checks for a
+                // token and OkHttp's own retry/backoff takes it from there.
+                if (cached != null) realtime.connect()
             }
         }
     }
@@ -98,6 +104,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
                 resolveTerminal(me)
                 _state.value = AuthState.SignedIn(me)
+                realtime.connect()
             } catch (e: ApiException) {
                 _loginError.value = e.message
             } finally {
@@ -133,5 +140,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // cold start reopen the till as the staff member who just signed out.
         viewModelScope.launch { cache.rememberProfile(null) }
         _state.value = AuthState.SignedOut
+        realtime.disconnect()
     }
 }

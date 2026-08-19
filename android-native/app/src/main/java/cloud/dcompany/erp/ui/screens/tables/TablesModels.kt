@@ -127,37 +127,3 @@ data class OrderLinesAppendBody(val lines: List<OrderLineBody>)
 
 @Serializable
 data class VoidOrderBody(val reason: String)
-
-// ---------------------------------------------------------------- retry safety
-
-const val SEND_KIND_CREATE = "create"
-const val SEND_KIND_APPEND = "append"
-
-@Serializable
-data class PendingLine(
-    @SerialName("menu_item_id") val menuItemId: String,
-    val qty: Int,
-    val note: String? = null,
-)
-
-/**
- * A "Send to kitchen" that was started but whose result is not known — the
- * connection dropped, or the server answered 5xx, so the order may or may not
- * have been written.
- *
- * It is written to disk *before* the request goes out and holds the exact
- * request body and Idempotency-Key. That is the whole point: retrying replays
- * the identical key, so the backend returns the original result instead of
- * adding the same round of food to the table a second time. Regenerating the
- * key on retry — or losing it when the tablet is killed — is precisely how a
- * table ends up billed twice.
- */
-@Serializable
-data class PendingSend(
-    @SerialName("table_id") val tableId: String,
-    @SerialName("idempotency_key") val idempotencyKey: String,
-    val kind: String,
-    @SerialName("order_id") val orderId: String? = null,
-    @SerialName("shift_id") val shiftId: String? = null,
-    val lines: List<PendingLine> = emptyList(),
-)

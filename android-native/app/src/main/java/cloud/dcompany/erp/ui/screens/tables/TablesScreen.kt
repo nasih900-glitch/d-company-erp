@@ -48,18 +48,20 @@ fun TablesScreen(vm: TablesViewModel = viewModel()) {
     val state by vm.state.collectAsState()
 
     when {
-        state.loading && state.tables.isEmpty() ->
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
-            }
-
         state.tables.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.padding(24.dp),
             ) {
-                Text("No tables set up", color = Brand.Foreground)
+                // Still shown even on a never-synced device: a bare spinner
+                // with no way out is what this replaced — offline on the
+                // very first open must not be a dead end.
+                if (!state.everSynced) CircularProgressIndicator(color = Brand.Gold)
+                Text(
+                    if (state.everSynced) "No tables set up" else "Waiting for the first sync",
+                    color = Brand.Foreground,
+                )
                 Text(
                     state.error ?: "Add floors and tables in the ERP, then refresh.",
                     color = Brand.ForegroundMuted,

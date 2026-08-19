@@ -2,17 +2,23 @@ package cloud.dcompany.erp.ui.screens.kitchen
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
+import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.UUID
 
-/** How often the wall screen re-reads the queue. */
+/** Fallback poll cadence — belt and suspenders on top of realtime push for
+ * a board where staleness is a real operational risk, not just stale UI. */
 const val KITCHEN_POLL_MS = 5_000L
 
 /**
@@ -25,13 +31,13 @@ const val KITCHEN_POLL_MS = 5_000L
 private const val ADVANCE_LOCK_MS = 1_200L
 
 data class KitchenUiState(
-    val loading: Boolean = true,
     val error: String? = null,
     val orders: List<KitchenOrder> = emptyList(),
     val includeServed: Boolean = false,
-    /** The ticket whose PATCH is in flight. */
+    /** The ticket whose advance is queued or in flight. */
     val busyOrderId: String? = null,
     val advanceLockedUntilMillis: Long = 0L,
+    val everSynced: Boolean = false,
     val lastSyncedAtMillis: Long? = null,
     /** Ticks every second so "synced 4s ago" and the tap lock stay honest. */
     val nowMillis: Long = System.currentTimeMillis(),
@@ -60,138 +66,167 @@ data class KitchenUiState(
     val stale: Boolean get() = (secondsSinceSync ?: 0) > (KITCHEN_POLL_MS / 1000) * 3
 }
 
+/**
+ * Room-backed for the live board (`includeServed = false`) — an advance is
+ * captured to an outbox and applied optimistically, so a gloved tap keeps
+ * working through a dropped link the same way POS billing does. Naturally
+ * idempotent server-side (see KitchenState's doc comment), so unlike every
+ * other outbox in this app there's no idempotency key to generate and
+ * nothing to resolve at push time — just resend the target state.
+ *
+ * `includeServed = true` (the "what happened today" history view) stays
+ * online-only, deliberately: it's a look-back, not an operational need, and
+ * caching a second, much larger dataset just to make browsing history work
+ * offline isn't worth the complexity for something nobody needs mid-outage.
+ */
 class KitchenViewModel : ViewModel() {
 
     private val api = ApiClient.create<KitchenApi>()
+    private val appCtx = DCompanyApp.instance
+    private val db = appCtx.db
 
-    private val _state = MutableStateFlow(KitchenUiState())
-    val state: StateFlow<KitchenUiState> = _state.asStateFlow()
+    private val includeServed = MutableStateFlow(false)
+    private val busyOrderId = MutableStateFlow<String?>(null)
+    private val advanceLockedUntilMillis = MutableStateFlow(0L)
+    private val nowMillis = MutableStateFlow(System.currentTimeMillis())
+    private val error = MutableStateFlow<String?>(null)
+    /** Non-null only while includeServed = true — bypasses Room entirely. */
+    private val historySnapshot = MutableStateFlow<List<KitchenOrder>?>(null)
 
-    private var loadJob: Job? = null
+    val state: StateFlow<KitchenUiState> = combine(
+        db.kitchenDao().observeOrderCache(),
+        db.kitchenDao().observePendingAdvances(),
+        historySnapshot,
+        combine(includeServed, busyOrderId, advanceLockedUntilMillis, ::Triple),
+        combine(error, nowMillis, appCtx.db.syncMetaDao().observe("kitchen"), ::Triple),
+    ) { cache, pending, history, uiA, uiB ->
+        val (includeServedNow, busy, lockedUntil) = uiA
+        val (err, now, meta) = uiB
+        KitchenUiState(
+            error = err,
+            orders = history ?: mergeCacheWithPending(cache, pending),
+            includeServed = includeServedNow,
+            busyOrderId = busy,
+            advanceLockedUntilMillis = lockedUntil,
+            everSynced = meta != null,
+            lastSyncedAtMillis = meta?.lastSyncMillis,
+            nowMillis = now,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KitchenUiState())
 
     init {
         viewModelScope.launch {
             while (isActive) {
                 delay(1_000)
-                _state.value = _state.value.copy(nowMillis = System.currentTimeMillis())
+                nowMillis.value = System.currentTimeMillis()
+            }
+        }
+        refresh()
+        viewModelScope.launch {
+            while (isActive) {
+                delay(KITCHEN_POLL_MS)
+                if (!includeServed.value) {
+                    appCtx.sync.requestSync()
+                    appCtx.sync.refresh("kitchen")
+                }
             }
         }
     }
 
-    /**
-     * Re-reads the queue. Polling calls this every few seconds, so a failure
-     * must never blank the board: the last good tickets stay on screen and the
-     * error is raised as a banner instead. A cook can still cook from a stale
-     * ticket list; they can do nothing with an empty one.
-     */
+    /** Re-reads the queue — realtime push already keeps Room fresh; this is the manual/poll path. */
     fun refresh() {
-        if (loadJob?.isActive == true) return
-        val hadData = _state.value.orders.isNotEmpty()
-        if (!hadData) _state.value = _state.value.copy(loading = true)
-
-        loadJob = viewModelScope.launch {
-            try {
-                val orders = api.queue(includeServed = _state.value.includeServed)
-                _state.value = _state.value.copy(
-                    loading = false,
-                    error = null,
-                    orders = orders,
-                    lastSyncedAtMillis = System.currentTimeMillis(),
-                )
-            } catch (e: ApiException) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    error = e.message ?: "Could not reach the server.",
-                )
-            }
+        if (includeServed.value) {
+            loadHistorySnapshot()
+        } else {
+            appCtx.sync.requestSync()
+            viewModelScope.launch { appCtx.sync.refresh("kitchen") }
         }
     }
 
     /** Manual retry from the error state: clears the message first so a repeat failure still reads as new. */
     fun retry() {
-        _state.value = _state.value.copy(error = null)
+        error.value = null
         refresh()
     }
 
     fun setIncludeServed(include: Boolean) {
-        if (include == _state.value.includeServed) return
-        // Drop the current tickets: they answer a different question than the
-        // one now being asked, and showing them under the new toggle would be
-        // a lie until the next poll lands.
-        loadJob?.cancel()
-        _state.value = _state.value.copy(
-            includeServed = include,
-            orders = emptyList(),
-            error = null,
-            loading = true,
-        )
-        refresh()
+        if (include == includeServed.value) return
+        includeServed.value = include
+        error.value = null
+        if (include) loadHistorySnapshot() else historySnapshot.value = null
     }
 
-    fun dismissError() { _state.value = _state.value.copy(error = null) }
+    private fun loadHistorySnapshot() {
+        viewModelScope.launch {
+            try {
+                historySnapshot.value = api.queue(includeServed = true)
+                error.value = null
+            } catch (e: ApiException) {
+                error.value = e.message ?: "Could not reach the server."
+            }
+        }
+    }
+
+    fun dismissError() { error.value = null }
 
     /**
-     * Moves one ticket one rung up the ladder.
-     *
-     * There is no retry loop and no idempotency key on purpose: the server
-     * treats "set the state it is already in" as a no-op, so if the reply is
-     * lost the cook simply taps again and the outcome is identical. What it
-     * refuses is a skip or a step backwards — which is exactly the protection
-     * needed if this screen's view of the ticket is stale.
+     * Moves one ticket one rung up the ladder. Captured to the outbox and
+     * applied optimistically rather than awaited — same reasoning as the
+     * comment that used to live here: a gloved tap that appears to do
+     * nothing for five seconds gets tapped again, and the server-enforced
+     * ladder (no skip, no backwards step) is what makes a stale local view
+     * safe to act on regardless.
      */
     fun advance(order: KitchenOrder) {
         val current = KitchenState.from(order.kitchenState) ?: return
         val next = current.next ?: return
         val now = System.currentTimeMillis()
-        if (_state.value.busyOrderId != null || now < _state.value.advanceLockedUntilMillis) return
+        if (busyOrderId.value != null || now < advanceLockedUntilMillis.value) return
 
-        _state.value = _state.value.copy(busyOrderId = order.id, error = null)
+        busyOrderId.value = order.id
+        error.value = null
         viewModelScope.launch {
-            try {
-                val updated = api.setState(order.id, KitchenStateUpdate(next.wire))
-                applyAdvance(order.id, updated.kitchenState)
-            } catch (e: ApiException) {
-                _state.value = _state.value.copy(
-                    busyOrderId = null,
-                    error = when {
-                        // "may or may not have committed" — so say that, and let
-                        // the poll below settle it rather than guessing.
-                        e.isAmbiguous ->
-                            "${e.message} — checking whether it went through."
-                        else -> e.message
-                    },
-                )
-                // Either way the truth is on the server, not here.
-                refresh()
-            }
+            db.kitchenDao().insertAdvance(
+                LocalKitchenAdvanceEntity(
+                    localId = UUID.randomUUID().toString(),
+                    orderId = order.id,
+                    targetState = next.wire,
+                    requestedAtMillis = System.currentTimeMillis(),
+                ),
+            )
+            busyOrderId.value = null
+            advanceLockedUntilMillis.value = System.currentTimeMillis() + ADVANCE_LOCK_MS
+            appCtx.sync.requestSync()
+            if (includeServed.value) loadHistorySnapshot()
         }
     }
+}
 
-    /**
-     * Applies the state the server just confirmed, without waiting for the next
-     * poll — a gloved tap that appears to do nothing for five seconds gets
-     * tapped again.
-     *
-     * Only the state is taken from the response. Its `lines` array also carries
-     * lines the queue deliberately hides (already served ones), so splicing the
-     * whole DTO in would make finished items reappear on the board.
-     */
-    private fun applyAdvance(orderId: String, confirmedState: String) {
-        val servedNow = KitchenState.from(confirmedState) == KitchenState.SERVED
-        val orders = _state.value.orders.mapNotNull { o ->
-            when {
-                o.id != orderId -> o
-                // Served tickets leave the active board entirely, matching what
-                // the next queue read will return.
-                servedNow && !_state.value.includeServed -> null
-                else -> o.copy(kitchenState = confirmedState)
-            }
-        }
-        _state.value = _state.value.copy(
-            orders = orders,
-            busyOrderId = null,
-            advanceLockedUntilMillis = System.currentTimeMillis() + ADVANCE_LOCK_MS,
-            nowMillis = System.currentTimeMillis(),
+/**
+ * The cache holds only what the last pull returned; a locally-advanced
+ * ticket overrides its state until that pull lands, and a locally-advanced
+ * *served* ticket drops off the active board entirely, matching what the
+ * next queue read will return.
+ */
+private fun mergeCacheWithPending(
+    cache: List<KitchenOrderCacheEntity>,
+    pending: List<LocalKitchenAdvanceEntity>,
+): List<KitchenOrder> {
+    val latestByOrder = pending.groupBy { it.orderId }
+        .mapValues { (_, rows) -> rows.maxBy { it.requestedAtMillis } }
+    return cache.mapNotNull { row ->
+        val effectiveState = latestByOrder[row.id]?.targetState ?: row.kitchenState
+        if (KitchenState.from(effectiveState) == KitchenState.SERVED) return@mapNotNull null
+        KitchenOrder(
+            id = row.id,
+            invoiceNo = row.invoiceNo,
+            type = row.type,
+            tableCode = row.tableCode,
+            customerName = row.customerName,
+            openedAt = row.openedAt,
+            kitchenState = effectiveState,
+            minutesWaiting = row.minutesWaiting,
+            lines = row.lines,
         )
     }
 }

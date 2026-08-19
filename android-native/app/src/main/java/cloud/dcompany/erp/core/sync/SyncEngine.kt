@@ -7,8 +7,17 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.db.ErpDatabase
+import cloud.dcompany.erp.core.db.CafeTableEntity
+import cloud.dcompany.erp.core.db.FloorEntity
+import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.GamingStationEntity
+import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
+import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalShiftEntity
+import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.ShiftState
@@ -20,9 +29,14 @@ import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.screens.gaming.GamingApi
+import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
+import cloud.dcompany.erp.ui.screens.kitchen.KitchenApi
+import cloud.dcompany.erp.ui.screens.kitchen.KitchenStateUpdate
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
+import cloud.dcompany.erp.ui.screens.tables.TablesApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +45,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.Instant
 
 /**
  * Watches real connectivity. `hasInternet` requires NET_CAPABILITY_VALIDATED,
@@ -95,6 +110,9 @@ class SyncEngine(
 ) {
 
     private val shiftApi = ApiClient.create<ShiftApi>()
+    private val gamingApi = ApiClient.create<GamingApi>()
+    private val kitchenApi = ApiClient.create<KitchenApi>()
+    private val tablesApi = ApiClient.create<TablesApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -114,7 +132,52 @@ class SyncEngine(
      * attention the way a stuck, rejected one does. Grows as more resources
      * gain an outbox — see the plan this phase started from.
      */
-    val totalRejectedCount = combine(rejectedCount, db.shiftDao().observeRejectedCount()) { a, b -> a + b }
+    val totalRejectedCount = combine(
+        rejectedCount,
+        db.shiftDao().observeRejectedCount(),
+        db.gamingDao().observeRejectedCount(),
+        db.kitchenDao().observeRejectedCount(),
+        db.tablesDao().observeRejectedCount(),
+    ) { orders, shifts, gaming, kitchen, tables -> orders + shifts + gaming + kitchen + tables }
+
+    /**
+     * Pull-only resources, fetched when a screen using them opens or a
+     * realtime "changed" event names them — not on every sync(), which would
+     * otherwise fan every reconnect out into GETs for screens nobody has
+     * open. Push (the outbox drain) is always unconditional in sync(); this
+     * map is purely the read side.
+     */
+    private val onDemandPulls: Map<String, suspend () -> Unit> = mapOf(
+        "gaming" to ::pullGamingData,
+        "kitchen" to ::pullKitchenData,
+        "tables" to ::pullTablesData,
+    )
+
+    /**
+     * Same `ApiException`-only catch as [sync] — offline is the expected,
+     * routine case here (a screen refreshing on open), not a bug. Letting it
+     * propagate crashed the app the instant Gaming/Kitchen/Tables opened
+     * without a connection, which defeats the entire point of caching these
+     * resources in Room in the first place.
+     */
+    suspend fun refresh(resource: String) {
+        try {
+            onDemandPulls[resource]?.invoke()
+        } catch (e: ApiException) {
+            _lastError.value = e.message
+        }
+    }
+
+    /** Every on-demand resource — used after a realtime reconnect-after-gap. */
+    suspend fun refreshAllOnDemand() {
+        for (pull in onDemandPulls.values) {
+            try {
+                pull()
+            } catch (e: ApiException) {
+                _lastError.value = e.message
+            }
+        }
+    }
 
     fun requestSync() {
         scope.launch { sync() }
@@ -135,6 +198,9 @@ class SyncEngine(
             // open leg resolves (see pushPendingOrders).
             pushShifts()
             pushPendingOrders()
+            pushGamingSessions()
+            pushKitchenAdvances()
+            pushTableOrders()
             pullMenu()
             db.syncMetaDao().put(SyncMetaEntity("menu", System.currentTimeMillis()))
         } catch (e: ApiException) {
@@ -218,6 +284,231 @@ class SyncEngine(
             )
             dao.markClosed(row.localId, result.varianceMinor)
         }
+    }
+
+    /**
+     * Same dependency-resolution need as orders: a session started against a
+     * shift that was itself opened offline carries that shift's `localId`
+     * until it resolves. Sessions whose shift hasn't synced yet are left
+     * untouched, not rejected — the next sync() call picks them up once
+     * pushShifts() (which runs first) has resolved it.
+     */
+    private suspend fun pushGamingSessions() {
+        val dao = db.gamingDao()
+        val shiftDao = db.shiftDao()
+        val ready = dao.pushableSessions().filter { row ->
+            // Only a still-unsynced start leg has a shift to wait on — a
+            // stop-only row (serverId already set) or a genuinely shiftless
+            // row is always ready.
+            if (row.serverId != null || row.shiftId == null) return@filter true
+            val localShift = shiftDao.byLocalId(row.shiftId)
+            localShift == null || localShift.serverShiftId != null
+        }
+        drainOutbox(
+            rows = ready,
+            markRejected = { row, msg -> dao.markSessionRejected(row.localId, msg) },
+            push = ::pushGamingSessionOne,
+        )
+    }
+
+    /**
+     * Start, then stop if requested — same one-row-both-legs shape and same
+     * reasoning as pushShiftOne: a stop requested before the start has
+     * synced is already `state = stop_pending` on this row, so the check
+     * below just finds it waiting once a real serverId exists.
+     */
+    private suspend fun pushGamingSessionOne(row: LocalGamingSessionEntity) {
+        val dao = db.gamingDao()
+        var serverId = row.serverId
+        if (serverId == null) {
+            // Guaranteed non-null here by GamingViewModel.start() — the only
+            // call site that ever inserts a start_pending row. A violation
+            // surfaces as a caught, rejected "app error" via drainOutbox
+            // rather than crashing the sync.
+            val shiftId = row.shiftId!!
+            val resolvedShiftId = db.shiftDao().byLocalId(shiftId)?.serverShiftId ?: shiftId
+            val started = gamingApi.start(
+                SessionStartBody(
+                    stationId = row.stationId,
+                    shiftId = resolvedShiftId,
+                    customerPhone = row.customerPhone,
+                    timerMinutes = row.timerMinutes,
+                ),
+                "gaming-session-start:${row.localId}",
+            )
+            serverId = started.id
+            dao.setSessionStarted(
+                row.localId,
+                serverId,
+                started.status,
+                started.timerEndsAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() },
+            )
+            dao.transitionSessionState(
+                row.localId,
+                fromState = GamingSessionState.START_PENDING,
+                toState = GamingSessionState.START_SYNCED,
+            )
+        }
+        val current = dao.localSessionById(row.localId) ?: return
+        if (current.state == GamingSessionState.STOP_PENDING) {
+            val stopped = gamingApi.stop(serverId, "gaming-session-stop:${row.localId}")
+            dao.markSessionStopped(
+                row.localId,
+                stopped.status,
+                stopped.endAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() },
+                stopped.billableMinutes,
+                stopped.amountMinor,
+            )
+        }
+    }
+
+    /**
+     * Stations + every session on every terminal — a shared floor view, so
+     * this always pulls the whole company's sessions, not just this
+     * device's. On-demand only (see onDemandPulls): a screen open or a
+     * realtime "gaming" event triggers it, not every sync().
+     */
+    private suspend fun pullGamingData() {
+        val stations = gamingApi.stations()
+        db.gamingDao().replaceStations(
+            stations.map {
+                GamingStationEntity(
+                    id = it.id,
+                    code = it.code,
+                    name = it.name,
+                    type = it.type,
+                    ratePerHourMinor = it.ratePerHourMinor,
+                    isActive = it.isActive,
+                )
+            },
+        )
+        val sessions = gamingApi.sessions()
+        db.gamingDao().replaceSessionCache(
+            sessions.map {
+                GamingSessionCacheEntity(
+                    id = it.id,
+                    stationId = it.stationId,
+                    status = it.status,
+                    startAtMillis = runCatching { Instant.parse(it.startAt).toEpochMilli() }
+                        .getOrDefault(System.currentTimeMillis()),
+                    endAtMillis = it.endAt?.let { s -> runCatching { Instant.parse(s).toEpochMilli() }.getOrNull() },
+                    timerMinutes = it.timerMinutes,
+                    timerEndsAtMillis = it.timerEndsAt?.let { s ->
+                        runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()
+                    },
+                    billableMinutes = it.billableMinutes,
+                    amountMinor = it.amountMinor,
+                    customerName = it.customerName,
+                    customerPhone = it.customerPhone,
+                    orderId = it.orderId,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("gaming", System.currentTimeMillis()))
+    }
+
+    /**
+     * No idempotency key, no dependency to resolve — `setState` is naturally
+     * idempotent (see KitchenState's own doc comment), so a retry is just
+     * calling it again. A synced row is deleted rather than kept: the next
+     * pull already reflects the truth, and there's no local history worth
+     * keeping for a ticket advance the way there is for a sale.
+     */
+    private suspend fun pushKitchenAdvances() {
+        val dao = db.kitchenDao()
+        drainOutbox(
+            rows = dao.pendingAdvances(),
+            markRejected = { row, msg -> dao.markAdvanceRejected(row.localId, msg) },
+        ) { row ->
+            kitchenApi.setState(row.orderId, KitchenStateUpdate(row.targetState))
+            dao.deleteAdvance(row.localId)
+        }
+    }
+
+    private suspend fun pullKitchenData() {
+        val orders = kitchenApi.queue(includeServed = false)
+        db.kitchenDao().replaceOrderCache(
+            orders.map {
+                KitchenOrderCacheEntity(
+                    id = it.id,
+                    invoiceNo = it.invoiceNo,
+                    type = it.type,
+                    tableCode = it.tableCode,
+                    customerName = it.customerName,
+                    openedAt = it.openedAt,
+                    kitchenState = it.kitchenState,
+                    minutesWaiting = it.minutesWaiting,
+                    lines = it.lines,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("kitchen", System.currentTimeMillis()))
+    }
+
+    /**
+     * Create, then send to POS — always both together, never independently
+     * (unlike Shift/Gaming's open-then-maybe-close-later shape). A retry
+     * that finds `orderId` already set skips straight to the send leg; both
+     * legs are safe to repeat (create via its idempotency key, send because
+     * the backend already treats re-sending an already-"held" order as a
+     * no-op).
+     */
+    private suspend fun pushTableOrders() {
+        val dao = db.tablesDao()
+        val shiftDao = db.shiftDao()
+        val ready = dao.pendingOrders().filter { row ->
+            val localShift = shiftDao.byLocalId(row.shiftId)
+            localShift == null || localShift.serverShiftId != null
+        }
+        drainOutbox(
+            rows = ready,
+            markRejected = { row, msg -> dao.markOrderRejected(row.localId, msg) },
+            push = ::pushTableOrderOne,
+        )
+    }
+
+    private suspend fun pushTableOrderOne(row: LocalTableOrderEntity) {
+        val dao = db.tablesDao()
+        var orderId = row.orderId
+        if (orderId == null) {
+            val resolvedShiftId = db.shiftDao().byLocalId(row.shiftId)?.serverShiftId ?: row.shiftId
+            val created = tablesApi.createOrder(
+                CreateOrderRequest(
+                    type = "dine_in",
+                    shiftId = resolvedShiftId,
+                    lines = row.lines.map { OrderLineRequest(it.menuItemId, it.qty) },
+                    tableId = row.tableId,
+                ),
+                "table-order:${row.localId}",
+            )
+            orderId = created.id
+            dao.setOrderId(row.localId, orderId)
+        }
+        tablesApi.sendToPos(orderId)
+        dao.deleteLocalOrder(row.localId)
+    }
+
+    private suspend fun pullTablesData() {
+        val floors = tablesApi.floors()
+        db.tablesDao().replaceFloors(
+            floors.map { FloorEntity(id = it.id, branchId = it.branchId, name = it.name) },
+        )
+        val tables = tablesApi.tables()
+        db.tablesDao().replaceTables(
+            tables.map {
+                CafeTableEntity(
+                    id = it.id,
+                    floorId = it.floorId,
+                    code = it.code,
+                    seats = it.seats,
+                    shape = it.shape,
+                    x = it.x,
+                    y = it.y,
+                    status = it.status,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("tables", System.currentTimeMillis()))
     }
 
     private suspend fun pullMenu() {

@@ -49,6 +49,7 @@ data class CreateOrderRequest(
     val type: String,
     @SerialName("shift_id") val shiftId: String,
     val lines: List<OrderLineRequest>,
+    @SerialName("table_id") val tableId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
 )
