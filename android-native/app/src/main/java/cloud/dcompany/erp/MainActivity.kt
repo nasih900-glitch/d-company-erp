@@ -35,6 +35,7 @@ import cloud.dcompany.erp.ui.AuthState
 import cloud.dcompany.erp.ui.SessionViewModel
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.finance.FinanceScreen
 import cloud.dcompany.erp.ui.screens.inventory.InventoryScreen
@@ -135,7 +136,14 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                 },
             ) { padding ->
                 Box(Modifier.padding(padding)) {
-                    WorkspaceScaffold(header = {}) { destination ->
+                    // Access Control is gated on audit_access specifically, not
+                    // protected_access — a co-owner has protected_access=true but
+                    // must not see this, matching the web app's own gate exactly
+                    // (audit_access is effectively super-owner-only server-side).
+                    val destinations = Destination.entries.filter {
+                        it != Destination.AccessControl || s.me.auditAccess
+                    }
+                    WorkspaceScaffold(header = {}, destinations = destinations) { destination ->
                         when (destination) {
                             Destination.Pos -> PosScreen(
                                 state = posState,
@@ -156,6 +164,7 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                             Destination.Reports -> ReportsScreen()
                             Destination.Finance -> FinanceScreen()
                             Destination.Refunds -> RefundsScreen()
+                            Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen()
                         }
                     }

@@ -43,17 +43,29 @@ enum class Destination(val label: String) {
     Reports("Reports"),
     Finance("Finance"),
     Refunds("Refunds"),
+    AccessControl("Access Control"),
     Settings("Settings"),
 }
 
 @Composable
 fun WorkspaceScaffold(
     header: @Composable () -> Unit,
+    // Defaults to every destination — callers that need to hide one (e.g.
+    // Access Control from anyone without audit access) pass a filtered list.
+    destinations: List<Destination> = Destination.entries,
     content: @Composable (Destination) -> Unit,
 ) {
     // Saveable so the selected tab survives a process death, not just a
     // recomposition — staff should come back to where they were.
     var current by rememberSaveable { mutableStateOf(Destination.Pos) }
+    // `destinations` is a real access boundary (Access Control disappears
+    // the moment auditAccess is false), not just a display preference — a
+    // `current` restored from saved state, or left over from before this
+    // account's access changed mid-session, must not go on rendering a
+    // destination the rail no longer shows.
+    if (current !in destinations) {
+        current = destinations.firstOrNull() ?: Destination.Pos
+    }
 
     Column(Modifier.fillMaxSize()) {
         header()
@@ -63,7 +75,7 @@ fun WorkspaceScaffold(
                     .verticalScroll(rememberScrollState()).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Destination.entries.forEach { dest ->
+                destinations.forEach { dest ->
                     val selected = dest == current
                     Box(
                         // fillMaxSize(0f) collapsed these to zero height, so the
