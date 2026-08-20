@@ -88,10 +88,16 @@ fun ReportsScreen() {
         Box(Modifier.fillMaxSize()) {
             val report = state.report
             when {
+                // A cached report for the current key takes priority over
+                // both the error and loading states — it's never mislabeled
+                // (the cache key already encodes this exact period), so
+                // there's no reason to hide it behind a spinner or an error
+                // banner while a refresh is in flight or has just failed.
+                report != null && report.hasNothing ->
+                    EmptyPanel(state.period, report.label, state.loading, state.fetchedAtMillis)
+                report != null -> ReportBody(report, state.period, state.loading, state.fetchedAtMillis)
                 state.error != null -> ErrorPanel(state.error!!, vm::retry)
-                report == null -> LoadingPanel()
-                report.hasNothing -> EmptyPanel(state.period, report.label)
-                else -> ReportBody(report, state.period, state.loading)
+                else -> LoadingPanel()
             }
         }
     }
@@ -355,7 +361,7 @@ private fun ErrorPanel(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun EmptyPanel(period: ReportPeriod, label: String) {
+private fun EmptyPanel(period: ReportPeriod, label: String, refreshing: Boolean, fetchedAtMillis: Long?) {
     Column(
         Modifier
             .fillMaxSize()
@@ -378,6 +384,17 @@ private fun EmptyPanel(period: ReportPeriod, label: String) {
             textAlign = TextAlign.Center,
             modifier = Modifier.widthIn(max = 520.dp),
         )
+        // Same reasoning as ReportHeading: an empty result is itself a cached
+        // fact that can go stale — a period that had nothing yesterday but
+        // has since been billed into must not still read as empty forever.
+        if (fetchedAtMillis != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.GoldMuted,
+            )
+        }
     }
 }
 
@@ -391,7 +408,12 @@ private fun unitWord(period: ReportPeriod): String = when (period) {
 // ----------------------------------------------------------------- report
 
 @Composable
-private fun ReportBody(report: ReportData, period: ReportPeriod, refreshing: Boolean) {
+private fun ReportBody(
+    report: ReportData,
+    period: ReportPeriod,
+    refreshing: Boolean,
+    fetchedAtMillis: Long?,
+) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 720.dp
         val columns = if (wide) 4 else 2
@@ -403,7 +425,7 @@ private fun ReportBody(report: ReportData, period: ReportPeriod, refreshing: Boo
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ReportHeading(report, period, refreshing)
+            ReportHeading(report, period, refreshing, fetchedAtMillis)
 
             KpiGrid(report, columns)
 
@@ -452,7 +474,12 @@ private fun ReportBody(report: ReportData, period: ReportPeriod, refreshing: Boo
 }
 
 @Composable
-private fun ReportHeading(report: ReportData, period: ReportPeriod, refreshing: Boolean) {
+private fun ReportHeading(
+    report: ReportData,
+    period: ReportPeriod,
+    refreshing: Boolean,
+    fetchedAtMillis: Long?,
+) {
     Column(Modifier.padding(top = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -476,6 +503,26 @@ private fun ReportHeading(report: ReportData, period: ReportPeriod, refreshing: 
             style = MaterialTheme.typography.labelSmall,
             color = Brand.ForegroundMuted,
         )
+        // A cached figure must never pass for a fresh one — this is the one
+        // line standing between "the tablet was offline" and an owner making
+        // a call on numbers that are actually a day old.
+        if (fetchedAtMillis != null) {
+            Text(
+                "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.GoldMuted,
+            )
+        }
+    }
+}
+
+private fun relativeAge(fetchedAtMillis: Long): String {
+    val seconds = (System.currentTimeMillis() - fetchedAtMillis) / 1000
+    return when {
+        seconds < 60 -> "just now"
+        seconds < 3_600 -> "${seconds / 60}m ago"
+        seconds < 86_400 -> "${seconds / 3_600}h ago"
+        else -> "${seconds / 86_400}d ago"
     }
 }
 

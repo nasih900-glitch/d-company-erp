@@ -35,7 +35,12 @@ class ApiException(
 
 object ApiClient {
 
-    private val json = Json {
+    // Not private: report-snapshot caching (core/db/ReportSnapshots.kt) reuses
+    // this exact instance to encode/decode cached bodies, so a cached row
+    // round-trips through the same lenient rules (ignoreUnknownKeys,
+    // coerceInputValues) as a live response instead of a second, potentially
+    // diverging Json config.
+    val json = Json {
         ignoreUnknownKeys = true   // the backend may add fields; never crash on them
         explicitNulls = false
         coerceInputValues = true

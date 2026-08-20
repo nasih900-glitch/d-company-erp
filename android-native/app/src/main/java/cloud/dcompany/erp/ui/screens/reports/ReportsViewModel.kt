@@ -2,6 +2,9 @@ package cloud.dcompany.erp.ui.screens.reports
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.db.cached
+import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import kotlinx.coroutines.Job
@@ -47,6 +50,8 @@ data class ReportsUiState(
     val loading: Boolean = true,
     val error: String? = null,
     val report: ReportData? = null,
+    /** When `report` was last actually fetched from the server — null for a report that's never synced. */
+    val fetchedAtMillis: Long? = null,
 ) {
     /**
      * Nothing is ever recorded ahead of time, so stepping past the present is
@@ -64,9 +69,29 @@ data class ReportsUiState(
         }
 }
 
+/** The exact key this selection is cached under — see core/db/ReportSnapshots.kt. */
+private fun cacheKey(s: ReportsUiState): String = when (s.period) {
+    ReportPeriod.DAILY -> "daily:${s.onDate}"
+    ReportPeriod.MONTHLY -> "monthly:${s.month}"
+    ReportPeriod.QUARTERLY -> "quarterly:${s.fiscalYear}:Q${s.quarter}"
+    ReportPeriod.YEARLY -> "yearly:${s.fiscalYear}"
+}
+
+/**
+ * Room-backed via the shared [cloud.dcompany.erp.core.db.ReportSnapshotEntity]
+ * cache, not a per-row entity — a P&L has nothing to queue or merge, it's one
+ * JSON blob per (period type + resolved date/month/fy/quarter) key. Every
+ * load() seeds instantly from that key's cache (if any) before the network
+ * call resolves, and a cached report for the CURRENT key is never mislabeled
+ * the way the old "drop everything on error" behavior was guarding against —
+ * the key already encodes the exact period, so a stale cached figure stays on
+ * screen (with its own fetchedAtMillis) instead of being replaced by an error
+ * banner when offline.
+ */
 class ReportsViewModel : ViewModel() {
 
     private val api = ApiClient.create<ReportsApi>()
+    private val db = DCompanyApp.instance.db
 
     private val _state = MutableStateFlow(
         businessToday().let { today ->
@@ -149,8 +174,16 @@ class ReportsViewModel : ViewModel() {
     private fun load() {
         inFlight?.cancel()
         val s = _state.value
-        _state.value = s.copy(loading = true, error = null)
+        val key = cacheKey(s)
+        // Cleared immediately, not left showing the PREVIOUS period's figures
+        // under the new heading while this period's own cache is read — that
+        // read is a fast local lookup, not worth a flash of wrong numbers to
+        // save.
+        _state.value = s.copy(loading = true, error = null, report = null, fetchedAtMillis = null)
         inFlight = viewModelScope.launch {
+            db.reportSnapshotDao().cached<ReportData>(key)?.let { (cachedReport, fetchedAt) ->
+                _state.value = _state.value.copy(report = cachedReport, fetchedAtMillis = fetchedAt)
+            }
             try {
                 val report = when (s.period) {
                     ReportPeriod.DAILY -> api.daily(s.onDate.toString())
@@ -160,15 +193,19 @@ class ReportsViewModel : ViewModel() {
                     ReportPeriod.QUARTERLY -> api.quarterly(s.fiscalYear, s.quarter)
                     ReportPeriod.YEARLY -> api.yearly(s.fiscalYear)
                 }
-                _state.value = _state.value.copy(loading = false, report = report, error = null)
+                val now = System.currentTimeMillis()
+                db.reportSnapshotDao().store(key, report)
+                _state.value = _state.value.copy(
+                    loading = false, report = report, fetchedAtMillis = now, error = null,
+                )
             } catch (e: ApiException) {
-                // The stale report is dropped rather than left on screen under
-                // an error banner: a P&L labelled with one period but holding
-                // another period's money is worse than no P&L.
                 _state.value = _state.value.copy(
                     loading = false,
-                    report = null,
-                    error = e.message ?: "Could not load the report.",
+                    // A cached report for this exact key is never mislabeled —
+                    // it stays on screen instead of being replaced by an
+                    // error banner. Only a period with no cache at all falls
+                    // back to the old error state.
+                    error = if (_state.value.report == null) (e.message ?: "Could not load the report.") else null,
                 )
             }
         }

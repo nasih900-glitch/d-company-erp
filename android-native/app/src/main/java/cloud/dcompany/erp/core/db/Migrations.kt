@@ -211,4 +211,19 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `report_snapshots` (
+                `key` TEXT NOT NULL,
+                `jsonBody` TEXT NOT NULL,
+                `fetchedAtMillis` INTEGER NOT NULL,
+                PRIMARY KEY(`key`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)

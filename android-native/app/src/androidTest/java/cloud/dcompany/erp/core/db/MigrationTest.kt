@@ -150,4 +150,40 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate4To5_preservesExistingDataAndAddsReportSnapshots() {
+        // v4 already has a Phase 3 table (local_refunds) — seed one row there
+        // plus a v1 row, so this test also proves the Phase 5 migration
+        // doesn't disturb earlier phases' tables.
+        helper.createDatabase(dbName, 4).apply {
+            execSQL(
+                "INSERT INTO menu_items (id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1)",
+            )
+            execSQL(
+                "INSERT INTO local_refunds (localId, orderId, reasonCode, amountMinor, createdAtMillis, state) " +
+                    "VALUES ('refund-1', 'order-1', 'other', 4300, 1000, 'synced')",
+            )
+            close()
+        }
+
+        // MIGRATION_4_5 adds the one Phase 5 table (report_snapshots) —
+        // validated against the real, Room-generated v5 schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 5, true, MIGRATION_4_5)
+
+        migrated.query("SELECT id, name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(1) == "Cold Coffee")
+        }
+        migrated.query("SELECT localId, state FROM local_refunds WHERE localId = 'refund-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "local_refunds row lost across the migration" }
+            assert(cursor.getString(1) == "synced")
+        }
+        migrated.query("SELECT COUNT(*) FROM report_snapshots").use { cursor ->
+            cursor.moveToFirst()
+            assert(cursor.getInt(0) == 0) { "report_snapshots should exist and start empty" }
+        }
+        migrated.close()
+    }
 }

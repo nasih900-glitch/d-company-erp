@@ -36,6 +36,7 @@ import cloud.dcompany.erp.ui.SessionViewModel
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
+import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.finance.FinanceScreen
 import cloud.dcompany.erp.ui.screens.inventory.InventoryScreen
@@ -141,7 +142,8 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                     // must not see this, matching the web app's own gate exactly
                     // (audit_access is effectively super-owner-only server-side).
                     val destinations = Destination.entries.filter {
-                        it != Destination.AccessControl || s.me.auditAccess
+                        (it != Destination.AccessControl || s.me.auditAccess) &&
+                            (it != Destination.Analytics || s.me.accessibleModules.contains("insights_reports"))
                     }
                     WorkspaceScaffold(header = {}, destinations = destinations) { destination ->
                         when (destination) {
@@ -162,6 +164,7 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                             Destination.Customers -> CustomersScreen()
                             Destination.Inventory -> InventoryScreen()
                             Destination.Reports -> ReportsScreen()
+                            Destination.Analytics -> AnalyticsScreen()
                             Destination.Finance -> FinanceScreen()
                             Destination.Refunds -> RefundsScreen()
                             Destination.AccessControl -> AccessControlScreen()
