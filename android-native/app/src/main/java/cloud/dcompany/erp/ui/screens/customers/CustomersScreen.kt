@@ -90,18 +90,22 @@ fun CustomersScreen() {
             val selected = state.selected
 
             when {
-                state.loading && state.rows.isEmpty() -> CentredBlock {
+                state.loading -> CentredBlock {
                     CircularProgressIndicator(color = Brand.Gold)
                     Text("Loading customers…", color = Brand.ForegroundMuted)
                 }
 
-                state.error != null && state.rows.isEmpty() -> CentredBlock {
+                state.couldNotLoad -> CentredBlock {
                     Text(
                         "Could not load customers",
                         style = MaterialTheme.typography.titleLarge,
                         color = Brand.Foreground,
                     )
-                    Text(state.error!!, color = Brand.Danger)
+                    Text(
+                        "No customers cached on this tablet yet, and there's no connection " +
+                            "right now to fetch them.",
+                        color = Brand.ForegroundMuted,
+                    )
                     Button(onClick = vm::retry) { Text("Retry") }
                 }
 
@@ -135,7 +139,6 @@ fun CustomersScreen() {
 
                 twoPane -> Row(Modifier.fillMaxSize()) {
                     Column(Modifier.weight(1f).fillMaxHeight()) {
-                        StaleWarning(state.error)
                         CustomerList(state, vm)
                     }
                     Spacer(Modifier.width(14.dp))
@@ -143,7 +146,12 @@ fun CustomersScreen() {
                         if (selected == null) {
                             DetailPlaceholder()
                         } else {
-                            DetailPane(selected, onEdit = { vm.startEdit(selected) }, onBack = null)
+                            DetailPane(
+                                selected,
+                                onEdit = { vm.startEdit(selected) },
+                                onBack = null,
+                                onRetrySync = { vm.retrySync(selected) },
+                            )
                         }
                     }
                 }
@@ -152,10 +160,10 @@ fun CustomersScreen() {
                     customer = selected,
                     onEdit = { vm.startEdit(selected) },
                     onBack = vm::clearSelection,
+                    onRetrySync = { vm.retrySync(selected) },
                 )
 
                 else -> Column(Modifier.fillMaxSize()) {
-                    StaleWarning(state.error)
                     CustomerList(state, vm)
                 }
             }
@@ -281,20 +289,25 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     }
 }
 
-/**
- * A refresh that failed while rows are already on screen. Those rows are still
- * shown — they are the last known truth — but staff must know they are stale
- * before quoting someone their points balance from them.
- */
 @Composable
-private fun StaleWarning(error: String?) {
-    if (error == null) return
-    Text(
-        "Showing the last loaded list — refresh failed: $error",
-        style = MaterialTheme.typography.labelSmall,
-        color = Brand.Danger,
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-    )
+private fun SyncFailedNotice(error: String?, onRetry: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.Danger, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("Could not sync this customer", color = Brand.Danger, fontWeight = FontWeight.SemiBold)
+        Text(
+            error ?: "The server refused this save.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Brand.ForegroundMuted,
+        )
+        OutlinedButton(onClick = onRetry) { Text("Retry") }
+    }
 }
 
 // -------------------------------------------------------------------- list
@@ -342,6 +355,11 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (customer.isRejected) {
+                SyncStatusBadge("Sync failed", Brand.Danger)
+            } else if (customer.isPendingSync) {
+                SyncStatusBadge("Not synced", Brand.GoldMuted)
+            }
             RankBadge(customer.gamingRank)
         }
         Row(
@@ -391,6 +409,20 @@ private fun RankBadge(rank: String) {
     )
 }
 
+@Composable
+private fun SyncStatusBadge(label: String, colour: androidx.compose.ui.graphics.Color) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelSmall,
+        color = colour,
+        modifier = Modifier
+            .padding(end = 8.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .border(1.dp, colour, RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
+}
+
 private fun rankColour(rank: String) = when (rank) {
     "Legend" -> Brand.Gold
     "Pro" -> Brand.Gold
@@ -422,7 +454,12 @@ private fun DetailPlaceholder() {
 }
 
 @Composable
-private fun DetailPane(customer: Customer, onEdit: () -> Unit, onBack: (() -> Unit)?) {
+private fun DetailPane(
+    customer: Customer,
+    onEdit: () -> Unit,
+    onBack: (() -> Unit)?,
+    onRetrySync: () -> Unit,
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -447,6 +484,16 @@ private fun DetailPane(customer: Customer, onEdit: () -> Unit, onBack: (() -> Un
             style = MaterialTheme.typography.bodyLarge,
             color = Brand.Gold,
         )
+
+        if (customer.isRejected) {
+            SyncFailedNotice(customer.rejectedError, onRetrySync)
+        } else if (customer.isPendingSync) {
+            Text(
+                "Not synced yet — will save the next time this tablet is online.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.GoldMuted,
+            )
+        }
 
         Row(
             Modifier.fillMaxWidth(),
@@ -570,7 +617,7 @@ private fun EditorDialog(
         onDismissRequest = { if (!saving) onCancel() },
         title = {
             Text(
-                if (editor.isNew) "New customer"
+                if (editor.isUnsyncedDraft) "New customer"
                 else "Edit ${editor.name.ifBlank { editor.originalPhone }}",
             )
         },
@@ -588,17 +635,17 @@ private fun EditorDialog(
                         onValueChange = { onChange(editor.copy(phone = it.trim())) },
                         label = { Text("Phone (10+ digits, +country if needed)") },
                         singleLine = true,
-                        enabled = editor.isNew || editor.phoneUnlocked,
+                        enabled = editor.isUnsyncedDraft || editor.phoneUnlocked,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                         modifier = Modifier.weight(1f),
                     )
-                    if (!editor.isNew && !editor.phoneUnlocked) {
+                    if (!editor.isUnsyncedDraft && !editor.phoneUnlocked) {
                         OutlinedButton(onClick = { onChange(editor.copy(phoneUnlocked = true)) }) {
                             Text("Fix typo")
                         }
                     }
                 }
-                if (!editor.isNew && editor.phoneUnlocked) {
+                if (!editor.isUnsyncedDraft && editor.phoneUnlocked) {
                     Text(
                         "This number is the customer's loyalty identity. Changing it moves " +
                             "their points and visit history to the new number — it does not " +
@@ -664,7 +711,7 @@ private fun EditorDialog(
                         color = Brand.Danger,
                     )
                 }
-                if (editor.isNew) {
+                if (editor.isUnsyncedDraft) {
                     Text(
                         "If this number is already on file, the existing customer is opened — " +
                             "their points are never split across two records.",

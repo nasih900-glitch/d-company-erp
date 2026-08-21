@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.CafeTableEntity
+import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
@@ -15,6 +16,7 @@ import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
+import cloud.dcompany.erp.core.db.LocalCustomerEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.LocalRefundEntity
@@ -31,6 +33,9 @@ import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
+import cloud.dcompany.erp.ui.screens.customers.CustomerUpsertBody
+import cloud.dcompany.erp.ui.screens.customers.CustomersApi
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenApi
@@ -118,6 +123,7 @@ class SyncEngine(
     private val kitchenApi = ApiClient.create<KitchenApi>()
     private val tablesApi = ApiClient.create<TablesApi>()
     private val refundsApi = ApiClient.create<RefundsApi>()
+    private val customersApi = ApiClient.create<CustomersApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -143,13 +149,18 @@ class SyncEngine(
         db.gamingDao().observeRejectedCount(),
         db.kitchenDao().observeRejectedCount(),
         // Kotlin's combine() only has typed overloads up to 5 flows — nest
-        // the last two into a Pair rather than adding a 6th argument, or it
-        // silently falls back to the untyped vararg overload (see the same
-        // fix in TablesViewModel.state).
-        combine(db.tablesDao().observeRejectedCount(), db.refundDao().observeRejectedCount(), ::Pair),
-    ) { orders, shifts, gaming, kitchen, tablesAndRefunds ->
-        val (tables, refunds) = tablesAndRefunds
-        orders + shifts + gaming + kitchen + tables + refunds
+        // the last three into a Triple rather than adding more top-level
+        // arguments, or it silently falls back to the untyped vararg
+        // overload (see the same fix in TablesViewModel.state).
+        combine(
+            db.tablesDao().observeRejectedCount(),
+            db.refundDao().observeRejectedCount(),
+            db.customerDao().observeRejectedCount(),
+            ::Triple,
+        ),
+    ) { orders, shifts, gaming, kitchen, rest ->
+        val (tables, refunds, customers) = rest
+        orders + shifts + gaming + kitchen + tables + refunds + customers
     }
 
     /**
@@ -169,6 +180,7 @@ class SyncEngine(
         // terminal issuing a refund or taking a payment already wakes this
         // pull, no new backend resource needed.
         "orders" to ::pullRefundableOrders,
+        "customers" to ::pullCustomers,
     )
 
     /**
@@ -220,6 +232,7 @@ class SyncEngine(
             pushKitchenAdvances()
             pushTableOrders()
             pushRefunds()
+            pushCustomers()
             pullMenu()
             db.syncMetaDao().put(SyncMetaEntity("menu", System.currentTimeMillis()))
         } catch (e: ApiException) {
@@ -599,6 +612,114 @@ class SyncEngine(
             },
         )
         db.syncMetaDao().put(SyncMetaEntity("orders", System.currentTimeMillis()))
+    }
+
+    /**
+     * No shift or any other id to resolve first — see [LocalCustomerEntity]'s
+     * doc comment for why a customer write never has a dependency chain the
+     * way orders/gaming/tables do.
+     */
+    private suspend fun pushCustomers() {
+        val dao = db.customerDao()
+        drainOutbox(
+            rows = dao.pushable(),
+            markRejected = { row, msg -> dao.markRejected(row.localId, msg) },
+            push = ::pushCustomerOne,
+        )
+    }
+
+    /**
+     * Order matters here, more than in most push-one functions:
+     *
+     * 1. `setServerId` lands the moment the response names it — independent
+     *    of `state`, so a brand-new customer never has a window where it's
+     *    absent from both the local override (still `state = pending`,
+     *    still visible) AND the cache (not pulled yet). Without this
+     *    separation, marking the row `synced` immediately would remove it
+     *    from `observeLocal()` before the cache pull below had a chance to
+     *    repopulate it — a guaranteed, every-single-create "the customer I
+     *    just added vanished" flash. Landing `serverId` first also means
+     *    `mergeCustomers` starts resolving this row against the real cache
+     *    row (once pulled) by id rather than a since-superseded phone match.
+     * 2. `pullCustomers()` runs before `markSynced` — if this GET fails (a
+     *    dropped connection right after a successful write is a realistic
+     *    cafe-wifi moment), the row is simply left `pending` with its real
+     *    `serverId` already recorded; the next sync() retries it as a PATCH
+     *    (absolute-set, so re-sending the same values is harmless) instead
+     *    of leaving a `synced`-but-never-deleted, invisible orphan row that
+     *    only some unrelated later push would happen to clean up.
+     * 3. `markSynced` only applies if `version` still matches what was just
+     *    pushed (see LocalCustomerEntity's doc comment) — if a newer edit
+     *    landed on this row while this network call was in flight, this is
+     *    a no-op and the row stays pending with the newer content, so the
+     *    next sync() actually sends it instead of it being silently
+     *    discarded when this stale write's response arrives.
+     * 4. `deleteSynced()` only runs once this row is confirmed to actually
+     *    be the one that got marked synced (step 3 applied) — deleting
+     *    unconditionally here would remove a row a concurrent newer edit
+     *    just legitimately re-armed back to pending.
+     */
+    private suspend fun pushCustomerOne(row: LocalCustomerEntity) {
+        val dao = db.customerDao()
+        val server = if (row.serverId == null) {
+            customersApi.upsert(
+                CustomerUpsertBody(
+                    phone = row.phone!!,
+                    name = row.name,
+                    email = row.email,
+                    birthday = row.birthday,
+                    notes = row.notes,
+                ),
+            )
+        } else {
+            customersApi.update(
+                row.serverId,
+                CustomerUpdateBody(
+                    name = row.name,
+                    phone = row.phone,
+                    email = row.email,
+                    birthday = row.birthday,
+                    notes = row.notes,
+                ),
+            )
+        }
+        dao.setServerId(row.localId, server.id)
+        pullCustomers()
+        val applied = dao.markSynced(row.localId, expectedVersion = row.version)
+        if (applied > 0) dao.deleteSynced()
+    }
+
+    /**
+     * The full customer list, wholesale-replaced — same shape as pullMenu.
+     * On-demand only (see onDemandPulls): opening Customers, a "customers"
+     * realtime event, or this device's own write finishing (see
+     * pushCustomerOne) triggers it, not every sync().
+     */
+    private suspend fun pullCustomers() {
+        val customers = customersApi.list(limit = 500)
+        db.customerDao().replaceCache(
+            customers.map {
+                CustomerCacheEntity(
+                    id = it.id,
+                    name = it.name,
+                    phone = it.phone,
+                    email = it.email,
+                    birthday = it.birthday,
+                    visitCount = it.visitCount,
+                    totalSpentMinor = it.totalSpentMinor,
+                    loyaltyPoints = it.loyaltyPoints,
+                    lifetimeGamingPointsEarned = it.lifetimeGamingPointsEarned,
+                    gamingRank = it.gamingRank,
+                    gamingRankFloor = it.gamingRankFloor,
+                    nextGamingRank = it.nextGamingRank,
+                    nextGamingRankFloor = it.nextGamingRankFloor,
+                    pointsToNextGamingRank = it.pointsToNextGamingRank,
+                    lastVisitAt = it.lastVisitAt,
+                    notes = it.notes,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("customers", System.currentTimeMillis()))
     }
 
     private suspend fun pullMenu() {

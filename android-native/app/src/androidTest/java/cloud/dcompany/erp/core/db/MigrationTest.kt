@@ -186,4 +186,43 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate5To6_preservesExistingDataAndAddsCustomerTables() {
+        // v5 already has a Phase 5 table (report_snapshots) — seed a row
+        // there plus a v1 row, so this test also proves the Phase 6
+        // migration doesn't disturb earlier phases' tables.
+        helper.createDatabase(dbName, 5).apply {
+            execSQL(
+                "INSERT INTO menu_items (id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1)",
+            )
+            execSQL(
+                "INSERT INTO report_snapshots (`key`, jsonBody, fetchedAtMillis) " +
+                    "VALUES ('daily:2026-08-19', '{}', 1000)",
+            )
+            close()
+        }
+
+        // MIGRATION_5_6 adds the two Phase 6 tables (customer_cache,
+        // local_customers) — validated against the real, Room-generated v6
+        // schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 6, true, MIGRATION_5_6)
+
+        migrated.query("SELECT id, name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(1) == "Cold Coffee")
+        }
+        migrated.query("SELECT `key`, jsonBody FROM report_snapshots WHERE `key` = 'daily:2026-08-19'").use { cursor ->
+            assert(cursor.moveToFirst()) { "report_snapshots row lost across the migration" }
+            assert(cursor.getString(1) == "{}")
+        }
+        for (table in listOf("customer_cache", "local_customers")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.close()
+    }
 }

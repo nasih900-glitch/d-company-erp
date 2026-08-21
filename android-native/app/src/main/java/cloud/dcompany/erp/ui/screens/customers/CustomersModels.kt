@@ -46,11 +46,31 @@ data class Customer(
     @SerialName("points_to_next_gaming_rank") val pointsToNextGamingRank: Int? = null,
     @SerialName("last_visit_at") val lastVisitAt: String? = null,
     val notes: String? = null,
+    /**
+     * UI-only, never present on a server response (defaults keep decode of a
+     * real API payload unaffected). Non-null while this row reflects a local
+     * write this device hasn't synced yet — see CustomersViewModel.mergeCustomers.
+     */
+    val pendingLocalId: String? = null,
+    /** UI-only. The server's refusal reason, if this row's last sync attempt failed. */
+    val rejectedError: String? = null,
+    /**
+     * UI-only. The underlying LocalCustomerEntity.localId, present whenever
+     * this row originates from a local write REGARDLESS of state — unlike
+     * [pendingLocalId], which is deliberately null on a rejected row (so the
+     * "not synced yet" banner doesn't show alongside the "sync failed" one).
+     * retrySync() needs the id precisely on a rejected row, so it reads this
+     * field instead.
+     */
+    val localWriteId: String? = null,
 ) {
     /** What the spendable balance is worth, in paise. Never a Double. */
     val loyaltyValueMinor: Long get() = loyaltyPoints.toLong() * MINOR_PER_POINT
 
     val displayName: String get() = name?.takeIf { it.isNotBlank() } ?: "— no name —"
+
+    val isPendingSync: Boolean get() = pendingLocalId != null
+    val isRejected: Boolean get() = rejectedError != null
 
     /** Fill fraction (0f..1f) for the rank progress bar. */
     val rankProgress: Float

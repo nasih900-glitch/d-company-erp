@@ -226,4 +226,56 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `customer_cache` (
+                `id` TEXT NOT NULL,
+                `name` TEXT,
+                `phone` TEXT NOT NULL,
+                `email` TEXT,
+                `birthday` TEXT,
+                `visitCount` INTEGER NOT NULL,
+                `totalSpentMinor` INTEGER NOT NULL,
+                `loyaltyPoints` INTEGER NOT NULL,
+                `lifetimeGamingPointsEarned` INTEGER NOT NULL,
+                `gamingRank` TEXT NOT NULL,
+                `gamingRankFloor` INTEGER NOT NULL,
+                `nextGamingRank` TEXT,
+                `nextGamingRankFloor` INTEGER,
+                `pointsToNextGamingRank` INTEGER,
+                `lastVisitAt` TEXT,
+                `notes` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_customers` (
+                `localId` TEXT NOT NULL,
+                `serverId` TEXT,
+                `phone` TEXT,
+                `name` TEXT,
+                `email` TEXT,
+                `birthday` TEXT,
+                `notes` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `version` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_customers_state` ON `local_customers` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_customers_serverId` ON `local_customers` (`serverId`)",
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)

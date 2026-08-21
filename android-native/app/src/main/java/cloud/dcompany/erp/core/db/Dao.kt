@@ -130,8 +130,10 @@ interface SyncMetaDao {
         RefundOrderCacheEntity::class,
         LocalRefundEntity::class,
         ReportSnapshotEntity::class,
+        CustomerCacheEntity::class,
+        LocalCustomerEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(KitchenLineListConverter::class, TableOrderLineListConverter::class)
@@ -145,4 +147,5 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun tablesDao(): TablesDao
     abstract fun refundDao(): RefundDao
     abstract fun reportSnapshotDao(): ReportSnapshotDao
+    abstract fun customerDao(): CustomerDao
 }

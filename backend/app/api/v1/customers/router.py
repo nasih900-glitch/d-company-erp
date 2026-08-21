@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import ConflictError, NotFoundError
@@ -213,7 +214,36 @@ async def upsert_customer(
         notes=payload.notes,
     )
     session.add(c)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Two concurrent upserts for a brand-new phone number both saw
+        # `existing is None` above and both tried to insert — the partial
+        # unique index (uq_customer_phone_per_company_live) catches the
+        # loser here. That's not a real conflict for an *upsert*: the whole
+        # point of this endpoint is "return the customer for this phone,
+        # whoever created it," so heal into the winner's row instead of
+        # surfacing a 500 (or a 409 a queued offline write would have no
+        # way to recover from on its own).
+        await session.rollback()
+        winner = (
+            await session.execute(
+                select(Customer).where(
+                    Customer.company_id == tenant.company_id,
+                    Customer.phone == payload.phone,
+                    Customer.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if winner is None:
+            # Vanishingly unlikely (the winner would have to be soft-deleted
+            # in the instant between the IntegrityError and this re-query),
+            # but `scalar_one()` raising NoResultFound here would surface as
+            # a bare 500 with no useful message — a clean, retryable 409 is
+            # the honest response to a real (if tiny) transient race, not a
+            # crash.
+            raise ConflictError("This phone number was just freed up by another request — try again.")
+        return _to_read(winner)
     return _to_read(c)
 
 
