@@ -15,9 +15,13 @@ data class MenuItemEntity(
     val categoryId: String,
     val sku: String,
     val name: String,
+    val type: String,
     val basePriceMinor: Long,
     val taxRate: Double,
+    val hsnCode: String?,
+    val priceIncludesTax: Boolean,
     val isAvailable: Boolean,
+    val description: String?,
 )
 
 @Entity(tableName = "menu_categories")

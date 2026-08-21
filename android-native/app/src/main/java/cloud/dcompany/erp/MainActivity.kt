@@ -41,6 +41,7 @@ import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.finance.FinanceScreen
 import cloud.dcompany.erp.ui.screens.inventory.InventoryScreen
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenScreen
+import cloud.dcompany.erp.ui.screens.menu.MenuScreen
 import cloud.dcompany.erp.ui.screens.refunds.RefundsScreen
 import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
 import cloud.dcompany.erp.ui.screens.tables.TablesScreen
@@ -143,7 +144,8 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                     // (audit_access is effectively super-owner-only server-side).
                     val destinations = Destination.entries.filter {
                         (it != Destination.AccessControl || s.me.auditAccess) &&
-                            (it != Destination.Analytics || s.me.accessibleModules.contains("insights_reports"))
+                            (it != Destination.Analytics || s.me.accessibleModules.contains("insights_reports")) &&
+                            (it != Destination.Menu || s.me.accessibleModules.contains("menu"))
                     }
                     WorkspaceScaffold(header = {}, destinations = destinations) { destination ->
                         when (destination) {
@@ -162,6 +164,7 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                             Destination.Kitchen -> KitchenScreen()
                             Destination.Shift -> ShiftScreen()
                             Destination.Customers -> CustomersScreen()
+                            Destination.Menu -> MenuScreen()
                             Destination.Inventory -> InventoryScreen()
                             Destination.Reports -> ReportsScreen()
                             Destination.Analytics -> AnalyticsScreen()

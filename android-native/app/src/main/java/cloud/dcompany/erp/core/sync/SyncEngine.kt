@@ -17,6 +17,8 @@ import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
 import cloud.dcompany.erp.core.db.LocalCustomerEntity
+import cloud.dcompany.erp.core.db.LocalMenuCategoryEntity
+import cloud.dcompany.erp.core.db.LocalMenuItemEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.LocalRefundEntity
@@ -40,6 +42,10 @@ import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenApi
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenStateUpdate
+import cloud.dcompany.erp.ui.screens.menu.CategoryCreateBody
+import cloud.dcompany.erp.ui.screens.menu.CategoryUpdateBody
+import cloud.dcompany.erp.ui.screens.menu.ItemDetailsUpdateBody
+import cloud.dcompany.erp.ui.screens.menu.MenuApi
 import cloud.dcompany.erp.ui.screens.refunds.RefundBody
 import cloud.dcompany.erp.ui.screens.refunds.RefundsApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
@@ -124,6 +130,7 @@ class SyncEngine(
     private val tablesApi = ApiClient.create<TablesApi>()
     private val refundsApi = ApiClient.create<RefundsApi>()
     private val customersApi = ApiClient.create<CustomersApi>()
+    private val menuApi = ApiClient.create<MenuApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -148,19 +155,22 @@ class SyncEngine(
         db.shiftDao().observeRejectedCount(),
         db.gamingDao().observeRejectedCount(),
         db.kitchenDao().observeRejectedCount(),
-        // Kotlin's combine() only has typed overloads up to 5 flows — nest
-        // the last three into a Triple rather than adding more top-level
-        // arguments, or it silently falls back to the untyped vararg
-        // overload (see the same fix in TablesViewModel.state).
+        // Kotlin's combine() only has typed overloads up to 5 flows — the
+        // rest are pre-summed in a nested 5-arg combine (itself at the
+        // typed-overload cap) rather than adding more top-level arguments,
+        // or piling into a bigger tuple, which would just move the same
+        // limit one level down (see the same fix in TablesViewModel.state).
         combine(
             db.tablesDao().observeRejectedCount(),
             db.refundDao().observeRejectedCount(),
             db.customerDao().observeRejectedCount(),
-            ::Triple,
-        ),
+            db.menuWriteDao().observeRejectedCategoryCount(),
+            db.menuWriteDao().observeRejectedItemCount(),
+        ) { tables, refunds, customers, menuCategories, menuItems ->
+            tables + refunds + customers + menuCategories + menuItems
+        },
     ) { orders, shifts, gaming, kitchen, rest ->
-        val (tables, refunds, customers) = rest
-        orders + shifts + gaming + kitchen + tables + refunds + customers
+        orders + shifts + gaming + kitchen + rest
     }
 
     /**
@@ -233,6 +243,12 @@ class SyncEngine(
             pushTableOrders()
             pushRefunds()
             pushCustomers()
+            // Right before the menu pull, same reasoning the pull's own
+            // class doc already gives for running last: this device's own
+            // just-synced category/item edits, and any other device's,
+            // should already be reflected the instant pullMenu() runs.
+            pushMenuCategories()
+            pushMenuItems()
             pullMenu()
             db.syncMetaDao().put(SyncMetaEntity("menu", System.currentTimeMillis()))
         } catch (e: ApiException) {
@@ -732,15 +748,89 @@ class SyncEngine(
                     categoryId = it.categoryId,
                     sku = it.sku,
                     name = it.name,
+                    type = it.type,
                     basePriceMinor = it.basePriceMinor,
                     taxRate = it.taxRate,
+                    hsnCode = it.hsnCode,
+                    priceIncludesTax = it.priceIncludesTax,
                     isAvailable = it.isAvailable,
+                    description = it.description,
                 )
             },
             categories = categories.map {
                 MenuCategoryEntity(id = it.id, name = it.name, sortOrder = it.sortOrder)
             },
         )
+    }
+
+    /**
+     * Categories have no price fields, so unlike items they're fully
+     * offline-capable — same shape and same ordering rationale as
+     * pushCustomerOne (see its doc comment): setServerId lands independent
+     * of state so a just-created category is never briefly absent from both
+     * the local override and the cache; the cache pull runs before
+     * markSynced so a dropped connection right after a successful write
+     * leaves the row pending-with-known-serverId for a clean retry instead
+     * of an invisible orphan; markSynced only applies if version still
+     * matches what was actually pushed, so a re-edit landing while this
+     * exact push was in flight isn't silently discarded.
+     */
+    private suspend fun pushMenuCategories() {
+        val dao = db.menuWriteDao()
+        drainOutbox(
+            rows = dao.pushableCategories(),
+            markRejected = { row, msg -> dao.markCategoryRejected(row.localId, msg) },
+            push = ::pushMenuCategoryOne,
+        )
+    }
+
+    private suspend fun pushMenuCategoryOne(row: LocalMenuCategoryEntity) {
+        val dao = db.menuWriteDao()
+        val server = if (row.serverId == null) {
+            menuApi.createCategory(
+                CategoryCreateBody(name = row.name!!, sortOrder = row.sortOrder ?: 0),
+                "menu-category:${row.localId}",
+            )
+        } else {
+            menuApi.updateCategory(
+                row.serverId,
+                CategoryUpdateBody(name = row.name, sortOrder = row.sortOrder),
+            )
+        }
+        dao.setCategoryServerId(row.localId, server.id)
+        pullMenu()
+        val applied = dao.markCategorySynced(row.localId, expectedVersion = row.version)
+        if (applied > 0) dao.deleteSyncedCategories()
+    }
+
+    /**
+     * No id-resolution, no create leg — an item's `serverId` is always
+     * already known (see [LocalMenuItemEntity]'s doc comment), so this is
+     * the simplest push in the whole engine: one PATCH, then refresh.
+     */
+    private suspend fun pushMenuItems() {
+        val dao = db.menuWriteDao()
+        drainOutbox(
+            rows = dao.pushableItems(),
+            markRejected = { row, msg -> dao.markItemRejected(row.localId, msg) },
+            push = ::pushMenuItemOne,
+        )
+    }
+
+    private suspend fun pushMenuItemOne(row: LocalMenuItemEntity) {
+        val dao = db.menuWriteDao()
+        menuApi.updateItemDetails(
+            row.serverId,
+            ItemDetailsUpdateBody(
+                categoryId = row.categoryId,
+                name = row.name,
+                description = row.description,
+                isAvailable = row.isAvailable,
+            ),
+        )
+        pullMenu()
+        val applied = dao.markItemSynced(row.localId, expectedVersion = row.version)
+        if (applied > 0) dao.deleteSyncedItems()
     }
 
     /**

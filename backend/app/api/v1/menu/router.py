@@ -6,18 +6,36 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import NotFoundError, ConflictError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
 from app.models import MenuCategory, MenuItem
 
 router = APIRouter()
+
+
+def _optional_idempotency(request: Request) -> tuple[str, str] | tuple[None, None]:
+    """Unlike gaming's `_require_idempotency`, a missing key is not an error
+    here — the web app's menu screen has never sent one and must keep
+    working unchanged. The native app's offline outbox always sends one
+    (deterministic, derived from its local row id), so it gets full
+    check_or_reserve replay-safety; a caller that doesn't still gets the
+    IntegrityError-catch safety net below, just not response replay on an
+    exact-retry.
+    """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not request_hash:
+        return None, None
+    return str(key), str(request_hash)
 
 
 # ---------------------------------------------------------------- DTOs
@@ -126,8 +144,21 @@ async def list_categories(
 async def create_category(
     payload: CategoryCreate,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("menu.write")),
 ) -> CategoryRead:
+    idempotency_key, request_hash = _optional_idempotency(request)
+    if idempotency_key:
+        existing_response = await check_or_reserve(
+            session,
+            key=idempotency_key,
+            request_hash=request_hash,
+            user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+        )
+        if existing_response:
+            return CategoryRead.model_validate(existing_response["body"])
+
     c = MenuCategory(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -135,8 +166,27 @@ async def create_category(
         sort_order=payload.sort_order,
     )
     session.add(c)
-    await session.flush()
-    return CategoryRead(id=c.id, name=c.name, sort_order=c.sort_order)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # uq_menu_cat_name — no pre-check existed before this fix, so this
+        # was a raw 500 on any collision (two offline devices queueing the
+        # same new category name, most plausibly). Unlike a customer's
+        # phone, a category name collision isn't a confirmed "same real
+        # entity" — surface a clean, actionable conflict rather than
+        # silently merging into whichever row won the race.
+        await session.rollback()
+        raise ConflictError(f"A category named '{payload.name}' already exists") from exc
+
+    response = CategoryRead(id=c.id, name=c.name, sort_order=c.sort_order)
+    if idempotency_key:
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+    return response
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryRead)
@@ -200,10 +250,24 @@ async def list_items(
 async def create_item(
     payload: ItemCreate,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("menu.write")),
     x_pricing_token: str | None = Header(default=None, alias="X-Pricing-Token"),
 ) -> ItemRead:
     require_pricing_unlock(x_pricing_token, tenant)
+
+    idempotency_key, request_hash = _optional_idempotency(request)
+    if idempotency_key:
+        existing_response = await check_or_reserve(
+            session,
+            key=idempotency_key,
+            request_hash=request_hash,
+            user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+        )
+        if existing_response:
+            return ItemRead.model_validate(existing_response["body"])
+
     cat = await session.get(MenuCategory, payload.category_id)
     if not cat or cat.company_id != tenant.company_id:
         raise NotFoundError("category not found")
@@ -228,8 +292,25 @@ async def create_item(
         description=payload.description, is_available=True,
     )
     session.add(item)
-    await session.flush()
-    return item_read(item)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # The pre-check above is a plain SELECT-then-INSERT, so it still has
+        # a TOCTOU gap under real concurrency (two offline devices queueing
+        # the same new SKU) — this closes it with a clean conflict instead
+        # of a raw 500, same reasoning as create_category above.
+        await session.rollback()
+        raise ConflictError(f"an item with SKU '{payload.sku}' already exists") from exc
+
+    response = item_read(item)
+    if idempotency_key:
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+    return response
 
 
 @router.patch("/items/{item_id}", response_model=ItemRead)

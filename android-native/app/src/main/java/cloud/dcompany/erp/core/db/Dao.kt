@@ -16,6 +16,11 @@ interface MenuDao {
     @Query("SELECT * FROM menu_items WHERE isAvailable = 1 ORDER BY name")
     fun observeItems(): Flow<List<MenuItemEntity>>
 
+    /** Unlike [observeItems], includes unavailable items — the Menu admin
+     * screen needs to show (and re-enable) a "sold out" item, unlike POS. */
+    @Query("SELECT * FROM menu_items ORDER BY name")
+    fun observeAllItems(): Flow<List<MenuItemEntity>>
+
     @Query("SELECT * FROM menu_categories ORDER BY sortOrder, name")
     fun observeCategories(): Flow<List<MenuCategoryEntity>>
 
@@ -132,13 +137,16 @@ interface SyncMetaDao {
         ReportSnapshotEntity::class,
         CustomerCacheEntity::class,
         LocalCustomerEntity::class,
+        LocalMenuCategoryEntity::class,
+        LocalMenuItemEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(KitchenLineListConverter::class, TableOrderLineListConverter::class)
 abstract class ErpDatabase : RoomDatabase() {
     abstract fun menuDao(): MenuDao
+    abstract fun menuWriteDao(): MenuWriteDao
     abstract fun orderDao(): OrderDao
     abstract fun syncMetaDao(): SyncMetaDao
     abstract fun shiftDao(): ShiftDao

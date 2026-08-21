@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.core.net
 
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
 import kotlinx.serialization.json.Json
@@ -79,9 +80,24 @@ object ApiClient {
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            // Order matters here more than it looks: OkHttp interceptors
+            // nest in add-order, so the LAST one added sits closest to the
+            // real network call and is the FIRST to see the raw Response on
+            // the way back. AuthInterceptor's whole 401-refresh-and-retry
+            // logic depends on inspecting that raw response's status code —
+            // if ErrorInterceptor were added after it, ErrorInterceptor
+            // would throw ApiException on any non-2xx (including 401)
+            // before AuthInterceptor's own `chain.proceed()` call ever
+            // returns, so its refresh logic would never run at all (an
+            // ApiException would propagate straight out instead). Fixed
+            // during Phase 7's review after this ordering was traced and
+            // confirmed broken with a real reproduction — it predates this
+            // phase but lives in a file this phase touches, so it's fixed
+            // here rather than left in place.
             .addInterceptor(TerminalInterceptor())
-            .addInterceptor(AuthInterceptor())
+            .addInterceptor(PricingTokenInterceptor())
             .addInterceptor(ErrorInterceptor(json))
+            .addInterceptor(AuthInterceptor())
             .build()
 
         retrofit = Retrofit.Builder()
@@ -156,6 +172,22 @@ object ApiClient {
                 // Never a reason to destroy a valid session.
                 null
             }
+        }
+    }
+
+    /**
+     * Attaches `X-Pricing-Token` to every request whenever a live unlock
+     * exists — mirrors the web app's own axios interceptor (one global
+     * attach point rather than every price-write call site remembering to
+     * set the header itself). A request for an endpoint that doesn't care
+     * about pricing just carries an extra, ignored header.
+     */
+    private class PricingTokenInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val token = PricingLock.currentToken() ?: return chain.proceed(chain.request())
+            return chain.proceed(
+                chain.request().newBuilder().header("X-Pricing-Token", token).build(),
+            )
         }
     }
 

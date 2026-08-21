@@ -225,4 +225,52 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate6To7_preservesExistingDataAndWidensMenuItemsAndAddsMenuOutboxTables() {
+        // v6 already has a Phase 6 table (local_customers) — seed a row
+        // there plus a v1 menu_items row (using v6's narrower column set,
+        // since `type`/`hsnCode`/`priceIncludesTax`/`description` don't
+        // exist until this migration adds them), so this test also proves
+        // the Phase 7 migration doesn't disturb earlier phases' tables.
+        helper.createDatabase(dbName, 6).apply {
+            execSQL(
+                "INSERT INTO menu_items (id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1)",
+            )
+            execSQL(
+                "INSERT INTO local_customers (localId, phone, createdAtMillis, state, version) " +
+                    "VALUES ('cust-1', '9999900001', 1000, 'synced', 0)",
+            )
+            close()
+        }
+
+        // MIGRATION_6_7 widens menu_items (type/hsnCode/priceIncludesTax/
+        // description) and adds the two Phase 7 outbox tables
+        // (local_menu_categories, local_menu_items) — validated against the
+        // real, Room-generated v7 schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 7, true, MIGRATION_6_7)
+
+        migrated.query(
+            "SELECT name, type, hsnCode, priceIncludesTax, description FROM menu_items WHERE id = 'item-1'",
+        ).use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(0) == "Cold Coffee")
+            assert(cursor.getString(1) == "") { "new NOT NULL `type` column should default to ''" }
+            assert(cursor.isNull(2)) { "new nullable `hsnCode` column should default to NULL" }
+            assert(cursor.getInt(3) == 1) { "new NOT NULL `priceIncludesTax` column should default to true" }
+            assert(cursor.isNull(4)) { "new nullable `description` column should default to NULL" }
+        }
+        migrated.query("SELECT localId, state FROM local_customers WHERE localId = 'cust-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "local_customers row lost across the migration" }
+            assert(cursor.getString(1) == "synced")
+        }
+        for (table in listOf("local_menu_categories", "local_menu_items")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.close()
+    }
 }

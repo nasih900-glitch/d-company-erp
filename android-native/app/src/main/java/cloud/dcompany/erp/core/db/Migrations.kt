@@ -278,4 +278,61 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Widen the existing read-cache table — it's wholesale-replaced on
+        // every sync, so the placeholder defaults below only need to be
+        // schema-valid; real values land on the very next pullMenu().
+        db.execSQL("ALTER TABLE `menu_items` ADD COLUMN `type` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `menu_items` ADD COLUMN `hsnCode` TEXT")
+        db.execSQL("ALTER TABLE `menu_items` ADD COLUMN `priceIncludesTax` INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE `menu_items` ADD COLUMN `description` TEXT")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_menu_categories` (
+                `localId` TEXT NOT NULL,
+                `serverId` TEXT,
+                `name` TEXT,
+                `sortOrder` INTEGER,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `version` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_menu_categories_state` ON `local_menu_categories` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_menu_categories_serverId` ON `local_menu_categories` (`serverId`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_menu_items` (
+                `localId` TEXT NOT NULL,
+                `serverId` TEXT NOT NULL,
+                `categoryId` TEXT,
+                `name` TEXT,
+                `description` TEXT,
+                `isAvailable` INTEGER,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `version` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_menu_items_state` ON `local_menu_items` (`state`)",
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(
+    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+)
