@@ -11,11 +11,15 @@ import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.CapitalEntryCacheEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.EventCacheEntity
+import cloud.dcompany.erp.core.db.EventTicketCacheEntity
 import cloud.dcompany.erp.core.db.ExpenseCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.LocalAssetEntity
 import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
+import cloud.dcompany.erp.core.db.LocalCheckInEntity
 import cloud.dcompany.erp.core.db.LocalExpenseEntity
+import cloud.dcompany.erp.core.db.LocalTicketSaleEntity
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.BatchCacheEntity
@@ -55,6 +59,8 @@ import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpsertBody
 import cloud.dcompany.erp.ui.screens.customers.CustomersApi
+import cloud.dcompany.erp.ui.screens.events.EventsApi
+import cloud.dcompany.erp.ui.screens.events.TicketSell
 import cloud.dcompany.erp.ui.screens.finance.AssetCreate
 import cloud.dcompany.erp.ui.screens.finance.CapitalEntryCreate
 import cloud.dcompany.erp.ui.screens.finance.ExpenseCreate
@@ -164,6 +170,7 @@ class SyncEngine(
     private val staffApi = ApiClient.create<StaffApi>()
     private val inventoryApi = ApiClient.create<InventoryApi>()
     private val financeApi = ApiClient.create<FinanceApi>()
+    private val eventsApi = ApiClient.create<EventsApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -225,9 +232,19 @@ class SyncEngine(
                     db.financeDao().observeRejectedAssetCount(),
                     db.financeDao().observeRejectedCapitalEntryCount(),
                 ) { expenses, assets, capitalEntries -> expenses + assets + capitalEntries },
-            ) { menuItems, staff, inventory, finance -> menuItems + staff + inventory + finance },
-        ) { tables, refunds, customers, menuCategories, menuItemsAndStaffAndInventoryAndFinance ->
-            tables + refunds + customers + menuCategories + menuItemsAndStaffAndInventoryAndFinance
+                // Fifth application: 2 new Events sources (ticket sale/
+                // check-in) — this fills level 3's last remaining slot, so
+                // any further resource needs a new nesting level, not a
+                // wider combine here.
+                combine(
+                    db.eventDao().observeRejectedTicketSaleCount(),
+                    db.eventDao().observeRejectedCheckInCount(),
+                ) { ticketSales, checkIns -> ticketSales + checkIns },
+            ) { menuItems, staff, inventory, finance, events ->
+                menuItems + staff + inventory + finance + events
+            },
+        ) { tables, refunds, customers, menuCategories, rest ->
+            tables + refunds + customers + menuCategories + rest
         },
     ) { orders, shifts, gaming, kitchen, rest ->
         orders + shifts + gaming + kitchen + rest
@@ -263,6 +280,10 @@ class SyncEngine(
         // loaded on selection instead (see pullCapitalEntriesFor), same
         // shape as pullBatchesFor.
         "finance" to ::pullFinanceOnDemand,
+        // /events/* broadcasts as one combined "events" resource too.
+        // Per-event ticket lists are demand-loaded on selection instead
+        // (see pullTicketsFor), same shape as pullBatchesFor.
+        "events" to ::pullEventsData,
     )
 
     /**
@@ -335,6 +356,14 @@ class SyncEngine(
             pushExpenses()
             pushAssets()
             pushCapitalEntries()
+            // Sales before check-ins: the tickets UI only ever offers
+            // check-in for an already-synced ticket (dependency-sidestep,
+            // same as GRN/adjustments only offering synced ingredients), so
+            // in practice a check-in row's ticketId is never itself
+            // pending — this ordering just matches the general "push a
+            // dependency before its dependent" discipline everywhere else.
+            pushTicketSales()
+            pushCheckIns()
             // Right before the menu pull, same reasoning the pull's own
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
@@ -1295,6 +1324,95 @@ class SyncEngine(
     private suspend fun pullFinanceOnDemand() {
         pullExpenses()
         pullAssets()
+    }
+
+    // -------------------------------------------------------------- events
+
+    private suspend fun pullEventsData() {
+        val rows = eventsApi.listAll()
+        db.eventDao().replaceEventCache(
+            rows.map {
+                EventCacheEntity(
+                    id = it.id, name = it.name, description = it.description,
+                    eventType = it.eventType, screen = it.screen, startsAt = it.startsAt,
+                    endsAt = it.endsAt, capacity = it.capacity, sold = it.sold,
+                    remaining = it.remaining, baseTicketPriceMinor = it.baseTicketPriceMinor,
+                    sacCode = it.sacCode, taxRate = it.taxRate, status = it.status,
+                    posterUrl = it.posterUrl,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("events", System.currentTimeMillis()))
+    }
+
+    /**
+     * Per-event ticket list — demand-loaded on selection, not part of
+     * [onDemandPulls] (that map is keyed by realtime *resource* name, this
+     * is keyed by which event a screen currently has open). Called
+     * directly by EventsViewModel.selectEvent().
+     */
+    suspend fun pullTicketsFor(eventId: String) {
+        val rows = eventsApi.listTickets(eventId)
+        db.eventDao().replaceTicketsFor(
+            eventId,
+            rows.map {
+                EventTicketCacheEntity(
+                    id = it.id, eventId = it.eventId, ticketNo = it.ticketNo,
+                    eventName = it.eventName, customerName = it.customerName,
+                    customerPhone = it.customerPhone, seat = it.seat,
+                    pricePaidMinor = it.pricePaidMinor, status = it.status,
+                    checkedInAt = it.checkedInAt,
+                )
+            },
+        )
+    }
+
+    private suspend fun pushTicketSales() {
+        val dao = db.eventDao()
+        drainOutbox(
+            rows = dao.pushableTicketSales(),
+            markRejected = { row, msg -> dao.markTicketSaleRejected(row.localId, msg) },
+            push = ::pushTicketSaleOne,
+        )
+    }
+
+    /**
+     * Insert-only, same reasoning as pushGrnOne/pushAdjustmentOne — no
+     * version-CAS needed: a ticket sale is never edited, only ever queued
+     * once. Refreshes the event (sold/remaining) and this event's ticket
+     * list immediately, same as GRN refreshing ingredients after posting.
+     */
+    private suspend fun pushTicketSaleOne(row: LocalTicketSaleEntity) {
+        eventsApi.sellTickets(
+            row.eventId,
+            TicketSell(
+                customerName = row.customerName, customerPhone = row.customerPhone,
+                seat = row.seat, qty = row.qty, note = row.note,
+            ),
+            key = "ticket-sale:${row.localId}",
+        )
+        pullEventsData()
+        pullTicketsFor(row.eventId)
+        db.eventDao().markTicketSaleSynced(row.localId)
+    }
+
+    private suspend fun pushCheckIns() {
+        val dao = db.eventDao()
+        drainOutbox(
+            rows = dao.pushableCheckIns(),
+            markRejected = { row, msg -> dao.markCheckInRejected(row.localId, msg) },
+            push = ::pushCheckInOne,
+        )
+    }
+
+    /** Shape C — targets an existing server ticket id, no CAS needed since
+     * a check-in is a one-way transition the server itself already guards
+     * (re-checking-in an already-checked-in ticket is a clean 4xx, not a
+     * silent double-effect). */
+    private suspend fun pushCheckInOne(row: LocalCheckInEntity) {
+        eventsApi.checkIn(row.eventId, row.ticketId)
+        pullTicketsFor(row.eventId)
+        db.eventDao().markCheckInSynced(row.localId)
     }
 
     private suspend fun pullMenu() {

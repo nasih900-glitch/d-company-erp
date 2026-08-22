@@ -17,12 +17,13 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -293,6 +294,7 @@ async def sell_tickets(
     event_id: UUID,
     payload: TicketSell,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> list[TicketRead]:
     """Sell N tickets to the same customer.
@@ -300,7 +302,30 @@ async def sell_tickets(
     Each ticket gets its own row + sequential ticket_no. Payment is recorded
     against the parent Order (next iteration wires this into the POS pipeline);
     for now we record price_paid_minor on the ticket as the GST-inclusive amount.
+
+    ticket_no is computed fresh from the current sold count on every call, so
+    it is NOT a safe dedup fallback — a retry after a dropped response would
+    recompute a higher sold count and mint brand-new, non-colliding ticket
+    numbers, silently double-issuing tickets and double-consuming capacity.
+    Idempotency-Key is therefore mandatory here, same reasoning as
+    Inventory's GRN/adjustment writes (see inventory/router.py's
+    _require_idempotency).
     """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not str(key).strip() or not request_hash:
+        raise BusinessRuleError("Idempotency-Key header required for ticket sale writes")
+    idempotency_key, idempotency_hash = str(key), str(request_hash)
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=idempotency_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return [TicketRead.model_validate(t) for t in replay["body"]["tickets"]]
+
     ev = await _event_or_404(session, event_id, tenant.company_id, lock=True)
     if ev.status not in {"scheduled", "live"}:
         raise BusinessRuleError(f"event status={ev.status}, cannot sell tickets")
@@ -343,6 +368,12 @@ async def sell_tickets(
                 checked_in_at=ticket.checked_in_at,
             )
         )
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body={"tickets": [t.model_dump(mode="json") for t in out]},
+    )
     return out
 
 

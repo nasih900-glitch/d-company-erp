@@ -12157,6 +12157,12 @@ private struct SellTicketsSheet: View {
     @State private var error: String?
     @State private var issued: [EventTicketDTO]?
 
+    // Frozen once when the sheet opens, not regenerated per submit() call —
+    // ticket_no is computed server-side fresh from the current sold count on
+    // every call, so a retry without a stable key would silently double-
+    // issue tickets and double-consume capacity instead of replaying.
+    @State private var idempotencyKey = UUID().uuidString
+
     private var qty: Int? {
         guard let value = Int(qtyText), value >= 1, value <= event.remaining else { return nil }
         return value
@@ -12287,7 +12293,8 @@ private struct SellTicketsSheet: View {
                         qty: qty,
                         note: note.trimmingCharacters(in: .whitespaces).nilIfBlank
                     ),
-                    token: token
+                    token: token,
+                    headers: ["Idempotency-Key": idempotencyKey]
                 )
             }
             Haptics.success()

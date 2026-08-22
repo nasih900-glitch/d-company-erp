@@ -656,7 +656,84 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
     }
 }
 
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `event_cache` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `description` TEXT,
+                `eventType` TEXT NOT NULL,
+                `screen` TEXT NOT NULL,
+                `startsAt` TEXT NOT NULL,
+                `endsAt` TEXT,
+                `capacity` INTEGER NOT NULL,
+                `sold` INTEGER NOT NULL,
+                `remaining` INTEGER NOT NULL,
+                `baseTicketPriceMinor` INTEGER NOT NULL,
+                `sacCode` TEXT NOT NULL,
+                `taxRate` REAL NOT NULL,
+                `status` TEXT NOT NULL,
+                `posterUrl` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `event_ticket_cache` (
+                `id` TEXT NOT NULL,
+                `eventId` TEXT NOT NULL,
+                `ticketNo` TEXT NOT NULL,
+                `eventName` TEXT NOT NULL,
+                `customerName` TEXT,
+                `customerPhone` TEXT,
+                `seat` TEXT,
+                `pricePaidMinor` INTEGER NOT NULL,
+                `status` TEXT NOT NULL,
+                `checkedInAt` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_event_ticket_cache_eventId` ON `event_ticket_cache` (`eventId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_ticket_sales` (
+                `localId` TEXT NOT NULL,
+                `eventId` TEXT NOT NULL,
+                `customerName` TEXT NOT NULL,
+                `customerPhone` TEXT,
+                `seat` TEXT,
+                `qty` INTEGER NOT NULL,
+                `note` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_check_ins` (
+                `localId` TEXT NOT NULL,
+                `eventId` TEXT NOT NULL,
+                `ticketId` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-    MIGRATION_8_9, MIGRATION_9_10,
+    MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
 )

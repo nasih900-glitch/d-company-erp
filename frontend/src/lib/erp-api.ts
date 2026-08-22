@@ -1579,10 +1579,17 @@ export const events = {
   }>) => api.patch<EventDTO>(`/events/${id}`, body).then((r) => r.data),
   delete: (id: string) => api.delete(`/events/${id}`),
 
+  // Idempotency-Key is required server-side — ticket_no is computed fresh
+  // from the current sold count on every call, so it's not a safe dedup
+  // fallback; a retry after a dropped response would otherwise silently
+  // double-issue tickets and double-consume capacity.
   sellTickets: (event_id: string, body: {
     customer_name: string; customer_phone?: string;
     seat?: string; qty?: number; note?: string;
-  }) => api.post<EventTicketDTO[]>(`/events/${event_id}/tickets`, body).then((r) => r.data),
+  }, idempotencyKey: string) =>
+    api.post<EventTicketDTO[]>(`/events/${event_id}/tickets`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   listTickets: (event_id: string) =>
     api.get<EventTicketDTO[]>(`/events/${event_id}/tickets`).then((r) => r.data),
   checkIn: (event_id: string, ticket_id: string) =>

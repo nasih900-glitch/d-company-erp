@@ -45,6 +45,7 @@ enum class Destination(val label: String) {
     Reports("Reports"),
     Analytics("Analytics"),
     Finance("Finance"),
+    Events("Events"),
     Refunds("Refunds"),
     AccessControl("Access Control"),
     Settings("Settings"),

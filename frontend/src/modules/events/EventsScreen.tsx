@@ -346,12 +346,20 @@ function EventForm({
 }
 
 // ---------------------------------------------------------------- Sell ticket
+function newTicketSaleKey(): string {
+  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `ticket-sale:${randomPart}`;
+}
+
 function SellTicketForm({
   event, onClose, onSuccess,
 }: { event: EventDTO; onClose: () => void; onSuccess: () => void }) {
   const [form, setForm] = useState({
     customer_name: '', customer_phone: '', seat: '', qty: '1', note: '',
   });
+  const [idempotencyKey] = useState(newTicketSaleKey);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [issued, setIssued] = useState<EventTicketDTO[] | null>(null);
@@ -365,7 +373,7 @@ function SellTicketForm({
         seat: form.seat.trim() || undefined,
         qty: parseInt(form.qty, 10),
         note: form.note.trim() || undefined,
-      });
+      }, idempotencyKey);
       setIssued(out);
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }

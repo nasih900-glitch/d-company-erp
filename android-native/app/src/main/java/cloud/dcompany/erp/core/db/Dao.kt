@@ -156,8 +156,12 @@ interface SyncMetaDao {
         LocalAssetEntity::class,
         CapitalEntryCacheEntity::class,
         LocalCapitalEntryEntity::class,
+        EventCacheEntity::class,
+        EventTicketCacheEntity::class,
+        LocalTicketSaleEntity::class,
+        LocalCheckInEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 @TypeConverters(KitchenLineListConverter::class, TableOrderLineListConverter::class)
@@ -177,4 +181,5 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun attendanceDao(): AttendanceDao
     abstract fun inventoryDao(): InventoryDao
     abstract fun financeDao(): FinanceDao
+    abstract fun eventDao(): EventDao
 }
