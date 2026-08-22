@@ -733,7 +733,83 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
     }
 }
 
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `membership_tier_cache` (
+                `id` TEXT NOT NULL,
+                `code` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `monthlyPriceMinor` INTEGER NOT NULL,
+                `annualPriceMinor` INTEGER,
+                `foodDiscountPct` REAL NOT NULL,
+                `gamingDiscountPct` REAL NOT NULL,
+                `hookahDiscountPct` REAL NOT NULL,
+                `pointMultiplier` REAL NOT NULL,
+                `freeGamingMinutesPerWeek` INTEGER NOT NULL,
+                `freeHookahPerMonth` INTEGER NOT NULL,
+                `priorityBooking` INTEGER NOT NULL,
+                `description` TEXT,
+                `sortOrder` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `customer_membership_cache` (
+                `id` TEXT NOT NULL,
+                `customerId` TEXT NOT NULL,
+                `tierId` TEXT NOT NULL,
+                `tierCode` TEXT NOT NULL,
+                `tierName` TEXT NOT NULL,
+                `billingCycle` TEXT NOT NULL,
+                `startsAt` TEXT NOT NULL,
+                `expiresAt` TEXT NOT NULL,
+                `cancelledAt` TEXT,
+                `autoRenew` INTEGER NOT NULL,
+                `amountPaidMinor` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_customer_membership_cache_customerId` ON `customer_membership_cache` (`customerId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_subscriptions` (
+                `localId` TEXT NOT NULL,
+                `customerId` TEXT NOT NULL,
+                `tierId` TEXT NOT NULL,
+                `billingCycle` TEXT NOT NULL,
+                `paidVia` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_membership_cancellations` (
+                `localId` TEXT NOT NULL,
+                `customerId` TEXT NOT NULL,
+                `subscriptionId` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-    MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+    MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
 )

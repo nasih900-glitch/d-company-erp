@@ -18,8 +18,12 @@ import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.LocalAssetEntity
 import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
 import cloud.dcompany.erp.core.db.LocalCheckInEntity
+import cloud.dcompany.erp.core.db.CustomerMembershipCacheEntity
 import cloud.dcompany.erp.core.db.LocalExpenseEntity
+import cloud.dcompany.erp.core.db.LocalMembershipCancellationEntity
+import cloud.dcompany.erp.core.db.LocalSubscriptionEntity
 import cloud.dcompany.erp.core.db.LocalTicketSaleEntity
+import cloud.dcompany.erp.core.db.MembershipTierCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.BatchCacheEntity
@@ -68,6 +72,8 @@ import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.inventory.AdjustmentBody
+import cloud.dcompany.erp.ui.screens.memberships.MembershipsApi
+import cloud.dcompany.erp.ui.screens.memberships.SubscribeRequest
 import cloud.dcompany.erp.ui.screens.inventory.GrnBody
 import cloud.dcompany.erp.ui.screens.inventory.GrnLineBody
 import cloud.dcompany.erp.ui.screens.inventory.IngredientCreate
@@ -171,6 +177,7 @@ class SyncEngine(
     private val inventoryApi = ApiClient.create<InventoryApi>()
     private val financeApi = ApiClient.create<FinanceApi>()
     private val eventsApi = ApiClient.create<EventsApi>()
+    private val membershipsApi = ApiClient.create<MembershipsApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -232,14 +239,19 @@ class SyncEngine(
                     db.financeDao().observeRejectedAssetCount(),
                     db.financeDao().observeRejectedCapitalEntryCount(),
                 ) { expenses, assets, capitalEntries -> expenses + assets + capitalEntries },
-                // Fifth application: 2 new Events sources (ticket sale/
-                // check-in) — this fills level 3's last remaining slot, so
-                // any further resource needs a new nesting level, not a
-                // wider combine here.
+                // Fifth application: 2 Events sources (ticket sale/check-in)
+                // filled level 3's last remaining slot — so the 2 new
+                // Memberships sources (subscribe/cancel) nest one level
+                // deeper again, inside this same slot, rather than
+                // widening level 3 past its 5-arg cap.
                 combine(
                     db.eventDao().observeRejectedTicketSaleCount(),
                     db.eventDao().observeRejectedCheckInCount(),
-                ) { ticketSales, checkIns -> ticketSales + checkIns },
+                    combine(
+                        db.membershipDao().observeRejectedSubscriptionCount(),
+                        db.membershipDao().observeRejectedCancellationCount(),
+                    ) { subscriptions, cancellations -> subscriptions + cancellations },
+                ) { ticketSales, checkIns, memberships -> ticketSales + checkIns + memberships },
             ) { menuItems, staff, inventory, finance, events ->
                 menuItems + staff + inventory + finance + events
             },
@@ -284,6 +296,10 @@ class SyncEngine(
         // Per-event ticket lists are demand-loaded on selection instead
         // (see pullTicketsFor), same shape as pullBatchesFor.
         "events" to ::pullEventsData,
+        // /memberships/* broadcasts as one combined "memberships" resource.
+        // Per-customer membership status is demand-loaded on selection
+        // instead (see pullMembershipFor), same shape as pullBatchesFor.
+        "memberships" to ::pullTiers,
     )
 
     /**
@@ -364,6 +380,13 @@ class SyncEngine(
             // dependency before its dependent" discipline everywhere else.
             pushTicketSales()
             pushCheckIns()
+            // Subscribes before cancellations: a cancel row only ever
+            // targets an already-synced subscription id (dependency-
+            // sidestep, same as check-in only targeting synced tickets),
+            // so this ordering matches the general discipline even though
+            // it isn't strictly required in practice.
+            pushSubscriptions()
+            pushCancellations()
             // Right before the menu pull, same reasoning the pull's own
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
@@ -1413,6 +1436,91 @@ class SyncEngine(
         eventsApi.checkIn(row.eventId, row.ticketId)
         pullTicketsFor(row.eventId)
         db.eventDao().markCheckInSynced(row.localId)
+    }
+
+    // --------------------------------------------------------- memberships
+
+    private suspend fun pullTiers() {
+        val rows = membershipsApi.listTiers()
+        db.membershipDao().replaceTierCache(
+            rows.map {
+                MembershipTierCacheEntity(
+                    id = it.id, code = it.code, name = it.name,
+                    monthlyPriceMinor = it.monthlyPriceMinor, annualPriceMinor = it.annualPriceMinor,
+                    foodDiscountPct = it.foodDiscountPct, gamingDiscountPct = it.gamingDiscountPct,
+                    hookahDiscountPct = it.hookahDiscountPct, pointMultiplier = it.pointMultiplier,
+                    freeGamingMinutesPerWeek = it.freeGamingMinutesPerWeek,
+                    freeHookahPerMonth = it.freeHookahPerMonth, priorityBooking = it.priorityBooking,
+                    description = it.description, sortOrder = it.sortOrder,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("memberships", System.currentTimeMillis()))
+    }
+
+    /**
+     * Per-customer active-membership lookup — demand-loaded on selection,
+     * not part of [onDemandPulls] (that map is keyed by realtime *resource*
+     * name, this is keyed by which customer a screen currently has open).
+     * Called directly by MembershipsViewModel.selectCustomer(). A null
+     * response (no active membership) clears this customer's cache row
+     * rather than leaving a stale one showing.
+     */
+    suspend fun pullMembershipFor(customerId: String) {
+        val sub = membershipsApi.getCustomerSubscription(customerId)
+        db.membershipDao().replaceMembershipFor(
+            customerId,
+            listOfNotNull(sub).map {
+                CustomerMembershipCacheEntity(
+                    id = it.id, customerId = it.customerId, tierId = it.tierId,
+                    tierCode = it.tierCode, tierName = it.tierName, billingCycle = it.billingCycle,
+                    startsAt = it.startsAt, expiresAt = it.expiresAt, cancelledAt = it.cancelledAt,
+                    autoRenew = it.autoRenew, amountPaidMinor = it.amountPaidMinor, isActive = it.isActive,
+                )
+            },
+        )
+    }
+
+    private suspend fun pushSubscriptions() {
+        val dao = db.membershipDao()
+        drainOutbox(
+            rows = dao.pushableSubscriptions(),
+            markRejected = { row, msg -> dao.markSubscriptionRejected(row.localId, msg) },
+            push = ::pushSubscriptionOne,
+        )
+    }
+
+    /** Insert-only, same reasoning as pushTicketSaleOne — no version-CAS
+     * needed: a subscribe is never edited, only ever queued once. */
+    private suspend fun pushSubscriptionOne(row: LocalSubscriptionEntity) {
+        membershipsApi.subscribe(
+            SubscribeRequest(
+                customerId = row.customerId, tierId = row.tierId,
+                billingCycle = row.billingCycle, paidVia = row.paidVia,
+            ),
+            key = "membership-subscribe:${row.localId}",
+        )
+        pullMembershipFor(row.customerId)
+        db.membershipDao().markSubscriptionSynced(row.localId)
+    }
+
+    private suspend fun pushCancellations() {
+        val dao = db.membershipDao()
+        drainOutbox(
+            rows = dao.pushableCancellations(),
+            markRejected = { row, msg -> dao.markCancellationRejected(row.localId, msg) },
+            push = ::pushCancellationOne,
+        )
+    }
+
+    /** Shape C — targets an existing server subscription id, no CAS needed
+     * since a cancel is a one-way transition the server itself already
+     * guards (re-cancelling an already-cancelled subscription is a clean
+     * 4xx, not a silent double-effect), same as Events' check-in. */
+    private suspend fun pushCancellationOne(row: LocalMembershipCancellationEntity) {
+        membershipsApi.cancel(row.subscriptionId)
+        pullMembershipFor(row.customerId)
+        db.membershipDao().markCancellationSynced(row.localId)
     }
 
     private suspend fun pullMenu() {

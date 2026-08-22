@@ -12760,6 +12760,13 @@ private struct SubscribeMemberSheet: View {
     @State private var error: String?
     @State private var success: SubscriptionDTO?
 
+    // Frozen once when the sheet opens, not regenerated per submit() call —
+    // starts_at/expires_at are computed server-side fresh on every call, and
+    // the overlap check guards against a *second* real subscription, not a
+    // retry of the same one, so a retry without a stable key would silently
+    // mint a duplicate membership term instead of replaying cleanly.
+    @State private var idempotencyKey = UUID().uuidString
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -12905,7 +12912,8 @@ private struct SubscribeMemberSheet: View {
                 try await APIClient.shared.post(
                     "memberships/subscribe",
                     body: SubscribeRequest(customer_id: customer.id, tier_id: tier.id, billing_cycle: billingCycle, paid_via: nil),
-                    token: token
+                    token: token,
+                    headers: ["Idempotency-Key": idempotencyKey]
                 )
             }
             Haptics.success()

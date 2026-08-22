@@ -15,12 +15,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ForbiddenError, NotFoundError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -190,12 +191,36 @@ async def _subscription_to_read(session, sub: CustomerMembership) -> Subscriptio
 async def subscribe(
     payload: SubscribeRequest,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("admin.system")),
 ) -> SubscriptionRead:
     if not tenant.protected_access:
         raise ForbiddenError(
             "Only a protected owner may create a manual membership entitlement."
         )
+    # starts_at/expires_at are computed from datetime.now() fresh on every
+    # call, and the overlap check below guards against a *second* real
+    # subscription, not against a retry of the *same* one — a retry after a
+    # dropped response would hit that guard's BusinessRuleError with no way
+    # to recover the original SubscriptionRead. Idempotency-Key is mandatory
+    # here for the same reason Inventory's GRN/adjustment writes and Events'
+    # ticket sales are: no natural key a duplicate retry could collide
+    # against safely.
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not str(key).strip() or not request_hash:
+        raise BusinessRuleError("Idempotency-Key header required for subscribe writes")
+    idempotency_key, idempotency_hash = str(key), str(request_hash)
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=idempotency_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return SubscriptionRead.model_validate(replay["body"])
+
     # Serialize subscriptions per customer. Two concurrent owner requests then
     # cannot both pass the overlap check and mint duplicate allowances.
     customer = (
@@ -262,7 +287,14 @@ async def subscribe(
     )
     session.add(sub)
     await session.flush()
-    return await _subscription_to_read(session, sub)
+    response = await _subscription_to_read(session, sub)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.get("/customer/{customer_id}", response_model=SubscriptionRead | None)

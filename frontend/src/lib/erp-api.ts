@@ -1068,11 +1068,19 @@ export const memberships = {
     api.post<MembershipTierDTO>('/memberships/tiers', body).then((r) => r.data),
   updateTier: (id: string, body: Partial<MembershipTierDTO>) =>
     api.patch<MembershipTierDTO>(`/memberships/tiers/${id}`, body).then((r) => r.data),
+  // Idempotency-Key is required server-side — starts_at/expires_at are
+  // computed fresh on every call and the overlap check guards against a
+  // *second* real subscription, not a retry of the same one, so a retry
+  // after a dropped response would otherwise silently mint a duplicate
+  // membership term.
   subscribe: (body: {
     customer_id: string; tier_id: string;
     billing_cycle?: 'monthly' | 'annual';
     paid_via?: 'cash' | 'card' | 'upi' | 'razorpay';
-  }) => api.post<SubscriptionDTO>('/memberships/subscribe', body).then((r) => r.data),
+  }, idempotencyKey: string) =>
+    api.post<SubscriptionDTO>('/memberships/subscribe', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   getCustomerSubscription: (customer_id: string) =>
     api.get<SubscriptionDTO | null>(`/memberships/customer/${customer_id}`).then((r) => r.data),
   cancel: (subscription_id: string) =>

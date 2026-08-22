@@ -99,6 +99,15 @@ def _tenant(*, protected_access: bool = False) -> TenantContext:
     )
 
 
+def _request() -> SimpleNamespace:
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="membership-subscribe-test",
+            idempotency_request_hash="request-hash",
+        )
+    )
+
+
 def test_membership_periods_use_the_business_timezone() -> None:
     # Sunday 20:00 UTC is already Monday in India.
     at = datetime(2026, 7, 19, 20, 0, tzinfo=UTC)
@@ -161,13 +170,19 @@ async def test_only_protected_owner_can_mint_manual_membership_entitlement() -> 
                 paid_via="cash",
             ),
             session,
+            _request(),
             tenant,
         )
     assert session.statements == []
 
 
 @pytest.mark.asyncio
-async def test_subscription_locks_customer_and_rejects_unexpired_overlap() -> None:
+async def test_subscription_locks_customer_and_rejects_unexpired_overlap(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(memberships_router, "check_or_reserve", reserve)
+
     tenant = _tenant(protected_access=True)
     customer = Customer(
         id=uuid4(),
@@ -199,6 +214,7 @@ async def test_subscription_locks_customer_and_rejects_unexpired_overlap() -> No
                 paid_via="upi",
             ),
             session,
+            _request(),
             tenant,
         )
     assert session.statements[0]._for_update_arg is not None
@@ -206,7 +222,18 @@ async def test_subscription_locks_customer_and_rejects_unexpired_overlap() -> No
 
 
 @pytest.mark.asyncio
-async def test_manual_entitlement_records_declared_rail_without_claiming_auto_renewal() -> None:
+async def test_manual_entitlement_records_declared_rail_without_claiming_auto_renewal(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    async def store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(memberships_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(memberships_router, "store_response", store)
+
     tenant = _tenant(protected_access=True)
     customer = Customer(
         id=uuid4(),
@@ -235,6 +262,7 @@ async def test_manual_entitlement_records_declared_rail_without_claiming_auto_re
             paid_via="upi",
         ),
         session,
+        _request(),
         tenant,
     )
 

@@ -39,6 +39,7 @@ import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.events.EventsScreen
+import cloud.dcompany.erp.ui.screens.memberships.MembershipsScreen
 import cloud.dcompany.erp.ui.screens.finance.FinanceScreen
 import cloud.dcompany.erp.ui.screens.inventory.InventoryScreen
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenScreen
@@ -174,6 +175,7 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                             Destination.Analytics -> AnalyticsScreen()
                             Destination.Finance -> FinanceScreen()
                             Destination.Events -> EventsScreen()
+                            Destination.Memberships -> MembershipsScreen()
                             Destination.Refunds -> RefundsScreen()
                             Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen()
