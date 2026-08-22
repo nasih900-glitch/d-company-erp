@@ -22,10 +22,13 @@ import cloud.dcompany.erp.core.db.LocalMenuItemEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.LocalRefundEntity
+import cloud.dcompany.erp.core.db.LocalStaffEntity
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.OnShiftEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
+import cloud.dcompany.erp.core.db.StaffCacheEntity
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.SyncMetaEntity
 import cloud.dcompany.erp.core.db.SyncState
@@ -51,6 +54,8 @@ import cloud.dcompany.erp.ui.screens.refunds.RefundsApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
+import cloud.dcompany.erp.ui.screens.staff.StaffApi
+import cloud.dcompany.erp.ui.screens.staff.StaffUserUpdateBody
 import cloud.dcompany.erp.ui.screens.tables.TablesApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,6 +136,7 @@ class SyncEngine(
     private val refundsApi = ApiClient.create<RefundsApi>()
     private val customersApi = ApiClient.create<CustomersApi>()
     private val menuApi = ApiClient.create<MenuApi>()
+    private val staffApi = ApiClient.create<StaffApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -165,9 +171,17 @@ class SyncEngine(
             db.refundDao().observeRejectedCount(),
             db.customerDao().observeRejectedCount(),
             db.menuWriteDao().observeRejectedCategoryCount(),
-            db.menuWriteDao().observeRejectedItemCount(),
-        ) { tables, refunds, customers, menuCategories, menuItems ->
-            tables + refunds + customers + menuCategories + menuItems
+            // One more resource than fits this inner combine's own 5-arg cap
+            // — nested one level deeper rather than restructuring the levels
+            // above, which already have real, unrelated meaning (orders vs.
+            // shifts vs. gaming vs. kitchen). Same pre-sum technique, just
+            // applied again as the resource count grows past 10.
+            combine(
+                db.menuWriteDao().observeRejectedItemCount(),
+                db.staffDao().observeRejectedCount(),
+            ) { menuItems, staff -> menuItems + staff },
+        ) { tables, refunds, customers, menuCategories, menuItemsAndStaff ->
+            tables + refunds + customers + menuCategories + menuItemsAndStaff
         },
     ) { orders, shifts, gaming, kitchen, rest ->
         orders + shifts + gaming + kitchen + rest
@@ -191,6 +205,8 @@ class SyncEngine(
         // pull, no new backend resource needed.
         "orders" to ::pullRefundableOrders,
         "customers" to ::pullCustomers,
+        "staff" to ::pullStaff,
+        "attendance" to ::pullOnShift,
     )
 
     /**
@@ -243,6 +259,7 @@ class SyncEngine(
             pushTableOrders()
             pushRefunds()
             pushCustomers()
+            pushStaff()
             // Right before the menu pull, same reasoning the pull's own
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
@@ -736,6 +753,105 @@ class SyncEngine(
             },
         )
         db.syncMetaDao().put(SyncMetaEntity("customers", System.currentTimeMillis()))
+    }
+
+    private suspend fun pushStaff() {
+        val dao = db.staffDao()
+        drainOutbox(
+            rows = dao.pushable(),
+            markRejected = { row, msg -> dao.markRejected(row.localId, msg) },
+            push = ::pushStaffOne,
+        )
+    }
+
+    /**
+     * `serverId` is always already set here — see [LocalStaffEntity]'s doc
+     * comment on why a staff write is never a create. `pendingDelete` wins
+     * over any field edits also sitting on the row: a delete is a terminal
+     * state, there is nothing left to PATCH after it.
+     *
+     * The delete branch's `status != 404` check is the one real subtlety:
+     * `DELETE /staff/users/{id}` 404s on an already-deleted user rather than
+     * silently no-op'ing (backend/app/api/v1/staff/router.py delete_user), so
+     * a dropped connection right after a successful delete would otherwise
+     * make a clean retry look like a failure — see the entity's doc comment
+     * for the full reasoning. Same pull-then-CAS-markSynced-then-
+     * conditional-delete ordering as pushCustomerOne otherwise, for the same
+     * reasons: `pullStaff()` before `markSynced` so a failed pull just
+     * leaves the row pending for a harmless retry instead of a synced-but-
+     * orphaned row; `markSynced`'s version check so a newer edit that landed
+     * while this call was in flight is not silently discarded.
+     */
+    private suspend fun pushStaffOne(row: LocalStaffEntity) {
+        val dao = db.staffDao()
+        if (row.pendingDelete) {
+            try {
+                staffApi.delete(row.serverId)
+            } catch (e: ApiException) {
+                if (e.status != 404) throw e
+            }
+        } else {
+            staffApi.update(
+                row.serverId,
+                StaffUserUpdateBody(
+                    name = row.name,
+                    phone = row.phone,
+                    status = row.status,
+                    roleCode = row.roleCode,
+                ),
+            )
+        }
+        pullStaff()
+        val applied = dao.markSynced(row.localId, expectedVersion = row.version)
+        if (applied > 0) dao.deleteSynced()
+    }
+
+    /**
+     * The full staff list, wholesale-replaced — same shape as pullCustomers.
+     * On-demand only (see onDemandPulls): opening Staff, a "staff" realtime
+     * event, or this device's own write finishing (see pushStaffOne)
+     * triggers it, not every sync().
+     */
+    private suspend fun pullStaff() {
+        val users = staffApi.list()
+        db.staffDao().replaceCache(
+            users.map {
+                StaffCacheEntity(
+                    id = it.id,
+                    email = it.email,
+                    name = it.name,
+                    phone = it.phone,
+                    status = it.status,
+                    rolesCsv = it.roles.joinToString(","),
+                    lastLoginAt = it.lastLoginAt,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("staff", System.currentTimeMillis()))
+    }
+
+    /**
+     * Who's currently clocked in — read-only, no outbox (see [OnShiftEntity]'s
+     * doc comment on why clock-in/out can never be queued). On-demand only:
+     * opening Staff, an "attendance" realtime event, or this device's own
+     * clock-in/clock-out finishing (see StaffViewModel.clockIn/clockOut)
+     * triggers it.
+     */
+    private suspend fun pullOnShift() {
+        val rows = staffApi.onShift()
+        db.attendanceDao().replaceOnShift(
+            rows.map {
+                OnShiftEntity(
+                    attendanceId = it.id,
+                    userId = it.userId,
+                    userName = it.userName,
+                    userEmail = it.userEmail,
+                    branchId = it.branchId,
+                    branchName = it.branchName,
+                    clockInAt = it.clockInAt,
+                )
+            },
+        )
     }
 
     private suspend fun pullMenu() {

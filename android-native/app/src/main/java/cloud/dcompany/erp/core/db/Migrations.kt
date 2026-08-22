@@ -333,6 +333,63 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `staff_cache` (
+                `id` TEXT NOT NULL,
+                `email` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `phone` TEXT,
+                `status` TEXT NOT NULL,
+                `rolesCsv` TEXT NOT NULL,
+                `lastLoginAt` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_staff` (
+                `localId` TEXT NOT NULL,
+                `serverId` TEXT NOT NULL,
+                `name` TEXT,
+                `phone` TEXT,
+                `status` TEXT,
+                `roleCode` TEXT,
+                `pendingDelete` INTEGER NOT NULL DEFAULT 0,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `version` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_staff_state` ON `local_staff` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_staff_serverId` ON `local_staff` (`serverId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `on_shift_cache` (
+                `attendanceId` TEXT NOT NULL,
+                `userId` TEXT NOT NULL,
+                `userName` TEXT,
+                `userEmail` TEXT,
+                `branchId` TEXT NOT NULL,
+                `branchName` TEXT,
+                `clockInAt` TEXT NOT NULL,
+                PRIMARY KEY(`attendanceId`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
-    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
 )

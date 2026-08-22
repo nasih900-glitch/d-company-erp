@@ -46,6 +46,7 @@ import cloud.dcompany.erp.ui.screens.refunds.RefundsScreen
 import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
 import cloud.dcompany.erp.ui.screens.tables.TablesScreen
 import cloud.dcompany.erp.ui.screens.settings.SettingsScreen
+import cloud.dcompany.erp.ui.screens.staff.StaffScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
@@ -145,7 +146,8 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                     val destinations = Destination.entries.filter {
                         (it != Destination.AccessControl || s.me.auditAccess) &&
                             (it != Destination.Analytics || s.me.accessibleModules.contains("insights_reports")) &&
-                            (it != Destination.Menu || s.me.accessibleModules.contains("menu"))
+                            (it != Destination.Menu || s.me.accessibleModules.contains("menu")) &&
+                            (it != Destination.Staff || s.me.accessibleModules.contains("staff"))
                     }
                     WorkspaceScaffold(header = {}, destinations = destinations) { destination ->
                         when (destination) {
@@ -165,6 +167,7 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
                             Destination.Shift -> ShiftScreen()
                             Destination.Customers -> CustomersScreen()
                             Destination.Menu -> MenuScreen()
+                            Destination.Staff -> StaffScreen()
                             Destination.Inventory -> InventoryScreen()
                             Destination.Reports -> ReportsScreen()
                             Destination.Analytics -> AnalyticsScreen()

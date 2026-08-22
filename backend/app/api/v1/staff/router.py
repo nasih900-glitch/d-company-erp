@@ -180,7 +180,8 @@ async def update_user(
     if not u or u.company_id != tenant.company_id or u.deleted_at:
         raise NotFoundError("user not found")
     is_self = u.id == tenant.user_id
-    is_protected_owner = PROTECTED_OWNER_ROLE in await _raw_roles_for_user(session, u.id)
+    current_roles = await _raw_roles_for_user(session, u.id)
+    is_protected_owner = PROTECTED_OWNER_ROLE in current_roles
     if is_self and (payload.role_code is not None or payload.status == "suspended"):
         raise BusinessRuleError("you cannot remove or suspend your own access")
     if is_protected_owner and payload.status == "suspended":
@@ -189,10 +190,17 @@ async def update_user(
         u.name = payload.name
     if payload.phone is not None:
         u.phone = payload.phone
-    if payload.status is not None:
+    # auth_version evicts every live session for this user the instant it
+    # changes (see tenant.py's auth_version check) — bump it only on a
+    # genuine change, not merely because the field was present. Callers
+    # that always resend the current value (e.g. an edit form that only
+    # touched an unrelated field, or an offline client's absolute-PATCH
+    # outbox) would otherwise force-log-out a coworker mid-shift for an
+    # edit that never actually touched their access.
+    if payload.status is not None and payload.status != u.status:
         u.status = payload.status
         u.auth_version += 1
-    if payload.role_code is not None:
+    if payload.role_code is not None and payload.role_code not in current_roles:
         await _set_role(session, tenant, u.id, payload.role_code)
         u.auth_version += 1
     await session.flush()

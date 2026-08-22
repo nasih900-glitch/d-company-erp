@@ -40,6 +40,7 @@ enum class Destination(val label: String) {
     Shift("Shift"),
     Customers("Customers"),
     Menu("Menu"),
+    Staff("Staff"),
     Inventory("Stock"),
     Reports("Reports"),
     Analytics("Analytics"),
