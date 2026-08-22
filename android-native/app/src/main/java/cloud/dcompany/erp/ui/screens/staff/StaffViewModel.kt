@@ -359,7 +359,18 @@ class StaffViewModel : ViewModel() {
                     } else {
                         ed.roleCode.ifBlank { null }
                     },
-                    pendingDelete = existingPending?.pendingDelete ?: false,
+                    // Always false, not `existingPending?.pendingDelete`: the
+                    // only way to reach this save with an existing local row
+                    // already attached is either no pending write, or a
+                    // *rejected* delete (a still-pending delete hides the
+                    // Edit button — see StaffRowCard). Saving an edit is an
+                    // explicit signal to keep the row, so a rejected
+                    // delete's flag must not survive underneath it — found
+                    // via Phase 9's Inventory review, same bug shape, this
+                    // row silently requeuing as the same doomed delete
+                    // instead of the edit just typed, behind a false "Saved"
+                    // notice.
+                    pendingDelete = false,
                     state = StaffWriteState.PENDING,
                     lastError = null,
                     version = (existingPending?.version ?: -1) + 1,

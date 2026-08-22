@@ -12,9 +12,15 @@ import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.db.GamingStationEntity
+import cloud.dcompany.erp.core.db.IngredientCacheEntity
 import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
+import cloud.dcompany.erp.core.db.LocalAdjustmentEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
+import cloud.dcompany.erp.core.db.LocalGrnEntity
+import cloud.dcompany.erp.core.db.LocalGrnLineEntity
+import cloud.dcompany.erp.core.db.LocalIngredientEntity
 import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
 import cloud.dcompany.erp.core.db.LocalCustomerEntity
 import cloud.dcompany.erp.core.db.LocalMenuCategoryEntity
@@ -23,12 +29,14 @@ import cloud.dcompany.erp.core.db.LocalOrderEntity
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.LocalRefundEntity
 import cloud.dcompany.erp.core.db.LocalStaffEntity
+import cloud.dcompany.erp.core.db.LocalSupplierEntity
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.OnShiftEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
 import cloud.dcompany.erp.core.db.StaffCacheEntity
+import cloud.dcompany.erp.core.db.SupplierCacheEntity
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.SyncMetaEntity
 import cloud.dcompany.erp.core.db.SyncState
@@ -43,6 +51,13 @@ import cloud.dcompany.erp.ui.screens.customers.CustomerUpsertBody
 import cloud.dcompany.erp.ui.screens.customers.CustomersApi
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
+import cloud.dcompany.erp.ui.screens.inventory.AdjustmentBody
+import cloud.dcompany.erp.ui.screens.inventory.GrnBody
+import cloud.dcompany.erp.ui.screens.inventory.GrnLineBody
+import cloud.dcompany.erp.ui.screens.inventory.IngredientCreate
+import cloud.dcompany.erp.ui.screens.inventory.IngredientUpdate
+import cloud.dcompany.erp.ui.screens.inventory.InventoryApi
+import cloud.dcompany.erp.ui.screens.inventory.SupplierBody
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenApi
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenStateUpdate
 import cloud.dcompany.erp.ui.screens.menu.CategoryCreateBody
@@ -137,6 +152,7 @@ class SyncEngine(
     private val customersApi = ApiClient.create<CustomersApi>()
     private val menuApi = ApiClient.create<MenuApi>()
     private val staffApi = ApiClient.create<StaffApi>()
+    private val inventoryApi = ApiClient.create<InventoryApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -179,9 +195,20 @@ class SyncEngine(
             combine(
                 db.menuWriteDao().observeRejectedItemCount(),
                 db.staffDao().observeRejectedCount(),
-            ) { menuItems, staff -> menuItems + staff },
-        ) { tables, refunds, customers, menuCategories, menuItemsAndStaff ->
-            tables + refunds + customers + menuCategories + menuItemsAndStaff
+                // Same trick a third time: 4 more inventory sources than fit
+                // this combine's own remaining slots, pre-summed one level
+                // deeper again.
+                combine(
+                    db.inventoryDao().observeRejectedIngredientCount(),
+                    db.inventoryDao().observeRejectedSupplierCount(),
+                    db.inventoryDao().observeRejectedGrnCount(),
+                    db.inventoryDao().observeRejectedAdjustmentCount(),
+                ) { ingredients, suppliers, grns, adjustments ->
+                    ingredients + suppliers + grns + adjustments
+                },
+            ) { menuItems, staff, inventory -> menuItems + staff + inventory },
+        ) { tables, refunds, customers, menuCategories, menuItemsAndStaffAndInventory ->
+            tables + refunds + customers + menuCategories + menuItemsAndStaffAndInventory
         },
     ) { orders, shifts, gaming, kitchen, rest ->
         orders + shifts + gaming + kitchen + rest
@@ -207,6 +234,11 @@ class SyncEngine(
         "customers" to ::pullCustomers,
         "staff" to ::pullStaff,
         "attendance" to ::pullOnShift,
+        // Backend's realtime resource map deliberately does not split
+        // inventory into ingredients/suppliers/grn/adjustments — everything
+        // under /inventory broadcasts as one combined "inventory" resource,
+        // so one write anywhere in the module refreshes both caches here.
+        "inventory" to ::pullInventoryOnDemand,
     )
 
     /**
@@ -260,6 +292,16 @@ class SyncEngine(
             pushRefunds()
             pushCustomers()
             pushStaff()
+            // Ingredients/suppliers before GRN/adjustments: both depend on an
+            // already-synced ingredient/supplier server id (the GRN/adjust
+            // dialogs' own pickers exclude anything still local-only, so this
+            // ordering isn't required for correctness, just gives a
+            // same-pass chance for a just-created ingredient to be usable by
+            // a GRN queued in the same batch of offline work).
+            pushIngredients()
+            pushSuppliers()
+            pushGrns()
+            pushAdjustments()
             // Right before the menu pull, same reasoning the pull's own
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
@@ -852,6 +894,235 @@ class SyncEngine(
                 )
             },
         )
+    }
+
+    // ---------------------------------------------------------- ingredients
+
+    private suspend fun pushIngredients() {
+        val dao = db.inventoryDao()
+        drainOutbox(
+            rows = dao.pushableIngredients(),
+            markRejected = { row, msg -> dao.markIngredientRejected(row.localId, msg) },
+            push = ::pushIngredientOne,
+        )
+    }
+
+    /**
+     * Unlike Staff, an ingredient genuinely can be created offline — there's
+     * no live-round-trip block on it — so, matching Customers/Menu-category,
+     * `serverId == null` means this row is still an unsynced create. Delete
+     * is folded in via `pendingDelete`, same as Staff, including the same
+     * 404-tolerance on the delete branch (see LocalIngredientEntity's doc
+     * comment) — except here a delete can also target a row that was queued
+     * and then removed before it ever reached the server at all
+     * (`serverId == null`), which needs no network call, just dropping the
+     * local row outright.
+     */
+    private suspend fun pushIngredientOne(row: LocalIngredientEntity) {
+        val dao = db.inventoryDao()
+        if (row.pendingDelete) {
+            val serverId = row.serverId
+            if (serverId == null) {
+                dao.deleteLocalIngredient(row.localId)
+                return
+            }
+            try {
+                inventoryApi.deleteIngredient(serverId)
+            } catch (e: ApiException) {
+                if (e.status != 404) throw e
+            }
+        } else if (row.serverId == null) {
+            val created = inventoryApi.createIngredient(
+                IngredientCreate(
+                    sku = row.sku.orEmpty(),
+                    name = row.name.orEmpty(),
+                    baseUnit = row.baseUnit.orEmpty(),
+                    reorderThreshold = row.reorderThreshold ?: 0.0,
+                    reorderQty = row.reorderQty ?: 0.0,
+                ),
+            )
+            dao.setIngredientServerId(row.localId, created.id)
+        } else {
+            inventoryApi.updateIngredient(
+                row.serverId,
+                IngredientUpdate(
+                    name = row.name.orEmpty(),
+                    baseUnit = row.baseUnit.orEmpty(),
+                    reorderThreshold = row.reorderThreshold ?: 0.0,
+                    reorderQty = row.reorderQty ?: 0.0,
+                ),
+            )
+        }
+        pullIngredients()
+        val applied = dao.markIngredientSynced(row.localId, expectedVersion = row.version)
+        if (applied > 0) dao.deleteSyncedIngredients()
+    }
+
+    private suspend fun pullIngredients() {
+        val rows = inventoryApi.ingredients()
+        db.inventoryDao().replaceIngredientCache(
+            rows.map {
+                IngredientCacheEntity(
+                    id = it.id, sku = it.sku, name = it.name, baseUnit = it.baseUnit,
+                    currentQty = it.currentQty, reorderThreshold = it.reorderThreshold,
+                    reorderQty = it.reorderQty, avgCostMinor = it.avgCostMinor,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("ingredients", System.currentTimeMillis()))
+    }
+
+    // ------------------------------------------------------------ suppliers
+
+    private suspend fun pushSuppliers() {
+        val dao = db.inventoryDao()
+        drainOutbox(
+            rows = dao.pushableSuppliers(),
+            markRejected = { row, msg -> dao.markSupplierRejected(row.localId, msg) },
+            push = ::pushSupplierOne,
+        )
+    }
+
+    /** Same shape as pushIngredientOne — see its doc comment. */
+    private suspend fun pushSupplierOne(row: LocalSupplierEntity) {
+        val dao = db.inventoryDao()
+        if (row.pendingDelete) {
+            val serverId = row.serverId
+            if (serverId == null) {
+                dao.deleteLocalSupplier(row.localId)
+                return
+            }
+            try {
+                inventoryApi.deleteSupplier(serverId)
+            } catch (e: ApiException) {
+                if (e.status != 404) throw e
+            }
+        } else if (row.serverId == null) {
+            val created = inventoryApi.createSupplier(
+                SupplierBody(
+                    name = row.name.orEmpty(), contact = row.contact,
+                    gstin = row.gstin, paymentTerms = row.paymentTerms,
+                ),
+            )
+            dao.setSupplierServerId(row.localId, created.id)
+        } else {
+            inventoryApi.updateSupplier(
+                row.serverId,
+                SupplierBody(
+                    name = row.name.orEmpty(), contact = row.contact,
+                    gstin = row.gstin, paymentTerms = row.paymentTerms,
+                ),
+            )
+        }
+        pullSuppliers()
+        val applied = dao.markSupplierSynced(row.localId, expectedVersion = row.version)
+        if (applied > 0) dao.deleteSyncedSuppliers()
+    }
+
+    private suspend fun pullSuppliers() {
+        val rows = inventoryApi.suppliers()
+        db.inventoryDao().replaceSupplierCache(
+            rows.map {
+                SupplierCacheEntity(
+                    id = it.id, name = it.name, contact = it.contact,
+                    gstin = it.gstin, paymentTerms = it.paymentTerms,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("suppliers", System.currentTimeMillis()))
+    }
+
+    private suspend fun pullInventoryOnDemand() {
+        pullIngredients()
+        pullSuppliers()
+    }
+
+    /**
+     * FIFO batches for one ingredient — demand-loaded on selection, not part
+     * of [onDemandPulls] (that map is keyed by realtime *resource* name, this
+     * is keyed by which ingredient a screen currently has open). Called
+     * directly by InventoryViewModel.select().
+     */
+    suspend fun pullBatchesFor(ingredientId: String) {
+        val rows = inventoryApi.batches(ingredientId)
+        db.inventoryDao().replaceBatchesFor(
+            ingredientId,
+            rows.map {
+                BatchCacheEntity(
+                    id = it.id, ingredientId = it.ingredientId, receivedAt = it.receivedAt,
+                    expiresAt = it.expiresAt, qtyOnHand = it.qtyOnHand,
+                    costPerUnitMinor = it.costPerUnitMinor, lotCode = it.lotCode,
+                )
+            },
+        )
+    }
+
+    // -------------------------------------------------------------------- GRN
+
+    private suspend fun pushGrns() {
+        val dao = db.inventoryDao()
+        drainOutbox(
+            rows = dao.pushableGrns(),
+            markRejected = { row, msg -> dao.markGrnRejected(row.localId, msg) },
+            push = ::pushGrnOne,
+        )
+    }
+
+    /**
+     * Shape D, single call (unlike pushOne for orders, there's no second
+     * chained payment call — a GRN is complete in one POST). Insert-only, so
+     * unlike ingredients/suppliers there is no version-CAS on markGrnSynced:
+     * nothing can amend an already-captured GRN row out from under an
+     * in-flight push the way an edit can for master data.
+     */
+    private suspend fun pushGrnOne(grn: LocalGrnEntity) {
+        val dao = db.inventoryDao()
+        val lines = dao.grnLinesFor(grn.localId)
+        inventoryApi.postGrn(
+            GrnBody(
+                branchId = grn.branchId,
+                supplierId = grn.supplierId,
+                supplierInvoiceNo = grn.supplierInvoiceNo,
+                notes = grn.notes,
+                lines = lines.map {
+                    GrnLineBody(
+                        ingredientId = it.ingredientId, qty = it.qty,
+                        unitCostMinor = it.unitCostMinor,
+                        expiresAt = it.expiresAt, lotCode = it.lotCode,
+                    )
+                },
+            ),
+            key = "grn:${grn.localId}",
+        )
+        // The GRN itself rewrote current_qty/avg_cost_minor server-side —
+        // reflect that immediately rather than waiting for the next
+        // unrelated pull.
+        pullIngredients()
+        dao.markGrnSynced(grn.localId)
+    }
+
+    // ----------------------------------------------------------- adjustments
+
+    private suspend fun pushAdjustments() {
+        val dao = db.inventoryDao()
+        drainOutbox(
+            rows = dao.pushableAdjustments(),
+            markRejected = { row, msg -> dao.markAdjustmentRejected(row.localId, msg) },
+            push = ::pushAdjustmentOne,
+        )
+    }
+
+    /** Same insert-only reasoning as pushGrnOne — no version-CAS needed. */
+    private suspend fun pushAdjustmentOne(row: LocalAdjustmentEntity) {
+        inventoryApi.postAdjustment(
+            AdjustmentBody(
+                ingredientId = row.ingredientId, branchId = row.branchId,
+                qtyDelta = row.qtyDelta, type = row.type, note = row.note,
+            ),
+            key = "adjustment:${row.localId}",
+        )
+        pullIngredients()
+        db.inventoryDao().markAdjustmentSynced(row.localId)
     }
 
     private suspend fun pullMenu() {

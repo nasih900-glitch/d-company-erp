@@ -28,15 +28,10 @@ data class Ingredient(
     @SerialName("avg_cost_minor") val avgCostMinor: Long = 0,
 )
 
-/** Below the reorder line — the same test the web screen uses for its alerts. */
-val Ingredient.isLow: Boolean get() = currentQty < reorderThreshold
-
-/**
- * Stock value in paise. The quantity is a Double because it has to be, but the
- * result is rounded back to whole paise immediately so no fractional money can
- * travel any further.
- */
-val Ingredient.stockValueMinor: Long get() = (currentQty * avgCostMinor).roundToLong()
+// isLow / stockValueMinor live on IngredientRow (InventoryViewModel.kt) now —
+// the offline-merged row is what the screen actually displays, so that's
+// where the derived display logic belongs; this raw wire DTO doesn't need
+// its own copy.
 
 @Serializable
 data class IngredientCreate(

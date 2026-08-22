@@ -6,12 +6,14 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import (
@@ -30,6 +32,37 @@ from app.models import (
 )
 
 router = APIRouter()
+
+
+def _optional_idempotency(request: Request) -> tuple[str, str] | tuple[None, None]:
+    """Same shape as menu/router.py's helper of the same name — a missing key
+    is not an error here, since the web app has never sent one for ingredient/
+    supplier writes and must keep working unchanged. Used only where a real
+    fallback (a unique-constraint IntegrityError, or nothing worth protecting)
+    already covers the no-key case — see `_require_idempotency` below for the
+    writes that have no such fallback and can't be optional.
+    """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not request_hash:
+        return None, None
+    return str(key), str(request_hash)
+
+
+def _require_idempotency(request: Request) -> tuple[str, str]:
+    """GRN and adjustments create/mutate rows with no natural unique key to
+    fall back on (a fresh uuid4() PK every time, no constraint a duplicate
+    could collide against) — unlike menu/customers, there is no IntegrityError
+    safety net available if a caller skips this. A resubmitted GRN silently
+    inflates stock and purchase spend; a resubmitted adjustment silently
+    double-applies a stock change. Idempotency is the only mechanism that
+    closes this gap, so it's mandatory here, same as gaming's session-start.
+    """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not request_hash:
+        raise BusinessRuleError("Idempotency-Key header required for GRN/adjustment writes")
+    return str(key), str(request_hash)
 
 
 async def _require_writable_branch(
@@ -246,8 +279,18 @@ async def list_ingredients(
 async def create_ingredient(
     payload: IngredientCreate,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("inventory.write")),
 ) -> IngredientRead:
+    idempotency_key, request_hash = _optional_idempotency(request)
+    if idempotency_key:
+        existing_response = await check_or_reserve(
+            session, key=idempotency_key, request_hash=request_hash,
+            user_id=tenant.user_id, terminal_id=tenant.terminal_id,
+        )
+        if existing_response:
+            return IngredientRead.model_validate(existing_response["body"])
+
     existing = (
         await session.execute(
             select(Ingredient).where(
@@ -270,12 +313,23 @@ async def create_ingredient(
         avg_cost_minor=0,
     )
     session.add(ing)
-    await session.flush()
-    return IngredientRead(
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError(f"an ingredient with SKU '{payload.sku}' already exists") from exc
+
+    response = IngredientRead(
         id=ing.id, sku=ing.sku, name=ing.name, base_unit=ing.base_unit,
         current_qty=0.0, reorder_threshold=float(ing.reorder_threshold),
         reorder_qty=float(ing.reorder_qty), avg_cost_minor=0,
     )
+    if idempotency_key:
+        await store_response(
+            session, key=idempotency_key,
+            status_code=status.HTTP_201_CREATED, body=response.model_dump(mode="json"),
+        )
+    return response
 
 
 @router.patch("/ingredients/{ingredient_id}", response_model=IngredientRead)
@@ -607,8 +661,25 @@ async def list_suppliers(
 async def create_supplier(
     payload: SupplierCreate,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("inventory.write")),
 ) -> SupplierRead:
+    # Supplier has no unique natural key (a duplicate name is legal — the
+    # same real-world supplier chain can legitimately have two branches
+    # entered with the same name), so there's no IntegrityError fallback to
+    # lean on the way ingredient's SKU gives it one. Idempotency-key replay
+    # is the only protection available; still optional (not required) since
+    # a duplicate supplier row is an annoyance to clean up, not a stock/money
+    # correctness bug like GRN/adjustments.
+    idempotency_key, request_hash = _optional_idempotency(request)
+    if idempotency_key:
+        existing_response = await check_or_reserve(
+            session, key=idempotency_key, request_hash=request_hash,
+            user_id=tenant.user_id, terminal_id=tenant.terminal_id,
+        )
+        if existing_response:
+            return SupplierRead.model_validate(existing_response["body"])
+
     s = Supplier(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -619,10 +690,16 @@ async def create_supplier(
     )
     session.add(s)
     await session.flush()
-    return SupplierRead(
+    response = SupplierRead(
         id=s.id, name=s.name, contact=s.contact, gstin=s.gstin,
         payment_terms=s.payment_terms,
     )
+    if idempotency_key:
+        await store_response(
+            session, key=idempotency_key,
+            status_code=status.HTTP_201_CREATED, body=response.model_dump(mode="json"),
+        )
+    return response
 
 
 @router.patch("/suppliers/{supplier_id}", response_model=SupplierRead)
@@ -666,13 +743,27 @@ async def delete_supplier(
 async def post_grn(
     payload: GrnPost,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("inventory.write")),
 ) -> dict:
     """Record receipt of stock — creates a Batch per line and bumps Ingredient.current_qty.
 
     The simple receive-stock path creates an implicit closed purchase order so
     every stock receipt has a durable GRN header, line, batch, and movement trail.
+
+    Idempotency-Key is required (see `_require_idempotency`) — every row this
+    endpoint creates gets a fresh uuid4() PK with nothing a duplicate
+    submission could collide against, so a resubmitted GRN would otherwise
+    silently double stock and spend with no error and no trace it happened.
     """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session, key=idempotency_key, request_hash=request_hash,
+        user_id=tenant.user_id, terminal_id=tenant.terminal_id,
+    )
+    if existing_response is not None:
+        return existing_response["body"]
+
     if not payload.lines:
         raise BusinessRuleError("at least one line required")
     if payload.supplier_id is None:
@@ -713,7 +804,13 @@ async def post_grn(
     batch_ids: list[str] = []
     line_ids: list[str] = []
 
-    for ln in payload.lines:
+    # Ingredient is company-scoped, not branch-scoped, and this loop takes a
+    # row lock per line — sorted by id first so two concurrent GRNs against
+    # *different* branches that happen to reference the same ingredients in
+    # reversed order acquire those locks in the same canonical order instead
+    # of deadlocking (A holds flour, waits on sugar; B holds sugar, waits on
+    # flour). Order within a payload has no other meaning, so this is free.
+    for ln in sorted(payload.lines, key=lambda line: str(line.ingredient_id)):
         ing = (
             await session.execute(
                 select(Ingredient)
@@ -786,7 +883,7 @@ async def post_grn(
         line_ids.append(str(grn_line.id))
 
     await session.flush()
-    return {
+    response = {
         "ok": True,
         "id": str(grn.id),
         "purchase_order_id": str(po.id),
@@ -796,6 +893,11 @@ async def post_grn(
         "total_minor": total_minor,
         "supplier_invoice_no": payload.supplier_invoice_no,
     }
+    await store_response(
+        session, key=idempotency_key,
+        status_code=status.HTTP_201_CREATED, body=response,
+    )
+    return response
 
 
 # ============================================================================
@@ -805,13 +907,26 @@ async def post_grn(
 async def post_adjustment(
     payload: StockAdjustment,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("inventory.write")),
 ) -> dict:
     """Manual stock adjustment (waste, damage, transfer, count correction).
 
     Picks the oldest batch with remaining stock (FIFO for negative deltas).
     Updates Ingredient.current_qty.
+
+    Idempotency-Key is required, same reasoning as post_grn — a resubmitted
+    adjustment would otherwise silently double-apply a stock change with
+    nothing to catch the duplicate.
     """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session, key=idempotency_key, request_hash=request_hash,
+        user_id=tenant.user_id, terminal_id=tenant.terminal_id,
+    )
+    if existing_response is not None:
+        return existing_response["body"]
+
     if payload.qty_delta == 0:
         raise BusinessRuleError("qty_delta must be non-zero")
 
@@ -883,7 +998,12 @@ async def post_adjustment(
     if ing.current_qty < 0:
         ing.current_qty = 0
     await session.flush()
-    return {"id": str(mv.id), "remaining": float(ing.current_qty)}
+    response = {"id": str(mv.id), "remaining": float(ing.current_qty)}
+    await store_response(
+        session, key=idempotency_key,
+        status_code=status.HTTP_201_CREATED, body=response,
+    )
+    return response
 
 
 # ============================================================================

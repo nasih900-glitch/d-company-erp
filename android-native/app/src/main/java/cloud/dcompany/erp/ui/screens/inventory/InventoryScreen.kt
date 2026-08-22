@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens.inventory
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import kotlin.math.abs
@@ -65,33 +67,44 @@ fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
         Header(state, vm)
 
         when {
-            state.loading && state.ingredients.isEmpty() ->
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
+            state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     CircularProgressIndicator(color = Brand.Gold)
+                    Text("Loading inventory…", color = Brand.ForegroundMuted)
                 }
+            }
 
-            // Nothing loaded at all: the screen is useless until this is fixed,
-            // so it shows what the server actually said rather than a spinner
+            // Nothing cached and nothing coming: the screen is useless until
+            // this is fixed, so it shows that plainly rather than a spinner
             // that never resolves.
-            state.error != null && state.ingredients.isEmpty() ->
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.padding(24.dp).width(460.dp),
-                    ) {
-                        Text(
-                            "Inventory could not be loaded",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Brand.Foreground,
-                        )
-                        Text(state.error!!, color = Brand.Danger)
-                        Button(onClick = vm::load) { Text("Retry") }
-                    }
+            state.couldNotLoad -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(24.dp).width(460.dp),
+                ) {
+                    Text(
+                        "Could not load inventory",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Brand.Foreground,
+                    )
+                    Text(
+                        "No inventory cached on this tablet yet, and there's no connection right now to fetch it.",
+                        color = Brand.ForegroundMuted,
+                    )
+                    Button(onClick = vm::retry) { Text("Retry") }
                 }
+            }
 
             else -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                if (state.error != null) ErrorBanner(state.error!!)
+                state.notice?.let {
+                    NoticeBanner(it, vm::dismissNotice)
+                    Spacer(Modifier.height(10.dp))
+                }
+                if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
+                    PendingStockChangesPanel(state, vm)
+                    Spacer(Modifier.height(12.dp))
+                }
                 StatRow(state)
                 if (state.restockPriority.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
@@ -108,43 +121,33 @@ fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
         }
     }
 
-    when (val dialog = state.dialog) {
-        is InventoryDialog.IngredientForm -> IngredientDialog(dialog.editing, state, vm)
-        is InventoryDialog.SupplierForm -> SupplierDialog(dialog.editing, state, vm)
+    when (val d = state.dialog) {
+        is InventoryDialog.IngredientForm -> IngredientDialog(d.editing, state, vm)
+        is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm)
         is InventoryDialog.Grn -> GrnDialog(state, vm)
-        is InventoryDialog.Adjust -> AdjustDialog(dialog.ingredient, state, vm)
+        is InventoryDialog.Adjust -> AdjustDialog(d.ingredient, state, vm)
         is InventoryDialog.ConfirmDeleteIngredient -> ConfirmDialog(
-            title = "Delete ${dialog.ingredient.name}?",
+            title = "Delete ${d.ingredient.name}?",
             body = "Existing batches stay in the audit trail. Recipes that use it will " +
-                "stop deducting stock at checkout.",
+                "stop deducting stock at checkout. If offline, this queues and applies once " +
+                "back online — you can cancel it from this screen any time before it syncs.",
             confirmLabel = "Delete",
             busy = state.busy,
             error = state.formError,
-            onConfirm = { vm.deleteIngredient(dialog.ingredient) },
+            onConfirm = { vm.deleteIngredient(d.ingredient) },
             onDismiss = vm::closeDialog,
         )
         is InventoryDialog.ConfirmDeleteSupplier -> ConfirmDialog(
-            title = "Delete ${dialog.supplier.name}?",
-            body = "Past receipts from this supplier are kept.",
+            title = "Delete ${d.supplier.name}?",
+            body = "Past receipts from this supplier are kept. If offline, this queues and " +
+                "applies once back online — you can cancel it from this screen any time before it syncs.",
             confirmLabel = "Delete",
             busy = state.busy,
             error = state.formError,
-            onConfirm = { vm.deleteSupplier(dialog.supplier) },
+            onConfirm = { vm.deleteSupplier(d.supplier) },
             onDismiss = vm::closeDialog,
         )
         null -> Unit
-    }
-
-    // A stock write is confirmed in words, with the resulting quantity, because
-    // an adjustment applied in the wrong direction looks identical to a correct
-    // one until someone counts the shelf.
-    state.notice?.let { message ->
-        AlertDialog(
-            onDismissRequest = vm::dismissNotice,
-            confirmButton = { TextButton(onClick = vm::dismissNotice) { Text("OK") } },
-            title = { Text("Stock updated") },
-            text = { Text(message) },
-        )
     }
 }
 
@@ -169,20 +172,84 @@ private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = vm::load, enabled = !state.busy) { Text("Refresh") }
+            OutlinedButton(onClick = vm::retry, enabled = !state.syncing) { Text("Refresh") }
             if (state.tab == InventoryTab.INGREDIENTS) {
                 OutlinedButton(
                     onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
                 ) { Text("New ingredient") }
-                Button(onClick = { vm.openDialog(InventoryDialog.Grn) }) {
-                    Text("Receive stock (GRN)")
-                }
+                Button(
+                    onClick = { vm.openDialog(InventoryDialog.Grn) },
+                    enabled = state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
+                ) { Text("Receive stock (GRN)") }
             } else {
                 Button(onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) }) {
                     Text("New supplier")
                 }
             }
         }
+    }
+}
+
+/** Pending/rejected GRN and adjustment writes — the "Sync issues" surface for events with no natural list row of their own. */
+@Composable
+private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewModel) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(Brand.Surface).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Pending stock changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        state.pendingGrns.forEach { grn ->
+            PendingRow(
+                text = "Stock receipt from ${grn.supplierName}",
+                rejected = grn.rejected,
+                error = grn.error,
+                onRetry = { vm.retryGrn(grn.localId) },
+            )
+        }
+        state.pendingAdjustments.forEach { adj ->
+            val direction = if (adj.qtyDelta < 0) "removed from" else "added to"
+            PendingRow(
+                text = "${abs(adj.qtyDelta).asQty()} ${adj.unit} $direction ${adj.ingredientName}",
+                rejected = adj.rejected,
+                error = adj.error,
+                onRetry = { vm.retryAdjustment(adj.localId) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Brand.SurfaceRaised)
+            .padding(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+        }
+        Text(
+            if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
+            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Brand.SurfaceRaised)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
+        TextButton(onClick = onDismiss) { Text("Dismiss") }
     }
 }
 
@@ -229,7 +296,7 @@ private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
                 Column(
                     Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
                         .background(Brand.SurfaceRaised)
-                        .clickable { vm.select(ingredient.id) }
+                        .clickable { vm.select(ingredient) }
                         .padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
@@ -292,16 +359,6 @@ private fun TabButton(label: String, active: Boolean, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun ErrorBanner(text: String) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-            .background(Brand.SurfaceRaised).padding(12.dp),
-    ) {
-        Text(text, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
 // -------------------------------------------------------------- ingredients
 
 @Composable
@@ -323,14 +380,16 @@ private fun IngredientsPane(state: InventoryUiState, vm: InventoryViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
         ) {
-            items(state.sortedIngredients, key = { it.id }) { ingredient ->
-                IngredientRow(
+            items(state.sortedIngredients, key = { it.localWriteId ?: it.id }) { ingredient ->
+                IngredientRowCard(
                     ingredient = ingredient,
-                    selected = ingredient.id == state.selectedId,
-                    onClick = { vm.select(ingredient.id) },
+                    selected = ingredient.sku == state.selectedSku,
+                    onClick = { vm.select(ingredient) },
                     onAdjust = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
                     onEdit = { vm.openDialog(InventoryDialog.IngredientForm(ingredient)) },
                     onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteIngredient(ingredient)) },
+                    onCancelRemoval = { vm.cancelIngredientRemoval(ingredient) },
+                    onRetrySync = { vm.retryIngredientSync(ingredient) },
                 )
             }
         }
@@ -339,13 +398,15 @@ private fun IngredientsPane(state: InventoryUiState, vm: InventoryViewModel) {
 }
 
 @Composable
-private fun IngredientRow(
-    ingredient: Ingredient,
+private fun IngredientRowCard(
+    ingredient: IngredientRow,
     selected: Boolean,
     onClick: () -> Unit,
     onAdjust: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onCancelRemoval: () -> Unit,
+    onRetrySync: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
@@ -382,10 +443,12 @@ private fun IngredientRow(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                SmallAction("Adjust", onAdjust)
-                SmallAction("Edit", onEdit)
-                SmallAction("Delete", onDelete, Brand.Danger)
+            if (!ingredient.pendingDelete) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!ingredient.isUnsyncedDraft) SmallAction("Adjust", onAdjust)
+                    SmallAction("Edit", onEdit)
+                    SmallAction("Delete", onDelete, Brand.Danger)
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -401,11 +464,38 @@ private fun IngredientRow(
                 style = MaterialTheme.typography.labelSmall,
             )
         }
+        if (ingredient.pendingDelete) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Pending removal — will sync when back online",
+                    color = Brand.GoldMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onCancelRemoval) { Text("Cancel") }
+            }
+        } else if (ingredient.pendingLocalId != null) {
+            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+        } else if (ingredient.rejectedError != null) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, RoundedCornerShape(8.dp))
+                    .padding(8.dp),
+            ) {
+                Text("Could not sync: ${ingredient.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                Row {
+                    TextButton(onClick = onRetrySync) { Text("Retry") }
+                    if (ingredient.hasQueuedDelete) {
+                        TextButton(onClick = onCancelRemoval) { Text("Cancel removal") }
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun LevelBar(ingredient: Ingredient, modifier: Modifier = Modifier) {
+private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
     // Full bar = four times the reorder level, so "comfortable" and "about to
     // run out" are visibly different rather than both reading as near-full.
     val denom = if (ingredient.reorderThreshold > 0) ingredient.reorderThreshold * 4 else 1.0
@@ -458,10 +548,18 @@ private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
-        Button(
-            onClick = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Adjust stock") }
+        if (ingredient.isUnsyncedDraft) {
+            Text(
+                "This ingredient hasn't synced yet — stock actions unlock once it has.",
+                color = Brand.GoldMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        } else {
+            Button(
+                onClick = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Adjust stock") }
+        }
 
         Text(
             "Batches (oldest first)",
@@ -469,15 +567,11 @@ private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
             color = Brand.Foreground,
         )
         when {
-            state.batchesLoading -> Box(Modifier.fillMaxWidth().padding(16.dp), Alignment.Center) {
-                CircularProgressIndicator(color = Brand.Gold)
-            }
-            state.batchesError != null -> Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(state.batchesError!!, color = Brand.Danger)
-                OutlinedButton(onClick = { vm.select(ingredient.id) }) { Text("Retry") }
-            }
+            ingredient.isUnsyncedDraft -> Text(
+                "No batches yet — this ingredient hasn't synced.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
             state.batches.isEmpty() -> Text(
                 "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
                     "needs an existing batch to attach to.",
@@ -494,7 +588,7 @@ private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
 }
 
 @Composable
-private fun BatchRow(batch: Batch, unit: String) {
+private fun BatchRow(batch: BatchCacheEntity, unit: String) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
             .background(Brand.SurfaceRaised).padding(10.dp),
@@ -541,34 +635,82 @@ private fun SuppliersPane(state: InventoryUiState, vm: InventoryViewModel) {
         return
     }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(state.suppliers, key = { it.id }) { supplier ->
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .background(Brand.Surface).padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        items(state.suppliers, key = { it.localWriteId ?: it.id }) { supplier ->
+            SupplierRowCard(
+                supplier = supplier,
+                onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
+                onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
+                onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
+                onRetrySync = { vm.retrySupplierSync(supplier) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SupplierRowCard(
+    supplier: SupplierRow,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onCancelRemoval: () -> Unit,
+    onRetrySync: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(Brand.Surface).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    supplier.name,
+                    color = Brand.Foreground,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    supplier.contact ?: "No contact saved",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            Column(Modifier.width(220.dp)) {
+                Text("GSTIN", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                Text(supplier.gstin ?: "—", color = Brand.Foreground)
+            }
+            Column(Modifier.width(180.dp)) {
+                Text("Terms", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                Text(supplier.paymentTerms ?: "—", color = Brand.Foreground)
+            }
+            if (!supplier.pendingDelete) {
+                SmallAction("Edit", onEdit)
+                SmallAction("Delete", onDelete, Brand.Danger)
+            }
+        }
+        if (supplier.pendingDelete) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Pending removal — will sync when back online",
+                    color = Brand.GoldMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onCancelRemoval) { Text("Cancel") }
+            }
+        } else if (supplier.pendingLocalId != null) {
+            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+        } else if (supplier.rejectedError != null) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, RoundedCornerShape(8.dp))
+                    .padding(8.dp),
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        supplier.name,
-                        color = Brand.Foreground,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        supplier.contact ?: "No contact saved",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+                Text("Could not sync: ${supplier.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                Row {
+                    TextButton(onClick = onRetrySync) { Text("Retry") }
+                    if (supplier.hasQueuedDelete) {
+                        TextButton(onClick = onCancelRemoval) { Text("Cancel removal") }
+                    }
                 }
-                Column(Modifier.width(220.dp)) {
-                    Text("GSTIN", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                    Text(supplier.gstin ?: "—", color = Brand.Foreground)
-                }
-                Column(Modifier.width(180.dp)) {
-                    Text("Terms", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                    Text(supplier.paymentTerms ?: "—", color = Brand.Foreground)
-                }
-                SmallAction("Edit", { vm.openDialog(InventoryDialog.SupplierForm(supplier)) })
-                SmallAction("Delete", { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) }, Brand.Danger)
             }
         }
     }
@@ -593,7 +735,7 @@ private fun EmptyState(title: String, body: String, actionLabel: String, onActio
 
 @Composable
 private fun IngredientDialog(
-    editing: Ingredient?,
+    editing: IngredientRow?,
     state: InventoryUiState,
     vm: InventoryViewModel,
 ) {
@@ -627,8 +769,14 @@ private fun IngredientDialog(
         OutlinedTextField(
             value = sku,
             onValueChange = { sku = it },
-            // The SKU is the identity other records point at, so it is set once.
-            enabled = editing == null,
+            // The SKU is the identity other records point at, so it's locked
+            // once *other* records can actually reference it — i.e. once
+            // synced. A still-local draft is provably unreferenceable by
+            // anything (see InventoryUiState.syncedIngredients — a GRN/
+            // adjustment picker excludes it) until it syncs, so there's
+            // nothing to protect yet; without this, a typo in a still-local
+            // SKU could only be fixed by delete-and-recreate.
+            enabled = editing == null || editing.isUnsyncedDraft,
             label = { Text("SKU (e.g. MILK-1L, COFFEE-BEAN)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -664,7 +812,7 @@ private fun IngredientDialog(
 }
 
 @Composable
-private fun SupplierDialog(editing: Supplier?, state: InventoryUiState, vm: InventoryViewModel) {
+private fun SupplierDialog(editing: SupplierRow?, state: InventoryUiState, vm: InventoryViewModel) {
     var name by remember { mutableStateOf(editing?.name ?: "") }
     var contact by remember { mutableStateOf(editing?.contact ?: "") }
     var gstin by remember { mutableStateOf(editing?.gstin ?: "") }
@@ -722,11 +870,13 @@ private data class GrnLineDraft(
 
 @Composable
 private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
-    var supplierId by remember { mutableStateOf(state.suppliers.firstOrNull()?.id ?: "") }
+    val pickableIngredients = state.syncedIngredients
+    val pickableSuppliers = state.syncedSuppliers
+    var supplierId by remember { mutableStateOf(pickableSuppliers.firstOrNull()?.id ?: "") }
     var invoiceNo by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var lines by remember {
-        mutableStateOf(listOf(GrnLineDraft(ingredientId = state.ingredients.firstOrNull()?.id ?: "")))
+        mutableStateOf(listOf(GrnLineDraft(ingredientId = pickableIngredients.firstOrNull()?.id ?: "")))
     }
 
     val branchId = state.branchId
@@ -740,7 +890,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
 
     FormDialog(
         title = "Receive stock (GRN)",
-        confirmLabel = "Record receipt",
+        confirmLabel = "Queue receipt",
         busy = state.busy,
         error = state.formError,
         wide = true,
@@ -762,15 +912,21 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
     ) {
         if (state.branches.isEmpty()) {
             Text(
-                "No branches loaded, so this receipt cannot be attributed to one. " +
-                    "Close, tap Refresh, and try again.",
+                "No branches cached, so this receipt cannot be attributed to one. " +
+                    "Close, tap Refresh once back online, and try again.",
                 color = Brand.Danger,
             )
         }
-        if (state.suppliers.isEmpty()) {
+        if (pickableSuppliers.isEmpty()) {
             Text(
-                "No suppliers yet — add one on the Suppliers tab first. The backend " +
-                    "refuses a GRN without a supplier.",
+                "No synced suppliers yet — add one on the Suppliers tab first and wait for " +
+                    "it to sync. A GRN can't reference a supplier that hasn't synced.",
+                color = Brand.Danger,
+            )
+        }
+        if (pickableIngredients.isEmpty()) {
+            Text(
+                "No synced ingredients yet — add one first and wait for it to sync.",
                 color = Brand.Danger,
             )
         }
@@ -784,8 +940,8 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             )
             PickerField(
                 label = "Supplier",
-                selectedLabel = state.suppliers.firstOrNull { it.id == supplierId }?.name ?: "— select —",
-                options = state.suppliers.map { it.id to it.name },
+                selectedLabel = pickableSuppliers.firstOrNull { it.id == supplierId }?.name ?: "— select —",
+                options = pickableSuppliers.map { it.id to it.name },
                 modifier = Modifier.weight(1f),
                 onSelect = { supplierId = it },
             )
@@ -811,9 +967,9 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                 ) {
                     PickerField(
                         label = "Ingredient",
-                        selectedLabel = state.ingredients.firstOrNull { it.id == line.ingredientId }
+                        selectedLabel = pickableIngredients.firstOrNull { it.id == line.ingredientId }
                             ?.let { "${it.name} (${it.baseUnit})" } ?: "— select —",
-                        options = state.ingredients.map { it.id to "${it.name} (${it.baseUnit})" },
+                        options = pickableIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
                         modifier = Modifier.weight(1.4f),
                         onSelect = { id ->
                             lines = lines.replaceAt(index) { it.copy(ingredientId = id) }
@@ -891,7 +1047,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
 
 @Composable
 private fun AdjustDialog(
-    ingredient: Ingredient,
+    ingredient: IngredientRow,
     state: InventoryUiState,
     vm: InventoryViewModel,
 ) {
@@ -908,7 +1064,7 @@ private fun AdjustDialog(
 
     FormDialog(
         title = "Adjust ${ingredient.name}",
-        confirmLabel = "Record",
+        confirmLabel = "Queue adjustment",
         busy = state.busy,
         error = state.formError,
         onDismiss = vm::closeDialog,
@@ -955,7 +1111,7 @@ private fun AdjustDialog(
             modifier = Modifier.fillMaxWidth(),
         )
 
-        // Written out in full before it is committed. A sign error here does not
+        // Written out in full before it is queued. A sign error here does not
         // fail loudly — it just silently corrupts stock — so the operator gets
         // to see the resulting number first.
         if (delta != null && delta != 0.0 && after != null) {
@@ -1052,8 +1208,10 @@ private fun FormDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 content()
-                // The server's own words, next to the button that caused them —
-                // "SKU already exists" is actionable, "Request failed" is not.
+                // The server's own words (or, for a local validation issue,
+                // this dialog's own words), next to the button that caused
+                // them — "SKU already exists" is actionable, "Request
+                // failed" is not.
                 error?.let { Text(it, color = Brand.Danger) }
             }
         },

@@ -473,6 +473,13 @@ function IngredientForm({
   );
 }
 
+function newInventoryIdempotencyKey(prefix: string): string {
+  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}:${randomPart}`;
+}
+
 function GRNForm({
   ingredients, suppliers, branches, onClose, onSuccess,
 }: {
@@ -482,6 +489,10 @@ function GRNForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  // Stable for the lifetime of this form instance, same key reused if the
+  // operator retries after a failure (e.g. a timeout where the first
+  // attempt actually landed) — a fresh key would defeat the whole point.
+  const [idempotencyKey] = useState(() => newInventoryIdempotencyKey('grn'));
   const [supplierId, setSupplierId] = useState<string>('');
   const [branchId, setBranchId] = useState<string>(branches[0]?.id ?? '');
   const [invoiceNo, setInvoiceNo] = useState('');
@@ -525,7 +536,7 @@ function GRNForm({
         supplier_invoice_no: invoiceNo || undefined,
         notes: notes || undefined,
         lines: linesOut,
-      });
+      }, idempotencyKey);
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
@@ -617,6 +628,7 @@ function AdjustmentForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const [idempotencyKey] = useState(() => newInventoryIdempotencyKey('adjustment'));
   const [branchId, setBranchId] = useState(branches[0]?.id ?? '');
   const [type, setType] = useState<'waste' | 'damage' | 'transfer' | 'adjustment'>('waste');
   const [qty, setQty] = useState('');
@@ -642,7 +654,7 @@ function AdjustmentForm({
         qty_delta: delta,
         type,
         note: note || undefined,
-      });
+      }, idempotencyKey);
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }

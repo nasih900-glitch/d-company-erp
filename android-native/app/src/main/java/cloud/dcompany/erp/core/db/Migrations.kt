@@ -390,6 +390,152 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `ingredient_cache` (
+                `id` TEXT NOT NULL,
+                `sku` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `baseUnit` TEXT NOT NULL,
+                `currentQty` REAL NOT NULL,
+                `reorderThreshold` REAL NOT NULL,
+                `reorderQty` REAL NOT NULL,
+                `avgCostMinor` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_ingredients` (
+                `localId` TEXT NOT NULL,
+                `serverId` TEXT,
+                `sku` TEXT,
+                `name` TEXT,
+                `baseUnit` TEXT,
+                `reorderThreshold` REAL,
+                `reorderQty` REAL,
+                `pendingDelete` INTEGER NOT NULL DEFAULT 0,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `version` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_ingredients_state` ON `local_ingredients` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_ingredients_serverId` ON `local_ingredients` (`serverId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `supplier_cache` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `contact` TEXT,
+                `gstin` TEXT,
+                `paymentTerms` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_suppliers` (
+                `localId` TEXT NOT NULL,
+                `serverId` TEXT,
+                `name` TEXT,
+                `contact` TEXT,
+                `gstin` TEXT,
+                `paymentTerms` TEXT,
+                `pendingDelete` INTEGER NOT NULL DEFAULT 0,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `version` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_suppliers_state` ON `local_suppliers` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_suppliers_serverId` ON `local_suppliers` (`serverId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `batch_cache` (
+                `id` TEXT NOT NULL,
+                `ingredientId` TEXT NOT NULL,
+                `receivedAt` TEXT NOT NULL,
+                `expiresAt` TEXT,
+                `qtyOnHand` REAL NOT NULL,
+                `costPerUnitMinor` INTEGER NOT NULL,
+                `lotCode` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_batch_cache_ingredientId` ON `batch_cache` (`ingredientId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_grns` (
+                `localId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `supplierId` TEXT NOT NULL,
+                `supplierInvoiceNo` TEXT,
+                `notes` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_grn_lines` (
+                `rowId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `grnLocalId` TEXT NOT NULL,
+                `ingredientId` TEXT NOT NULL,
+                `qty` REAL NOT NULL,
+                `unitCostMinor` INTEGER NOT NULL,
+                `expiresAt` TEXT,
+                `lotCode` TEXT
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_grn_lines_grnLocalId` ON `local_grn_lines` (`grnLocalId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_adjustments` (
+                `localId` TEXT NOT NULL,
+                `ingredientId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `qtyDelta` REAL NOT NULL,
+                `type` TEXT NOT NULL,
+                `note` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+    MIGRATION_8_9,
 )

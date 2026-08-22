@@ -434,6 +434,11 @@ export const inventory = {
   }>) => api.patch<SupplierDTO>(`/inventory/suppliers/${id}`, body).then((r) => r.data),
   deleteSupplier: (id: string) => api.delete(`/inventory/suppliers/${id}`),
 
+  // Idempotency-Key is required server-side for both of these — a GRN or
+  // adjustment creates/mutates rows with no natural unique key to catch a
+  // duplicate resubmit, unlike most other creates in this app, so the
+  // backend refuses the write outright without one (see inventory/router.py
+  // _require_idempotency). Every caller must generate one per submission.
   postGRN: (body: {
     branch_id: string; supplier_id?: string;
     supplier_invoice_no?: string;
@@ -444,15 +449,17 @@ export const inventory = {
       ingredient_id: string; qty: number; unit_cost_minor: number;
       expires_at?: string; lot_code?: string;
     }>;
-  }) => api.post<{ ok: boolean; batches_created: number; batch_ids: string[] }>(
-    '/inventory/grn', body,
+  }, idempotencyKey: string) => api.post<{ ok: boolean; batches_created: number; batch_ids: string[] }>(
+    '/inventory/grn', body, { headers: { 'Idempotency-Key': idempotencyKey } },
   ).then((r) => r.data),
 
   postAdjustment: (body: {
     ingredient_id: string; branch_id: string; qty_delta: number;
     type: 'waste' | 'damage' | 'transfer' | 'adjustment';
     note?: string;
-  }) => api.post<{ id: string; remaining: number }>('/inventory/adjustments', body).then((r) => r.data),
+  }, idempotencyKey: string) => api.post<{ id: string; remaining: number }>(
+    '/inventory/adjustments', body, { headers: { 'Idempotency-Key': idempotencyKey } },
+  ).then((r) => r.data),
 
   listBatches: (ingredient_id?: string) =>
     api.get<BatchDTO[]>('/inventory/batches', { params: ingredient_id ? { ingredient_id } : {} }).then((r) => r.data),

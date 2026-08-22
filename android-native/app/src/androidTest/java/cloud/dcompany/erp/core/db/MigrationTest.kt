@@ -316,4 +316,50 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate8To9_preservesExistingDataAndAddsInventoryTables() {
+        // Same "oldest table survives" canary — a v1 menu_items row plus a
+        // Phase 8 table (local_staff) — to prove this migration disturbs
+        // neither the original table nor the immediately-preceding phase's.
+        helper.createDatabase(dbName, 8).apply {
+            execSQL(
+                "INSERT INTO menu_items " +
+                    "(id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable, type, hsnCode, priceIncludesTax, description) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1, 'drink', NULL, 1, NULL)",
+            )
+            execSQL(
+                "INSERT INTO local_staff " +
+                    "(localId, serverId, name, phone, status, roleCode, pendingDelete, createdAtMillis, state, lastError, version) " +
+                    "VALUES ('staff-1', 'server-staff-1', 'Rafi', NULL, NULL, NULL, 0, 1000, 'synced', NULL, 0)",
+            )
+            close()
+        }
+
+        // MIGRATION_8_9 adds the eight new Phase 9 tables (ingredient_cache,
+        // local_ingredients, supplier_cache, local_suppliers, batch_cache,
+        // local_grns, local_grn_lines, local_adjustments) — validated against
+        // the real, Room-generated v9 schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 9, true, MIGRATION_8_9)
+
+        migrated.query("SELECT name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(0) == "Cold Coffee")
+        }
+        migrated.query("SELECT localId, name, state FROM local_staff WHERE localId = 'staff-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "local_staff row lost across the migration" }
+            assert(cursor.getString(1) == "Rafi")
+            assert(cursor.getString(2) == "synced")
+        }
+        for (table in listOf(
+            "ingredient_cache", "local_ingredients", "supplier_cache", "local_suppliers",
+            "batch_cache", "local_grns", "local_grn_lines", "local_adjustments",
+        )) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.close()
+    }
 }
