@@ -11218,6 +11218,14 @@ private struct AddExpenseSheet: View {
     @State private var isBusy = false
     @State private var error: String?
 
+    // Frozen once when the sheet opens (not recomputed per submit() call) so
+    // that a retry after a client-side timeout resends byte-identical
+    // request contents — the backend's idempotency replay is keyed on both
+    // the key and a hash of the request body, so a `paid_at` that moved
+    // between the first attempt and a retry would 409 instead of replaying.
+    @State private var idempotencyKey = UUID().uuidString
+    @State private var paidAt = Date()
+
     private let paidViaOptions = ["cash", "upi", "card", "bank"]
 
     init(categories: [ExpenseCategoryDTO], branches: [BranchDTO], onDone: @escaping () -> Void) {
@@ -11321,12 +11329,13 @@ private struct AddExpenseSheet: View {
                         supplier_id: nil,
                         amount_minor: amountMinor,
                         paid_via: paidVia,
-                        paid_at: DateFormatters.iso.string(from: Date()),
+                        paid_at: DateFormatters.iso.string(from: paidAt),
                         vendor_name: vendorName.trimmingCharacters(in: .whitespaces).nilIfBlank,
                         invoice_no: invoiceNo.trimmingCharacters(in: .whitespaces).nilIfBlank,
                         note: note.trimmingCharacters(in: .whitespaces).nilIfBlank
                     ),
-                    token: token
+                    token: token,
+                    headers: ["Idempotency-Key": idempotencyKey]
                 )
             }
             Haptics.success()

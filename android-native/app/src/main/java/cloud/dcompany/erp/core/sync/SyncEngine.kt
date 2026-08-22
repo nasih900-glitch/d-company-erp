@@ -7,9 +7,15 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.db.ErpDatabase
+import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.CafeTableEntity
+import cloud.dcompany.erp.core.db.CapitalEntryCacheEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.ExpenseCacheEntity
 import cloud.dcompany.erp.core.db.FloorEntity
+import cloud.dcompany.erp.core.db.LocalAssetEntity
+import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
+import cloud.dcompany.erp.core.db.LocalExpenseEntity
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.BatchCacheEntity
@@ -49,6 +55,10 @@ import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpsertBody
 import cloud.dcompany.erp.ui.screens.customers.CustomersApi
+import cloud.dcompany.erp.ui.screens.finance.AssetCreate
+import cloud.dcompany.erp.ui.screens.finance.CapitalEntryCreate
+import cloud.dcompany.erp.ui.screens.finance.ExpenseCreate
+import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.inventory.AdjustmentBody
@@ -153,6 +163,7 @@ class SyncEngine(
     private val menuApi = ApiClient.create<MenuApi>()
     private val staffApi = ApiClient.create<StaffApi>()
     private val inventoryApi = ApiClient.create<InventoryApi>()
+    private val financeApi = ApiClient.create<FinanceApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -206,9 +217,17 @@ class SyncEngine(
                 ) { ingredients, suppliers, grns, adjustments ->
                     ingredients + suppliers + grns + adjustments
                 },
-            ) { menuItems, staff, inventory -> menuItems + staff + inventory },
-        ) { tables, refunds, customers, menuCategories, menuItemsAndStaffAndInventory ->
-            tables + refunds + customers + menuCategories + menuItemsAndStaffAndInventory
+                // Fourth application of the same pre-sum trick: 3 new Finance
+                // sources (expense/asset/capital-entry) than fit this
+                // combine's own remaining slots.
+                combine(
+                    db.financeDao().observeRejectedExpenseCount(),
+                    db.financeDao().observeRejectedAssetCount(),
+                    db.financeDao().observeRejectedCapitalEntryCount(),
+                ) { expenses, assets, capitalEntries -> expenses + assets + capitalEntries },
+            ) { menuItems, staff, inventory, finance -> menuItems + staff + inventory + finance },
+        ) { tables, refunds, customers, menuCategories, menuItemsAndStaffAndInventoryAndFinance ->
+            tables + refunds + customers + menuCategories + menuItemsAndStaffAndInventoryAndFinance
         },
     ) { orders, shifts, gaming, kitchen, rest ->
         orders + shifts + gaming + kitchen + rest
@@ -239,6 +258,11 @@ class SyncEngine(
         // under /inventory broadcasts as one combined "inventory" resource,
         // so one write anywhere in the module refreshes both caches here.
         "inventory" to ::pullInventoryOnDemand,
+        // Same reasoning for finance: /finance/* broadcasts as one combined
+        // "finance" resource. Capital entries are per-partner and demand-
+        // loaded on selection instead (see pullCapitalEntriesFor), same
+        // shape as pullBatchesFor.
+        "finance" to ::pullFinanceOnDemand,
     )
 
     /**
@@ -302,6 +326,15 @@ class SyncEngine(
             pushSuppliers()
             pushGrns()
             pushAdjustments()
+            // No cross-resource dependency here (a capital entry's partner
+            // is never itself created offline, and an expense's branch/
+            // category/supplier pickers only ever offer already-synced
+            // options, same dependency-sidestep as GRN/adjustments above) —
+            // placed here purely to keep all outbox pushes grouped before
+            // the menu pull.
+            pushExpenses()
+            pushAssets()
+            pushCapitalEntries()
             // Right before the menu pull, same reasoning the pull's own
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
@@ -1123,6 +1156,145 @@ class SyncEngine(
         )
         pullIngredients()
         db.inventoryDao().markAdjustmentSynced(row.localId)
+    }
+
+    // ---------------------------------------------------------------- expenses
+
+    private suspend fun pushExpenses() {
+        val dao = db.financeDao()
+        drainOutbox(
+            rows = dao.pushableExpenses(),
+            markRejected = { row, msg -> dao.markExpenseRejected(row.localId, msg) },
+            push = ::pushExpenseOne,
+        )
+    }
+
+    /** Insert-only, same reasoning as pushGrnOne/pushAdjustmentOne above — no
+     * version-CAS needed: expense edit/delete stay web-only, so nothing can
+     * amend this row out from under an in-flight push. */
+    private suspend fun pushExpenseOne(row: LocalExpenseEntity) {
+        financeApi.createExpense(
+            ExpenseCreate(
+                branchId = row.branchId, categoryId = row.categoryId, supplierId = row.supplierId,
+                amountMinor = row.amountMinor, paidVia = row.paidVia, paidAt = row.paidAt,
+                vendorName = row.vendorName, invoiceNo = row.invoiceNo, note = row.note,
+            ),
+            key = "expense:${row.localId}",
+        )
+        pullExpenses()
+        db.financeDao().markExpenseSynced(row.localId)
+    }
+
+    private suspend fun pullExpenses() {
+        val rows = financeApi.expenses()
+        db.financeDao().replaceExpenseCache(
+            rows.map {
+                ExpenseCacheEntity(
+                    id = it.id, branchId = it.branchId, categoryId = it.categoryId,
+                    supplierId = it.supplierId, amountMinor = it.amountMinor, paidVia = it.paidVia,
+                    paidAt = it.paidAt, vendorName = it.vendorName, invoiceNo = it.invoiceNo,
+                    note = it.note,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("expenses", System.currentTimeMillis()))
+    }
+
+    // ------------------------------------------------------------------- assets
+
+    private suspend fun pushAssets() {
+        val dao = db.financeDao()
+        drainOutbox(
+            rows = dao.pushableAssets(),
+            markRejected = { row, msg -> dao.markAssetRejected(row.localId, msg) },
+            push = ::pushAssetOne,
+        )
+    }
+
+    /** Same insert-only reasoning as pushExpenseOne — assets have no backend
+     * edit/delete endpoint at all, so there is nothing to guard against. */
+    private suspend fun pushAssetOne(row: LocalAssetEntity) {
+        financeApi.createAsset(
+            AssetCreate(
+                branchId = row.branchId, name = row.name, type = row.type,
+                purchaseMinor = row.purchaseMinor, purchaseDate = row.purchaseDate,
+                usefulLifeMonths = row.usefulLifeMonths, salvageMinor = row.salvageMinor,
+                notes = row.notes,
+            ),
+            key = "asset:${row.localId}",
+        )
+        pullAssets()
+        db.financeDao().markAssetSynced(row.localId)
+    }
+
+    private suspend fun pullAssets() {
+        val rows = financeApi.assets()
+        db.financeDao().replaceAssetCache(
+            rows.map {
+                AssetCacheEntity(
+                    id = it.id, branchId = it.branchId, name = it.name, type = it.type,
+                    purchaseMinor = it.purchaseMinor, purchaseDate = it.purchaseDate,
+                    usefulLifeMonths = it.usefulLifeMonths, salvageMinor = it.salvageMinor,
+                    depreciationMethod = it.depreciationMethod, notes = it.notes,
+                    accumulatedDepreciationMinor = it.accumulatedDepreciationMinor,
+                    bookValueMinor = it.bookValueMinor,
+                )
+            },
+        )
+        db.syncMetaDao().put(SyncMetaEntity("assets", System.currentTimeMillis()))
+    }
+
+    // ---------------------------------------------------------- capital entries
+
+    private suspend fun pushCapitalEntries() {
+        val dao = db.financeDao()
+        drainOutbox(
+            rows = dao.pushableCapitalEntries(),
+            markRejected = { row, msg -> dao.markCapitalEntryRejected(row.localId, msg) },
+            push = ::pushCapitalEntryOne,
+        )
+    }
+
+    /** Same insert-only reasoning — a capital entry is void-only after
+     * creation, and void stays online-only (direct write, not queued). */
+    private suspend fun pushCapitalEntryOne(row: LocalCapitalEntryEntity) {
+        financeApi.createCapitalEntry(
+            CapitalEntryCreate(
+                partnerId = row.partnerId, type = row.type, amountMinor = row.amountMinor,
+                effectiveAt = row.effectiveAt, settlementAccount = row.settlementAccount,
+                sourceRef = row.sourceRef, note = row.note,
+            ),
+            key = "capital-entry:${row.localId}",
+        )
+        pullCapitalEntriesFor(row.partnerId)
+        db.financeDao().markCapitalEntrySynced(row.localId)
+    }
+
+    /**
+     * Per-partner, on-demand pull — called directly by FinanceViewModel on
+     * partner selection, not part of [onDemandPulls] (that map is keyed by
+     * realtime *resource* name, this is keyed by which partner's capital
+     * history a screen currently has open). Same shape as pullBatchesFor.
+     */
+    suspend fun pullCapitalEntriesFor(partnerId: String) {
+        val rows = financeApi.capitalEntries(partnerId)
+        db.financeDao().replaceCapitalEntriesFor(
+            partnerId,
+            rows.map {
+                CapitalEntryCacheEntity(
+                    id = it.id, partnerId = it.partnerId, type = it.type,
+                    amountMinor = it.amountMinor, effectiveAt = it.effectiveAt,
+                    settlementAccount = it.settlementAccount, sourceRef = it.sourceRef,
+                    note = it.note, createdByName = it.createdByName, createdAt = it.createdAt,
+                    voidedAt = it.voidedAt, voidReason = it.voidReason, isVoided = it.isVoided,
+                )
+            },
+        )
+    }
+
+    private suspend fun pullFinanceOnDemand() {
+        pullExpenses()
+        pullAssets()
     }
 
     private suspend fun pullMenu() {

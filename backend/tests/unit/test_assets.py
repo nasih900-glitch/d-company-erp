@@ -15,7 +15,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.api.v1.finance.router import AssetCreate, create_asset, list_assets
+import app.api.v1.finance.router as finance_router
+from app.api.v1.finance.router import AssetCreate, AssetRead, create_asset, list_assets
 from app.core.errors import BusinessRuleError, ForbiddenError, NotFoundError
 from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
@@ -43,6 +44,15 @@ def _branch(*, company_id: UUID = COMPANY_ID, deleted: bool = False) -> SimpleNa
     return SimpleNamespace(
         id=BRANCH_ID, company_id=company_id,
         deleted_at=datetime(2026, 1, 1, tzinfo=UTC) if deleted else None,
+    )
+
+
+def _request() -> SimpleNamespace:
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="asset-2026-08-22-v1",
+            idempotency_request_hash="request-hash",
+        )
     )
 
 
@@ -99,11 +109,22 @@ def _asset_payload(**overrides) -> AssetCreate:
 # Successful creation
 # ============================================================================
 @pytest.mark.asyncio
-async def test_create_asset_success_persists_correct_fields_and_computes_book_value() -> None:
+async def test_create_asset_success_persists_correct_fields_and_computes_book_value(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    async def store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(finance_router, "store_response", store)
+
     session = _CreateSession(_branch())
     payload = _asset_payload()
 
-    result = await create_asset(payload, session, _tenant())
+    result = await create_asset(payload, session, _request(), _tenant())
 
     assert session.flushes == 1
     assert len(session.added) == 1
@@ -127,11 +148,20 @@ async def test_create_asset_success_persists_correct_fields_and_computes_book_va
 
 
 @pytest.mark.asyncio
-async def test_create_asset_persists_optional_notes() -> None:
+async def test_create_asset_persists_optional_notes(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    async def store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(finance_router, "store_response", store)
+
     session = _CreateSession(_branch())
     payload = _asset_payload(notes="Purchased for the new kitchen build-out")
 
-    result = await create_asset(payload, session, _tenant())
+    result = await create_asset(payload, session, _request(), _tenant())
 
     assert session.added[0].notes == "Purchased for the new kitchen build-out"
     assert result.notes == "Purchased for the new kitchen build-out"
@@ -141,12 +171,17 @@ async def test_create_asset_persists_optional_notes() -> None:
 # Business-rule validation
 # ============================================================================
 @pytest.mark.asyncio
-async def test_create_asset_rejects_salvage_value_exceeding_purchase_cost() -> None:
+async def test_create_asset_rejects_salvage_value_exceeding_purchase_cost(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+
     session = _CreateSession(_branch())
     payload = _asset_payload(purchase_minor=10_000_00, salvage_minor=10_000_01)
 
     with pytest.raises(BusinessRuleError, match="salvage value cannot exceed purchase value"):
-        await create_asset(payload, session, _tenant())
+        await create_asset(payload, session, _request(), _tenant())
 
     assert session.added == []
 
@@ -155,32 +190,46 @@ async def test_create_asset_rejects_salvage_value_exceeding_purchase_cost() -> N
 # Multi-tenant scoping
 # ============================================================================
 @pytest.mark.asyncio
-async def test_create_asset_rejects_a_branch_belonging_to_another_company() -> None:
+async def test_create_asset_rejects_a_branch_belonging_to_another_company(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+
     session = _CreateSession(_branch(company_id=OTHER_COMPANY_ID))
     payload = _asset_payload()
 
     with pytest.raises(NotFoundError, match="branch not found"):
-        await create_asset(payload, session, _tenant(company_id=COMPANY_ID))
+        await create_asset(payload, session, _request(), _tenant(company_id=COMPANY_ID))
 
     assert session.added == []
 
 
 @pytest.mark.asyncio
-async def test_create_asset_rejects_a_soft_deleted_branch() -> None:
+async def test_create_asset_rejects_a_soft_deleted_branch(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
+
     session = _CreateSession(_branch(deleted=True))
     payload = _asset_payload()
 
     with pytest.raises(NotFoundError, match="branch not found"):
-        await create_asset(payload, session, _tenant())
+        await create_asset(payload, session, _request(), _tenant())
 
     assert session.added == []
 
 
 @pytest.mark.asyncio
-async def test_create_asset_rejects_a_branch_outside_a_branch_scoped_tenant() -> None:
+async def test_create_asset_rejects_a_branch_outside_a_branch_scoped_tenant(monkeypatch) -> None:
     """A tenant pinned to one branch (branch_id set, not company-wide) cannot
     create an asset in a different branch — checked via tenant.in_branch()
     before the branch is even looked up (no session.get call expected)."""
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", reserve)
 
     class _NoLookupSession(_CreateSession):
         async def get(self, model, key):
@@ -190,9 +239,55 @@ async def test_create_asset_rejects_a_branch_outside_a_branch_scoped_tenant() ->
     payload = _asset_payload(branch_id=OTHER_BRANCH_ID)
 
     with pytest.raises(NotFoundError, match="branch not found"):
-        await create_asset(payload, session, _tenant(branch_id=BRANCH_ID))
+        await create_asset(payload, session, _request(), _tenant(branch_id=BRANCH_ID))
 
     assert session.added == []
+
+
+# ============================================================================
+# Idempotency
+# ============================================================================
+@pytest.mark.asyncio
+async def test_create_asset_requires_idempotency_key() -> None:
+    session = _CreateSession(_branch())
+    payload = _asset_payload()
+    bare_request = SimpleNamespace(state=SimpleNamespace())
+
+    with pytest.raises(BusinessRuleError, match="Idempotency-Key"):
+        await create_asset(payload, session, bare_request, _tenant())
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_create_asset_is_idempotent_on_exact_replay(monkeypatch) -> None:
+    existing = AssetRead(
+        id=uuid4(),
+        branch_id=BRANCH_ID,
+        name="Double-door commercial fridge",
+        type="kitchen_equipment",
+        purchase_minor=12_000_00,
+        purchase_date=datetime(2026, 1, 1, tzinfo=UTC),
+        useful_life_months=96,
+        salvage_minor=0,
+        depreciation_method="straight_line",
+        notes=None,
+        accumulated_depreciation_minor=0,
+        book_value_minor=12_000_00,
+    )
+
+    async def replay(*_args, **_kwargs):
+        return {"status_code": 201, "body": existing.model_dump(mode="json")}
+
+    monkeypatch.setattr(finance_router, "check_or_reserve", replay)
+
+    class _NoMutationSession:
+        def __getattr__(self, name):
+            raise AssertionError(f"Replay attempted database mutation via {name}")
+
+    response = await create_asset(
+        _asset_payload(), _NoMutationSession(), _request(), _tenant(),
+    )
+    assert response == existing
 
 
 @pytest.mark.asyncio

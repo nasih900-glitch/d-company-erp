@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.core.db import SessionDep
@@ -407,12 +408,40 @@ async def list_expenses(
     ]
 
 
+def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
+    """Shared mandatory-idempotency guard for writes with no natural key.
+
+    Expenses and assets get a fresh uuid4() PK with no unique constraint a
+    duplicate could collide against — unlike ingredient SKU or customer
+    phone, there is no fallback that makes a missing header merely an
+    annoyance, so (like Inventory's GRN/adjustment writes) the header is
+    required, not optional.
+    """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not str(key).strip() or not request_hash:
+        raise BusinessRuleError(f"Idempotency-Key header required for {what} writes")
+    return str(key), str(request_hash)
+
+
 @router.post("/expenses", response_model=ExpenseRead, status_code=status.HTTP_201_CREATED)
 async def create_expense(
     payload: ExpenseCreate,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseRead:
+    idempotency_key, request_hash = _require_idempotency(request, what="expense")
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return ExpenseRead.model_validate(replay["body"])
+
     if not tenant.in_branch(payload.branch_id):
         raise NotFoundError("branch not found")
     await _validate_expense_references(
@@ -430,12 +459,19 @@ async def create_expense(
     )
     session.add(ex)
     await session.flush()
-    return ExpenseRead(
+    response = ExpenseRead(
         id=ex.id, branch_id=ex.branch_id, category_id=ex.category_id,
         supplier_id=ex.supplier_id, amount_minor=ex.amount_minor,
         paid_via=ex.paid_via, paid_at=ex.paid_at, vendor_name=ex.vendor_name,
         invoice_no=ex.invoice_no, note=ex.note,
     )
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.patch("/expenses/{expense_id}", response_model=ExpenseRead)
@@ -1177,8 +1213,20 @@ async def list_capital_entries(
 async def create_capital_entry(
     payload: CapitalEntryCreate,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("finance.partner.write")),
 ) -> CapitalEntryRead:
+    idempotency_key, request_hash = _require_idempotency(request, what="capital entry")
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return CapitalEntryRead.model_validate(replay["body"])
+
     p = (
         await session.execute(
             select(Partner)
@@ -1219,12 +1267,31 @@ async def create_capital_entry(
         created_by=tenant.user_id,
     )
     session.add(ce)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        # The pre-check above is a plain SELECT with no lock on CapitalEntry
+        # itself (only Partner is locked) — two concurrent requests citing
+        # the same source_ref can both pass it and race to insert. This
+        # closes that window the same way Inventory's create_ingredient
+        # converts a duplicate-SKU race into a clean ConflictError instead
+        # of a raw 500.
+        raise ConflictError(
+            f"a capital entry with source_ref '{source_ref}' already exists"
+        ) from exc
     creator = await session.get(User, tenant.user_id)
-    return _capital_entry_read(
+    response = _capital_entry_read(
         ce,
         created_by_name=creator.name if creator else None,
     )
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.post(
@@ -1313,6 +1380,7 @@ async def list_assets(
 async def create_asset(
     payload: AssetCreate,
     session: SessionDep,
+    request: Request,
     # finance.assets.write is the dedicated scope for this ("Add / depreciate
     # assets" in permissions.py) — matching the specific-over-generic pattern
     # create_partner/create_capital_entry already use (finance.partner.write,
@@ -1320,6 +1388,17 @@ async def create_asset(
     # scope for an unrelated register.
     tenant: TenantContext = Depends(requires("finance.assets.write")),
 ) -> AssetRead:
+    idempotency_key, request_hash = _require_idempotency(request, what="asset")
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return AssetRead.model_validate(replay["body"])
+
     if not tenant.in_branch(payload.branch_id):
         raise NotFoundError("branch not found")
     branch = await session.get(Branch, payload.branch_id)
@@ -1339,7 +1418,14 @@ async def create_asset(
     )
     session.add(a)
     await session.flush()
-    return _asset_read(a, as_of=datetime.now(timezone.utc))
+    response = _asset_read(a, as_of=datetime.now(timezone.utc))
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 # ============================================================================

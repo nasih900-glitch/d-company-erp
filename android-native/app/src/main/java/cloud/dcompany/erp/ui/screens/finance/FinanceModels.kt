@@ -40,6 +40,15 @@ data class ExpenseCategory(
     val code: String? = null,
 )
 
+/** Only the fields this screen needs; ignoreUnknownKeys drops the rest — same
+ * local-copy-per-screen convention as InventoryModels.kt's own Branch. */
+@Serializable
+data class Branch(
+    val id: String,
+    val name: String,
+    val code: String? = null,
+)
+
 @Serializable
 data class Partner(
     val id: String,
@@ -49,6 +58,79 @@ data class Partner(
     val notes: String? = null,
     /** Sum of investments minus capital repayments. Voided entries excluded. */
     @SerialName("capital_balance_minor") val capitalBalanceMinor: Long,
+)
+
+@Serializable
+data class CapitalEntry(
+    val id: String,
+    @SerialName("partner_id") val partnerId: String,
+    val type: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("effective_at") val effectiveAt: String,
+    @SerialName("settlement_account") val settlementAccount: String,
+    @SerialName("source_ref") val sourceRef: String? = null,
+    val note: String? = null,
+    @SerialName("created_by_name") val createdByName: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("is_voided") val isVoided: Boolean,
+)
+
+@Serializable
+data class Asset(
+    val id: String,
+    @SerialName("branch_id") val branchId: String,
+    val name: String,
+    val type: String,
+    @SerialName("purchase_minor") val purchaseMinor: Long,
+    @SerialName("purchase_date") val purchaseDate: String,
+    @SerialName("useful_life_months") val usefulLifeMonths: Int,
+    @SerialName("salvage_minor") val salvageMinor: Long,
+    @SerialName("depreciation_method") val depreciationMethod: String,
+    val notes: String? = null,
+    // Recomputed server-side "as of now" on every read — never stored. See
+    // backend app/services/accounting/depreciation.py.
+    @SerialName("accumulated_depreciation_minor") val accumulatedDepreciationMinor: Long,
+    @SerialName("book_value_minor") val bookValueMinor: Long,
+)
+
+// -------------------------------------------------------- write-path bodies
+
+@Serializable
+data class ExpenseCreate(
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("category_id") val categoryId: String,
+    @SerialName("supplier_id") val supplierId: String? = null,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("paid_via") val paidVia: String,
+    @SerialName("paid_at") val paidAt: String,
+    @SerialName("vendor_name") val vendorName: String? = null,
+    @SerialName("invoice_no") val invoiceNo: String? = null,
+    val note: String? = null,
+)
+
+@Serializable
+data class AssetCreate(
+    @SerialName("branch_id") val branchId: String,
+    val name: String,
+    val type: String,
+    @SerialName("purchase_minor") val purchaseMinor: Long,
+    @SerialName("purchase_date") val purchaseDate: String,
+    @SerialName("useful_life_months") val usefulLifeMonths: Int,
+    @SerialName("salvage_minor") val salvageMinor: Long,
+    val notes: String? = null,
+)
+
+@Serializable
+data class CapitalEntryCreate(
+    @SerialName("partner_id") val partnerId: String,
+    val type: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("effective_at") val effectiveAt: String,
+    @SerialName("settlement_account") val settlementAccount: String,
+    @SerialName("source_ref") val sourceRef: String,
+    val note: String? = null,
 )
 
 /**

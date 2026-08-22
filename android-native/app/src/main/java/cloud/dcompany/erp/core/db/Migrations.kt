@@ -535,7 +535,128 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `expense_cache` (
+                `id` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `categoryId` TEXT NOT NULL,
+                `supplierId` TEXT,
+                `amountMinor` INTEGER NOT NULL,
+                `paidVia` TEXT NOT NULL,
+                `paidAt` TEXT NOT NULL,
+                `vendorName` TEXT,
+                `invoiceNo` TEXT,
+                `note` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_expenses` (
+                `localId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `categoryId` TEXT NOT NULL,
+                `supplierId` TEXT,
+                `amountMinor` INTEGER NOT NULL,
+                `paidVia` TEXT NOT NULL,
+                `paidAt` TEXT NOT NULL,
+                `vendorName` TEXT,
+                `invoiceNo` TEXT,
+                `note` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `asset_cache` (
+                `id` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `purchaseMinor` INTEGER NOT NULL,
+                `purchaseDate` TEXT NOT NULL,
+                `usefulLifeMonths` INTEGER NOT NULL,
+                `salvageMinor` INTEGER NOT NULL,
+                `depreciationMethod` TEXT NOT NULL,
+                `notes` TEXT,
+                `accumulatedDepreciationMinor` INTEGER NOT NULL,
+                `bookValueMinor` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_assets` (
+                `localId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `purchaseMinor` INTEGER NOT NULL,
+                `purchaseDate` TEXT NOT NULL,
+                `usefulLifeMonths` INTEGER NOT NULL,
+                `salvageMinor` INTEGER NOT NULL,
+                `notes` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `capital_entry_cache` (
+                `id` TEXT NOT NULL,
+                `partnerId` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `amountMinor` INTEGER NOT NULL,
+                `effectiveAt` TEXT NOT NULL,
+                `settlementAccount` TEXT NOT NULL,
+                `sourceRef` TEXT,
+                `note` TEXT,
+                `createdByName` TEXT,
+                `createdAt` TEXT NOT NULL,
+                `voidedAt` TEXT,
+                `voidReason` TEXT,
+                `isVoided` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_capital_entry_cache_partnerId` ON `capital_entry_cache` (`partnerId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_capital_entries` (
+                `localId` TEXT NOT NULL,
+                `partnerId` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `amountMinor` INTEGER NOT NULL,
+                `effectiveAt` TEXT NOT NULL,
+                `settlementAccount` TEXT NOT NULL,
+                `sourceRef` TEXT NOT NULL,
+                `note` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `syncState` TEXT NOT NULL,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-    MIGRATION_8_9,
+    MIGRATION_8_9, MIGRATION_9_10,
 )

@@ -174,6 +174,13 @@ export default function AssetsTab() {
   );
 }
 
+function newAssetKey(): string {
+  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `asset:${randomPart}`;
+}
+
 function AssetForm({
   branches,
   onClose,
@@ -193,6 +200,7 @@ function AssetForm({
     salvage_rupees: '0',
     notes: '',
   });
+  const [idempotencyKey] = useState(newAssetKey);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -230,7 +238,7 @@ function AssetForm({
         useful_life_months: usefulLifeMonths,
         salvage_minor: salvageMinor,
         notes: form.notes.trim() || undefined,
-      });
+      }, idempotencyKey);
       onSuccess();
     } catch (error) {
       setErr((error as Error).message);

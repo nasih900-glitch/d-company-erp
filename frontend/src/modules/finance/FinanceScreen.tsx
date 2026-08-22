@@ -398,6 +398,13 @@ function ExpensesTab() {
   );
 }
 
+function newExpenseKey(): string {
+  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `expense:${randomPart}`;
+}
+
 function ExpenseForm({
   cats, branches, onClose, onSuccess,
 }: {
@@ -416,6 +423,7 @@ function ExpenseForm({
     invoice_no: '',
     note: '',
   });
+  const [idempotencyKey] = useState(newExpenseKey);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -431,7 +439,7 @@ function ExpenseForm({
         vendor_name: form.vendor_name || undefined,
         invoice_no: form.invoice_no || undefined,
         note: form.note || undefined,
-      });
+      }, idempotencyKey);
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
@@ -728,6 +736,13 @@ function PartnerForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
   );
 }
 
+function newCapitalEntryKey(): string {
+  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `capital-entry:${randomPart}`;
+}
+
 function CapitalForm({
   partner, onClose, onSuccess,
 }: { partner: PartnerDTO; onClose: () => void; onSuccess: () => void }) {
@@ -739,6 +754,7 @@ function CapitalForm({
     source_ref: '',
     note: '',
   });
+  const [idempotencyKey] = useState(newCapitalEntryKey);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -764,7 +780,7 @@ function CapitalForm({
         settlement_account: form.settlement_account,
         source_ref: sourceRef,
         note: form.note.trim() || undefined,
-      });
+      }, idempotencyKey);
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }

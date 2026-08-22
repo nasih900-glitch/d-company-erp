@@ -55,8 +55,10 @@ describe('capital ledger API contract', () => {
       note: 'Partner contribution',
     };
 
-    await expect(finance.createCapitalEntry(body)).resolves.toEqual(row);
-    expect(api.post).toHaveBeenCalledWith('/finance/capital-entries', body);
+    await expect(finance.createCapitalEntry(body, 'capital-entry:test')).resolves.toEqual(row);
+    expect(api.post).toHaveBeenCalledWith('/finance/capital-entries', body, {
+      headers: { 'Idempotency-Key': 'capital-entry:test' },
+    });
   });
 
   it('voids by reason without exposing edit or delete operations', async () => {

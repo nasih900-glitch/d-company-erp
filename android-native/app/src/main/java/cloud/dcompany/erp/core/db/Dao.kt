@@ -150,8 +150,14 @@ interface SyncMetaDao {
         LocalGrnEntity::class,
         LocalGrnLineEntity::class,
         LocalAdjustmentEntity::class,
+        ExpenseCacheEntity::class,
+        LocalExpenseEntity::class,
+        AssetCacheEntity::class,
+        LocalAssetEntity::class,
+        CapitalEntryCacheEntity::class,
+        LocalCapitalEntryEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(KitchenLineListConverter::class, TableOrderLineListConverter::class)
@@ -170,4 +176,5 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun staffDao(): StaffDao
     abstract fun attendanceDao(): AttendanceDao
     abstract fun inventoryDao(): InventoryDao
+    abstract fun financeDao(): FinanceDao
 }

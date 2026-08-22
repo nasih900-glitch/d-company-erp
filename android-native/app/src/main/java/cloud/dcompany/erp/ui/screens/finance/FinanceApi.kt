@@ -1,19 +1,31 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Header
+import retrofit2.http.POST
+import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
- * Finance is read-only on the tablet, so every call here is a GET and none of
- * them needs an Idempotency-Key — nothing on this screen moves money.
+ * Recording an expense, a partner capital movement, or an asset are all
+ * offline-capable, insert-only writes (create-only — edit/delete for
+ * expenses, void for capital entries, and any edit at all for assets all
+ * stay in the web ERP; see FinanceViewModel's class doc for why). Each carries
+ * an Idempotency-Key: none of the three has a natural key a duplicate retry
+ * could collide against server-side, so a receipt sent twice because a
+ * tablet lost the reply mid-request would otherwise silently double an
+ * expense, a capital movement, or the asset register — same reasoning as
+ * Inventory's GRN/adjustment writes.
  *
- * Recording an expense, a partner capital movement, or voiding one stays in
- * the web ERP on purpose: those entries are immutable and demand an evidence
- * reference (bank UTR / UPI id / voucher no.) or a written void reason, which
- * is not something to type one-handed on a counter tablet.
- *
- * Every endpoint below is behind the same `finance.read` permission, so a user
- * who can open this screen can load all of it. The base URL already ends in
- * /api/v1/, hence the relative paths.
+ * Every endpoint below is behind the same `finance.read`/`finance.write`/
+ * `finance.partner.write`/`finance.assets.write` permissions the backend
+ * enforces — this app shows every write affordance optimistically and lets a
+ * 403 land as a rejected outbox row with the server's own message, rather
+ * than trying to pre-derive fine-grained permission state from the
+ * module-level `accessible_modules` list `/auth/me` returns (which cannot
+ * distinguish "can read finance" from "can write assets" anyway). The base
+ * URL already ends in /api/v1/, hence the relative paths.
  */
 interface FinanceApi {
 
@@ -33,14 +45,46 @@ interface FinanceApi {
     @GET("finance/distributable")
     suspend fun distributable(): DistributableProfit
 
-    /** Newest first, as ordered by the server. */
+    /** Newest first, as ordered by the server. Unconditional full list — no
+     * from_date/to_date window, matching this app's existing behavior. */
     @GET("finance/expenses")
     suspend fun expenses(): List<Expense>
+
+    @POST("finance/expenses")
+    suspend fun createExpense(
+        @Body body: ExpenseCreate,
+        @Header("Idempotency-Key") key: String,
+    ): Expense
 
     @GET("finance/partners")
     suspend fun partners(): List<Partner>
 
+    @GET("finance/partners/{partner_id}/capital")
+    suspend fun capitalEntries(
+        @Path("partner_id") partnerId: String,
+        @Query("include_voided") includeVoided: Boolean = true,
+    ): List<CapitalEntry>
+
+    @POST("finance/capital-entries")
+    suspend fun createCapitalEntry(
+        @Body body: CapitalEntryCreate,
+        @Header("Idempotency-Key") key: String,
+    ): CapitalEntry
+
+    @GET("finance/assets")
+    suspend fun assets(): List<Asset>
+
+    @POST("finance/assets")
+    suspend fun createAsset(
+        @Body body: AssetCreate,
+        @Header("Idempotency-Key") key: String,
+    ): Asset
+
     /** Only used to put a name on each expense's category_id. */
     @GET("settings/expense-categories")
     suspend fun expenseCategories(): List<ExpenseCategory>
+
+    /** Both expense and asset create need a branch picker. */
+    @GET("settings/branches")
+    suspend fun branches(): List<Branch>
 }

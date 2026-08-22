@@ -670,11 +670,18 @@ export interface BusinessMetricsDTO {
 export const finance = {
   listExpenses: (params?: { from_date?: string; to_date?: string }) =>
     api.get<ExpenseDTO[]>('/finance/expenses', { params }).then((r) => r.data),
+  // Idempotency-Key is required server-side — Expense gets a fresh uuid4()
+  // PK on every create with no natural key a duplicate could collide
+  // against (unlike ingredient SKU or customer phone), so a retried write
+  // after a flaky connection needs the header to avoid a silent duplicate.
   createExpense: (body: {
     branch_id: string; category_id: string; supplier_id?: string;
     amount_minor: number; paid_via: 'cash' | 'card' | 'bank' | 'upi';
     paid_at: string; vendor_name?: string; invoice_no?: string; note?: string;
-  }) => api.post<ExpenseDTO>('/finance/expenses', body).then((r) => r.data),
+  }, idempotencyKey: string) =>
+    api.post<ExpenseDTO>('/finance/expenses', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   deleteExpense: (id: string) => api.delete(`/finance/expenses/${id}`),
 
   listPartners: () => api.get<PartnerDTO[]>('/finance/partners').then((r) => r.data),
@@ -688,12 +695,20 @@ export const finance = {
     api.get<CapitalEntryDTO[]>(`/finance/partners/${partner_id}/capital`, {
       params: { include_voided },
     }).then((r) => r.data),
+  // Idempotency-Key is required server-side now too — source_ref uniqueness
+  // remains an independent safeguard against two different drafts citing
+  // the same bank reference, but it never protected a plain retry (a
+  // network-timeout resubmission with the exact same source_ref would have
+  // 409'd instead of replaying cleanly).
   createCapitalEntry: (body: {
     partner_id: string; type: 'invest' | 'withdraw';
     amount_minor: number; effective_at: string;
     settlement_account: 'cash' | 'bank' | 'upi';
     source_ref: string; note?: string;
-  }) => api.post<CapitalEntryDTO>('/finance/capital-entries', body).then((r) => r.data),
+  }, idempotencyKey: string) =>
+    api.post<CapitalEntryDTO>('/finance/capital-entries', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   voidCapitalEntry: (id: string, reason: string) =>
     api.post<CapitalEntryDTO>(`/finance/capital-entries/${id}/void`, { reason })
       .then((r) => r.data),
@@ -749,11 +764,17 @@ export const finance = {
       .then((r) => r.data),
 
   listAssets: () => api.get<AssetDTO[]>('/finance/assets').then((r) => r.data),
+  // Idempotency-Key is required server-side — Asset has no unique
+  // constraint at all, so a retried create after a flaky connection would
+  // otherwise silently duplicate the fixed-asset register.
   createAsset: (body: {
     branch_id: string; name: string; type: string;
     purchase_minor: number; purchase_date: string;
     useful_life_months?: number; salvage_minor?: number; notes?: string;
-  }) => api.post<AssetDTO>('/finance/assets', body).then((r) => r.data),
+  }, idempotencyKey: string) =>
+    api.post<AssetDTO>('/finance/assets', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
 };
 
 // =============================================================================

@@ -2,6 +2,7 @@ package cloud.dcompany.erp.ui.screens.finance
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,18 +13,25 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -39,12 +47,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 /**
  * Finance — read-only.
@@ -61,20 +72,20 @@ import kotlin.math.abs
 fun FinanceScreen() {
     val vm: FinanceViewModel = viewModel()
     val state by vm.state.collectAsState()
-    FinanceContent(state, onRetry = vm::load)
+    FinanceContent(state, vm)
 }
 
 @Composable
-private fun FinanceContent(state: FinanceUiState, onRetry: () -> Unit) {
+private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel) {
     var tab by remember { mutableStateOf(0) }
-    val tabs = listOf("Overview", "Expenses", "Partners")
+    val tabs = listOf("Overview", "Expenses", "Assets", "Partners")
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Header(state, onRetry)
+        Header(state, onRefresh = vm::load)
 
         when {
             // Nothing to show yet and it failed: this is the whole screen.
-            !state.loaded && state.error != null -> ErrorBlock(state.error, onRetry)
+            !state.loaded && state.error != null -> ErrorBlock(state.error, vm::load)
 
             !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 Column(
@@ -105,12 +116,32 @@ private fun FinanceContent(state: FinanceUiState, onRetry: () -> Unit) {
                 // A refresh that failed on top of good data: keep the figures,
                 // but never let the failure pass unmentioned.
                 if (state.error != null) {
-                    ErrorBanner(state.error, onRetry)
+                    ErrorBanner(state.error, vm::load)
+                }
+                if (state.notice != null) {
+                    Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        NoticeBanner(state.notice, vm::dismissNotice)
+                    }
+                }
+                if (state.pendingExpenses.isNotEmpty() || state.pendingAssets.isNotEmpty() ||
+                    state.pendingCapitalEntries.isNotEmpty()
+                ) {
+                    Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        PendingFinanceChangesPanel(state, vm)
+                    }
                 }
                 when (tab) {
                     0 -> OverviewTab(state)
-                    1 -> ExpensesTab(state)
-                    else -> PartnersTab(state)
+                    1 -> ExpensesTab(state, vm)
+                    2 -> AssetsTab(state, vm)
+                    else -> PartnersTab(state, vm)
+                }
+
+                when (val dialog = state.dialog) {
+                    FinanceDialog.ExpenseForm -> ExpenseCreateDialog(state, vm)
+                    FinanceDialog.AssetForm -> AssetCreateDialog(state, vm)
+                    is FinanceDialog.CapitalEntryForm -> CapitalEntryCreateDialog(dialog.partner, state, vm)
+                    null -> {}
                 }
             }
         }
@@ -316,9 +347,8 @@ private fun OverviewTab(state: FinanceUiState) {
         }
 
         Note(
-            "Read-only on the tablet. Recording expenses and partner capital movements " +
-                "stays in the web ERP, where the evidence reference can be typed in. For " +
-                "monthly, quarterly and yearly P&L, open Reports there.",
+            "Expenses, assets and partner capital movements can now be recorded right " +
+                "here. For monthly, quarterly and yearly P&L, open Reports in the web ERP.",
         )
     }
 }
@@ -327,13 +357,18 @@ private fun OverviewTab(state: FinanceUiState) {
 // EXPENSES
 // ============================================================================
 @Composable
-private fun ExpensesTab(state: FinanceUiState) {
+private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel) {
     if (state.expenses.isEmpty()) {
-        EmptyBlock(
-            title = "No expenses recorded yet",
-            body = "Rent, salaries, supplies and utilities recorded in the web ERP " +
-                "(Finance → Expenses) show up here, newest first.",
-        )
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
+                Button(onClick = vm::openExpenseForm) { Text("New expense") }
+            }
+            EmptyBlock(
+                title = "No expenses recorded yet",
+                body = "Record one here, or in the web ERP (Finance → Expenses) — either " +
+                    "way it shows up here, newest first.",
+            )
+        }
         return
     }
 
@@ -343,18 +378,25 @@ private fun ExpensesTab(state: FinanceUiState) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            Text(
-                "${countLabel(state.expenses.size, "expense")} · Total: " +
-                    state.expenseTotalMinor.asRupees(),
-                style = MaterialTheme.typography.bodyMedium,
-                color = Brand.ForegroundMuted,
-            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${countLabel(state.expenses.size, "expense")} · Total: " +
+                        state.expenseTotalMinor.asRupees(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Brand.ForegroundMuted,
+                )
+                Button(onClick = vm::openExpenseForm) { Text("New expense") }
+            }
         }
         items(state.expenses, key = { it.id }) { expense ->
             ExpenseRow(expense, state.categoryName(expense.categoryId))
         }
         item {
-            Note("Every expense ever recorded, newest first.")
+            Note("Every expense ever recorded, newest first. Editing or deleting one still needs the web ERP.")
         }
     }
 }
@@ -412,10 +454,102 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
 }
 
 // ============================================================================
+// ASSETS
+// ============================================================================
+@Composable
+private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel) {
+    if (state.assets.isEmpty()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
+                Button(onClick = vm::openAssetForm) { Text("New asset") }
+            }
+            EmptyBlock(
+                title = "No assets registered yet",
+                body = "PS5s, TVs, the projector, kitchen equipment — register one here, " +
+                    "or in the web ERP (Finance → Assets). Depreciation is computed " +
+                    "straight-line automatically.",
+            )
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    countLabel(state.assets.size, "asset"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Brand.ForegroundMuted,
+                )
+                Button(onClick = vm::openAssetForm) { Text("New asset") }
+            }
+        }
+        items(state.assets, key = { it.id }) { asset -> AssetRow(asset) }
+        item {
+            Note("Straight-line depreciation, recomputed as of today on every load. Editing an asset still needs the web ERP.")
+        }
+    }
+}
+
+@Composable
+private fun AssetRow(asset: Asset) {
+    Panel {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    asset.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${asset.type} · Bought ${asset.purchaseDate.asDay()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "Purchase ${asset.purchaseMinor.asRupees()} · ${asset.usefulLifeMonths} months useful life",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    "Book value",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    asset.bookValueMinor.asRupees(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Depreciated ${asset.accumulatedDepreciationMinor.asRupees()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.Gold,
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
 // PARTNERS
 // ============================================================================
 @Composable
-private fun PartnersTab(state: FinanceUiState) {
+private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel) {
     val distributable = state.distributable
 
     Column(
@@ -451,13 +585,13 @@ private fun PartnersTab(state: FinanceUiState) {
 
         val shareByPartnerId = distributable?.partners.orEmpty().associateBy { it.partnerId }
         state.partners.forEach { partner ->
-            PartnerCard(partner, shareByPartnerId[partner.id])
+            PartnerCard(partner, shareByPartnerId[partner.id], onRecordCapital = { vm.openCapitalEntryForm(partner) })
         }
 
         Note(
             "Investment records money a partner put in; capital repayment records money " +
                 "paid back. Profit share is calculated separately and does not change " +
-                "contributed capital. Both are recorded in the web ERP.",
+                "contributed capital. Voiding a capital entry still needs the web ERP.",
         )
     }
 }
@@ -529,7 +663,11 @@ private fun DistributableCard(d: DistributableProfit) {
 }
 
 @Composable
-private fun PartnerCard(partner: Partner, share: DistributablePartnerShare?) {
+private fun PartnerCard(
+    partner: Partner,
+    share: DistributablePartnerShare?,
+    onRecordCapital: () -> Unit,
+) {
     Panel {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
@@ -589,6 +727,10 @@ private fun PartnerCard(partner: Partner, share: DistributablePartnerShare?) {
                     color = if (share.distributableShareMinor > 0) Brand.Good else Brand.Foreground,
                 )
             }
+        }
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(onClick = onRecordCapital, modifier = Modifier.fillMaxWidth()) {
+            Text("Record capital movement")
         }
     }
 }
@@ -804,3 +946,398 @@ private fun EmptyBlock(title: String, body: String) {
         }
     }
 }
+
+// ============================================================================
+// PENDING FINANCE CHANGES — mirrors Inventory's PendingStockChangesPanel
+// ============================================================================
+@Composable
+private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewModel) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(Brand.Surface).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Pending finance changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        state.pendingExpenses.forEach { row ->
+            FinancePendingRow(
+                text = "${row.amountMinor.asRupees()} · ${row.categoryName}" +
+                    (row.vendorName?.let { " · $it" } ?: ""),
+                rejected = row.rejected,
+                error = row.error,
+                onRetry = { vm.retryExpense(row.localId) },
+            )
+        }
+        state.pendingAssets.forEach { row ->
+            FinancePendingRow(
+                text = "New asset: ${row.name} (${row.purchaseMinor.asRupees()})",
+                rejected = row.rejected,
+                error = row.error,
+                onRetry = { vm.retryAsset(row.localId) },
+            )
+        }
+        state.pendingCapitalEntries.forEach { row ->
+            val verb = if (row.type == "invest") "Investment from" else "Capital repayment to"
+            FinancePendingRow(
+                text = "$verb ${row.partnerName}: ${row.amountMinor.asRupees()}",
+                rejected = row.rejected,
+                error = row.error,
+                onRetry = { vm.retryCapitalEntry(row.localId) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun FinancePendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Brand.SurfaceRaised)
+            .padding(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+        }
+        Text(
+            if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
+            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Brand.SurfaceRaised)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
+        TextButton(onClick = onDismiss) { Text("Dismiss") }
+    }
+}
+
+// ============================================================================
+// CREATE DIALOGS
+// ============================================================================
+@Composable
+private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+    var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
+    var categoryId by remember { mutableStateOf(state.categoryNames.keys.firstOrNull() ?: "") }
+    var amountRupees by remember { mutableStateOf("") }
+    var paidVia by remember { mutableStateOf("cash") }
+    var vendorName by remember { mutableStateOf("") }
+    var invoiceNo by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    FormDialog(
+        title = "Add expense",
+        confirmLabel = "Queue expense",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val amountMinor = amountRupees.toRupeesMinor()
+            if (amountMinor <= 0) {
+                localError = "Enter an amount greater than ₹0."
+                return@FormDialog
+            }
+            if (branchId.isBlank() || categoryId.isBlank()) {
+                localError = "Pick a branch and a category."
+                return@FormDialog
+            }
+            localError = null
+            vm.postExpense(
+                branchId = branchId, categoryId = categoryId, amountMinor = amountMinor,
+                paidVia = paidVia, paidAt = nowIso(), vendorName = vendorName,
+                invoiceNo = invoiceNo, note = note,
+            )
+        },
+    ) {
+        PickerField(
+            "Branch",
+            state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
+            state.branches.map { it.id to it.name },
+        ) { branchId = it }
+        PickerField(
+            "Category",
+            state.categoryNames[categoryId] ?: "Select…",
+            state.categoryNames.entries.map { it.key to it.value },
+        ) { categoryId = it }
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        PickerField(
+            "Paid via",
+            paidViaLabel(paidVia),
+            listOf("cash" to "Cash", "upi" to "UPI", "card" to "Card", "bank" to "Bank transfer"),
+        ) { paidVia = it }
+        OutlinedTextField(
+            value = vendorName, onValueChange = { vendorName = it },
+            label = { Text("Vendor (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = invoiceNo, onValueChange = { invoiceNo = it },
+            label = { Text("Invoice no. (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = note, onValueChange = { note = it },
+            label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun AssetCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+    var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
+    var name by remember { mutableStateOf("") }
+    var type by remember { mutableStateOf("kitchen_equipment") }
+    var purchaseRupees by remember { mutableStateOf("") }
+    var usefulLifeMonths by remember { mutableStateOf("60") }
+    var salvageRupees by remember { mutableStateOf("0") }
+    var notesText by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    FormDialog(
+        title = "Register asset",
+        confirmLabel = "Queue asset",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val purchaseMinor = purchaseRupees.toRupeesMinor()
+            val salvageMinor = salvageRupees.ifBlank { "0" }.toRupeesMinor()
+            val lifeMonths = usefulLifeMonths.toIntOrNull() ?: 0
+            when {
+                name.isBlank() -> localError = "Enter a name for this asset."
+                branchId.isBlank() -> localError = "Pick a branch."
+                purchaseMinor <= 0 -> localError = "Enter a purchase cost greater than ₹0."
+                lifeMonths <= 0 -> localError = "Useful life must be a whole number of months greater than 0."
+                salvageMinor > purchaseMinor -> localError = "Salvage value cannot exceed the purchase cost."
+                else -> {
+                    localError = null
+                    vm.postAsset(
+                        branchId = branchId, name = name, type = type, purchaseMinor = purchaseMinor,
+                        purchaseDate = nowIso(), usefulLifeMonths = lifeMonths,
+                        salvageMinor = salvageMinor, notesText = notesText,
+                    )
+                }
+            }
+        },
+    ) {
+        OutlinedTextField(
+            value = name, onValueChange = { name = it },
+            label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        PickerField(
+            "Branch",
+            state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
+            state.branches.map { it.id to it.name },
+        ) { branchId = it }
+        PickerField(
+            "Category",
+            type,
+            listOf(
+                "kitchen_equipment" to "Kitchen equipment", "gaming" to "Gaming",
+                "furniture" to "Furniture", "electronics" to "Electronics", "other" to "Other",
+            ),
+        ) { type = it }
+        DecimalField(purchaseRupees, { purchaseRupees = it }, "Purchase cost (₹)")
+        OutlinedTextField(
+            value = usefulLifeMonths,
+            onValueChange = { usefulLifeMonths = it.filter(Char::isDigit) },
+            label = { Text("Useful life (months)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(salvageRupees, { salvageRupees = it }, "Salvage value (₹)")
+        OutlinedTextField(
+            value = notesText, onValueChange = { notesText = it },
+            label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm: FinanceViewModel) {
+    var type by remember { mutableStateOf("invest") }
+    var amountRupees by remember { mutableStateOf("") }
+    var settlementAccount by remember { mutableStateOf("bank") }
+    var sourceRef by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    FormDialog(
+        title = "Capital movement — ${partner.name}",
+        confirmLabel = "Queue entry",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val amountMinor = amountRupees.toRupeesMinor()
+            val trimmedRef = sourceRef.trim()
+            when {
+                amountMinor <= 0 -> localError = "Enter an amount greater than ₹0."
+                trimmedRef.isBlank() ->
+                    localError = "Enter the unique bank, UPI, or cash-voucher reference that proves this movement."
+                else -> {
+                    localError = null
+                    vm.postCapitalEntry(
+                        partnerId = partner.id, type = type, amountMinor = amountMinor,
+                        effectiveAt = nowIso(), settlementAccount = settlementAccount,
+                        sourceRef = trimmedRef, note = note,
+                    )
+                }
+            }
+        },
+    ) {
+        PickerField(
+            "Type", if (type == "invest") "Investment" else "Capital repayment",
+            listOf("invest" to "Investment", "withdraw" to "Capital repayment"),
+        ) { type = it }
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        PickerField(
+            "Settlement account", paidViaLabel(settlementAccount).let { if (it == "Bank transfer") "Bank" else it },
+            listOf("cash" to "Cash", "bank" to "Bank", "upi" to "UPI"),
+        ) { settlementAccount = it }
+        OutlinedTextField(
+            value = sourceRef, onValueChange = { sourceRef = it },
+            label = { Text("Bank UTR / UPI id / voucher no.") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "Must be unique. On a network retry, submit the same reference instead of inventing a new one.",
+            style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+        )
+        OutlinedTextField(
+            value = note, onValueChange = { note = it },
+            label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+// ============================================================================
+// FORM PRIMITIVES — local copies of InventoryScreen.kt's shell/inputs, kept
+// per-screen rather than promoted to a shared file (same convention as
+// InventoryModels.kt's own local Branch DTO).
+// ============================================================================
+@Composable
+private fun FormDialog(
+    title: String,
+    confirmLabel: String,
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.width(480.dp),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                content()
+                error?.let { Text(it, color = Brand.Danger) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !busy) {
+                Text(if (busy) "Working…" else confirmLabel)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun PickerField(
+    label: String,
+    selectedLabel: String,
+    options: List<Pair<String, String>>,
+    modifier: Modifier = Modifier,
+    onSelect: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        Spacer(Modifier.height(4.dp))
+        Box {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(Brand.SurfaceRaised)
+                    .clickable(enabled = options.isNotEmpty()) { open = true }
+                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    selectedLabel,
+                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text("▾", color = Brand.Gold)
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                options.forEach { (id, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text) },
+                        onClick = {
+                            open = false
+                            onSelect(id)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DecimalField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onValueChange(filterDecimal(it)) },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
+private fun filterDecimal(raw: String): String {
+    val sb = StringBuilder()
+    var dotSeen = false
+    for (c in raw) {
+        when {
+            c.isDigit() -> sb.append(c)
+            c == '.' && !dotSeen -> {
+                dotSeen = true
+                sb.append(c)
+            }
+        }
+    }
+    return sb.toString()
+}
+
+/** Rupees typed by a human -> whole paise, rounded not truncated (the exact
+ * same IEEE-754 edge case Menu/Inventory's own equivalents guard against —
+ * .toLong() on rupees*100 can silently truncate a value like 2.66). */
+private fun String.toRupeesMinor(): Long = ((toDoubleOrNull() ?: 0.0) * 100).roundToLong()
+
+private fun nowIso(): String = java.time.OffsetDateTime.now().toString()
