@@ -201,17 +201,25 @@ private fun SelectedCustomerPanel(customer: CustomerCacheEntity, state: Membersh
             }
             membership?.subscription != null && membership.subscription.isActive -> {
                 val sub = membership.subscription
+                val alreadyCancelled = sub.cancelledAt != null
                 Text(
                     "${sub.tierName} · ${billingCycleLabel(sub.billingCycle)}",
                     style = MaterialTheme.typography.bodyLarge, color = Brand.Foreground,
                 )
                 Text(
-                    "Expires ${sub.expiresAt.take(10)}",
-                    style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+                    if (alreadyCancelled) {
+                        "Cancelled — perks active until ${sub.expiresAt.take(10)}"
+                    } else {
+                        "Expires ${sub.expiresAt.take(10)}"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (alreadyCancelled) Brand.GoldMuted else Brand.ForegroundMuted,
                 )
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(onClick = { vm.openConfirmCancel(customer, membership) }) {
-                    Text("Cancel membership", color = Brand.Danger)
+                if (!alreadyCancelled) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = { vm.openConfirmCancel(customer, membership) }) {
+                        Text("Cancel membership", color = Brand.Danger)
+                    }
                 }
             }
             else -> {

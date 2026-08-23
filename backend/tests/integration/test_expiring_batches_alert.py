@@ -61,6 +61,12 @@ async def test_near_future_batch_is_included_far_future_and_null_are_excluded(
     near_ingredient = _ingredient(company_id=company_id, name="Near Expiry Cheese")
     far_ingredient = _ingredient(company_id=company_id, name="Far Expiry Cheese")
     null_ingredient = _ingredient(company_id=company_id, name="No Expiry Syrup")
+    session.add_all([near_ingredient, far_ingredient, null_ingredient])
+    # Flush the parents alone first: Batch/Ingredient have no ORM relationship()
+    # linking them (plain FK columns, matching this codebase's convention), so
+    # the unit-of-work has no dependency edge to order a same-flush parent+child
+    # insert correctly — it can and does emit the child rows' INSERT first.
+    await session.flush()
 
     near_batch = _batch(
         ingredient_id=near_ingredient.id,
@@ -87,17 +93,7 @@ async def test_near_future_batch_is_included_far_future_and_null_are_excluded(
         qty_on_hand=0,
     )
 
-    session.add_all(
-        [
-            near_ingredient,
-            far_ingredient,
-            null_ingredient,
-            near_batch,
-            far_batch,
-            null_batch,
-            depleted_batch,
-        ]
-    )
+    session.add_all([near_batch, far_batch, null_batch, depleted_batch])
     await session.flush()
 
     alerts = await build_expiring_batches_alert(session, company_id=company_id)

@@ -106,6 +106,11 @@ async def test_delete_customer_is_tenant_isolated(client, session, seed_owner) -
 
     other_company = Company(id=uuid4(), name=f"Other Co {uuid4().hex[:6]}")
     session.add(other_company)
+    # Flush the parent alone first: Customer/Company have no ORM relationship()
+    # linking them (plain FK columns, matching this codebase's convention), so
+    # the unit-of-work has no dependency edge to order a same-flush parent+child
+    # insert correctly — it can and does emit the child's INSERT first.
+    await session.flush()
     other_customer = Customer(
         id=uuid4(), company_id=other_company.id, phone=f"+91-7{uuid4().int % 10**9:09d}", name="Not Yours",
     )
