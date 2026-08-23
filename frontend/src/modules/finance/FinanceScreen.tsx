@@ -34,6 +34,7 @@ import Modal from '@/components/ui/Modal';
 import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
 import TipPayoutsTab from './TipPayoutsTab';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type Tab = 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
 
@@ -106,7 +107,7 @@ function OverviewTab() {
   useEffect(() => { load(); }, []);
 
   if (loading) {
-    return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading today's P&L…</div>;
+    return <SkeletonCard />;
   }
   if (err) return <ErrorRow text={err}/>;
   if (!data) return null;
@@ -287,7 +288,7 @@ function ExpensesTab() {
     catch (e) { alert((e as Error).message); }
   }
 
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   const total = rows.reduce((s, r) => s + r.amount_minor, 0);
   const catName = (id: string) => cats.find((c) => c.id === id)?.name ?? '—';
@@ -543,7 +544,7 @@ function PartnersTab() {
     distributable?.partners.map((p) => [p.partner_id, p]) ?? []
   );
 
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   return (
     <div>

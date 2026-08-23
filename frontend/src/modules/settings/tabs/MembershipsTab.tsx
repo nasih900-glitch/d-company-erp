@@ -15,6 +15,7 @@ import { inr } from '@/lib/inr';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { memberships, type MembershipTierDTO } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const TIER_ACCENT: Record<string, string> = {
   silver:   'border-fg-muted/60 text-fg',
@@ -36,7 +37,7 @@ export default function MembershipsTab() {
   }
   useEffect(() => { load(); }, []);
 
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   return (
     <div>

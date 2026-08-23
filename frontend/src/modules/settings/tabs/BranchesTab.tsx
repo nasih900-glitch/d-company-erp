@@ -4,6 +4,7 @@ import { Plus, Edit2, Save, Loader2, AlertCircle, MapPin } from 'lucide-react';
 import { LIVE_MODE } from '@/lib/demo';
 import { settings, type BranchDTO } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 export default function BranchesTab() {
   const [rows, setRows] = useState<BranchDTO[]>([]);
@@ -22,7 +23,7 @@ export default function BranchesTab() {
   }
   useEffect(() => { load(); }, []);
 
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
   if (!LIVE_MODE) return <div className="card text-fg-muted">Available in live mode only.</div>;
 
   return (

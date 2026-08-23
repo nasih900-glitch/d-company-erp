@@ -21,6 +21,7 @@ import {
   type TopItemDTO, type HeatmapCellDTO, type LossesDTO, type GLEntryDTO,
   type PartnerDTO,
 } from '@/lib/erp-api';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type Tab = 'growth' | 'inventory' | 'accounting' | 'losses';
 
@@ -724,7 +725,7 @@ function Stat({ label, value, tone = 'default' }: {
   );
 }
 function LoadingCard() {
-  return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  return <SkeletonCard />;
 }
 function ErrorCard({ text }: { text: string }) {
   return <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">

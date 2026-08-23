@@ -28,6 +28,7 @@ import {
 } from '@/lib/erp-api';
 import { subscribeRealtime } from '@/lib/realtime';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type Tab = 'tables' | 'gaming';
 // Fallback only — real-time push (see subscribeRealtime below) is what
@@ -97,7 +98,7 @@ function TableReservationsTab() {
   }
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Reservations are live-mode only.</div>;
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   return (
     <div>
@@ -198,7 +199,7 @@ function GamingBookingsTab() {
   }
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Bookings are live-mode only.</div>;
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   return (
     <div>

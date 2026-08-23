@@ -25,6 +25,7 @@ import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const ROLE_COLOR: Record<string, string> = {
   super_owner: 'border-accent-gold/70 text-accent-gold',
@@ -137,7 +138,7 @@ export default function StaffScreen() {
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>
+        <SkeletonCard />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
           {users.map((u) => (

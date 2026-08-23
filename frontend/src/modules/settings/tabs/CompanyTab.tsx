@@ -3,6 +3,7 @@ import { Save, Loader2, AlertCircle, Check } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
 import { settings, type CompanyDTO } from '@/lib/erp-api';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 export default function CompanyTab() {
   const [data, setData] = useState<CompanyDTO | null>(null);
@@ -39,7 +40,7 @@ export default function CompanyTab() {
     finally { setBusy(false); }
   }
 
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
   if (!data) return (
     <div className="card text-fg-muted">
       Company settings are only available in live mode (you're in demo mode). Connect to a backend to manage company details.

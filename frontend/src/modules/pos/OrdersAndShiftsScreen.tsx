@@ -26,6 +26,7 @@ import {
 import Modal from '@/components/ui/Modal';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { subscribeRealtime } from '@/lib/realtime';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type Tab = 'orders' | 'shifts';
 // Fallback only — real-time push (see subscribeRealtime below) is what
@@ -88,7 +89,7 @@ function OrdersTab() {
   }, []);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Order history is live-mode only.</div>;
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   const total = rows.reduce((s, r) => s + r.total_minor, 0);
 
@@ -261,7 +262,7 @@ function ShiftsTab() {
   }, [terminalReady, terminalId]);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Shift management is live-mode only.</div>;
-  if (loading) return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+  if (loading) return <SkeletonCard />;
 
   const openResolution = resolveOpenShift({
     storedShiftId: null,

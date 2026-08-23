@@ -9,6 +9,7 @@ import { AlertCircle, Check, Loader2, RotateCcw, X } from 'lucide-react';
 
 import { accessControl, type AccessControlDTO } from '@/lib/erp-api';
 import { roleLabel } from '@/lib/roles';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const MODULE_LABEL: Record<string, string> = {
   pos: 'POS',
@@ -53,7 +54,7 @@ export default function AccessControlTab() {
   }
 
   if (loading) {
-    return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading…</div>;
+    return <SkeletonCard />;
   }
   if (!data) {
     return (
