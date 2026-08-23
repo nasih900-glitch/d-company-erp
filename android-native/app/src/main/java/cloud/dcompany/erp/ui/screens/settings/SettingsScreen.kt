@@ -159,6 +159,17 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (state.companyPending) {
+                PendingBanner(
+                    text = if (state.companyRejectedError != null) {
+                        "Could not sync your last change: ${state.companyRejectedError}"
+                    } else {
+                        "Change queued — not synced yet."
+                    },
+                    rejected = state.companyRejectedError != null,
+                    onRetry = vm::retryCompanyEdit,
+                )
+            }
             Card {
                 Text("Company", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
                 val f = state.companyForm
@@ -199,6 +210,19 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
 }
 
 @Composable
+private fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, color = if (rejected) Brand.Danger else Brand.GoldMuted, modifier = Modifier.weight(1f))
+        if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+    }
+}
+
+@Composable
 private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
     when {
         state.branchesLoading -> Loading()
@@ -213,7 +237,22 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
                 Text("Branches", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
                 Button(onClick = vm::newBranch) { Text("Add branch") }
             }
-            if (state.branches.isEmpty()) {
+            if (state.pendingBranches.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    state.pendingBranches.forEach { row ->
+                        PendingBanner(
+                            text = if (row.rejected) {
+                                "\"${row.name}\" could not sync: ${row.error ?: "unknown error"}"
+                            } else {
+                                "\"${row.name}\" queued — not synced yet."
+                            },
+                            rejected = row.rejected,
+                            onRetry = { vm.retryBranch(row.localId) },
+                        )
+                    }
+                }
+            }
+            if (state.branches.isEmpty() && state.pendingBranches.isEmpty()) {
                 Text("No branches yet. Add one to start billing.", color = Brand.ForegroundMuted)
             }
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -234,7 +273,66 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
+    state.branchForm?.let { BranchFormDialog(it, state, vm) }
     Feedback(state.branchNotice, vm::dismissBranchNotice)
+}
+
+@Composable
+private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: SettingsViewModel) {
+    AlertDialog(
+        onDismissRequest = { if (!state.branchSaving) vm.closeBranchForm() },
+        modifier = Modifier.width(480.dp),
+        title = { Text(if (form.isNew) "Add branch" else "Edit ${form.name}") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (form.isNew) {
+                    Text(
+                        "Queued and synced when back online, like every other write on " +
+                            "this tablet.",
+                        style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+                    )
+                }
+                Field("Name", form.name) { v -> vm.updateBranchForm { it.copy(name = v) } }
+                Field("Short code", form.code) { v -> vm.updateBranchForm { it.copy(code = v.uppercase()) } }
+                Field("Address", form.address) { v -> vm.updateBranchForm { it.copy(address = v) } }
+                Field("Timezone", form.timezone) { v -> vm.updateBranchForm { it.copy(timezone = v) } }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        Field("Opens (HH:MM)", form.opensAt) { v -> vm.updateBranchForm { it.copy(opensAt = v) } }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        Field("Closes (HH:MM)", form.closesAt) { v -> vm.updateBranchForm { it.copy(closesAt = v) } }
+                    }
+                }
+                Field("GST state code", form.stateCode) { v -> vm.updateBranchForm { it.copy(stateCode = v) } }
+                Field("FSSAI licence (14 digits)", form.fssaiLicenseNo) { v ->
+                    vm.updateBranchForm { it.copy(fssaiLicenseNo = v) }
+                }
+                Field("Trade licence no.", form.tradeLicenseNo) { v ->
+                    vm.updateBranchForm { it.copy(tradeLicenseNo = v) }
+                }
+                Field("Branch GSTIN", form.branchGstin) { v -> vm.updateBranchForm { it.copy(branchGstin = v.uppercase()) } }
+                state.branchFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = vm::saveBranch, enabled = !state.branchSaving) {
+                Text(
+                    when {
+                        state.branchSaving -> "Saving…"
+                        form.isNew -> "Queue branch"
+                        else -> "Save"
+                    },
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = vm::closeBranchForm, enabled = !state.branchSaving) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
@@ -261,9 +359,25 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 }
             }
         }
+        val pendingForBranch = state.pendingTerminals.filter { it.branchId == state.selectedBranchId }
         if (state.terminalsLoading) {
             Loading()
         } else {
+            if (pendingForBranch.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    pendingForBranch.forEach { row ->
+                        PendingBanner(
+                            text = if (row.rejected) {
+                                "\"${row.name}\" could not sync: ${row.error ?: "unknown error"}"
+                            } else {
+                                "\"${row.name}\" queued — not synced yet."
+                            },
+                            rejected = row.rejected,
+                            onRetry = { vm.retryTerminal(row.localId) },
+                        )
+                    }
+                }
+            }
             LazyColumn(
                 modifier = Modifier.weight(1f, fill = false),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -292,13 +406,19 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             }
             Card {
                 Text("Add a terminal", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Queued and synced when back online.",
+                    style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
+                )
                 Field("Name", state.terminalName, onChange = vm::setTerminalName)
                 Field("Device id", state.terminalDeviceId, onChange = vm::setTerminalDeviceId)
                 state.terminalFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(onClick = vm::addTerminal, enabled = !state.terminalBusy) { Text("Add terminal") }
+                Button(
+                    onClick = vm::addTerminal,
+                    enabled = !state.terminalBusy && state.selectedBranchId != null,
+                ) { Text("Add terminal") }
             }
         }
-        state.terminalsError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
     Feedback(state.terminalNotice, vm::dismissTerminalFeedback)
 }

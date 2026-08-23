@@ -18,8 +18,19 @@ import retrofit2.http.Query
  * entry, but `upi_vpa` is the account customers are told to pay into and the
  * GSTIN is what gets printed on a tax invoice, so a request that times out
  * mid-flight must be replayable rather than re-executed blind. The key is
- * minted once per attempt by SettingsViewModel and reused verbatim on retry —
- * see IdempotencyKeys there.
+ * minted once per attempt (see IdempotencyKeys / SettingsViewModel's Room
+ * outbox for the offline paths).
+ *
+ * Offline scope, deliberately narrow — lowest-frequency screen in this
+ * rebuild: updateCompany (Shape C, natural PATCH retry-safety, no backend
+ * idempotency needed) and createBranch/createTerminal (Shape D, mandatory
+ * idempotency, since a retry with no key could 409 or silently duplicate)
+ * are real offline outbox writes — the plausible "no signal at the back
+ * office" cases. updateBranch, deleteTerminal, and the password-change
+ * flow below stay online-only: editing an existing branch or deleting a
+ * terminal is a rare, deliberate admin action typically done once at
+ * setup, and password reset is an inherently live OTP round-trip that
+ * can't be queued at all.
  */
 interface SettingsApi {
 
@@ -35,6 +46,10 @@ interface SettingsApi {
     @GET("settings/branches")
     suspend fun branches(): List<BranchDto>
 
+    /** Mandatory Idempotency-Key: has a company+name uniqueness guard, but
+     * a retry after a dropped response would otherwise just 409 instead of
+     * replaying the original success (see backend's _require_idempotency
+     * doc comment). Also this screen's one Shape D create-offline write. */
     @POST("settings/branches")
     suspend fun createBranch(
         @Body body: BranchWriteBody,

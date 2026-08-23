@@ -44,6 +44,12 @@ import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.LocalRefundEntity
 import cloud.dcompany.erp.core.db.LocalStaffEntity
 import cloud.dcompany.erp.core.db.LocalSupplierEntity
+import cloud.dcompany.erp.core.db.BranchCacheEntity
+import cloud.dcompany.erp.core.db.CompanyCacheEntity
+import cloud.dcompany.erp.core.db.LocalBranchEntity
+import cloud.dcompany.erp.core.db.LocalCompanyEditEntity
+import cloud.dcompany.erp.core.db.LocalTerminalEntity
+import cloud.dcompany.erp.core.db.TerminalCacheEntity
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
@@ -88,6 +94,10 @@ import cloud.dcompany.erp.ui.screens.menu.ItemDetailsUpdateBody
 import cloud.dcompany.erp.ui.screens.menu.MenuApi
 import cloud.dcompany.erp.ui.screens.refunds.RefundBody
 import cloud.dcompany.erp.ui.screens.refunds.RefundsApi
+import cloud.dcompany.erp.ui.screens.settings.BranchWriteBody
+import cloud.dcompany.erp.ui.screens.settings.CompanyUpdateBody
+import cloud.dcompany.erp.ui.screens.settings.SettingsApi
+import cloud.dcompany.erp.ui.screens.settings.TerminalCreateBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
@@ -178,6 +188,7 @@ class SyncEngine(
     private val financeApi = ApiClient.create<FinanceApi>()
     private val eventsApi = ApiClient.create<EventsApi>()
     private val membershipsApi = ApiClient.create<MembershipsApi>()
+    private val settingsApi = ApiClient.create<SettingsApi>()
     private val mutex = Mutex()
 
     private val _syncing = MutableStateFlow(false)
@@ -243,7 +254,9 @@ class SyncEngine(
                 // filled level 3's last remaining slot — so the 2 new
                 // Memberships sources (subscribe/cancel) nest one level
                 // deeper again, inside this same slot, rather than
-                // widening level 3 past its 5-arg cap.
+                // widening level 3 past its 5-arg cap. Settings' 3 sources
+                // (company edit/branch/terminal) join as a fourth argument
+                // at this same nested level — still within its own 5-cap.
                 combine(
                     db.eventDao().observeRejectedTicketSaleCount(),
                     db.eventDao().observeRejectedCheckInCount(),
@@ -251,7 +264,14 @@ class SyncEngine(
                         db.membershipDao().observeRejectedSubscriptionCount(),
                         db.membershipDao().observeRejectedCancellationCount(),
                     ) { subscriptions, cancellations -> subscriptions + cancellations },
-                ) { ticketSales, checkIns, memberships -> ticketSales + checkIns + memberships },
+                    combine(
+                        db.settingsDao().observeRejectedCompanyEditCount(),
+                        db.settingsDao().observeRejectedBranchCount(),
+                        db.settingsDao().observeRejectedTerminalCount(),
+                    ) { companyEdit, branches, terminals -> companyEdit + branches + terminals },
+                ) { ticketSales, checkIns, memberships, settings ->
+                    ticketSales + checkIns + memberships + settings
+                },
             ) { menuItems, staff, inventory, finance, events ->
                 menuItems + staff + inventory + finance + events
             },
@@ -300,6 +320,9 @@ class SyncEngine(
         // Per-customer membership status is demand-loaded on selection
         // instead (see pullMembershipFor), same shape as pullBatchesFor.
         "memberships" to ::pullTiers,
+        // /settings/* broadcasts as one combined "settings" resource —
+        // company profile, branches, and terminals all refresh together.
+        "settings" to ::pullSettingsData,
     )
 
     /**
@@ -387,6 +410,14 @@ class SyncEngine(
             // it isn't strictly required in practice.
             pushSubscriptions()
             pushCancellations()
+            // Branches before terminals: a new terminal only ever targets an
+            // already-synced branch id (dependency-sidestep — the branch
+            // picker only ever shows branch_cache rows), so a branch created
+            // in this same drain must land first. Company edit has no
+            // dependency either way.
+            pushCompanyEdit()
+            pushBranches()
+            pushTerminals()
             // Right before the menu pull, same reasoning the pull's own
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
@@ -1521,6 +1552,124 @@ class SyncEngine(
         membershipsApi.cancel(row.subscriptionId)
         pullMembershipFor(row.customerId)
         db.membershipDao().markCancellationSynced(row.localId)
+    }
+
+    // ------------------------------------------------------------ settings
+
+    /** One combined pull for company/branches/terminals — mirrors the
+     * backend's own settings routes all broadcasting as a single realtime
+     * resource (see onDemandPulls). */
+    private suspend fun pullSettingsData() {
+        pullCompany()
+        pullBranches()
+        pullTerminals()
+    }
+
+    private suspend fun pullCompany() {
+        val c = settingsApi.company()
+        db.settingsDao().upsertCompany(
+            CompanyCacheEntity(
+                id = c.id, name = c.name, legalName = c.legalName, currency = c.currency,
+                timezone = c.timezone, country = c.country, gstin = c.gstin, pan = c.pan,
+                gstRegistrationType = c.gstRegistrationType, isComposition = c.isComposition,
+                eInvoicingEnabled = c.eInvoicingEnabled,
+                fiscalYearStartMonth = c.fiscalYearStartMonth, upiVpa = c.upiVpa,
+            ),
+        )
+    }
+
+    private suspend fun pullBranches() {
+        val rows = settingsApi.branches()
+        db.settingsDao().replaceBranchCache(
+            rows.map {
+                BranchCacheEntity(
+                    id = it.id, name = it.name, code = it.code, address = it.address,
+                    timezone = it.timezone, opensAt = it.opensAt, closesAt = it.closesAt,
+                    stateCode = it.stateCode, fssaiLicenseNo = it.fssaiLicenseNo,
+                    tradeLicenseNo = it.tradeLicenseNo, branchGstin = it.branchGstin,
+                )
+            },
+        )
+    }
+
+    private suspend fun pullTerminals() {
+        val rows = settingsApi.terminals()
+        db.settingsDao().replaceTerminalCache(
+            rows.map {
+                TerminalCacheEntity(
+                    id = it.id, branchId = it.branchId, name = it.name,
+                    deviceId = it.deviceId, lastSeenAt = it.lastSeenAt,
+                )
+            },
+        )
+    }
+
+    /** Shape C — no Idempotency-Key needed, "set fields to X" is naturally
+     * safe to retry (see SettingsApi's class doc). */
+    private suspend fun pushCompanyEdit() {
+        val dao = db.settingsDao()
+        drainOutbox(
+            rows = listOfNotNull(dao.pushableCompanyEdit()),
+            markRejected = { row, msg -> dao.markCompanyEditRejected(row.localId, msg) },
+            push = ::pushCompanyEditOne,
+        )
+    }
+
+    private suspend fun pushCompanyEditOne(row: LocalCompanyEditEntity) {
+        settingsApi.updateCompany(
+            CompanyUpdateBody(
+                name = row.name, legalName = row.legalName, timezone = row.timezone,
+                gstin = row.gstin, pan = row.pan, gstRegistrationType = row.gstRegistrationType,
+                isComposition = row.isComposition, eInvoicingEnabled = row.eInvoicingEnabled,
+                upiVpa = row.upiVpa,
+            ),
+            "settings-company:${row.localId}",
+        )
+        pullCompany()
+        db.settingsDao().markCompanyEditSynced(row.localId)
+    }
+
+    /** Shape D — mandatory Idempotency-Key, no natural key a duplicate
+     * retry could safely collide against (see SettingsApi's class doc). */
+    private suspend fun pushBranches() {
+        val dao = db.settingsDao()
+        drainOutbox(
+            rows = dao.pushableBranches(),
+            markRejected = { row, msg -> dao.markBranchRejected(row.localId, msg) },
+            push = ::pushBranchOne,
+        )
+    }
+
+    private suspend fun pushBranchOne(row: LocalBranchEntity) {
+        settingsApi.createBranch(
+            BranchWriteBody(
+                name = row.name, code = row.code, address = row.address, timezone = row.timezone,
+                opensAt = row.opensAt, closesAt = row.closesAt, stateCode = row.stateCode,
+                fssaiLicenseNo = row.fssaiLicenseNo, tradeLicenseNo = row.tradeLicenseNo,
+                branchGstin = row.branchGstin,
+            ),
+            "settings-branch:${row.localId}",
+        )
+        pullBranches()
+        db.settingsDao().markBranchSynced(row.localId)
+    }
+
+    private suspend fun pushTerminals() {
+        val dao = db.settingsDao()
+        drainOutbox(
+            rows = dao.pushableTerminals(),
+            markRejected = { row, msg -> dao.markTerminalRejected(row.localId, msg) },
+            push = ::pushTerminalOne,
+        )
+    }
+
+    private suspend fun pushTerminalOne(row: LocalTerminalEntity) {
+        settingsApi.createTerminal(
+            TerminalCreateBody(branchId = row.branchId, name = row.name, deviceId = row.deviceId),
+            "settings-terminal:${row.localId}",
+        )
+        pullTerminals()
+        db.settingsDao().markTerminalSynced(row.localId)
     }
 
     private suspend fun pullMenu() {

@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from zoneinfo import available_timezones
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
-from app.core.errors import NotFoundError, ConflictError
+from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import Branch, Company, ExpenseCategory, Terminal
@@ -27,6 +28,25 @@ router = APIRouter()
 # makes Intl.DateTimeFormat throw in the POS webview while printing a receipt,
 # so a bad timezone must never be allowed to persist.
 _IANA_TIMEZONES = available_timezones()
+
+
+def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
+    """Shared mandatory-idempotency guard for writes with no natural key.
+
+    update_company/update_branch (PATCH, "set fields to X") and
+    delete_branch/delete_terminal are naturally safe to retry — same value
+    or already-gone, no idempotency needed. create_terminal has no unique
+    constraint a duplicate retry could collide against, so it needs this
+    like GRN/expense/ticket-sale/subscribe do. create_branch has a
+    company+name uniqueness guard already, but that only turns a duplicate
+    retry into a confusing 409 rather than replaying the original success —
+    still worth the same real idempotency treatment.
+    """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not str(key).strip() or not request_hash:
+        raise BusinessRuleError(f"Idempotency-Key header required for {what} writes")
+    return str(key), str(request_hash)
 
 
 def _require_iana_timezone(value: str | None) -> str | None:
@@ -244,9 +264,18 @@ async def list_branches(
 @router.post("/branches", response_model=BranchRead, status_code=status.HTTP_201_CREATED)
 async def create_branch(
     payload: BranchCreate,
+    request: Request,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("admin.system")),
 ) -> BranchRead:
+    idempotency_key, request_hash = _require_idempotency(request, what="branch create")
+    replay = await check_or_reserve(
+        session, key=idempotency_key, request_hash=request_hash,
+        user_id=tenant.user_id, terminal_id=None,
+    )
+    if replay:
+        return BranchRead.model_validate(replay["body"])
+
     existing = (
         await session.execute(
             select(Branch.id).where(
@@ -265,12 +294,17 @@ async def create_branch(
     )
     session.add(b)
     await session.flush()
-    return BranchRead(
+    response = BranchRead(
         id=b.id, name=b.name, code=b.code, address=b.address,
         timezone=b.timezone, opens_at=b.opens_at, closes_at=b.closes_at,
         state_code=b.state_code, fssai_license_no=b.fssai_license_no,
         trade_license_no=b.trade_license_no, branch_gstin=b.branch_gstin,
     )
+    await store_response(
+        session, key=idempotency_key, status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.patch("/branches/{branch_id}", response_model=BranchRead)
@@ -338,9 +372,18 @@ async def list_terminals(
 @router.post("/terminals", response_model=TerminalRead, status_code=status.HTTP_201_CREATED)
 async def create_terminal(
     payload: TerminalCreate,
+    request: Request,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("admin.system")),
 ) -> TerminalRead:
+    idempotency_key, request_hash = _require_idempotency(request, what="terminal create")
+    replay = await check_or_reserve(
+        session, key=idempotency_key, request_hash=request_hash,
+        user_id=tenant.user_id, terminal_id=None,
+    )
+    if replay:
+        return TerminalRead.model_validate(replay["body"])
+
     b = await session.get(Branch, payload.branch_id)
     if not b or b.company_id != tenant.company_id or b.deleted_at:
         raise NotFoundError("branch not found")
@@ -352,10 +395,15 @@ async def create_terminal(
     )
     session.add(t)
     await session.flush()
-    return TerminalRead(
+    response = TerminalRead(
         id=t.id, branch_id=t.branch_id, name=t.name,
         device_id=t.device_id, last_seen_at=t.last_seen_at,
     )
+    await store_response(
+        session, key=idempotency_key, status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.delete("/terminals/{terminal_id}", status_code=status.HTTP_204_NO_CONTENT)

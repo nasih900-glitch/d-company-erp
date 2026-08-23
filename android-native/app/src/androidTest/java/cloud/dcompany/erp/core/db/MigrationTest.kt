@@ -499,4 +499,52 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate12To13_preservesExistingDataAndAddsSettingsTables() {
+        // Same "oldest table survives" canary — a v1 menu_items row plus a
+        // Phase 12 table (local_subscriptions) — to prove this migration
+        // disturbs neither the original table nor the immediately-preceding
+        // phase's.
+        helper.createDatabase(dbName, 12).apply {
+            execSQL(
+                "INSERT INTO menu_items " +
+                    "(id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable, type, hsnCode, priceIncludesTax, description) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1, 'drink', NULL, 1, NULL)",
+            )
+            execSQL(
+                "INSERT INTO local_subscriptions " +
+                    "(localId, customerId, tierId, billingCycle, paidVia, createdAtMillis, syncState, lastError) " +
+                    "VALUES ('sub-1', 'cust-1', 'tier-1', 'monthly', 'cash', 1000, 'synced', NULL)",
+            )
+            close()
+        }
+
+        // MIGRATION_12_13 adds the six new Phase 13 tables (company_cache,
+        // local_company_edits, branch_cache, local_branches, terminal_cache,
+        // local_terminals) — validated against the real, Room-generated v13
+        // schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 13, true, MIGRATION_12_13)
+
+        migrated.query("SELECT name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(0) == "Cold Coffee")
+        }
+        migrated.query("SELECT localId, customerId, syncState FROM local_subscriptions WHERE localId = 'sub-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "local_subscriptions row lost across the migration" }
+            assert(cursor.getString(1) == "cust-1")
+            assert(cursor.getString(2) == "synced")
+        }
+        for (table in listOf(
+            "company_cache", "local_company_edits",
+            "branch_cache", "local_branches",
+            "terminal_cache", "local_terminals",
+        )) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.close()
+    }
 }

@@ -35,7 +35,7 @@ log = get_logger(__name__)
 RESOURCES = frozenset({
     "shifts", "tables", "orders", "gaming", "kitchen", "attendance",
     "menu", "customers", "inventory", "finance", "staff", "events",
-    "memberships", "access_control", "ocr",
+    "memberships", "access_control", "ocr", "settings",
 })
 
 
@@ -98,6 +98,7 @@ _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/staff", "staff"),
     ("/events", "events"),
     ("/memberships", "memberships"),
+    ("/settings", "settings"),
     # Narrow on purpose — NOT a bare "/admin" row, which would also swallow
     # /admin/pricing/unlock and /admin/audit/*, neither of which is a
     # resource anything should be pull-refreshing on.
