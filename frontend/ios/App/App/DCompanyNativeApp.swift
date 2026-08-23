@@ -3473,6 +3473,14 @@ struct NativeERPAppView: View {
         }
         .preferredColorScheme(.dark)
         .tint(Brand.gold)
+        // App-wide default: every Button() everywhere gets the same
+        // scale-on-press feedback unless a screen opts into something more
+        // specific with its own .buttonStyle() further down the tree (which
+        // still wins — SwiftUI resolves the nearest modifier). Previously
+        // only ~27 of 106 Button() call sites had PressableButtonStyle
+        // applied by hand; this makes it the default instead of something
+        // each new button has to remember to add.
+        .buttonStyle(PressableButtonStyle())
         .onChange(of: session.status) { status in
             if status == .signedOut {
                 cache.clear()
