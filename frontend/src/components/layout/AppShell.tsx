@@ -249,11 +249,13 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           onClick={() => setDrawerOpen(false)}
           aria-hidden
           className="md:hidden fixed inset-0 z-40 bg-bg/80 backdrop-blur-sm"
+          style={{ animation: 'modal-backdrop-in var(--motion-fast) ease-out both' }}
         />
       )}
 
       {/* ===================== MAIN CONTENT ===================== */}
       <main
+        key={loc.pathname}
         className="app-scroll route-frame px-3 py-4 md:p-6 min-w-0"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       >

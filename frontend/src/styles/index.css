@@ -78,6 +78,16 @@ textarea:focus-visible {
   100% { background-position: -200% 0; }
 }
 
+@keyframes modal-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-panel-in {
+  from { opacity: 0; transform: translate3d(0, 16px, 0) scale(0.98); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
 /* Touch-first hit targets for cashier workflows */
 @layer components {
   .btn {

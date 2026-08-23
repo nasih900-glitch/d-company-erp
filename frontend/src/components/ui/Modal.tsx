@@ -47,6 +47,7 @@ export default function Modal({ open, onClose, title, children, size = 'md' }: M
   return (
     <div
       className="fixed inset-0 z-[100] flex items-stretch md:items-center justify-center bg-bg/80 backdrop-blur-sm overflow-y-auto"
+      style={{ animation: 'modal-backdrop-in var(--motion-fast) ease-out both' }}
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -55,7 +56,10 @@ export default function Modal({ open, onClose, title, children, size = 'md' }: M
       <div
         onClick={(e) => e.stopPropagation()}
         className={`modal-panel flex max-h-[100dvh] w-full flex-col border border-bg-border bg-bg-surface shadow-2xl md:my-8 md:max-h-[90dvh] md:rounded-2xl ${sizeClass}`}
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        style={{
+          paddingBottom: 'env(safe-area-inset-bottom)',
+          animation: 'modal-panel-in var(--motion-med) ease-out both',
+        }}
       >
         <header
           className="flex shrink-0 items-center justify-between border-b border-bg-border p-4"
@@ -65,7 +69,7 @@ export default function Modal({ open, onClose, title, children, size = 'md' }: M
           <button
             onClick={onClose}
             aria-label="Close"
-            className="shrink-0 p-1.5 -m-1.5 rounded-lg hover:bg-bg-raised"
+            className="shrink-0 p-1.5 -m-1.5 rounded-lg hover:bg-bg-raised active:scale-90 transition"
           >
             <X size={18} />
           </button>
