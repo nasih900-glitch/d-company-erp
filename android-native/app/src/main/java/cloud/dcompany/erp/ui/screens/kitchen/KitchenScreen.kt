@@ -51,6 +51,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -225,8 +226,8 @@ private fun CountChip(label: String, colour: Color) {
     Text(
         label,
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .border(1.dp, colour.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
+            .border(1.dp, colour.copy(alpha = 0.5f), Radius.shapeSm)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         color = colour,
         fontWeight = FontWeight.SemiBold,
@@ -392,10 +393,10 @@ private fun TicketCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(Radius.shapeLg)
             .background(if (ticketState == KitchenState.SERVED) Brand.Surface else Brand.SurfaceRaised)
             .background(accent.copy(alpha = if (ticketState == KitchenState.RECEIVED) 0f else 0.10f))
-            .border(2.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
+            .border(2.dp, accent.copy(alpha = 0.65f), Radius.shapeLg)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -466,7 +467,7 @@ private fun TicketCard(
                 onClick = { onAdvance(order) },
                 enabled = !state.tapsLocked,
                 modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(12.dp),
+                shape = Radius.shapeMd,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = accent,
                     contentColor = Brand.Background,

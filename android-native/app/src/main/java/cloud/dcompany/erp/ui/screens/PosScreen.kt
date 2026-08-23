@@ -1,7 +1,19 @@
 package cloud.dcompany.erp.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +31,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -37,14 +48,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.EmptyState
+import cloud.dcompany.erp.ui.components.PrimaryButton
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Motion
+import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 
 @Composable
 fun PosScreen(
@@ -63,51 +79,36 @@ fun PosScreen(
         SyncBanner(state, onRefresh)
 
         if (state.menuEmpty) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(24.dp),
-                ) {
-                    // "Nothing downloaded yet" and "downloaded fine, the menu
-                    // is genuinely empty" look identical on screen but need
-                    // opposite actions. Conflating them sends a cashier tapping
-                    // a Download button forever against a server that has no
-                    // items to give.
-                    if (state.everSynced) {
-                        Text("The menu is empty", color = Brand.Foreground)
-                        Text(
-                            "This tablet is up to date — there are no menu items set up in " +
-                                "the ERP yet. Add items on the Menu screen, then sync.",
-                            color = Brand.ForegroundMuted,
-                        )
-                        Button(onClick = onRefresh) { Text("Check again") }
-                    } else {
-                        Text("No menu on this tablet yet", color = Brand.Foreground)
-                        Text(
-                            "Connect once to download the menu. After that the till works offline.",
-                            color = Brand.ForegroundMuted,
-                        )
-                        Button(onClick = onRefresh) { Text("Download menu") }
-                    }
+            EmptyState(
+                title = if (state.everSynced) "The menu is empty" else "No menu on this tablet yet",
+                body = if (state.everSynced) {
+                    "This tablet is up to date — there are no menu items set up in the ERP " +
+                        "yet. Add items on the Menu screen, then sync."
+                } else {
+                    "Connect once to download the menu. After that the till works offline."
+                },
+            )
+            Box(Modifier.fillMaxWidth(), Alignment.Center) {
+                PrimaryButton(onClick = onRefresh) {
+                    Text(if (state.everSynced) "Check again" else "Download menu")
                 }
             }
             return@Column
         }
 
         Row(Modifier.fillMaxSize()) {
-            Column(Modifier.weight(1f).padding(12.dp)) {
+            Column(Modifier.weight(1f).padding(Spacing.md)) {
                 CategoryStrip(state, onSelectCategory)
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Spacing.md))
                 LazyVerticalGrid(
                     // Adaptive rather than a fixed count, so one build fits an
                     // 8" tablet and a 12" one.
                     columns = GridCells.Adaptive(minSize = 150.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
                     items(state.visibleItems, key = { it.id }) { item ->
-                        MenuTile(item) { onAdd(item) }
+                        MenuTile(item, Modifier.animateItem()) { onAdd(item) }
                     }
                 }
             }
@@ -130,6 +131,8 @@ fun PosScreen(
     state.notice?.let { message ->
         AlertDialog(
             onDismissRequest = onDismissNotice,
+            containerColor = Brand.SurfaceOverlay,
+            shape = Radius.shapeLg,
             confirmButton = { TextButton(onClick = onDismissNotice) { Text("OK") } },
             title = { Text("Sale recorded") },
             text = { Text(message) },
@@ -155,26 +158,30 @@ private fun SyncBanner(state: PosUiState, onRefresh: () -> Unit) {
             Brand.GoldMuted to "Sending ${state.pendingCount} saved sale(s)…"
         else -> return
     }
-    Row(
-        Modifier.fillMaxWidth().background(bg).padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, color = Brand.Background, fontWeight = FontWeight.SemiBold)
-        if (state.online) {
-            TextButton(onClick = onRefresh) { Text("Sync now", color = Brand.Background) }
+    val animatedBg by animateColorAsState(bg, tween(Motion.medium), label = "syncBannerBg")
+    AnimatedVisibility(visible = true, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+        Row(
+            Modifier.fillMaxWidth().background(animatedBg).padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, color = Brand.Background, fontWeight = FontWeight.SemiBold)
+            if (state.online) {
+                TextButton(onClick = onRefresh) { Text("Sync now", color = Brand.Background) }
+            }
         }
     }
 }
 
 @Composable
 private fun CategoryStrip(state: PosUiState, onSelect: (String?) -> Unit) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         item {
             FilterChip(
                 selected = state.selectedCategoryId == null,
                 onClick = { onSelect(null) },
                 label = { Text("All") },
+                shape = Radius.shapePill,
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = Brand.Gold,
                     selectedLabelColor = Brand.Background,
@@ -186,6 +193,7 @@ private fun CategoryStrip(state: PosUiState, onSelect: (String?) -> Unit) {
                 selected = state.selectedCategoryId == category.id,
                 onClick = { onSelect(category.id) },
                 label = { Text(category.name) },
+                shape = Radius.shapePill,
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = Brand.Gold,
                     selectedLabelColor = Brand.Background,
@@ -195,15 +203,22 @@ private fun CategoryStrip(state: PosUiState, onSelect: (String?) -> Unit) {
     }
 }
 
+/** Scales down slightly on press — the one micro-interaction a cashier taps
+ * hundreds of times a shift, so it's worth it being responsive-feeling even
+ * though the tile itself is a plain, high-density grid item. */
 @Composable
-private fun MenuTile(item: MenuItemEntity, onClick: () -> Unit) {
+private fun MenuTile(item: MenuItemEntity, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
     Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
+        modifier = modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(Radius.shapeLg)
             .background(Brand.SurfaceRaised)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         Text(
             item.name,
@@ -233,7 +248,7 @@ private fun CartPanel(
             .width(320.dp)
             .fillMaxSize()
             .background(Brand.Surface)
-            .padding(14.dp),
+            .padding(Spacing.lg),
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -241,11 +256,11 @@ private fun CartPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Cart", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            if (state.cart.isNotEmpty()) {
-                OutlinedButton(onClick = onClear) { Text("Clear") }
+            AnimatedVisibility(state.cart.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
+                OutlinedButton(onClick = onClear, shape = Radius.shapePill) { Text("Clear") }
             }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(Spacing.sm))
 
         if (state.cart.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
@@ -254,10 +269,13 @@ private fun CartPanel(
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
                 items(state.cart, key = { it.item.id }) { line ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth().animateItem(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Column(Modifier.weight(1f)) {
                             Text(
                                 line.item.name,
@@ -272,34 +290,42 @@ private fun CartPanel(
                             )
                         }
                         QtyButton("−") { onRemove(line.item) }
-                        Text(
-                            "${line.qty}",
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            color = Brand.Foreground,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        AnimatedContent(
+                            targetState = line.qty,
+                            transitionSpec = { fadeIn(tween(Motion.fast)).togetherWith(fadeOut(tween(Motion.fast))) },
+                            label = "qty",
+                        ) { qty ->
+                            Text(
+                                "$qty",
+                                modifier = Modifier.padding(horizontal = Spacing.sm),
+                                color = Brand.Foreground,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
                         QtyButton("+") { onAdd(line.item) }
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(Spacing.sm))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Estimate", color = Brand.ForegroundMuted)
-            Text(
-                state.estimateMinor.asRupees(),
-                color = Brand.Foreground,
-                fontWeight = FontWeight.Bold,
-            )
+            AnimatedContent(
+                targetState = state.estimateMinor,
+                transitionSpec = { fadeIn(tween(Motion.fast)).togetherWith(fadeOut(tween(Motion.fast))) },
+                label = "estimate",
+            ) { minor ->
+                Text(minor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+            }
         }
         Text(
             "Server confirms the final taxed total",
             style = MaterialTheme.typography.labelSmall,
             color = Brand.ForegroundMuted,
         )
-        Spacer(Modifier.height(10.dp))
-        Button(
+        Spacer(Modifier.height(Spacing.sm))
+        PrimaryButton(
             onClick = onPay,
             enabled = state.cart.isNotEmpty(),
             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -333,15 +359,18 @@ private fun PayDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         title = { Text("Take payment · ${dueMinor.asRupees()}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     listOf("cash" to "Cash", "upi" to "UPI", "card" to "Card").forEach { (id, label) ->
                         FilterChip(
                             selected = method == id,
                             onClick = { method = id },
                             label = { Text(label) },
+                            shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = Brand.Gold,
                                 selectedLabelColor = Brand.Background,
@@ -356,21 +385,24 @@ private fun PayDialog(
                         onValueChange = { tendered = it.filter { c -> c.isDigit() || c == '.' } },
                         label = { Text("Cash received (₹)") },
                         singleLine = true,
+                        shape = Radius.shapeMd,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    when {
-                        tendered.isBlank() -> Unit
-                        changeMinor >= 0 -> Text(
-                            "Change due  ${changeMinor.asRupees()}",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = Brand.Good,
-                        )
-                        else -> Text(
-                            "Short by  ${(-changeMinor).asRupees()}",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = Brand.Danger,
-                        )
+                    AnimatedVisibility(tendered.isNotBlank(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                        if (changeMinor >= 0) {
+                            Text(
+                                "Change due  ${changeMinor.asRupees()}",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = Brand.Good,
+                            )
+                        } else {
+                            Text(
+                                "Short by  ${(-changeMinor).asRupees()}",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = Brand.Danger,
+                            )
+                        }
                     }
                 }
 
@@ -385,7 +417,7 @@ private fun PayDialog(
             }
         },
         confirmButton = {
-            Button(
+            PrimaryButton(
                 enabled = !cashShort,
                 onClick = { onConfirm(method, if (method == "cash") tenderedMinor else dueMinor) },
             ) { Text("Payment received") }
@@ -396,12 +428,16 @@ private fun PayDialog(
 
 @Composable
 private fun QtyButton(label: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.88f else 1f, tween(Motion.fast), label = "qtyBtnScale")
     Box(
         modifier = Modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
             .size(36.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeMd)
             .background(Brand.SurfaceRaised)
-            .clickable(onClick = onClick),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, color = Brand.Gold, fontWeight = FontWeight.Bold)

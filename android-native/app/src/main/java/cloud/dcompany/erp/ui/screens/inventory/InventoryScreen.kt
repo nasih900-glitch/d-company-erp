@@ -50,6 +50,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -194,7 +195,7 @@ private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
 @Composable
 private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewModel) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -223,7 +224,7 @@ private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewM
 private fun PendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
     Column(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .padding(8.dp),
     ) {
@@ -243,7 +244,7 @@ private fun PendingRow(text: String, rejected: Boolean, error: String?, onRetry:
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -270,7 +271,7 @@ private fun StatRow(state: InventoryUiState) {
 @Composable
 private fun StatCard(label: String, value: String, tone: Color, modifier: Modifier = Modifier) {
     Column(
-        modifier.clip(RoundedCornerShape(14.dp)).background(Brand.Surface).padding(14.dp),
+        modifier.clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
@@ -282,7 +283,7 @@ private fun StatCard(label: String, value: String, tone: Color, modifier: Modifi
 @Composable
 private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeLg)
             .background(Brand.Surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -294,7 +295,7 @@ private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             state.restockPriority.forEach { ingredient ->
                 Column(
-                    Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                    Modifier.weight(1f).clip(Radius.shapeSm)
                         .background(Brand.SurfaceRaised)
                         .clickable { vm.select(ingredient) }
                         .padding(10.dp),
@@ -409,7 +410,7 @@ private fun IngredientRowCard(
     onRetrySync: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
             .clickable(onClick = onClick)
             .padding(12.dp),
@@ -478,8 +479,8 @@ private fun IngredientRowCard(
             Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
         } else if (ingredient.rejectedError != null) {
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, RoundedCornerShape(8.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
                 Text("Could not sync: ${ingredient.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
@@ -517,7 +518,7 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
         color = tint,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(Radius.shapeSm)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
     )
@@ -528,7 +529,7 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
 private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
     val ingredient = state.selected
     Column(
-        Modifier.width(360.dp).fillMaxSize().clip(RoundedCornerShape(14.dp))
+        Modifier.width(360.dp).fillMaxSize().clip(Radius.shapeLg)
             .background(Brand.Surface).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -590,7 +591,7 @@ private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
 @Composable
 private fun BatchRow(batch: BatchCacheEntity, unit: String) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -656,7 +657,7 @@ private fun SupplierRowCard(
     onRetrySync: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -700,8 +701,8 @@ private fun SupplierRowCard(
             Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
         } else if (supplier.rejectedError != null) {
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, RoundedCornerShape(8.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                    .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
                 Text("Could not sync: ${supplier.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
@@ -957,7 +958,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         Text("Lines", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
         lines.forEachIndexed { index, line ->
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1116,7 +1117,7 @@ private fun AdjustDialog(
         // to see the resulting number first.
         if (delta != null && delta != 0.0 && after != null) {
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -1198,6 +1199,8 @@ private fun FormDialog(
     content: @Composable () -> Unit,
 ) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!busy) onDismiss() },
         modifier = if (wide) Modifier.width(760.dp) else Modifier.width(480.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1240,7 +1243,7 @@ private fun PickerField(
         Spacer(Modifier.height(4.dp))
         Box {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
                     .clickable(enabled = options.isNotEmpty()) { open = true }
                     .padding(horizontal = 12.dp, vertical = 14.dp),

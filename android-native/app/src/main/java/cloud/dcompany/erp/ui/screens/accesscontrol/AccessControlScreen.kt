@@ -80,6 +80,8 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
 
     state.actionError?.let { msg ->
         AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissActionError,
             confirmButton = { TextButton(onClick = vm::dismissActionError) { Text("OK") } },
             title = { Text("Access Control") },

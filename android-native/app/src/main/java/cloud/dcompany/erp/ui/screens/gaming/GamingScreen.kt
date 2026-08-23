@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
 
 @Composable
@@ -100,6 +101,8 @@ fun GamingScreen(vm: GamingViewModel = viewModel()) {
 
     state.error?.takeIf { state.stations.isNotEmpty() }?.let { msg ->
         AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissError,
             confirmButton = { TextButton(onClick = vm::dismissError) { Text("OK") } },
             title = { Text("Gaming") },
@@ -123,7 +126,7 @@ private fun StationTile(
     } ?: false
 
     Column(
-        Modifier.clip(RoundedCornerShape(16.dp))
+        Modifier.clip(Radius.shapeLg)
             .background(
                 when {
                     overtime -> Brand.Danger
@@ -195,6 +198,8 @@ private fun StartSessionDialog(
     var minutes by remember { mutableStateOf<Int?>(60) }
 
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = onDismiss,
         title = { Text("Start · ${station.name}") },
         text = {

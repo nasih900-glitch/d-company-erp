@@ -49,6 +49,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
 fun MenuScreen() {
@@ -225,9 +226,9 @@ private fun CategoryRowItem(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
-            .border(1.dp, if (selected) Brand.Gold else Brand.Border, RoundedCornerShape(10.dp))
+            .border(1.dp, if (selected) Brand.Gold else Brand.Border, Radius.shapeSm)
             .clickable(onClick = onClick)
             .padding(12.dp),
     ) {
@@ -254,9 +255,9 @@ private fun ItemRowCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radius.shapeMd)
             .background(Brand.Surface)
-            .border(1.dp, Brand.Border, RoundedCornerShape(12.dp))
+            .border(1.dp, Brand.Border, Radius.shapeMd)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -294,9 +295,9 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, RoundedCornerShape(10.dp))
+            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -344,7 +345,8 @@ private fun CategoryEditorDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -409,7 +411,8 @@ private fun ItemDetailsDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -467,7 +470,8 @@ private fun ItemPricingDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -548,7 +552,8 @@ private fun ItemCreateDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )

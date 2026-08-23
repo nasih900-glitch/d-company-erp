@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import kotlin.math.roundToLong
 
 /**
@@ -285,7 +286,7 @@ private fun statusColor(status: String): Color = when (status) {
 @Composable
 private fun PendingEventChangesPanel(state: EventsUiState, vm: EventsViewModel) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -312,7 +313,7 @@ private fun PendingEventChangesPanel(state: EventsUiState, vm: EventsViewModel) 
 @Composable
 private fun EventPendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Brand.SurfaceRaised).padding(8.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -329,7 +330,7 @@ private fun EventPendingRow(text: String, rejected: Boolean, error: String?, onR
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Brand.SurfaceRaised)
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -341,8 +342,8 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun ErrorBanner(message: String, onRetry: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Brand.Surface)
-            .border(1.dp, Brand.Danger, RoundedCornerShape(12.dp)).padding(12.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.Surface)
+            .border(1.dp, Brand.Danger, Radius.shapeMd).padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -532,6 +533,8 @@ private fun SellTicketsDialog(event: Event, state: EventsUiState, vm: EventsView
 @Composable
 private fun TicketsDialog(event: Event, state: EventsUiState, vm: EventsViewModel) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = vm::closeDialog,
         modifier = Modifier.width(560.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -556,7 +559,7 @@ private fun TicketsDialog(event: Event, state: EventsUiState, vm: EventsViewMode
 private fun TicketRow(event: Event, ticket: EventTicket, state: EventsUiState, vm: EventsViewModel) {
     val pendingCheckIn = state.pendingCheckIns.any { it.ticketId == ticket.id }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Brand.SurfaceRaised).padding(10.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -588,7 +591,7 @@ private fun TicketRow(event: Event, ticket: EventTicket, state: EventsUiState, v
 @Composable
 private fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Brand.Surface).padding(14.dp),
+        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
         content = content,
     )
 }
@@ -638,6 +641,8 @@ private fun FormDialog(
     content: @Composable () -> Unit,
 ) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!busy) onDismiss() },
         modifier = Modifier.width(480.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -674,7 +679,7 @@ private fun PickerField(
         Spacer(Modifier.height(4.dp))
         Box {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
                     .clickable(enabled = options.isNotEmpty()) { open = true }
                     .padding(horizontal = 12.dp, vertical = 14.dp),

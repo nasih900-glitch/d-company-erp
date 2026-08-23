@@ -46,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 
 /**
  * Memberships — greenfield screen. Tier browsing is read-only (create/edit
@@ -163,7 +164,7 @@ private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewMo
 @Composable
 private fun CustomerResultRow(customer: CustomerCacheEntity, vm: MembershipsViewModel) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .clickable { vm.selectCustomer(customer) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -333,7 +334,7 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
 @Composable
 private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: MembershipsViewModel) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -358,7 +359,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
 @Composable
 private fun MembershipPendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Brand.SurfaceRaised).padding(8.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -375,7 +376,7 @@ private fun MembershipPendingRow(text: String, rejected: Boolean, error: String?
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Brand.SurfaceRaised)
+        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -391,7 +392,7 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Brand.Surface).padding(14.dp),
+        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
         content = content,
     )
 }
@@ -441,6 +442,8 @@ private fun FormDialog(
     content: @Composable () -> Unit,
 ) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!busy) onDismiss() },
         modifier = Modifier.width(480.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -477,7 +480,7 @@ private fun PickerField(
         Spacer(Modifier.height(4.dp))
         Box {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
                     .clickable(enabled = options.isNotEmpty()) { open = true }
                     .padding(horizontal = 12.dp, vertical = 14.dp),

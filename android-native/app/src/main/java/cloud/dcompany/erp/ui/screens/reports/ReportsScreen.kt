@@ -49,6 +49,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -588,9 +589,9 @@ private fun ManualCollectionsNotice(amountMinor: Long) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.SurfaceRaised)
-            .border(BorderStroke(1.dp, Brand.GoldMuted), RoundedCornerShape(16.dp))
+            .border(BorderStroke(1.dp, Brand.GoldMuted), Radius.shapeLg)
             .padding(16.dp),
     ) {
         Text(
@@ -827,9 +828,9 @@ private fun SectionCard(
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.Surface)
-            .border(BorderStroke(1.dp, Brand.Border), RoundedCornerShape(16.dp))
+            .border(BorderStroke(1.dp, Brand.Border), Radius.shapeLg)
             .padding(16.dp),
         content = content,
     )
@@ -906,7 +907,7 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(44.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radius.shapeMd)
             .background(if (enabled) Brand.SurfaceRaised else Brand.Surface)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,

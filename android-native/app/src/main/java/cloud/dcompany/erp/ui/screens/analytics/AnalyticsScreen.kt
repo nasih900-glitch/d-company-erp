@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import java.util.Locale
 
 @Composable
@@ -381,8 +382,8 @@ private fun SectionCard(
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     Column(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Brand.Surface)
-            .border(BorderStroke(1.dp, Brand.Border), RoundedCornerShape(16.dp)).padding(16.dp),
+        modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface)
+            .border(BorderStroke(1.dp, Brand.Border), Radius.shapeLg).padding(16.dp),
         content = content,
     )
 }

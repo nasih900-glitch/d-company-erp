@@ -42,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.Order
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
 fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
@@ -57,7 +58,7 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
         if (state.rejected.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeMd)
                     .background(Brand.Danger.copy(alpha = 0.15f)).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -111,7 +112,7 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.visible, key = { it.id }) { order ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
                             .background(Brand.Surface)
                             .clickable { vm.select(order) }
                             .padding(14.dp),
@@ -141,6 +142,8 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
 
     state.notice?.let { msg ->
         AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissNotice,
             confirmButton = { TextButton(onClick = vm::dismissNotice) { Text("OK") } },
             title = { Text("Refund") },

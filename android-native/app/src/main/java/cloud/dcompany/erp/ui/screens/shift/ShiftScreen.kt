@@ -41,6 +41,7 @@ import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -69,6 +70,8 @@ fun ShiftScreen(vm: ShiftViewModel = viewModel()) {
 
     state.closedResult?.let { r ->
         AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissResult,
             confirmButton = { TextButton(onClick = vm::dismissResult) { Text("OK") } },
             title = { Text("Shift closed") },
@@ -93,7 +96,7 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
     val floatMinor = remember(float) { Math.round((float.toDoubleOrNull() ?: 0.0) * 100) }
 
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeLg)
             .background(Brand.Surface).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -142,7 +145,7 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
     var confirming by remember { mutableStateOf(false) }
 
     Column(
-        Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxSize().clip(Radius.shapeLg)
             .background(Brand.Surface).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -229,6 +232,8 @@ private fun CloseShiftCard(state: ShiftUiState, vm: ShiftViewModel) {
 
     if (confirming) {
         AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = { confirming = false },
             title = { Text("Close this shift?") },
             text = {
@@ -252,7 +257,7 @@ private val historyDateFormat = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefa
 @Composable
 private fun HistoryRow(s: LocalShiftEntity) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(10.dp),
     ) {
         Text(historyDateFormat.format(Date(s.openedAtMillis)), color = Brand.Foreground)

@@ -42,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
 fun TablesScreen(vm: TablesViewModel = viewModel()) {
@@ -123,6 +124,8 @@ fun TablesScreen(vm: TablesViewModel = viewModel()) {
 
     state.notice?.let { msg ->
         AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissNotice,
             confirmButton = { TextButton(onClick = vm::dismissNotice) { Text("OK") } },
             title = { Text("Tables") },
@@ -138,7 +141,7 @@ private fun TableTile(table: CafeTable, onClick: () -> Unit) {
     val occupied = table.status.lowercase() != "available"
     Column(
         Modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(if (occupied) Brand.SurfaceRaised else Brand.Surface)
             .clickable(onClick = onClick)
             .padding(16.dp),
@@ -169,6 +172,8 @@ private fun OrderBuilder(
     onSend: () -> Unit,
 ) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = onDismiss,
         title = { Text("Table ${table.code}") },
         text = {
@@ -189,7 +194,7 @@ private fun OrderBuilder(
                     ) {
                         items(state.menu, key = { it.id }) { item ->
                             Column(
-                                Modifier.clip(RoundedCornerShape(10.dp))
+                                Modifier.clip(Radius.shapeSm)
                                     .background(Brand.SurfaceRaised)
                                     .clickable { onAdd(item) }
                                     .padding(10.dp),

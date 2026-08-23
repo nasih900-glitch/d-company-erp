@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -237,7 +238,7 @@ private fun Tile(
 ) {
     Column(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.Surface)
             .padding(14.dp),
     ) {
@@ -278,9 +279,9 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, RoundedCornerShape(10.dp))
+            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -294,9 +295,9 @@ private fun SyncFailedNotice(error: String?, onRetry: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.Danger, RoundedCornerShape(10.dp))
+            .border(1.dp, Brand.Danger, Radius.shapeSm)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -333,12 +334,12 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radius.shapeMd)
             .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
             .border(
                 width = 1.dp,
                 color = if (selected) Brand.Gold else Brand.Border,
-                shape = RoundedCornerShape(12.dp),
+                shape = Radius.shapeMd,
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -402,9 +403,9 @@ private fun RankBadge(rank: String) {
         style = MaterialTheme.typography.labelSmall,
         color = if (filled) Brand.Background else colour,
         modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
+            .clip(Radius.shapePill)
             .background(if (filled) colour else Brand.Background)
-            .border(1.dp, colour, RoundedCornerShape(999.dp))
+            .border(1.dp, colour, Radius.shapePill)
             .padding(horizontal = 10.dp, vertical = 3.dp),
     )
 }
@@ -417,8 +418,8 @@ private fun SyncStatusBadge(label: String, colour: androidx.compose.ui.graphics.
         color = colour,
         modifier = Modifier
             .padding(end = 8.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .border(1.dp, colour, RoundedCornerShape(999.dp))
+            .clip(Radius.shapePill)
+            .border(1.dp, colour, Radius.shapePill)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     )
 }
@@ -437,7 +438,7 @@ private fun DetailPlaceholder() {
     Column(
         Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.Surface)
             .padding(20.dp),
         verticalArrangement = Arrangement.Center,
@@ -463,7 +464,7 @@ private fun DetailPane(
     Column(
         Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.Surface)
             .padding(18.dp)
             .verticalScroll(rememberScrollState()),
@@ -528,7 +529,7 @@ private fun RankCard(customer: Customer) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radius.shapeMd)
             .background(Brand.SurfaceRaised)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -554,14 +555,14 @@ private fun RankCard(customer: Customer) {
                 Modifier
                     .fillMaxWidth()
                     .height(6.dp)
-                    .clip(RoundedCornerShape(999.dp))
+                    .clip(Radius.shapePill)
                     .background(Brand.Border),
             ) {
                 Box(
                     Modifier
                         .fillMaxWidth(customer.rankProgress)
                         .height(6.dp)
-                        .clip(RoundedCornerShape(999.dp))
+                        .clip(Radius.shapePill)
                         .background(Brand.Gold),
                 )
             }
@@ -738,7 +739,8 @@ private fun EditorDialog(
         dismissButton = {
             TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") }
         },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -786,7 +788,7 @@ private fun BirthdayPicker(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
         colors = androidx.compose.material3.DatePickerDefaults.colors(
-            containerColor = Brand.SurfaceRaised,
+            containerColor = Brand.SurfaceOverlay,
         ),
     ) {
         DatePicker(state = state)

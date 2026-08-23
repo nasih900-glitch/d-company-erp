@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
@@ -72,7 +73,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
 @Composable
 private fun Card(content: @Composable () -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeLg)
             .background(Brand.Surface).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) { content() }
@@ -212,7 +213,7 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
 @Composable
 private fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -258,7 +259,7 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.branches, key = { it.id }) { b ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
                             .background(Brand.SurfaceRaised).padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
@@ -280,6 +281,8 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
 @Composable
 private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: SettingsViewModel) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!state.branchSaving) vm.closeBranchForm() },
         modifier = Modifier.width(480.dp),
         title = { Text(if (form.isNew) "Add branch" else "Edit ${form.name}") },
@@ -384,7 +387,7 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             ) {
                 items(state.terminals, key = { it.id }) { t ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
                             .background(Brand.SurfaceRaised).padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
@@ -444,6 +447,8 @@ private fun Retry(message: String, onRetry: () -> Unit) =
 private fun Feedback(notice: String?, onDismiss: () -> Unit) {
     notice ?: return
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
         title = { Text("Settings") },

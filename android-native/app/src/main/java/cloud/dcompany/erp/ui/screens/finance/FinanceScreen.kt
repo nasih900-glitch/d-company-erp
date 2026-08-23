@@ -54,6 +54,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -786,7 +787,7 @@ private fun StatGrid(
 private fun StatCard(stat: StatSpec, surface: Color, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(surface)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -857,11 +858,11 @@ private fun Panel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.Surface)
             .then(
                 if (border != null) {
-                    Modifier.border(1.dp, border, RoundedCornerShape(14.dp))
+                    Modifier.border(1.dp, border, Radius.shapeLg)
                 } else {
                     Modifier
                 },
@@ -892,9 +893,9 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radius.shapeMd)
             .background(Brand.Surface)
-            .border(1.dp, Brand.Danger, RoundedCornerShape(12.dp))
+            .border(1.dp, Brand.Danger, Radius.shapeMd)
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -953,7 +954,7 @@ private fun EmptyBlock(title: String, body: String) {
 @Composable
 private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewModel) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -991,7 +992,7 @@ private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewMod
 private fun FinancePendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
     Column(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .padding(8.dp),
     ) {
@@ -1011,7 +1012,7 @@ private fun FinancePendingRow(text: String, rejected: Boolean, error: String?, o
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1236,6 +1237,8 @@ private fun FormDialog(
     content: @Composable () -> Unit,
 ) {
     AlertDialog(
+        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!busy) onDismiss() },
         modifier = Modifier.width(480.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1272,7 +1275,7 @@ private fun PickerField(
         Spacer(Modifier.height(4.dp))
         Box {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
                     .clickable(enabled = options.isNotEmpty()) { open = true }
                     .padding(horizontal = 12.dp, vertical = 14.dp),

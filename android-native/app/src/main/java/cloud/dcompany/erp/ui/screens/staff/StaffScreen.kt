@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -134,7 +135,8 @@ fun StaffScreen() {
             },
             confirmButton = { Button(onClick = vm::confirmDelete) { Text("Remove") } },
             dismissButton = { TextButton(onClick = vm::cancelDelete) { Text("Cancel") } },
-            containerColor = Brand.SurfaceRaised,
+            containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
             titleContentColor = Brand.Foreground,
             textContentColor = Brand.Foreground,
         )
@@ -207,7 +209,7 @@ private fun AttendanceCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(Radius.shapeLg)
             .background(Brand.Surface)
             .padding(14.dp),
     ) {
@@ -240,7 +242,7 @@ private fun AttendanceCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.Foreground,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(Radius.shapeXl)
                             .background(Brand.SurfaceRaised)
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     )
@@ -264,7 +266,7 @@ private fun StaffRowCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radius.shapeMd)
             .background(Brand.Surface)
             .padding(14.dp),
     ) {
@@ -311,9 +313,9 @@ private fun StaffRowCard(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
-                    .border(1.dp, Brand.Danger, RoundedCornerShape(8.dp))
+                    .border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
                 Text("Could not sync: ${row.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
@@ -391,7 +393,8 @@ private fun EditDialog(
             Button(onClick = onSave, enabled = editor.valid && !saving) { Text(if (saving) "Saving…" else "Save") }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -514,7 +517,8 @@ private fun CreateLoginDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -585,7 +589,8 @@ private fun PasswordResetDialog(
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
-        containerColor = Brand.SurfaceRaised,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
     )
@@ -598,9 +603,9 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, RoundedCornerShape(10.dp))
+            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
