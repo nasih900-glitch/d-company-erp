@@ -18,6 +18,7 @@ import {
   type IngredientDTO, type RecipeDTO, type RecipeLineDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type ItemType = 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
 
@@ -132,9 +133,7 @@ export default function MenuScreen() {
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
-        </div>
+        <SkeletonCard />
       ) : !filtered.length ? (
         <div className="card text-fg-muted text-sm">
           {!items.length

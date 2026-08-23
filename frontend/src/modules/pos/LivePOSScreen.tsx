@@ -71,6 +71,7 @@ import {
   receiptConfigurationIssue,
   type ReceiptBusinessDetails,
 } from './receipt-business';
+import { Skeleton } from '@/components/ui/Skeleton';
 
 type CartLine = { item: MenuItemDTO; qty: number };
 type PayMethod = CheckoutPaymentMethod;
@@ -2191,8 +2192,9 @@ export default function LivePOSScreen() {
           </div>
           {heldError && <p className="text-accent-bad text-xs mb-2">{heldError}</p>}
           {heldLoading ? (
-            <div className="flex items-center gap-2 text-fg-muted text-sm py-6 justify-center">
-              <Loader2 className="animate-spin" size={16}/> Loading…
+            <div className="space-y-2 py-2">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-4 w-2/3" />
             </div>
           ) : (
             <div className="space-y-2 max-h-[50vh] overflow-y-auto">

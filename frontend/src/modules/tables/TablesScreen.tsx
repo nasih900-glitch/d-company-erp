@@ -38,6 +38,7 @@ import {
 } from '@/lib/retry-drafts';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard, Skeleton } from '@/components/ui/Skeleton';
 
 // Food/drink/dessert only — gaming and shisha (hookah) sessions bill
 // through the Gaming tab's own Send to POS flow, not Tables.
@@ -156,9 +157,7 @@ export default function TablesScreen() {
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
-        </div>
+        <SkeletonCard />
       ) : !rows.length ? (
         <div className="card text-fg-muted text-sm">
           No tables yet. Click <b>Manage</b>, then <b>New table</b>, to add the first one.
@@ -494,8 +493,9 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
   return (
     <Modal open onClose={onClose} title={`Table ${table.code}`} size="lg">
       {loading ? (
-        <div className="flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-4 w-full" />
         </div>
       ) : (
         <div className="space-y-3">

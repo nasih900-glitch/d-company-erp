@@ -18,6 +18,7 @@ import {
   type MenuItemDTO,
   type StationDTO,
 } from '@/lib/erp-api';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type MenuDraft = { price: string; gst: string };
 type StationDraft = { rate: string };
@@ -259,9 +260,7 @@ export default function PricingTab() {
 
   if (loading) {
     return (
-      <div className="card flex items-center gap-3 text-fg-muted">
-        <Loader2 className="animate-spin" size={16}/> Loading prices...
-      </div>
+      <SkeletonCard />
     );
   }
 

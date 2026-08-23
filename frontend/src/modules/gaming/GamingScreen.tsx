@@ -29,6 +29,7 @@ import { resolveRequiredOpenShift } from '@/lib/operational-context';
 import { subscribeRealtime } from '@/lib/realtime';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const ICON: Record<StationDTO['type'], React.ReactNode> = {
   ps5:       <Gamepad2 size={22}/>,
@@ -525,9 +526,7 @@ export default function GamingScreen() {
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
-        </div>
+        <SkeletonCard />
       ) : !stations.length ? (
         <div className="card text-fg-muted text-sm">
           {canManageStations

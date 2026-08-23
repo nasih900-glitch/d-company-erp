@@ -16,6 +16,7 @@ import { inr } from '@/lib/inr';
 import {
   ocr, settings, type OcrExtractionDTO, type BranchDTO,
 } from '@/lib/erp-api';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const STATUS_COLOR: Record<string, string> = {
   parsed:       'border-accent/40 text-accent',
@@ -144,9 +145,7 @@ export default function OcrScreen() {
         <FileText size={16}/> Verification queue · {rows.length} item{rows.length === 1 ? '' : 's'}
       </h3>
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
-        </div>
+        <SkeletonCard />
       ) : !rows.length ? (
         <div className="card text-fg-muted text-sm">
           No bills in the queue. Upload a receipt to extract vendor / date / amount automatically.

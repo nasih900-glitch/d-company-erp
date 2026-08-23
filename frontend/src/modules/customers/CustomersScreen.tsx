@@ -16,6 +16,7 @@ import {
 import { inr } from '@/lib/inr';
 import { customers, type CustomerDTO } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const RANK_STYLES: Record<string, string> = {
   Rookie: 'text-fg-muted border-bg-border',
@@ -106,9 +107,7 @@ export default function CustomersScreen() {
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
-        </div>
+        <SkeletonCard />
       ) : !rows.length ? (
         <div className="card text-fg-muted text-sm">
           No customers yet. Once you start taking orders with a phone number, they'll appear here automatically.

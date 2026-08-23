@@ -11,13 +11,14 @@
  */
 import { useEffect, useState } from 'react';
 import {
-  ShieldCheck, Search, Loader2, AlertCircle, RefreshCw, Eye,
+  ShieldCheck, Search, AlertCircle, RefreshCw, Eye,
   Plus, Edit2, Trash2, KeyRound, LogIn, ShieldAlert, Lock,
 } from 'lucide-react';
 
 import { audit, type AuditEntryDTO, type AuditFacetsDTO } from '@/lib/erp-api';
 import { inr } from '@/lib/inr';
 import Modal from '@/components/ui/Modal';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const ACTION_COLOR: Record<string, string> = {
   create: 'border-accent-good/40 text-accent-good',
@@ -231,9 +232,7 @@ export default function AuditScreen() {
       )}
 
       {loading ? (
-        <div className="card flex items-center gap-3 text-fg-muted">
-          <Loader2 className="animate-spin" size={16}/> Loading…
-        </div>
+        <SkeletonCard />
       ) : !visibleRows.length ? (
         <div className="card text-fg-muted text-sm">
           No audit entries match. Try clearing filters — or take some actions and reload.
