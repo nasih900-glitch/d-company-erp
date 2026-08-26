@@ -3,7 +3,7 @@ only in the Postgres-gated broadcast integration test."""
 
 from __future__ import annotations
 
-from app.services.realtime import RESOURCES, resource_for_path
+from app.services.realtime import RESOURCES, resource_for_path, resources_for_path
 
 
 def test_every_mapped_resource_is_declared() -> None:
@@ -46,3 +46,71 @@ def test_read_only_aggregate_paths_deliberately_have_no_resource() -> None:
         "/api/v1/accounting/trial-balance",
     ):
         assert resource_for_path(path) is None
+
+
+def test_membership_money_write_invalidates_every_affected_register() -> None:
+    assert resources_for_path("/api/v1/memberships/subscribe") == (
+        "memberships",
+        "shifts",
+        "customers",
+        "finance",
+    )
+
+
+def test_pos_payment_invalidates_shift_customer_finance_and_inventory() -> None:
+    assert resources_for_path("/api/v1/pos/orders/order-123/payments") == (
+        "orders",
+        "tables",
+        "kitchen",
+        "shifts",
+        "customers",
+        "finance",
+        "inventory",
+    )
+
+
+def test_zero_total_completion_invalidates_customer_finance_inventory_not_shift() -> None:
+    assert resources_for_path("/api/v1/pos/orders/order-123/finalize-zero/") == (
+        "orders",
+        "tables",
+        "kitchen",
+        "customers",
+        "finance",
+        "inventory",
+    )
+
+
+def test_unpaid_pos_order_edits_do_not_overinvalidate_customer_or_finance_reads() -> None:
+    ordinary_order_writes = (
+        "/api/v1/pos/orders",
+        "/api/v1/pos/orders/order-123/lines",
+        "/api/v1/pos/orders/order-123/customer",
+        "/api/v1/pos/orders/order-123/discount",
+        "/api/v1/pos/orders/order-123/points",
+        "/api/v1/pos/orders/order-123/reward",
+        "/api/v1/pos/orders/order-123/send-to-pos",
+        "/api/v1/pos/orders/order-123/checkout-claim",
+        "/api/v1/pos/orders/order-123/payments-preview",
+    )
+    for path in ordinary_order_writes:
+        assert resources_for_path(path) == ("orders", "tables", "kitchen")
+
+
+def test_pos_refund_completion_keeps_existing_money_invalidation_convention() -> None:
+    assert resources_for_path(
+        "/api/v1/pos/refund-requests/refund-123/finalize-provider"
+    ) == ("orders", "shifts", "customers", "finance")
+
+
+def test_customer_spend_reconciliation_invalidates_customer_and_finance_reads() -> None:
+    assert resources_for_path(
+        "/api/v1/pos/customer-spend-reconciliations"
+    ) == ("customers", "finance")
+
+
+def test_gaming_pos_handoffs_refresh_both_session_and_held_order_queues() -> None:
+    for path in (
+        "/api/v1/gaming/sessions/session-123/send-to-pos",
+        "/api/v1/gaming/sessions/session-123/reconcile-to-pos",
+    ):
+        assert resources_for_path(path) == ("gaming", "orders")

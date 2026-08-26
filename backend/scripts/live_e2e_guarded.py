@@ -54,6 +54,10 @@ from app.models import (
     IdempotencyKey,
     Ingredient,
     InvoiceCounter,
+    MembershipPayment,
+    MembershipRefund,
+    MembershipRefundResolution,
+    MembershipRefundSettlement,
     MembershipTier,
     MenuCategory,
     MenuItem,
@@ -64,6 +68,11 @@ from app.models import (
     OcrVerification,
     Partner,
     Payment,
+    PosRefundCashHandoff,
+    PosRefundProviderPayoutStart,
+    PosRefundProviderSettlement,
+    PosRefundRequest,
+    PosRefundWithdrawal,
     PurchaseOrder,
     PurchaseOrderLine,
     Refund,
@@ -113,6 +122,7 @@ def http_request(
     terminal_id: str | None = None,
     pricing_token: str | None = None,
     audit_token: str | None = None,
+    checkout_claim_token: str | None = None,
     idem: str | None = None,
     payload: dict[str, Any] | None = None,
     raw_data: bytes | None = None,
@@ -137,8 +147,11 @@ def http_request(
         headers["X-Pricing-Token"] = pricing_token
     if audit_token:
         headers["X-Audit-Token"] = audit_token
+    if checkout_claim_token:
+        headers["X-Checkout-Claim"] = checkout_claim_token
     if idem:
         headers["Idempotency-Key"] = idem
+        headers["X-Client-Action-Id"] = idem
 
     req = Request(f"{BASE_URL}{path}", data=data, headers=headers, method=method)
     try:
@@ -218,6 +231,39 @@ def http_multipart(
 async def _delete_count(session: Any, model: Any, *criteria: Any) -> int:
     result = await session.execute(delete(model).where(*criteria))
     return int(result.rowcount or 0)
+
+
+_POS_APPEND_ONLY_TRIGGERS = (
+    ("refunds", "trg_refunds_immutable"),
+    ("pos_refund_requests", "trg_pos_refund_requests_immutable"),
+    ("pos_refund_cash_handoffs", "trg_pos_refund_cash_handoffs_immutable"),
+    (
+        "pos_refund_provider_payout_starts",
+        "trg_pos_refund_provider_starts_immutable",
+    ),
+    (
+        "pos_refund_provider_settlements",
+        "trg_pos_refund_provider_settlements_immutable",
+    ),
+    ("pos_refund_withdrawals", "trg_pos_refund_withdrawals_immutable"),
+    (
+        "customer_spend_reconciliations",
+        "trg_customer_spend_reconciliations_immutable",
+    ),
+    (
+        "pos_refund_workflow_guards",
+        "trg_pos_refund_workflow_guards_internal",
+    ),
+)
+
+
+async def _set_staging_pos_cleanup_triggers(session: Any, *, enabled: bool) -> None:
+    """Explicit staging-only DDL; production has no caller-controlled bypass."""
+    verb = "ENABLE" if enabled else "DISABLE"
+    for table_name, trigger_name in _POS_APPEND_ONLY_TRIGGERS:
+        await session.execute(
+            text(f"ALTER TABLE {table_name} {verb} TRIGGER {trigger_name}")
+        )
 
 
 def _contains(col: Any, needle: str = MARKER) -> Any:
@@ -316,6 +362,12 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
     """Remove every row that this E2E run created."""
     counts: dict[str, int] = {}
     async with AsyncSessionLocal() as session:
+        # Membership 0035 still owns its separate staging cleanup policy. POS
+        # 0036 deliberately has no caller-settable production bypass.
+        await session.execute(
+            text("SET LOCAL dcompany.allow_financial_history_maintenance = 'on'")
+        )
+        await _set_staging_pos_cleanup_triggers(session, enabled=False)
         company_id = UUID(identity["company_id"]) if identity and identity.get("company_id") else None
         branch_id = UUID(identity["branch_id"]) if identity and identity.get("branch_id") else None
         terminal_id = UUID(identity["terminal_id"]) if identity and identity.get("terminal_id") else None
@@ -399,6 +451,46 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
                 _contains(MembershipTier.code), _contains(MembershipTier.name),
                 _contains(MembershipTier.description),
             )
+        )
+        marker_membership_ids = select(CustomerMembership.id).where(
+            or_(
+                CustomerMembership.customer_id.in_(marker_customer_ids),
+                CustomerMembership.tier_id.in_(marker_tier_ids),
+            )
+        )
+        marker_membership_payment_ids = select(MembershipPayment.id).where(
+            or_(
+                MembershipPayment.membership_id.in_(marker_membership_ids),
+                _eq(MembershipPayment.branch_id, branch_id),
+                _eq(MembershipPayment.terminal_id, terminal_id),
+                _eq(MembershipPayment.created_by, user_id),
+                _contains(MembershipPayment.idempotency_key),
+                _contains(MembershipPayment.note),
+            )
+        )
+        marker_membership_refund_ids = select(MembershipRefund.id).where(
+            or_(
+                MembershipRefund.payment_id.in_(marker_membership_payment_ids),
+                _eq(MembershipRefund.branch_id, branch_id),
+                _eq(MembershipRefund.terminal_id, terminal_id),
+                _eq(MembershipRefund.approved_by, user_id),
+                _contains(MembershipRefund.idempotency_key),
+                _contains(MembershipRefund.reason),
+            )
+        )
+        marker_pos_refund_request_ids = select(PosRefundRequest.id).where(
+            or_(
+                PosRefundRequest.order_id.in_(marker_order_ids),
+                _eq(PosRefundRequest.branch_id, branch_id),
+                _eq(PosRefundRequest.terminal_id, terminal_id),
+                _eq(PosRefundRequest.approved_by, user_id),
+                _contains(PosRefundRequest.idempotency_key),
+                _contains(PosRefundRequest.client_action_id),
+                _contains(PosRefundRequest.note),
+            )
+        )
+        marker_pos_refund_request_id_values = list(
+            (await session.execute(marker_pos_refund_request_ids)).scalars()
         )
         marker_partner_ids = select(Partner.id).where(
             or_(_contains(Partner.name), _contains(Partner.notes))
@@ -498,10 +590,106 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
                 _contains(Asset.type), _contains(Asset.notes),
             ),
         )
+        counts["membership_refund_settlements"] = await _delete_count(
+            session,
+            MembershipRefundSettlement,
+            or_(
+                MembershipRefundSettlement.refund_id.in_(marker_membership_refund_ids),
+                MembershipRefundSettlement.payment_id.in_(marker_membership_payment_ids),
+                _eq(MembershipRefundSettlement.branch_id, branch_id),
+                _eq(MembershipRefundSettlement.terminal_id, terminal_id),
+                _eq(MembershipRefundSettlement.settled_by, user_id),
+                _contains(MembershipRefundSettlement.idempotency_key),
+                _contains(MembershipRefundSettlement.external_ref),
+            ),
+        )
+        counts["membership_refund_resolutions"] = await _delete_count(
+            session,
+            MembershipRefundResolution,
+            or_(
+                MembershipRefundResolution.refund_id.in_(marker_membership_refund_ids),
+                _eq(MembershipRefundResolution.branch_id, branch_id),
+                _eq(MembershipRefundResolution.terminal_id, terminal_id),
+                _eq(MembershipRefundResolution.resolved_by, user_id),
+                _contains(MembershipRefundResolution.idempotency_key),
+                _contains(MembershipRefundResolution.reason),
+            ),
+        )
+        counts["membership_refunds"] = await _delete_count(
+            session,
+            MembershipRefund,
+            MembershipRefund.id.in_(marker_membership_refund_ids),
+        )
         counts["refunds"] = await _delete_count(
             session,
             Refund,
             or_(Refund.order_id.in_(marker_order_ids), _eq(Refund.approved_by, user_id), _contains(Refund.note)),
+        )
+        counts["pos_refund_provider_settlements"] = await _delete_count(
+            session,
+            PosRefundProviderSettlement,
+            or_(
+                PosRefundProviderSettlement.refund_request_id.in_(
+                    marker_pos_refund_request_ids
+                ),
+                _eq(PosRefundProviderSettlement.branch_id, branch_id),
+                _eq(PosRefundProviderSettlement.terminal_id, terminal_id),
+                _eq(PosRefundProviderSettlement.settled_by, user_id),
+                _contains(PosRefundProviderSettlement.idempotency_key),
+                _contains(PosRefundProviderSettlement.external_reference),
+            ),
+        )
+        counts["pos_refund_provider_payout_starts"] = await _delete_count(
+            session,
+            PosRefundProviderPayoutStart,
+            or_(
+                PosRefundProviderPayoutStart.refund_request_id.in_(
+                    marker_pos_refund_request_ids
+                ),
+                _eq(PosRefundProviderPayoutStart.branch_id, branch_id),
+                _eq(PosRefundProviderPayoutStart.terminal_id, terminal_id),
+                _eq(PosRefundProviderPayoutStart.started_by, user_id),
+                _contains(PosRefundProviderPayoutStart.idempotency_key),
+            ),
+        )
+        counts["pos_refund_cash_handoffs"] = await _delete_count(
+            session,
+            PosRefundCashHandoff,
+            or_(
+                PosRefundCashHandoff.refund_request_id.in_(marker_pos_refund_request_ids),
+                _eq(PosRefundCashHandoff.branch_id, branch_id),
+                _eq(PosRefundCashHandoff.terminal_id, terminal_id),
+                _eq(PosRefundCashHandoff.started_by, user_id),
+                _contains(PosRefundCashHandoff.idempotency_key),
+            ),
+        )
+        counts["pos_refund_withdrawals"] = await _delete_count(
+            session,
+            PosRefundWithdrawal,
+            or_(
+                PosRefundWithdrawal.refund_request_id.in_(marker_pos_refund_request_ids),
+                _eq(PosRefundWithdrawal.branch_id, branch_id),
+                _eq(PosRefundWithdrawal.terminal_id, terminal_id),
+                _eq(PosRefundWithdrawal.withdrawn_by, user_id),
+                _contains(PosRefundWithdrawal.idempotency_key),
+                _contains(PosRefundWithdrawal.reason),
+            ),
+        )
+        guard_count = 0
+        for request_id in marker_pos_refund_request_id_values:
+            result = await session.execute(
+                text(
+                    "DELETE FROM pos_refund_workflow_guards "
+                    "WHERE refund_request_id = :request_id"
+                ),
+                {"request_id": request_id},
+            )
+            guard_count += int(result.rowcount or 0)
+        counts["pos_refund_workflow_guards"] = guard_count
+        counts["pos_refund_requests"] = await _delete_count(
+            session,
+            PosRefundRequest,
+            PosRefundRequest.id.in_(marker_pos_refund_request_ids),
         )
         counts["payments"] = await _delete_count(
             session,
@@ -570,6 +758,11 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
             session,
             Order,
             or_(Order.id.in_(marker_order_ids), _eq(Order.branch_id, branch_id), _eq(Order.terminal_id, terminal_id), Order.shift_id.in_(marker_shift_ids), _eq(Order.opened_by, user_id)),
+        )
+        counts["membership_payments"] = await _delete_count(
+            session,
+            MembershipPayment,
+            MembershipPayment.id.in_(marker_membership_payment_ids),
         )
         counts["idempotency_keys"] = await _delete_count(
             session,
@@ -690,6 +883,7 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
             or_(_eq(Branch.id, branch_id), _contains(Branch.code), _contains(Branch.name), _contains(Branch.address)),
         )
 
+        await _set_staging_pos_cleanup_triggers(session, enabled=True)
         await session.commit()
     return counts
 
@@ -710,6 +904,11 @@ SCAN_SQL = {
     "orders": "select count(*) from orders where customer_name ilike :m or customer_phone ilike :m or notes ilike :m or idempotency_key ilike :m",
     "payments": "select count(*) from payments where ref_external ilike :m",
     "refunds": "select count(*) from refunds where note ilike :m",
+    "pos_refund_requests": "select count(*) from pos_refund_requests where client_action_id ilike :m or idempotency_key ilike :m or note ilike :m",
+    "pos_refund_cash_handoffs": "select count(*) from pos_refund_cash_handoffs where idempotency_key ilike :m",
+    "pos_refund_provider_payout_starts": "select count(*) from pos_refund_provider_payout_starts where idempotency_key ilike :m",
+    "pos_refund_provider_settlements": "select count(*) from pos_refund_provider_settlements where idempotency_key ilike :m or external_reference ilike :m",
+    "pos_refund_withdrawals": "select count(*) from pos_refund_withdrawals where reason ilike :m or idempotency_key ilike :m",
     "customers": "select count(*) from customers where name ilike :m or phone ilike :m or notes ilike :m",
     "stations": "select count(*) from stations where code ilike :m or name ilike :m or notes ilike :m",
     "gaming_sessions": "select count(*) from gaming_sessions where customer_name ilike :m or customer_phone ilike :m",
@@ -720,6 +919,10 @@ SCAN_SQL = {
     "events": "select count(*) from events where name ilike :m or description ilike :m or screen ilike :m or poster_url ilike :m",
     "event_tickets": "select count(*) from event_tickets where customer_name ilike :m or customer_phone ilike :m or note ilike :m",
     "membership_tiers": "select count(*) from membership_tiers where code ilike :m or name ilike :m or description ilike :m",
+    "membership_payments": "select count(*) from membership_payments where idempotency_key ilike :m or note ilike :m",
+    "membership_refunds": "select count(*) from membership_refunds where idempotency_key ilike :m or reason ilike :m",
+    "membership_refund_settlements": "select count(*) from membership_refund_settlements where idempotency_key ilike :m or external_ref ilike :m",
+    "membership_refund_resolutions": "select count(*) from membership_refund_resolutions where idempotency_key ilike :m or reason ilike :m",
     "partners": "select count(*) from partners where name ilike :m or notes ilike :m",
     "capital_entries": "select count(*) from capital_entries where note ilike :m",
     "expense_categories": "select count(*) from expense_categories where name ilike :m or code ilike :m",
@@ -943,13 +1146,29 @@ async def main() -> int:
             "membership pricing update persists",
             checks,
         )
+        shift = http_json(
+            "POST",
+            "/pos/shifts/open",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            payload={"opening_float_minor": 1000},
+        )
+        shift_id = shift["id"]
+        check(bool(shift_id), "POS shift opens on temp terminal", checks)
+
+        membership_collected_at = datetime.now(timezone.utc).isoformat()
         subscription = http_json(
             "POST",
             "/memberships/subscribe",
             token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"membership-subscribe:{MARKER}",
             payload={
                 "customer_id": customer["id"],
                 "tier_id": tier["id"],
+                "shift_id": shift_id,
+                "expected_amount_minor": 109900,
+                "collected_at": membership_collected_at,
                 "billing_cycle": "monthly",
                 "paid_via": "cash",
             },
@@ -1067,6 +1286,7 @@ async def main() -> int:
             "POST",
             "/inventory/grn",
             token=token,
+            idem=f"inventory-grn:{MARKER}",
             payload={
                 "supplier_id": supplier["id"],
                 "branch_id": identity["branch_id"],
@@ -1090,6 +1310,7 @@ async def main() -> int:
             "POST",
             "/inventory/adjustments",
             token=token,
+            idem=f"inventory-adjustment:{MARKER}",
             payload={
                 "ingredient_id": ingredient["id"],
                 "branch_id": identity["branch_id"],
@@ -1135,6 +1356,7 @@ async def main() -> int:
             "POST",
             "/finance/expenses",
             token=token,
+            idem=f"finance-expense:{MARKER}",
             payload={
                 "branch_id": identity["branch_id"],
                 "category_id": expense_category["id"],
@@ -1151,6 +1373,7 @@ async def main() -> int:
             "POST",
             "/finance/assets",
             token=token,
+            idem=f"finance-asset:{MARKER}",
             payload={
                 "branch_id": identity["branch_id"],
                 "name": f"{MARKER} Espresso Machine",
@@ -1176,11 +1399,13 @@ async def main() -> int:
             "POST",
             "/finance/capital-entries",
             token=token,
+            idem=f"finance-capital:{MARKER}",
             payload={
                 "partner_id": partner["id"],
                 "type": "invest",
                 "amount_minor": 500000,
                 "effective_at": datetime.now(timezone.utc).isoformat(),
+                "source_ref": f"e2e:{RUN_ID}:{MARKER}",
                 "note": MARKER,
             },
         )
@@ -1306,7 +1531,7 @@ async def main() -> int:
             pricing_token=pricing_token,
             payload={"base_ticket_price_minor": 5500},
         )
-        tickets = http_json(
+        _, _, blocked_ticket_raw = http_request(
             "POST",
             f"/events/{event['id']}/tickets",
             token=token,
@@ -1317,20 +1542,15 @@ async def main() -> int:
                 "qty": 2,
                 "note": MARKER,
             },
-        )
-        checked_ticket = http_json(
-            "POST",
-            f"/events/{event['id']}/tickets/{tickets[0]['id']}/check-in",
-            token=token,
-            payload={},
+            expected=(422,),
         )
         ticket_rows = http_json("GET", f"/events/{event['id']}/tickets", token=token)
         check(
             event_updated.get("base_ticket_price_minor") == 5500
-            and len(tickets) == 2
-            and checked_ticket.get("status") == "checked_in"
-            and len(ticket_rows) == 2,
-            "event pricing, ticket sale, check-in, and list work",
+            and b"direct event ticket sales are temporarily disabled"
+            in blocked_ticket_raw.lower()
+            and ticket_rows == [],
+            "event pricing persists and unsafe direct ticket sales fail closed",
             checks,
         )
 
@@ -1360,16 +1580,6 @@ async def main() -> int:
             stations[station_type] = created["id"]
         check(set(stations) == {"ps5", "vr", "simulator", "streaming", "hookah"}, "gaming stations create for all cafe session types", checks)
 
-        shift = http_json(
-            "POST",
-            "/pos/shifts/open",
-            token=token,
-            terminal_id=identity["terminal_id"],
-            payload={"opening_float_minor": 1000},
-        )
-        shift_id = shift["id"]
-        check(bool(shift_id), "POS shift opens on temp terminal", checks)
-
         order = http_json(
             "POST",
             "/pos/orders",
@@ -1377,8 +1587,9 @@ async def main() -> int:
             terminal_id=identity["terminal_id"],
             idem=f"{RUN_ID}-order-1",
             payload={
-                "type": "dine_in",
-                "table_id": table["id"],
+                # This is a direct POS checkout. Table-originated orders use
+                # the separate Tables -> Send to POS -> claim flow below.
+                "type": "takeaway",
                 "shift_id": shift_id,
                 "customer_name": MARKER,
                 "customer_phone": customer_phone,
@@ -1472,20 +1683,65 @@ async def main() -> int:
             checks,
         )
 
-        refund = http_json(
+        refund_action = f"{RUN_ID}-refund-request-1"
+        refund_request = http_json(
             "POST",
-            f"/pos/orders/{order['id']}/refunds",
+            "/pos/refund-requests",
             token=token,
             terminal_id=identity["terminal_id"],
-            idem=f"{RUN_ID}-refund-1",
+            idem=refund_action,
             payload={
+                "order_id": order["id"],
+                "shift_id": shift_id,
                 "reason_code": "customer_request",
                 "amount_minor": 100,
+                "expected_paid_minor": total_minor,
+                "expected_refundable_minor": total_minor,
                 "mode": "original",
+                "client_action_id": refund_action,
                 "note": MARKER,
             },
         )
-        check(bool(refund.get("id")), "POS partial refund records", checks)
+        check(
+            refund_request.get("status") == "accepted_cash_due",
+            "POS cash refund creates a recoverable server task without moving money",
+            checks,
+        )
+        refund_handoff = http_json(
+            "POST",
+            f"/pos/refund-requests/{refund_request['id']}/begin-cash-handoff",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-refund-handoff-1",
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 100,
+                "ready_to_handover": True,
+            },
+        )
+        check(
+            refund_handoff.get("status") == "cash_handoff_in_progress",
+            "POS refund records server handoff before drawer cash is touched",
+            checks,
+        )
+        refund = http_json(
+            "POST",
+            f"/pos/refund-requests/{refund_request['id']}/settle-cash",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-refund-settle-1",
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 100,
+                "cash_handed_over": True,
+                "settled_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        check(
+            refund.get("status") == "settled" and bool(refund.get("refund_id")),
+            "POS partial cash refund settles exactly once on the server",
+            checks,
+        )
 
         # --- Tables -> Send to Kitchen -> Send to POS -> bill lifecycle ---
         tables_before = http_json("GET", "/tables", token=token)
@@ -1610,11 +1866,25 @@ async def main() -> int:
             checks,
         )
 
+        table_claim = http_json(
+            "POST",
+            f"/pos/orders/{table_order['id']}/checkout-claim",
+            token=token,
+            terminal_id=identity["terminal_id"],
+        )
+        check(
+            table_claim.get("order_id") == table_order["id"]
+            and bool(table_claim.get("claim_token")),
+            "cashier claims the held table order before payment",
+            checks,
+        )
+
         table_payment = http_json(
             "POST",
             f"/pos/orders/{table_order['id']}/payments",
             token=token,
             terminal_id=identity["terminal_id"],
+            checkout_claim_token=table_claim["claim_token"],
             idem=f"{RUN_ID}-table-order-1-pay",
             payload={
                 "method": "cash",
@@ -1655,6 +1925,7 @@ async def main() -> int:
             "POST",
             "/gaming/sessions/start",
             token=token,
+            idem=f"gaming-missing-terminal:{MARKER}",
             payload={
                 "station_id": stations["ps5"],
                 "shift_id": shift_id,
@@ -1675,6 +1946,7 @@ async def main() -> int:
                 "/gaming/sessions/start",
                 token=token,
                 terminal_id=identity["terminal_id"],
+                idem=f"gaming-start:{station_type}:{MARKER}",
                 payload={
                     "station_id": station_id,
                     "shift_id": shift_id,
@@ -1707,6 +1979,7 @@ async def main() -> int:
                 f"/gaming/sessions/{session_started['id']}/stop",
                 token=token,
                 terminal_id=identity["terminal_id"],
+                idem=f"gaming-stop:{station_type}:{MARKER}",
                 payload={},
             )
             check(
@@ -1719,6 +1992,7 @@ async def main() -> int:
                 f"/gaming/sessions/{session_started['id']}/stop",
                 token=token,
                 terminal_id=identity["terminal_id"],
+                idem=f"gaming-stop:{station_type}:{MARKER}",
                 payload={},
             )
             check(
@@ -1736,8 +2010,8 @@ async def main() -> int:
                 payload={},
             )
             check(
-                bool(sent.get("order_id")) and sent.get("amount_minor") == stopped.get("amount_minor"),
-                f"gaming {station_type} session sends to POS and matches the stopped amount",
+                bool(sent.get("order_id")) and int(sent.get("amount_minor") or 0) > 0,
+                f"gaming {station_type} session sends to POS",
                 checks,
             )
             session_order = http_json(
@@ -1750,12 +2024,16 @@ async def main() -> int:
                 session_order.get("status") == "held"
                 and session_order.get("type") == "session"
                 and len(session_order.get("lines", [])) == 1
+                and sent.get("amount_minor") == session_order.get("total_minor")
+                and session_order["lines"][0]["line_total_minor"]
+                == stopped.get("amount_minor")
                 and session_order["lines"][0]["taxable_value_minor"]
                 + session_order["lines"][0]["cgst_minor"]
                 + session_order["lines"][0]["sgst_minor"]
                 + session_order["lines"][0]["igst_minor"]
+                + session_order["round_off_minor"]
                 == session_order["total_minor"],
-                f"gaming {station_type} session order is held with one internally-consistent GST line",
+                f"gaming {station_type} session order preserves the stopped charge and applies GST/round-off consistently",
                 checks,
             )
             resent_session = http_json(
@@ -1793,6 +2071,18 @@ async def main() -> int:
                 f"gaming {station_type} session order carries a station source_label in the held queue",
                 checks,
             )
+            session_claim = http_json(
+                "POST",
+                f"/pos/orders/{sent['order_id']}/checkout-claim",
+                token=token,
+                terminal_id=identity["terminal_id"],
+            )
+            check(
+                session_claim.get("order_id") == sent["order_id"]
+                and bool(session_claim.get("claim_token")),
+                f"cashier claims gaming {station_type} session order before payment",
+                checks,
+            )
             # Pay off every station's session order — an unpaid held order
             # would otherwise block closing the temp shift at the end of this run.
             session_payment = http_json(
@@ -1800,6 +2090,7 @@ async def main() -> int:
                 f"/pos/orders/{sent['order_id']}/payments",
                 token=token,
                 terminal_id=identity["terminal_id"],
+                checkout_claim_token=session_claim["claim_token"],
                 idem=f"{RUN_ID}-session-order-pay-{station_type}",
                 payload={
                     "method": "cash",
@@ -2113,6 +2404,7 @@ async def main() -> int:
             "/gaming/sessions/start",
             token=token,
             terminal_id=identity["terminal_id"],
+            idem=f"gaming-unsent-start:{MARKER}",
             payload={
                 "station_id": stations["ps5"],
                 "shift_id": shift_id,
@@ -2124,14 +2416,28 @@ async def main() -> int:
             f"/gaming/sessions/{unsent_session['id']}/stop",
             token=token,
             terminal_id=identity["terminal_id"],
+            idem=f"gaming-unsent-stop:{MARKER}",
             payload={},
         )
+        open_shift_rows = http_json(
+            "GET",
+            "/pos/shifts?only_open=true",
+            token=token,
+            terminal_id=identity["terminal_id"],
+        )
+        open_shift = next(
+            (row for row in open_shift_rows if str(row.get("id")) == shift_id),
+            None,
+        )
+        if open_shift is None or open_shift.get("expected_minor") is None:
+            raise E2EError("open shift disappeared before drawer reconciliation")
+        expected_cash_at_close = int(open_shift["expected_minor"])
         _, _, blocked_close_raw = http_request(
             "POST",
             f"/pos/shifts/{shift_id}/close",
             token=token,
             terminal_id=identity["terminal_id"],
-            payload={"counted_minor": total_minor + 1000},
+            payload={"counted_minor": expected_cash_at_close},
             expected=(422,),
         )
         check(
@@ -2159,9 +2465,13 @@ async def main() -> int:
             f"/pos/shifts/{shift_id}/close",
             token=token,
             terminal_id=identity["terminal_id"],
-            payload={"counted_minor": total_minor + 1000},
+            payload={"counted_minor": expected_cash_at_close},
         )
-        check(close.get("status") == "closed", "POS shift closes", checks)
+        check(
+            close.get("status") == "closed" and close.get("variance_minor") == 0,
+            "POS shift closes against the server-authoritative expected drawer",
+            checks,
+        )
 
         otp_request = http_json(
             "POST",

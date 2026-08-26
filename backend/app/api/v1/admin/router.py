@@ -6,10 +6,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, cast, distinct, or_, select
+from sqlalchemy import String, and_, cast, distinct, or_, select
 
+from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.db import SessionDep
 from app.core.errors import AuthError, BusinessRuleError, NotFoundError
 from app.core.permissions import (
@@ -39,6 +40,15 @@ class AuditEntry(BaseModel):
     after: dict[str, Any] | None
     ip: str | None
     user_agent: str | None
+    terminal_id: UUID | None
+    request_id: str | None
+    client_platform: str | None
+    client_version_code: int | None
+    client_action_id: str | None
+    client_reported_at: datetime | None
+    client_was_offline: bool | None
+    synced_at: datetime | None
+    reason: str | None
     created_at: datetime
 
 
@@ -62,7 +72,14 @@ class PricingUnlockResponse(BaseModel):
 
 
 AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
-    "pos": ("Order", "OrderLine", "Payment", "Refund", "Shift"),
+    "pos": (
+        "Order", "OrderLine", "Payment", "Refund", "MembershipPaymentRequest",
+        "MembershipPaymentCashCollection", "MembershipPaymentProviderAction",
+        "MembershipPaymentRequestResolution", "MembershipPayment",
+        "MembershipPaymentAttemptResolution", "MembershipRefund",
+        "MembershipRefundCashHandoff", "MembershipRefundProviderAction",
+        "MembershipRefundResolution", "MembershipRefundSettlement", "Shift",
+    ),
     "customers": ("Customer", "CustomerMembership", "MembershipTier"),
     "staff": ("User", "UserRole", "Role"),
     "inventory": (
@@ -83,6 +100,17 @@ AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
         "JournalEntry",
         "JournalLine",
         "ManualCollection",
+        "MembershipPaymentRequest",
+        "MembershipPaymentCashCollection",
+        "MembershipPaymentProviderAction",
+        "MembershipPaymentRequestResolution",
+        "MembershipPayment",
+        "MembershipPaymentAttemptResolution",
+        "MembershipRefund",
+        "MembershipRefundCashHandoff",
+        "MembershipRefundProviderAction",
+        "MembershipRefundResolution",
+        "MembershipRefundSettlement",
         "Partner",
         "CapitalEntry",
     ),
@@ -115,13 +143,6 @@ def _apply_audit_area_filter(stmt: Any, area: str | None) -> Any:
     return stmt
 
 
-def _request_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    return request.client.host if request.client else None
-
-
 def _audit_security_event(
     *,
     session: SessionDep,
@@ -140,8 +161,8 @@ def _audit_security_event(
             entity_id=str(tenant.user_id),
             before=None,
             after={"result": action, **(details or {})},
-            ip=_request_ip(request),
-            user_agent=request.headers.get("user-agent"),
+            ip=trusted_client_ip(request),
+            user_agent=audit_user_agent(request),
         )
     )
 
@@ -241,13 +262,16 @@ async def list_audit(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("admin.audit.read")),
     x_audit_token: str | None = Header(default=None, alias="X-Audit-Token"),
-    limit: int = 100,
-    entity_type: str | None = None,
-    action: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    before_id: int | None = Query(default=None, ge=1),
+    entity_type: str | None = Query(default=None, max_length=100),
+    action: str | None = Query(default=None, max_length=100),
     actor_user_id: UUID | None = None,
-    entity_id: str | None = None,
-    area: str | None = None,
-    q: str | None = None,
+    entity_id: str | None = Query(default=None, max_length=64),
+    terminal_id: UUID | None = None,
+    request_id: str | None = Query(default=None, max_length=64),
+    area: str | None = Query(default=None, max_length=32),
+    q: str | None = Query(default=None, min_length=1, max_length=200),
 ) -> list[AuditEntry]:
     """List audit log entries newest-first, scoped to this company.
 
@@ -259,11 +283,19 @@ async def list_audit(
 
     stmt = (
         select(AuditLog, User.name, User.email)
-        .outerjoin(User, User.id == AuditLog.actor_user_id)
+        .outerjoin(
+            User,
+            and_(
+                User.id == AuditLog.actor_user_id,
+                User.company_id == AuditLog.company_id,
+            ),
+        )
         .where(AuditLog.company_id == tenant.company_id)
         .order_by(AuditLog.id.desc())
-        .limit(min(limit, 500))
+        .limit(limit)
     )
+    if before_id:
+        stmt = stmt.where(AuditLog.id < before_id)
     if entity_type:
         stmt = stmt.where(AuditLog.entity_type == entity_type)
     if action:
@@ -272,15 +304,23 @@ async def list_audit(
         stmt = stmt.where(AuditLog.actor_user_id == actor_user_id)
     if entity_id:
         stmt = stmt.where(AuditLog.entity_id == entity_id)
+    if terminal_id:
+        stmt = stmt.where(AuditLog.terminal_id == terminal_id)
+    if request_id:
+        stmt = stmt.where(AuditLog.request_id == request_id)
     stmt = _apply_audit_area_filter(stmt, area)
     if q:
         # Cast JSONB to text and ilike — sufficient for "search for a phone
         # number" or "find an invoice change" without needing a full-text index.
-        like = f"%{q}%"
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         stmt = stmt.where(
             or_(
-                cast(AuditLog.before, String).ilike(like),
-                cast(AuditLog.after, String).ilike(like),
+                cast(AuditLog.before, String).ilike(like, escape="\\"),
+                cast(AuditLog.after, String).ilike(like, escape="\\"),
+                AuditLog.reason.ilike(like, escape="\\"),
+                AuditLog.request_id.ilike(like, escape="\\"),
+                AuditLog.client_action_id.ilike(like, escape="\\"),
             )
         )
     rows = (await session.execute(stmt)).all()
@@ -297,6 +337,15 @@ async def list_audit(
             after=r.AuditLog.after,
             ip=r.AuditLog.ip,
             user_agent=r.AuditLog.user_agent,
+            terminal_id=r.AuditLog.terminal_id,
+            request_id=r.AuditLog.request_id,
+            client_platform=r.AuditLog.client_platform,
+            client_version_code=r.AuditLog.client_version_code,
+            client_action_id=r.AuditLog.client_action_id,
+            client_reported_at=r.AuditLog.client_reported_at,
+            client_was_offline=r.AuditLog.client_was_offline,
+            synced_at=r.AuditLog.synced_at,
+            reason=r.AuditLog.reason,
             created_at=r.AuditLog.created_at,
         )
         for r in rows
@@ -314,19 +363,25 @@ async def audit_facets(
     _require_audit_unlock(x_audit_token, tenant)
 
     types = (
-        await session.execute(
-            select(distinct(AuditLog.entity_type)).where(
-                AuditLog.company_id == tenant.company_id
+        (
+            await session.execute(
+                select(distinct(AuditLog.entity_type)).where(
+                    AuditLog.company_id == tenant.company_id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     actions = (
-        await session.execute(
-            select(distinct(AuditLog.action)).where(
-                AuditLog.company_id == tenant.company_id
+        (
+            await session.execute(
+                select(distinct(AuditLog.action)).where(AuditLog.company_id == tenant.company_id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return AuditFacetsDTO(
         entity_types=sorted([t for t in types if t]),
         actions=sorted([a for a in actions if a]),
@@ -361,12 +416,16 @@ async def get_access_control(
     """Protected-owner-only: every role's effective access per feature
     module, so it can be toggled without a code deploy."""
     overrides = (
-        await session.execute(
-            select(RolePermissionOverride).where(
-                RolePermissionOverride.company_id == tenant.company_id
+        (
+            await session.execute(
+                select(RolePermissionOverride).where(
+                    RolePermissionOverride.company_id == tenant.company_id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     override_by_key = {(o.role_code, o.module): o.allowed for o in overrides}
 
     role_codes = [r for r in ROLE_PERMISSIONS if r != PROTECTED_OWNER_ROLE]
@@ -377,13 +436,15 @@ async def get_access_control(
         for module in modules:
             default_allowed = bool(MODULE_PERMISSIONS[module] & role_perms)
             override = override_by_key.get((role_code, module))
-            cells.append(AccessCell(
-                role_code=role_code,
-                module=module,
-                default_allowed=default_allowed,
-                override=override,
-                allowed=default_allowed if override is None else override,
-            ))
+            cells.append(
+                AccessCell(
+                    role_code=role_code,
+                    module=module,
+                    default_allowed=default_allowed,
+                    override=override,
+                    allowed=default_allowed if override is None else override,
+                )
+            )
     return AccessControlDTO(
         roles={r: ROLE_DESCRIPTIONS.get(r, r) for r in role_codes},
         modules=modules,
@@ -432,13 +493,15 @@ async def update_access_control(
     elif existing:
         existing.allowed = payload.allowed
     else:
-        session.add(RolePermissionOverride(
-            id=uuid4(),
-            company_id=tenant.company_id,
-            role_code=payload.role_code,
-            module=payload.module,
-            allowed=payload.allowed,
-        ))
+        session.add(
+            RolePermissionOverride(
+                id=uuid4(),
+                company_id=tenant.company_id,
+                role_code=payload.role_code,
+                module=payload.module,
+                allowed=payload.allowed,
+            )
+        )
     await session.flush()
 
     default_allowed = bool(

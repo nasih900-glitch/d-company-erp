@@ -13,7 +13,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BusinessRuleError
@@ -23,13 +23,14 @@ from app.models import (
     Asset,
     Branch,
     CapitalEntry,
-    Event,
-    EventTicket,
     Expense,
     ExpenseCategory,
     JournalEntry,
     JournalLine,
     ManualCollection,
+    MembershipPayment,
+    MembershipRefund,
+    MembershipRefundSettlement,
     Order,
     Partner,
     Payment,
@@ -49,12 +50,12 @@ from app.services.accounting.accounts import (
     DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
     DEPRECIATION_EXPENSE,
     DISCOUNTS_GIVEN,
-    EVENT_REVENUE,
     HISTORICAL_FUNDS,
     IGST_PAYABLE,
     INVENTORY,
     LOYALTY_POINTS_REDEEMED,
     MANUAL_COLLECTION_REVENUE,
+    MEMBERSHIP_REVENUE,
     OTHER_EXPENSES,
     PARTNER_CAPITAL,
     POS_SETTLEMENT_CLEARING,
@@ -70,7 +71,6 @@ from app.services.accounting.accounts import (
     WALLET_CLEARING,
 )
 from app.services.accounting.depreciation import asset_depreciation_expense_minor
-from app.services.pos.pricing import split_tax_from_inclusive_minor
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +214,66 @@ def _manual_collection_ledger_lines(
                     ref_id=collection.id,
                     account=MANUAL_COLLECTION_REVENUE_ACCOUNT,
                     credit=collection.amount_minor,
+                    memo=memo,
+                ),
+            ]
+        )
+    return lines
+
+
+def _membership_payment_ledger_lines(
+    payments: list[MembershipPayment],
+) -> list[LedgerLine]:
+    """Recognize only explicit settlement rows, never bare entitlements."""
+    lines: list[LedgerLine] = []
+    for payment in payments:
+        memo = payment.note or f"Membership payment {payment.membership_id}"
+        lines.extend(
+            [
+                _line(
+                    occurred_at=payment.paid_at,
+                    ref_type="membership_payment",
+                    ref_id=payment.id,
+                    account=_method_account(payment.method),
+                    debit=payment.amount_minor,
+                    memo=memo,
+                ),
+                _line(
+                    occurred_at=payment.paid_at,
+                    ref_type="membership_payment",
+                    ref_id=payment.id,
+                    account=MEMBERSHIP_REVENUE.ledger_tuple,
+                    credit=payment.amount_minor,
+                    memo=memo,
+                ),
+            ]
+        )
+    return lines
+
+
+def _membership_refund_ledger_lines(
+    rows: list[tuple[MembershipRefundSettlement, MembershipRefund]],
+) -> list[LedgerLine]:
+    """Reverse membership revenue against the rail that paid the refund."""
+    lines: list[LedgerLine] = []
+    for settlement, refund in rows:
+        memo = f"Membership refund: {refund.reason}"
+        lines.extend(
+            [
+                _line(
+                    occurred_at=settlement.settled_at,
+                    ref_type="membership_refund",
+                    ref_id=settlement.id,
+                    account=MEMBERSHIP_REVENUE.ledger_tuple,
+                    debit=settlement.amount_minor,
+                    memo=memo,
+                ),
+                _line(
+                    occurred_at=settlement.settled_at,
+                    ref_type="membership_refund",
+                    ref_id=settlement.id,
+                    account=_method_account(settlement.method),
+                    credit=settlement.amount_minor,
                     memo=memo,
                 ),
             ]
@@ -395,7 +455,44 @@ async def build_operational_ledger(
         )
     )
 
-    sale_at = Order.invoice_issued_at
+    membership_stmt = (
+        select(MembershipPayment)
+        .where(
+            MembershipPayment.company_id == company_id,
+            MembershipPayment.paid_at < end_exclusive,
+        )
+        .order_by(MembershipPayment.paid_at, MembershipPayment.id)
+    )
+    if start_at is not None:
+        membership_stmt = membership_stmt.where(MembershipPayment.paid_at >= start_at)
+    membership_rows = (await session.execute(membership_stmt)).scalars().all()
+    lines.extend(_membership_payment_ledger_lines(list(membership_rows)))
+
+    membership_refund_stmt = (
+        select(MembershipRefundSettlement, MembershipRefund)
+        .join(MembershipRefund, MembershipRefund.id == MembershipRefundSettlement.refund_id)
+        .where(
+            MembershipRefundSettlement.company_id == company_id,
+            MembershipRefundSettlement.settled_at < end_exclusive,
+        )
+        .order_by(
+            MembershipRefundSettlement.settled_at,
+            MembershipRefundSettlement.id,
+        )
+    )
+    if start_at is not None:
+        membership_refund_stmt = membership_refund_stmt.where(
+            MembershipRefundSettlement.settled_at >= start_at
+        )
+    membership_refund_rows = (
+        await session.execute(membership_refund_stmt)
+    ).all()
+    lines.extend(_membership_refund_ledger_lines(list(membership_refund_rows)))
+
+    # Keep the sale cohort aligned with Reports/Insights for paid legacy rows
+    # created before invoice_issued_at was reliably persisted. The report DTO
+    # exposes these fallback rows as an explicit reconciliation warning.
+    sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     order_stmt = select(Order).where(
         Order.company_id == company_id,
         sale_at.isnot(None),
@@ -542,14 +639,15 @@ async def build_operational_ledger(
             ]
         )
 
+    refund_at = func.coalesce(Refund.settled_at, Refund.created_at)
     refund_stmt = (
         select(Refund, Order)
         .join(Order, Order.id == Refund.order_id)
         .where(
             Order.company_id == company_id,
-            Refund.created_at < end_exclusive,
+            refund_at < end_exclusive,
         )
-        .order_by(Refund.order_id, Refund.created_at, Refund.id)
+        .order_by(Refund.order_id, refund_at, Refund.id)
     )
     all_refunds = (await session.execute(refund_stmt)).all()
     cumulative_by_order: dict[UUID, int] = {}
@@ -557,7 +655,8 @@ async def build_operational_ledger(
         previous = cumulative_by_order.get(order.id, 0)
         cumulative = previous + refund.amount_minor
         cumulative_by_order[order.id] = cumulative
-        if start_at is not None and refund.created_at < start_at:
+        occurred_at = getattr(refund, "settled_at", None) or refund.created_at
+        if start_at is not None and occurred_at < start_at:
             continue
 
         # order.total_minor includes any tip folded on at payment time
@@ -599,7 +698,7 @@ async def build_operational_ledger(
         if return_amount:
             lines.append(
                 _line(
-                    occurred_at=refund.created_at,
+                    occurred_at=occurred_at,
                     ref_type="refund",
                     ref_id=refund.id,
                     account=SALES_RETURNS.ledger_tuple,
@@ -610,7 +709,7 @@ async def build_operational_ledger(
         if tip_amount:
             lines.append(
                 _line(
-                    occurred_at=refund.created_at,
+                    occurred_at=occurred_at,
                     ref_type="refund",
                     ref_id=refund.id,
                     account=TIPS_PAYABLE.ledger_tuple,
@@ -621,7 +720,7 @@ async def build_operational_ledger(
         for account, amount in allocated_tax:
             lines.append(
                 _line(
-                    occurred_at=refund.created_at,
+                    occurred_at=occurred_at,
                     ref_type="refund",
                     ref_id=refund.id,
                     account=account,
@@ -642,7 +741,7 @@ async def build_operational_ledger(
         )
         lines.append(
             _line(
-                occurred_at=refund.created_at,
+                occurred_at=occurred_at,
                 ref_type="refund",
                 ref_id=refund.id,
                 account=settlement_account,
@@ -772,63 +871,6 @@ async def build_operational_ledger(
                 ),
             ]
         )
-
-    ticket_stmt = (
-        select(EventTicket, Event)
-        .join(Event, Event.id == EventTicket.event_id)
-        .where(
-            Event.company_id == company_id,
-            EventTicket.order_id.is_(None),
-            EventTicket.created_at < end_exclusive,
-            EventTicket.status.in_(("sold", "checked_in")),
-        )
-        .order_by(EventTicket.created_at, EventTicket.id)
-    )
-    if start_at is not None:
-        ticket_stmt = ticket_stmt.where(EventTicket.created_at >= start_at)
-    for ticket, event in (await session.execute(ticket_stmt)).all():
-        taxable, cgst, sgst, igst = split_tax_from_inclusive_minor(
-            ticket.price_paid_minor,
-            Decimal(str(event.tax_rate or 0)),
-            True,
-        )
-        memo = f"Direct event ticket {ticket.ticket_no}"
-        lines.extend(
-            [
-                _line(
-                    occurred_at=ticket.created_at,
-                    ref_type="event_ticket",
-                    ref_id=ticket.id,
-                    account=UNRECONCILED_SETTLEMENT.ledger_tuple,
-                    debit=ticket.price_paid_minor,
-                    memo=memo,
-                ),
-                _line(
-                    occurred_at=ticket.created_at,
-                    ref_type="event_ticket",
-                    ref_id=ticket.id,
-                    account=EVENT_REVENUE.ledger_tuple,
-                    credit=taxable,
-                    memo=memo,
-                ),
-            ]
-        )
-        for account, amount in (
-            (CGST_PAYABLE.ledger_tuple, cgst),
-            (SGST_PAYABLE.ledger_tuple, sgst),
-            (IGST_PAYABLE.ledger_tuple, igst),
-        ):
-            if amount:
-                lines.append(
-                    _line(
-                        occurred_at=ticket.created_at,
-                        ref_type="event_ticket",
-                        ref_id=ticket.id,
-                        account=account,
-                        credit=amount,
-                        memo=memo,
-                    )
-                )
 
     # ------------------------------------------------------------------
     # Depreciation — never manually entered or posted by a cron job.

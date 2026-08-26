@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.config import get_settings
 from app.core.db import SessionDep
 from app.core.errors import AuthError, BusinessRuleError, ConflictError, ServiceUnavailableError
-from app.core.permissions import SELF_SERVICE_SIGNUP_ROLE, accessible_modules
+from app.core.permissions import (
+    SELF_SERVICE_SIGNUP_ROLE,
+    effective_permissions,
+    modules_for_permissions,
+)
 from app.core.roles import has_full_access, has_protected_owner_access, public_roles
 from app.core.security import (
     decode_token,
@@ -54,7 +60,7 @@ class TokenPair(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class MeResponse(BaseModel):
@@ -66,7 +72,11 @@ class MeResponse(BaseModel):
     audit_access: bool = False
     company_id: str
     branch_id: str | None
-    accessible_modules: list[str] = []
+    # Display metadata only. Authorization remains anchored to branch_id in
+    # TenantContext; the value is resolved with an explicit company boundary.
+    branch_name: str | None = None
+    accessible_modules: list[str] = Field(default_factory=list)
+    effective_permissions: list[str] = Field(default_factory=list)
 
 
 class OtpChallengeResponse(BaseModel):
@@ -101,6 +111,38 @@ class AccountActionResponse(BaseModel):
     message: str
 
 
+_REFRESH_COOKIE = "dcompany_refresh"
+_COOKIE_SESSION_HEADER = "x-session-transport"
+
+
+def _uses_cookie_session(request: Request) -> bool:
+    return request.headers.get(_COOKIE_SESSION_HEADER, "").strip().lower() == "cookie"
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=_REFRESH_COOKIE,
+        value=refresh_token,
+        max_age=settings.refresh_token_days * 24 * 60 * 60,
+        httponly=True,
+        secure=settings.env in {"prod", "staging"},
+        samesite="strict",
+        path=f"{settings.api_prefix}/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        key=_REFRESH_COOKIE,
+        httponly=True,
+        secure=settings.env in {"prod", "staging"},
+        samesite="strict",
+        path=f"{settings.api_prefix}/auth",
+    )
+
+
 async def _fallback_company_id(session: SessionDep):
     company = (await session.execute(select(Company).limit(1))).scalar_one_or_none()
     return company.id if company else None
@@ -122,10 +164,10 @@ async def _account_security_company(session: SessionDep) -> Company:
         raise ServiceUnavailableError("account registration company is not available")
 
     companies = (
-        await session.execute(
-            select(Company).where(Company.deleted_at.is_(None)).limit(2)
-        )
-    ).scalars().all()
+        (await session.execute(select(Company).where(Company.deleted_at.is_(None)).limit(2)))
+        .scalars()
+        .all()
+    )
     if len(companies) != 1:
         raise ServiceUnavailableError("account registration company is not configured")
     return companies[0]
@@ -180,22 +222,19 @@ async def _optional_requester(
         user = await session.get(User, UUID(claims["sub"]))
     except (KeyError, TypeError, ValueError):
         return None
-    if (
-        not user
-        or user.company_id != company_id
-        or user.deleted_at
-        or user.status != "active"
-    ):
+    if not user or user.company_id != company_id or user.deleted_at or user.status != "active":
         return None
     return user
 
 
-def _request_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    value = forwarded.split(",", 1)[0].strip() if forwarded else None
-    if not value and request.client:
-        value = request.client.host
-    return value[:64] if value else None
+def _auth_audit_entity_id(email: str, user: User | None) -> str:
+    if user is not None:
+        return str(user.id)
+    normalized = email.strip().lower()
+    if len(normalized) <= 64:
+        return normalized
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"email-sha256:{digest[:51]}"
 
 
 def _audit_auth_event(
@@ -216,15 +255,15 @@ def _audit_auth_event(
             company_id=company_id,
             action=action,
             entity_type="User",
-            entity_id=str(user.id) if user else email,
+            entity_id=_auth_audit_entity_id(email, user),
             before=None,
             after={
                 "email": email,
                 "result": action,
                 **(details or {}),
             },
-            ip=_request_ip(request),
-            user_agent=request.headers.get("user-agent"),
+            ip=trusted_client_ip(request),
+            user_agent=audit_user_agent(request),
         )
     )
 
@@ -315,8 +354,8 @@ async def confirm_registration(
     set_actor(
         user_id=challenge.requested_by_user_id,
         company_id=challenge.company_id,
-        ip=_request_ip(request),
-        user_agent=request.headers.get("user-agent"),
+        ip=trusted_client_ip(request),
+        user_agent=audit_user_agent(request),
     )
     user = User(
         id=uuid4(),
@@ -347,8 +386,8 @@ async def confirm_registration(
             entity_id=str(user.id),
             before=None,
             after={"email": user.email, "name": user.name, "role": role_code},
-            ip=_request_ip(request),
-            user_agent=request.headers.get("user-agent"),
+            ip=trusted_client_ip(request),
+            user_agent=audit_user_agent(request),
         )
     )
     return AccountActionResponse(message="Login created. You can sign in now.")
@@ -417,8 +456,8 @@ async def confirm_password_reset(
     set_actor(
         user_id=challenge.requested_by_user_id,
         company_id=challenge.company_id,
-        ip=_request_ip(request),
-        user_agent=request.headers.get("user-agent"),
+        ip=trusted_client_ip(request),
+        user_agent=audit_user_agent(request),
     )
     user.password_hash = hash_password(payload.new_password)
     user.failed_login_count = 0
@@ -435,21 +474,24 @@ async def confirm_password_reset(
             entity_id=str(user.id),
             before=None,
             after={"email": user.email, "approval": "central_email_otp"},
-            ip=_request_ip(request),
-            user_agent=request.headers.get("user-agent"),
+            ip=trusted_client_ip(request),
+            user_agent=audit_user_agent(request),
         )
     )
     return AccountActionResponse(message="Password updated. You can sign in now.")
 
 
 @router.post("/login", response_model=TokenPair, status_code=status.HTTP_200_OK)
-async def login(payload: LoginRequest, request: Request, session: SessionDep) -> TokenPair:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+) -> TokenPair:
     settings = get_settings()
     email = payload.email.strip().lower()
     await enforce_login_rate_limit(request, email)
-    users = (
-        await session.execute(select(User).where(User.email == email))
-    ).scalars().all()
+    users = (await session.execute(select(User).where(User.email == email))).scalars().all()
     user = users[0] if len(users) == 1 else None
     if not user or user.deleted_at:
         company_id = await _fallback_company_id(session)
@@ -545,18 +587,50 @@ async def login(payload: LoginRequest, request: Request, session: SessionDep) ->
         auth_version=user.auth_version,
     )
 
+    if _uses_cookie_session(request):
+        _set_refresh_cookie(response, refresh)
+
     return TokenPair(
         access_token=access,
-        refresh_token=refresh,
+        # Same-origin web clients receive the refresh credential only through
+        # the HttpOnly cookie. Native clients keep the existing JSON contract.
+        refresh_token="" if _uses_cookie_session(request) else refresh,
         expires_in=settings.access_token_minutes * 60,
     )
 
 
 @router.post("/refresh", response_model=TokenPair)
-async def refresh(payload: RefreshRequest, session: SessionDep) -> TokenPair:
+async def refresh(
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    payload: RefreshRequest | None = None,
+) -> TokenPair:
     settings = get_settings()
+    cookie_refresh = request.cookies.get(_REFRESH_COOKIE)
+    if (
+        cookie_refresh
+        and not (payload and payload.refresh_token)
+        and not _uses_cookie_session(request)
+    ):
+        # Requiring a non-simple custom header makes a browser cookie refresh
+        # ineligible for a cross-site HTML form submission. SameSite=Strict is
+        # the first boundary; this is the explicit CSRF boundary as well.
+        raise AuthError("cookie session header required")
+    body_refresh = payload.refresh_token if payload and payload.refresh_token else None
+    # Once a browser has a cookie, it is authoritative. The optional body is
+    # only a one-release migration path from the former localStorage token;
+    # preferring a stale migration value could otherwise reject a still-valid
+    # rotated cookie.
+    supplied_refresh = (
+        (cookie_refresh or body_refresh)
+        if _uses_cookie_session(request)
+        else (body_refresh or cookie_refresh)
+    )
+    if not supplied_refresh:
+        raise AuthError("refresh token required")
     try:
-        claims = decode_token(payload.refresh_token)
+        claims = decode_token(supplied_refresh)
     except ValueError as exc:
         raise AuthError(str(exc)) from exc
     if claims.get("type") != "refresh":
@@ -566,9 +640,7 @@ async def refresh(payload: RefreshRequest, session: SessionDep) -> TokenPair:
         auth_version = int(claims.get("auth_version", 0))
     except (KeyError, TypeError, ValueError) as exc:
         raise AuthError("malformed token claims") from exc
-    user = (
-        await session.execute(select(User).where(User.id == user_id))
-    ).scalar_one_or_none()
+    user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user or user.deleted_at or user.status != "active":
         raise AuthError("user not found")
     if auth_version != user.auth_version:
@@ -589,20 +661,48 @@ async def refresh(payload: RefreshRequest, session: SessionDep) -> TokenPair:
         jti=str(uuid4()),
         auth_version=user.auth_version,
     )
+    cookie_session = _uses_cookie_session(request) or _REFRESH_COOKIE in request.cookies
+    if cookie_session:
+        _set_refresh_cookie(response, new_refresh)
     return TokenPair(
         access_token=access,
-        refresh_token=new_refresh,
+        refresh_token="" if cookie_session else new_refresh,
         expires_in=settings.access_token_minutes * 60,
     )
 
 
+@router.post("/logout", response_model=AccountActionResponse)
+async def logout(request: Request, response: Response) -> AccountActionResponse:
+    """Forget the browser refresh cookie.
+
+    Refresh tokens are otherwise stateless JWTs, so account-wide revocation is
+    still performed by incrementing the user's auth_version. This endpoint is
+    the browser's local sign-out boundary and deliberately returns success even
+    when no cookie exists.
+    """
+    if request.cookies.get(_REFRESH_COOKIE) and not _uses_cookie_session(request):
+        raise AuthError("cookie session header required")
+    _clear_refresh_cookie(response)
+    return AccountActionResponse(message="Signed out.")
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(tenant: TenantDep, session: SessionDep) -> MeResponse:
-    user = (
-        await session.execute(select(User).where(User.id == tenant.user_id))
-    ).scalar_one()
+    user = (await session.execute(select(User).where(User.id == tenant.user_id))).scalar_one()
     if user.status != "active" or user.deleted_at:
         raise AuthError("user not found")
+    branch_name = None
+    if tenant.branch_id is not None:
+        branch_name = (
+            await session.execute(
+                select(Branch.name).where(
+                    Branch.id == tenant.branch_id,
+                    Branch.company_id == tenant.company_id,
+                    Branch.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    permissions = await effective_permissions(session, tenant)
     return MeResponse(
         user_id=str(user.id),
         email=user.email,
@@ -612,7 +712,9 @@ async def me(tenant: TenantDep, session: SessionDep) -> MeResponse:
         audit_access=tenant.audit_access,
         company_id=str(tenant.company_id),
         branch_id=str(tenant.branch_id) if tenant.branch_id else None,
-        accessible_modules=await accessible_modules(session, tenant),
+        branch_name=branch_name,
+        accessible_modules=modules_for_permissions(permissions),
+        effective_permissions=permissions,
     )
 
 

@@ -17,6 +17,8 @@ and a real order-payment-shaped call into deduct_for_order.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -25,8 +27,13 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 
+import app.services.inventory.deduction as deduction_service
+from app.api.v1.insights.router import costing_coverage
+from app.core.db import AsyncSessionLocal
+from app.core.tenant import TenantContext
 from app.models import (
     Batch,
+    Branch,
     Company,
     Ingredient,
     MenuCategory,
@@ -35,7 +42,11 @@ from app.models import (
     RecipeLine,
     StockMovement,
 )
-from app.services.inventory.deduction import deduct_for_order
+from app.services.inventory.deduction import (
+    UNCOSTED_SHORTAGE_LOT_CODE,
+    deduct_for_order,
+    restock_for_refund,
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -123,7 +134,9 @@ async def test_create_recipe_creates_recipe_and_lines(client, session, seed_owne
 
 
 @pytest.mark.asyncio
-async def test_create_recipe_rejects_ingredient_from_another_company(client, session, seed_owner) -> None:
+async def test_create_recipe_rejects_ingredient_from_another_company(
+    client, session, seed_owner
+) -> None:
     company_id = seed_owner["company"].id
     item = await _menu_item(session, company_id)
 
@@ -147,7 +160,9 @@ async def test_create_recipe_rejects_ingredient_from_another_company(client, ses
 
 
 @pytest.mark.asyncio
-async def test_create_recipe_conflicts_with_existing_active_recipe(client, session, seed_owner) -> None:
+async def test_create_recipe_conflicts_with_existing_active_recipe(
+    client, session, seed_owner
+) -> None:
     company_id = seed_owner["company"].id
     item = await _menu_item(session, company_id)
     milk = await _ingredient(session, company_id)
@@ -177,7 +192,11 @@ async def test_list_recipes_by_menu_item(client, session, seed_owner) -> None:
     token = await _login(client, seed_owner)
     await client.post(
         "/api/v1/inventory/recipes",
-        json={"menu_item_id": str(item.id), "name": "R1", "lines": [{"ingredient_id": str(milk.id), "qty": 10}]},
+        json={
+            "menu_item_id": str(item.id),
+            "name": "R1",
+            "lines": [{"ingredient_id": str(milk.id), "qty": 10}],
+        },
         headers=_auth(token),
     )
     await client.post(
@@ -233,7 +252,11 @@ async def test_delete_recipe_deactivates_and_allows_recreation(client, session, 
     token = await _login(client, seed_owner)
     created = (await client.post(
         "/api/v1/inventory/recipes",
-        json={"menu_item_id": str(item.id), "name": "v1", "lines": [{"ingredient_id": str(milk.id), "qty": 10}]},
+        json={
+            "menu_item_id": str(item.id),
+            "name": "v1",
+            "lines": [{"ingredient_id": str(milk.id), "qty": 10}],
+        },
         headers=_auth(token),
     )).json()
 
@@ -251,7 +274,11 @@ async def test_delete_recipe_deactivates_and_allows_recreation(client, session, 
     # A new recipe can now be created for the same item (no active one blocks it).
     recreated = await client.post(
         "/api/v1/inventory/recipes",
-        json={"menu_item_id": str(item.id), "name": "v2", "lines": [{"ingredient_id": str(milk.id), "qty": 20}]},
+        json={
+            "menu_item_id": str(item.id),
+            "name": "v2",
+            "lines": [{"ingredient_id": str(milk.id), "qty": 20}],
+        },
         headers=_auth(token),
     )
     assert recreated.status_code == 201, recreated.text
@@ -279,7 +306,11 @@ async def test_recipe_line_add_update_delete(client, session, seed_owner) -> Non
     token = await _login(client, seed_owner)
     created = (await client.post(
         "/api/v1/inventory/recipes",
-        json={"menu_item_id": str(item.id), "name": "v1", "lines": [{"ingredient_id": str(milk.id), "qty": 150}]},
+        json={
+            "menu_item_id": str(item.id),
+            "name": "v1",
+            "lines": [{"ingredient_id": str(milk.id), "qty": 150}],
+        },
         headers=_auth(token),
     )).json()
     recipe_id = created["id"]
@@ -332,23 +363,34 @@ async def test_recipe_and_lines_are_tenant_isolated(client, session, seed_owner)
     other_recipe = Recipe(id=uuid4(), menu_item_id=other_item.id, name="Not yours", is_active=True)
     session.add(other_recipe)
     await session.flush()
-    other_line = RecipeLine(id=uuid4(), recipe_id=other_recipe.id, ingredient_id=other_ing.id, qty=10)
+    other_line = RecipeLine(
+        id=uuid4(),
+        recipe_id=other_recipe.id,
+        ingredient_id=other_ing.id,
+        qty=10,
+    )
     session.add(other_line)
     await session.commit()
 
     token = await _login(client, seed_owner)
 
     list_r = await client.get(
-        "/api/v1/inventory/recipes", params={"menu_item_id": str(other_item.id)}, headers=_auth(token),
+        "/api/v1/inventory/recipes",
+        params={"menu_item_id": str(other_item.id)},
+        headers=_auth(token),
     )
     assert list_r.status_code == 404  # menu item itself isn't visible to this tenant
 
     patch_r = await client.patch(
-        f"/api/v1/inventory/recipes/{other_recipe.id}", json={"name": "hijacked"}, headers=_auth(token),
+        f"/api/v1/inventory/recipes/{other_recipe.id}",
+        json={"name": "hijacked"},
+        headers=_auth(token),
     )
     assert patch_r.status_code == 404
 
-    delete_r = await client.delete(f"/api/v1/inventory/recipes/{other_recipe.id}", headers=_auth(token))
+    delete_r = await client.delete(
+        f"/api/v1/inventory/recipes/{other_recipe.id}", headers=_auth(token)
+    )
     assert delete_r.status_code == 404
 
     add_line_r = await client.post(
@@ -431,3 +473,378 @@ async def test_recipe_created_via_api_is_consumed_by_deduction(client, session, 
     assert movement.type == "sale"
     assert movement.ref_type == "order"
     assert float(movement.qty_delta) == pytest.approx(-expected_deduction)
+
+
+@pytest.mark.asyncio
+async def test_unknown_cost_shortage_round_trips_through_full_refund(
+    session,
+    seed_owner,
+) -> None:
+    """A batch-less sale must remain auditable and exactly reversible."""
+    item = await _menu_item(session, seed_owner["company"].id)
+    ingredient = await _ingredient(
+        session,
+        seed_owner["company"].id,
+        name="Never received ingredient",
+    )
+    ingredient.current_qty = 0
+    recipe = Recipe(
+        id=uuid4(),
+        menu_item_id=item.id,
+        name="Unknown-cost recipe",
+        is_active=True,
+    )
+    line = RecipeLine(
+        id=uuid4(),
+        recipe_id=recipe.id,
+        ingredient_id=ingredient.id,
+        qty=2,
+        wastage_pct=0,
+    )
+    session.add_all([recipe, line])
+    await session.flush()
+
+    order_id = uuid4()
+    movements = await deduct_for_order(
+        session,
+        order_id=order_id,
+        order_lines=[SimpleNamespace(menu_item_id=item.id, qty=1)],
+        branch_id=seed_owner["branch"].id,
+        created_by=seed_owner["owner"].id,
+    )
+    await session.flush()
+
+    shortage_batch = (
+        await session.execute(
+            select(Batch).where(
+                Batch.ingredient_id == ingredient.id,
+                Batch.branch_id == seed_owner["branch"].id,
+            )
+        )
+    ).scalar_one()
+    assert movements == 1
+    assert shortage_batch.lot_code == UNCOSTED_SHORTAGE_LOT_CODE
+    assert float(shortage_batch.qty_on_hand) == pytest.approx(-2)
+    assert int(shortage_batch.cost_per_unit_minor) == 0
+    assert float(ingredient.current_qty) == pytest.approx(-2)
+
+    restocked = await restock_for_refund(
+        session,
+        order_id=order_id,
+        branch_id=seed_owner["branch"].id,
+        created_by=seed_owner["owner"].id,
+        fraction=1.0,
+    )
+    await session.flush()
+
+    assert restocked == 1
+    assert float(shortage_batch.qty_on_hand) == pytest.approx(0)
+    assert float(ingredient.current_qty) == pytest.approx(0)
+    movement_rows = (
+        await session.execute(
+            select(StockMovement)
+            .where(StockMovement.ref_id == order_id)
+            .order_by(StockMovement.created_at, StockMovement.id)
+        )
+    ).scalars().all()
+    assert {movement.type for movement in movement_rows} == {"sale", "refund_restock"}
+    assert all(int(movement.cost_per_unit_minor) == 0 for movement in movement_rows)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_opposite_recipe_orders_use_one_inventory_lock_order(
+    session,
+    seed_owner,
+    monkeypatch,
+) -> None:
+    """Two opposite BOM orders must complete without a database deadlock.
+
+    The wrapper synchronizes both transactions before their first inventory
+    lock, then briefly holds the transaction that acquired its first
+    ingredient.  Without canonical ingredient ordering each transaction owns
+    a different first ingredient and deadlocks on the second; with canonical
+    ordering one waits at the shared first ingredient, then both complete.
+    Recipe query rows are supplied in-memory so the intentionally opposite
+    source order is deterministic while the inventory locks remain real
+    PostgreSQL row locks.
+    """
+    company_id = seed_owner["company"].id
+    branch_id = seed_owner["branch"].id
+    first = await _ingredient(session, company_id, name="Concurrency A")
+    second = await _ingredient(session, company_id, name="Concurrency B")
+    first.current_qty = 100
+    second.current_qty = 100
+    low, high = sorted((first, second), key=lambda ingredient: ingredient.id.int)
+    session.add_all(
+        [
+            Batch(
+                id=uuid4(),
+                ingredient_id=ingredient.id,
+                branch_id=branch_id,
+                received_at=datetime(2026, 8, 25, tzinfo=UTC),
+                qty_initial=100,
+                qty_on_hand=100,
+                cost_per_unit_minor=10,
+            )
+            for ingredient in (low, high)
+        ]
+    )
+    await session.commit()
+
+    menu_a = uuid4()
+    menu_b = uuid4()
+    recipe_a = Recipe(id=uuid4(), menu_item_id=menu_a, name="A then B", is_active=True)
+    recipe_b = Recipe(id=uuid4(), menu_item_id=menu_b, name="B then A", is_active=True)
+    lines_a = [
+        RecipeLine(
+            id=uuid4(),
+            recipe_id=recipe_a.id,
+            ingredient_id=low.id,
+            qty=1,
+            wastage_pct=0,
+        ),
+        RecipeLine(
+            id=uuid4(),
+            recipe_id=recipe_a.id,
+            ingredient_id=high.id,
+            qty=1,
+            wastage_pct=0,
+        ),
+    ]
+    lines_b = [
+        RecipeLine(
+            id=uuid4(),
+            recipe_id=recipe_b.id,
+            ingredient_id=high.id,
+            qty=1,
+            wastage_pct=0,
+        ),
+        RecipeLine(
+            id=uuid4(),
+            recipe_id=recipe_b.id,
+            ingredient_id=low.id,
+            qty=1,
+            wastage_pct=0,
+        ),
+    ]
+    order_a = uuid4()
+    order_b = uuid4()
+    peer = {order_a: order_b, order_b: order_a}
+    started = {order_a: asyncio.Event(), order_b: asyncio.Event()}
+    first_lock_complete = {order_a: asyncio.Event(), order_b: asyncio.Event()}
+    calls = {order_a: 0, order_b: 0}
+
+    class _Rows:
+        def __init__(self, rows) -> None:
+            self.rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class _RecipeRowsThenDatabase:
+        def __init__(self, database_session, recipe, lines) -> None:
+            self.database_session = database_session
+            self.results = [_Rows([recipe]), _Rows(lines)]
+
+        async def execute(self, statement):
+            if self.results:
+                return self.results.pop(0)
+            return await self.database_session.execute(statement)
+
+        def add(self, entity) -> None:
+            self.database_session.add(entity)
+
+    original_deduct = deduction_service._deduct_ingredient
+
+    async def _coordinated_deduct(database_session, **kwargs) -> int:
+        order_id = kwargs["order_id"]
+        if calls[order_id] == 0:
+            started[order_id].set()
+            await asyncio.wait_for(started[peer[order_id]].wait(), timeout=2)
+
+        result = await original_deduct(database_session, **kwargs)
+        calls[order_id] += 1
+        if calls[order_id] == 1:
+            first_lock_complete[order_id].set()
+            # Expected to time out with canonical ordering: the peer is
+            # waiting on this transaction's first Ingredient row lock.
+            with suppress(TimeoutError):
+                await asyncio.wait_for(
+                    first_lock_complete[peer[order_id]].wait(),
+                    timeout=0.25,
+                )
+        return result
+
+    monkeypatch.setattr(deduction_service, "_deduct_ingredient", _coordinated_deduct)
+
+    async def _run_payment(*, order_id, menu_item_id, recipe, lines) -> int:
+        async with AsyncSessionLocal() as database_session:
+            await database_session.execute(text("SET LOCAL lock_timeout = '3s'"))
+            proxy = _RecipeRowsThenDatabase(database_session, recipe, lines)
+            try:
+                movements = await deduction_service.deduct_for_order(
+                    proxy,
+                    order_id=order_id,
+                    order_lines=[SimpleNamespace(menu_item_id=menu_item_id, qty=1)],
+                    branch_id=branch_id,
+                    created_by=seed_owner["owner"].id,
+                )
+                await database_session.commit()
+                return movements
+            except Exception:
+                await database_session.rollback()
+                raise
+
+    movements = await asyncio.wait_for(
+        asyncio.gather(
+            _run_payment(
+                order_id=order_a,
+                menu_item_id=menu_a,
+                recipe=recipe_a,
+                lines=lines_a,
+            ),
+            _run_payment(
+                order_id=order_b,
+                menu_item_id=menu_b,
+                recipe=recipe_b,
+                lines=lines_b,
+            ),
+        ),
+        timeout=8,
+    )
+    assert movements == [2, 2]
+
+    async with AsyncSessionLocal() as verify:
+        ingredients = (
+            await verify.execute(
+                select(Ingredient).where(Ingredient.id.in_((low.id, high.id)))
+            )
+        ).scalars().all()
+        batches = (
+            await verify.execute(
+                select(Batch).where(
+                    Batch.ingredient_id.in_((low.id, high.id)),
+                    Batch.branch_id == branch_id,
+                )
+            )
+        ).scalars().all()
+        movements_written = (
+            await verify.execute(
+                select(StockMovement).where(StockMovement.ref_id.in_((order_a, order_b)))
+            )
+        ).scalars().all()
+
+    assert len(ingredients) == 2
+    assert all(float(ingredient.current_qty) == pytest.approx(98) for ingredient in ingredients)
+    assert len(batches) == 2
+    assert all(float(batch.qty_on_hand) == pytest.approx(98) for batch in batches)
+    assert len(movements_written) == 4
+
+
+@pytest.mark.asyncio
+async def test_costing_coverage_requires_branch_local_fifo_cost(
+    session,
+    seed_owner,
+) -> None:
+    company_id = seed_owner["company"].id
+    main_branch = seed_owner["branch"]
+    kiosk = Branch(id=uuid4(), company_id=company_id, name="Kiosk")
+    session.add(kiosk)
+    await session.flush()
+    item = await _menu_item(session, company_id)
+    ingredient = await _ingredient(session, company_id, name="Beans")
+    ingredient.avg_cost_minor = 30
+    recipe = Recipe(
+        id=uuid4(),
+        menu_item_id=item.id,
+        name="Branch-aware recipe",
+        is_active=True,
+    )
+    line = RecipeLine(
+        id=uuid4(),
+        recipe_id=recipe.id,
+        ingredient_id=ingredient.id,
+        qty=1,
+        wastage_pct=0,
+    )
+    main_costed = Batch(
+        id=uuid4(),
+        ingredient_id=ingredient.id,
+        branch_id=main_branch.id,
+        received_at=datetime(2026, 8, 1, tzinfo=UTC),
+        qty_initial=10,
+        qty_on_hand=10,
+        cost_per_unit_minor=30,
+    )
+    kiosk_uncosted = Batch(
+        id=uuid4(),
+        ingredient_id=ingredient.id,
+        branch_id=kiosk.id,
+        received_at=datetime(2026, 8, 1, tzinfo=UTC),
+        qty_initial=10,
+        qty_on_hand=10,
+        cost_per_unit_minor=0,
+    )
+    session.add_all([recipe, line, main_costed, kiosk_uncosted])
+    await session.flush()
+    tenant = TenantContext(
+        user_id=seed_owner["owner"].id,
+        company_id=company_id,
+        branch_id=main_branch.id,
+        terminal_id=seed_owner["terminal"].id,
+        roles=("owner",),
+    )
+
+    incomplete = await costing_coverage(session, tenant)
+    assert incomplete.is_complete is False
+    assert incomplete.incomplete_item_count == 1
+    assert "Beans at Kiosk" in incomplete.issues[0].detail
+
+    kiosk_uncosted.cost_per_unit_minor = 30
+    await session.flush()
+    complete = await costing_coverage(session, tenant)
+    assert complete.is_complete is True
+    assert complete.fully_costed_item_count == 1
+
+    unresolved_order_id = uuid4()
+    kiosk_uncosted.qty_on_hand = 9
+    session.add(
+        StockMovement(
+            id=uuid4(),
+            batch_id=kiosk_uncosted.id,
+            branch_id=kiosk.id,
+            type="sale",
+            ref_type="order",
+            ref_id=unresolved_order_id,
+            qty_delta=-1,
+            cost_per_unit_minor=0,
+            created_by=seed_owner["owner"].id,
+            note="historical unknown-cost sale",
+        )
+    )
+    await session.flush()
+    unresolved = await costing_coverage(session, tenant)
+    assert unresolved.is_complete is False
+    assert "Beans at Kiosk" in unresolved.issues[0].detail
+
+    kiosk_uncosted.qty_on_hand = 10
+    session.add(
+        StockMovement(
+            id=uuid4(),
+            batch_id=kiosk_uncosted.id,
+            branch_id=kiosk.id,
+            type="refund_restock",
+            ref_type="order",
+            ref_id=unresolved_order_id,
+            qty_delta=1,
+            cost_per_unit_minor=0,
+            created_by=seed_owner["owner"].id,
+            note="historical unknown-cost sale reversed",
+        )
+    )
+    await session.flush()
+    resolved = await costing_coverage(session, tenant)
+    assert resolved.is_complete is True

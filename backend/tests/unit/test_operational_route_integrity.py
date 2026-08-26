@@ -8,19 +8,22 @@ turning the unit suite into an implicit PostgreSQL integration suite.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from inspect import signature
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import BackgroundTasks
 from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy.dialects import postgresql
 
 from app.api.v1.gaming import router as gaming_router
 from app.api.v1.pos import router as pos_router
-from app.core.errors import BusinessRuleError
+from app.core.errors import BusinessRuleError, ConflictError, ForbiddenError
+from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
 from app.events.events import OrderPaid
-from app.models import Branch, Order, OrderLine, Payment, Refund, Station, Table
+from app.models import Branch, Order, OrderLine, Payment, Station, Table
 
 
 class _Result:
@@ -68,6 +71,214 @@ class _Session:
         self.flush_count += 1
 
 
+def _route_permissions(endpoint) -> tuple[str, ...]:
+    dependency = signature(endpoint).parameters["tenant"].default.dependency
+    closure = dict(
+        zip(
+            dependency.__code__.co_freevars,
+            (cell.cell_contents for cell in dependency.__closure__ or ()),
+            strict=True,
+        )
+    )
+    return tuple(closure["perms"])
+
+
+def test_table_bill_routes_enforce_required_domain_permissions() -> None:
+    assert _route_permissions(pos_router.add_order_lines) == (
+        "tables.write",
+        "pos.write",
+    )
+    assert _route_permissions(pos_router.send_order_to_pos) == (
+        "tables.write",
+        "pos.write",
+    )
+    assert _route_permissions(pos_router.void_order_line) == (
+        "tables.write",
+        "pos.void",
+    )
+    assert _route_permissions(pos_router.list_active_table_orders) == ("tables.read",)
+
+    # Self-service floor staff can prepare table drafts but cannot cancel
+    # already-released kitchen work. Cashiers and managers retain the audited
+    # reasoned-void action.
+    assert "tables.write" in ROLE_PERMISSIONS["staff"]
+    assert "pos.void" not in ROLE_PERMISSIONS["staff"]
+    assert "pos.void" in ROLE_PERMISSIONS["cashier"]
+    assert "pos.void" in ROLE_PERMISSIONS["manager"]
+
+
+@pytest.mark.asyncio
+async def test_whole_order_void_replay_requires_the_original_reason() -> None:
+    tenant = _tenant()
+    order_id = uuid4()
+    voided_at = datetime.now(UTC)
+    order = SimpleNamespace(
+        id=order_id,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        status="void",
+    )
+
+    same_reason_session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=voided_at),
+        _Result(rows=["Customer left"]),
+    )
+    assert (
+        await pos_router.void_held_order(
+            order_id,
+            pos_router.VoidOrderRequest(reason="Customer left"),
+            same_reason_session,
+            tenant,
+        )
+        is None
+    )
+
+    changed_reason_session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=voided_at),
+        _Result(rows=["Customer left"]),
+    )
+    with pytest.raises(BusinessRuleError, match="already voided with a different reason"):
+        await pos_router.void_held_order(
+            order_id,
+            pos_router.VoidOrderRequest(reason="Duplicate order"),
+            changed_reason_session,
+            tenant,
+        )
+
+
+@pytest.mark.asyncio
+async def test_table_order_create_requires_tables_access_before_reserving_request(
+    monkeypatch,
+) -> None:
+    tenant = _tenant()
+    checked: list[str] = []
+
+    async def _deny(_session, _tenant, permission: str) -> None:
+        checked.append(permission)
+        raise ForbiddenError(f"missing permission: {permission}")
+
+    monkeypatch.setattr(pos_router, "require_permission", _deny)
+    client_line_id = uuid4()
+    payload = pos_router.OrderCreate(
+        type="dine_in",
+        table_id=uuid4(),
+        shift_id=uuid4(),
+        lines=[
+            pos_router.OrderLineCreate(
+                client_line_id=client_line_id,
+                menu_item_id=uuid4(),
+                qty=1,
+            )
+        ],
+    )
+    request = SimpleNamespace(state=SimpleNamespace())
+
+    with pytest.raises(ForbiddenError, match="tables.write"):
+        await pos_router.create_order(payload, _Session(), request, tenant)
+
+    assert checked == ["tables.write"]
+
+
+def test_create_batch_rejects_duplicate_client_line_identity() -> None:
+    client_line_id = uuid4()
+    lines = [
+        pos_router.OrderLineCreate(
+            client_line_id=client_line_id,
+            menu_item_id=uuid4(),
+            qty=1,
+        ),
+        pos_router.OrderLineCreate(
+            client_line_id=client_line_id,
+            menu_item_id=uuid4(),
+            qty=1,
+        ),
+    ]
+
+    with pytest.raises(BusinessRuleError, match="same offline line action"):
+        pos_router._validate_client_line_ids(lines)
+
+
+@pytest.mark.asyncio
+async def test_append_reused_client_line_id_is_stable_conflict_without_partial_write(
+    monkeypatch,
+) -> None:
+    tenant = _tenant()
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=uuid4(),
+        table_id=uuid4(),
+        status="open",
+        checkout_version=7,
+    )
+    client_line_id = uuid4()
+    session = _Session(
+        _Result(scalar=order),
+        _Result(rows=[client_line_id]),
+    )
+
+    async def _reserve(*_args, **_kwargs):
+        return None
+
+    async def _guard(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
+    monkeypatch.setattr(pos_router, "guard_checkout_relevant_mutation", _guard)
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="different-request-key",
+            idempotency_request_hash="different-body-hash",
+        )
+    )
+
+    with pytest.raises(ConflictError, match="already saved"):
+        await pos_router.add_order_lines(
+            order.id,
+            pos_router.OrderLinesAppend(
+                expected_checkout_version=7,
+                lines=[
+                    pos_router.OrderLineCreate(
+                        client_line_id=client_line_id,
+                        menu_item_id=uuid4(),
+                        qty=1,
+                    )
+                ],
+            ),
+            session,
+            request,
+            tenant,
+        )
+
+    assert session.added == []
+    assert len(session.statements) == 2
+
+
+@pytest.mark.asyncio
+async def test_active_table_lookup_keeps_held_bill_visible_as_read_only(
+    monkeypatch,
+) -> None:
+    tenant = _tenant()
+    open_bill = SimpleNamespace(id=uuid4(), status="open")
+    held_bill = SimpleNamespace(id=uuid4(), status="held")
+    session = _Session(_Result(rows=[open_bill, held_bill]))
+
+    async def _identity(_session, order):
+        return order
+
+    monkeypatch.setattr(pos_router, "_build_order_read", _identity)
+    result = await pos_router.list_active_table_orders(session, tenant)
+
+    assert result == [open_bill, held_bill]
+    values = list(session.statements[0].compile().params.values())
+    assert ["open", "held"] in values
+
+
 def _tenant(
     *,
     company_id: UUID | None = None,
@@ -103,6 +314,18 @@ def _shift(tenant: TenantContext, **overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _billable_non_kitchen_line_row():
+    return (
+        SimpleNamespace(
+            id=uuid4(),
+            kitchen_released_at=None,
+            kitchen_round_no=None,
+            kitchen_status="queued",
+        ),
+        SimpleNamespace(type="gaming"),
+    )
 
 
 def _gaming_session(tenant: TenantContext, station_id: UUID, shift_id: UUID, **overrides):
@@ -252,6 +475,11 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve_idempotency)
     monkeypatch.setattr(pos_router, "store_response", _store_response)
 
+    async def _no_inventory(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "deduct_for_order", _no_inventory)
+
     request = SimpleNamespace(
         state=SimpleNamespace(
             idempotency_key="payment-with-tip-test",
@@ -264,7 +492,7 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
         _Result(scalar=0),  # _paid_total: nothing paid yet
         _Result(rows=[]),  # consume_membership_benefits: no reservations
         _Result(scalar=None),  # consume_points_redemption: no redemption row
-        _Result(rows=[]),  # order_lines fetched for finalization/deduction
+        _Result(rows=[_billable_non_kitchen_line_row()]),
         entities={(Branch, tenant.branch_id): branch},
     )
 
@@ -348,6 +576,11 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve_idempotency)
     monkeypatch.setattr(pos_router, "store_response", _store_response)
 
+    async def _no_inventory(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "deduct_for_order", _no_inventory)
+
     published: list[OrderPaid] = []
 
     class _FakeBus:
@@ -368,7 +601,7 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         _Result(scalar=0),
         _Result(rows=[]),
         _Result(scalar=None),
-        _Result(rows=[]),
+        _Result(rows=[_billable_non_kitchen_line_row()]),
         entities={(Branch, tenant.branch_id): branch},
     )
 
@@ -442,6 +675,11 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve_idempotency)
     monkeypatch.setattr(pos_router, "store_response", _store_response)
 
+    async def _no_inventory(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "deduct_for_order", _no_inventory)
+
     class _ExplodingBus:
         async def publish(self, _event):
             raise RuntimeError("event bus is down")
@@ -460,7 +698,7 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
         _Result(scalar=0),
         _Result(rows=[]),
         _Result(scalar=None),
-        _Result(rows=[]),
+        _Result(rows=[_billable_non_kitchen_line_row()]),
         entities={(Branch, tenant.branch_id): branch},
     )
 
@@ -643,6 +881,13 @@ def test_cancel_reason_is_trimmed_and_whitespace_only_is_rejected() -> None:
         gaming_router.SessionCancel(reason="   \t  ")
 
 
+def test_shift_close_count_schema_rejects_negative_but_preserves_zero() -> None:
+    with pytest.raises(PydanticValidationError):
+        pos_router.ShiftCloseRequest(counted_minor=-1)
+
+    assert pos_router.ShiftCloseRequest(counted_minor=0).counted_minor == 0
+
+
 @pytest.mark.asyncio
 async def test_close_shift_replays_only_the_same_count_and_keeps_opener_accountability() -> None:
     tenant = _tenant()
@@ -685,12 +930,39 @@ async def test_close_shift_replays_only_the_same_count_and_keeps_opener_accounta
 
 
 @pytest.mark.asyncio
+async def test_close_shift_replay_rejects_missing_saved_count_even_when_payload_is_zero() -> None:
+    tenant = _tenant()
+    closed_at = datetime.now(UTC)
+    closed = _shift(
+        tenant,
+        status="closed",
+        counted_minor=None,
+        variance_minor=None,
+        closed_at=closed_at,
+    )
+
+    with pytest.raises(BusinessRuleError, match="saved counted amount is missing"):
+        await pos_router.close_shift(
+            closed.id,
+            pos_router.ShiftCloseRequest(counted_minor=0),
+            _Session(_Result(scalar=closed)),
+            tenant,
+        )
+
+    assert closed.status == "closed"
+    assert closed.closed_at == closed_at
+    assert closed.counted_minor is None
+    assert closed.variance_minor is None
+
+
+@pytest.mark.asyncio
 async def test_close_shift_blocks_stopped_sessions_not_sent_to_pos() -> None:
     tenant = _tenant()
     shift = _shift(tenant)
     session = _Session(
         _Result(scalar=shift),
         _Result(scalar=0),  # unfinished POS orders
+        _Result(scalar=0),  # no unacknowledged kitchen cancellation
         _Result(scalar=0),  # running sessions
         _Result(scalar=1),  # stopped, unbilled sessions
     )
@@ -707,7 +979,263 @@ async def test_close_shift_blocks_stopped_sessions_not_sent_to_pos() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_opener_cannot_refund_an_original_non_cash_payment(
+async def test_close_shift_blocks_unacknowledged_kitchen_cancellation() -> None:
+    tenant = _tenant()
+    shift = _shift(tenant)
+    session = _Session(
+        _Result(scalar=shift),
+        _Result(scalar=0),  # unfinished POS orders
+        _Result(scalar=1),  # released cancellation still waiting on KDS
+    )
+
+    with pytest.raises(
+        BusinessRuleError,
+        match="1 kitchen cancellation.*Open KDS.*acknowledge",
+    ):
+        await pos_router.close_shift(
+            shift.id,
+            pos_router.ShiftCloseRequest(counted_minor=5_000),
+            session,
+            tenant,
+        )
+    assert shift.status == "open"
+    assert shift.closed_at is None
+
+
+@pytest.mark.asyncio
+async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> None:
+    """The QA fixture is Rs836 POS + Rs1,999 membership = Rs2,835 gross.
+
+    A membership refund is separately visible and must not silently rewrite
+    the immutable gross-receipt columns into something labelled as sales.
+    """
+    tenant = _tenant()
+    shift = _shift(tenant, expected_minor=5_000)
+    session = _Session(
+        _Result(
+            rows=[
+                (
+                    shift,
+                    "QA Owner",
+                    "qa-owner@example.test",
+                    83_600,
+                    199_900,
+                    2_000,
+                    1_000,
+                )
+            ]
+        )
+    )
+
+    rows = await pos_router.list_shifts(session, tenant, only_open=True)
+
+    assert len(rows) == 1
+    statement_sql = str(
+        session.statements[0].compile(dialect=postgresql.dialect())
+    )
+    assert "FROM refunds" in statement_sql
+    assert "refunds.settlement_shift_id = shifts.id" in statement_sql
+    assert "FROM membership_refund_settlements" in statement_sql
+    assert "membership_refund_settlements.shift_id = shifts.id" in statement_sql
+    assert "FROM pos_refund_requests" not in statement_sql
+    assert "FROM membership_refunds " not in statement_sql
+
+    summary = rows[0]
+    assert summary.pos_sales_minor == 83_600
+    assert summary.membership_sales_minor == 199_900
+    assert summary.gross_collections_minor == 283_500
+    assert summary.total_sales_minor == 283_500  # compatibility alias only
+    assert summary.settled_pos_refunds_minor == 2_000
+    assert summary.settled_membership_refunds_minor == 1_000
+    assert summary.total_refunds_minor == 3_000
+    assert summary.net_collections_minor == 280_500
+    assert summary.expected_minor == 5_000  # UPI receipts never alter drawer cash
+    assert summary.opened_by_name == "QA Owner"
+
+    # Exercise the API serialization boundary too.  A model-level assertion
+    # alone would not catch an accidentally optional/excluded response field,
+    # which is exactly how a mobile client can end up rendering misleading
+    # zero defaults even though the server calculated the right numbers.
+    payload = summary.model_dump(mode="json")
+    assert {
+        key: payload[key]
+        for key in (
+            "pos_sales_minor",
+            "membership_sales_minor",
+            "gross_collections_minor",
+            "settled_pos_refunds_minor",
+            "settled_membership_refunds_minor",
+            "total_refunds_minor",
+            "net_collections_minor",
+            "total_sales_minor",
+        )
+    } == {
+        "pos_sales_minor": 83_600,
+        "membership_sales_minor": 199_900,
+        "gross_collections_minor": 283_500,
+        "settled_pos_refunds_minor": 2_000,
+        "settled_membership_refunds_minor": 1_000,
+        "total_refunds_minor": 3_000,
+        "net_collections_minor": 280_500,
+        "total_sales_minor": 283_500,
+    }
+
+
+@pytest.mark.asyncio
+async def test_close_shift_blocks_unresolved_membership_payment() -> None:
+    tenant = _tenant()
+    shift = _shift(tenant)
+    session = _Session(
+        _Result(scalar=shift),
+        _Result(scalar=0),  # unfinished POS orders
+        _Result(scalar=0),  # no unacknowledged kitchen cancellation
+        _Result(scalar=0),  # running gaming sessions
+        _Result(scalar=0),  # stopped, unbilled gaming sessions
+        _Result(scalar=1),  # accepted membership payment still unresolved
+    )
+
+    with pytest.raises(
+        BusinessRuleError,
+        match="accepted membership payment task.*cash/provider collection",
+    ):
+        await pos_router.close_shift(
+            shift.id,
+            pos_router.ShiftCloseRequest(counted_minor=5_000),
+            session,
+            tenant,
+        )
+
+    assert shift.status == "open"
+    assert shift.closed_at is None
+
+
+@pytest.mark.asyncio
+async def test_close_shift_blocks_unresolved_membership_refund_on_any_rail() -> None:
+    tenant = _tenant()
+    shift = _shift(tenant)
+    session = _Session(
+        _Result(scalar=shift),
+        _Result(scalar=0),  # unfinished POS orders
+        _Result(scalar=0),  # no unacknowledged kitchen cancellation
+        _Result(scalar=0),  # running gaming sessions
+        _Result(scalar=0),  # stopped, unbilled gaming sessions
+        _Result(scalar=0),  # membership payments resolved
+        _Result(rows=[]),  # no unresolved saved refund recovery
+        _Result(scalar=1),  # membership cash/provider refund unresolved
+    )
+
+    with pytest.raises(
+        BusinessRuleError,
+        match="accepted membership refund task.*cash handover/provider payout",
+    ):
+        await pos_router.close_shift(
+            shift.id,
+            pos_router.ShiftCloseRequest(counted_minor=5_000),
+            session,
+            tenant,
+        )
+
+    assert shift.status == "open"
+    assert shift.closed_at is None
+
+
+@pytest.mark.asyncio
+async def test_close_shift_blocks_only_scoped_unresolved_membership_refund_recovery() -> None:
+    tenant = _tenant()
+    shift = _shift(tenant)
+    recovery_id = uuid4()
+    later_recovery_id = uuid4()
+    session = _Session(
+        _Result(scalar=shift),
+        _Result(scalar=0),  # unfinished POS orders
+        _Result(scalar=0),  # no unacknowledged kitchen cancellation
+        _Result(scalar=0),  # running gaming sessions
+        _Result(scalar=0),  # stopped, unbilled gaming sessions
+        _Result(scalar=0),  # membership payments resolved
+        _Result(
+            rows=[recovery_id, later_recovery_id]
+        ),  # exact scoped recoveries remain unresolved
+    )
+
+    with pytest.raises(
+        BusinessRuleError,
+        match=rf"with 2 unresolved saved membership refund recovery.*{recovery_id}",
+    ):
+        await pos_router.close_shift(
+            shift.id,
+            pos_router.ShiftCloseRequest(counted_minor=5_000),
+            session,
+            tenant,
+        )
+
+    recovery_query = session.statements[-1]
+    compiled = recovery_query.compile(dialect=postgresql.dialect())
+    statement = str(compiled)
+    for scoped_column in (
+        "membership_refund_attempt_recoveries.company_id",
+        "membership_refund_attempt_recoveries.source_branch_id",
+        "membership_refund_attempt_recoveries.source_terminal_id",
+        "membership_refund_attempt_recoveries.source_shift_id",
+        "membership_refund_attempt_resolutions.id IS NULL",
+    ):
+        assert scoped_column in statement
+    assert "FOR UPDATE OF membership_refund_attempt_recoveries" in statement
+    assert shift.id in compiled.params.values()
+    assert shift.company_id in compiled.params.values()
+    assert shift.branch_id in compiled.params.values()
+    assert shift.terminal_id in compiled.params.values()
+    assert shift.status == "open"
+    assert shift.closed_at is None
+
+
+@pytest.mark.asyncio
+async def test_close_shift_succeeds_only_after_all_financial_tasks_resolve() -> None:
+    tenant = _tenant()
+    shift = _shift(tenant)
+    session = _Session(
+        _Result(scalar=shift),
+        _Result(scalar=0),  # unfinished POS orders
+        _Result(scalar=0),  # no unacknowledged kitchen cancellation
+        _Result(scalar=0),  # running gaming sessions
+        _Result(scalar=0),  # stopped, unbilled gaming sessions
+        _Result(scalar=0),  # membership payments resolved
+        _Result(rows=[]),  # saved membership refund recoveries resolved
+        _Result(scalar=0),  # membership refunds resolved
+        _Result(scalar=0),  # POS refunds resolved
+    )
+
+    response = await pos_router.close_shift(
+        shift.id,
+        pos_router.ShiftCloseRequest(counted_minor=4_900),
+        session,
+        tenant,
+    )
+
+    assert response == {"id": str(shift.id), "status": "closed", "variance_minor": -100}
+    assert shift.closed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_pos_refund_evidence_reconciliation_requires_protected_owner() -> None:
+    tenant = _tenant(protected_access=False)
+    payload = pos_router.PosRefundEvidenceReconciliationCreate(
+        refund_id=uuid4(),
+        evidence_kind="provider_reference",
+        proof_reference="Provider case 123",
+        reason="Verified against the provider dashboard",
+    )
+
+    with pytest.raises(ForbiddenError, match="Only a protected owner"):
+        await pos_router.reconcile_pos_refund_evidence(
+            payload,
+            _Session(),
+            SimpleNamespace(),
+            tenant,
+        )
+
+
+@pytest.mark.asyncio
+async def test_legacy_one_call_refund_is_rejected_before_authorization_or_money_writes(
     monkeypatch,
 ) -> None:
     tenant = _tenant()
@@ -741,10 +1269,7 @@ async def test_non_opener_cannot_refund_an_original_non_cash_payment(
         _Result(scalar=original_shift),
     )
 
-    with pytest.raises(
-        BusinessRuleError,
-        match="Only the staff member who opened this shift",
-    ):
+    with pytest.raises(BusinessRuleError, match="older app.*No refund or drawer"):
         await pos_router.issue_refund(
             order.id,
             pos_router.RefundCreate(
@@ -757,8 +1282,7 @@ async def test_non_opener_cannot_refund_an_original_non_cash_payment(
             tenant,
         )
 
-    assert len(session.statements) == 2
-    assert original_shift.id in session.statements[1].compile().params.values()
+    assert session.statements == []
     assert session.added == []
 
 
@@ -811,22 +1335,21 @@ async def test_protected_owner_can_refund_original_non_cash_on_closed_shift(
         _Result(rows=[]),  # sale StockMovements fetched for refund-restock; none found
     )
 
-    response = await pos_router.issue_refund(
-        order.id,
-        pos_router.RefundCreate(
-            reason_code="CUSTOMER_REQUEST",
-            amount_minor=5_000,
-            mode="original",
-        ),
-        session,
-        request,
-        tenant,
-    )
-
-    refund = next(entity for entity in session.added if isinstance(entity, Refund))
-    assert response == {"id": str(refund.id), "settlement_method": "upi"}
-    assert refund.approved_by == tenant.user_id
-    assert order.status == "refunded"
+    with pytest.raises(BusinessRuleError, match="older app.*No refund or drawer"):
+        await pos_router.issue_refund(
+            order.id,
+            pos_router.RefundCreate(
+                reason_code="CUSTOMER_REQUEST",
+                amount_minor=5_000,
+                mode="original",
+            ),
+            session,
+            request,
+            tenant,
+        )
+    assert session.statements == []
+    assert session.added == []
+    assert order.status == "paid"
 
 
 @pytest.mark.asyncio
@@ -871,10 +1394,7 @@ async def test_cash_refund_still_requires_a_current_open_drawer_shift(
         _Result(rows=[]),
     )
 
-    with pytest.raises(
-        BusinessRuleError,
-        match="needs an open shift on this terminal",
-    ):
+    with pytest.raises(BusinessRuleError, match="older app.*No refund or drawer"):
         await pos_router.issue_refund(
             order.id,
             pos_router.RefundCreate(
@@ -1181,6 +1701,7 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
         held_at=held_at,
     )
     line = SimpleNamespace(
+        id=uuid4(),
         menu_item_id=uuid4(),
         variant_id=None,
         modifiers=None,
@@ -1194,6 +1715,9 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
         igst_minor=0,
         note="No onions, extra spicy",
         hsn_or_sac="996331",
+        kitchen_status="queued",
+        voided_at=None,
+        voided_by=None,
     )
     item = SimpleNamespace(name="Sandwich", sku="FOOD-1", hsn_code="996331")
     session = _Session(
@@ -1227,6 +1751,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
         customer_name="Cafe Guest",
         created_at=datetime(2026, 7, 15, 10, tzinfo=UTC),
         held_at=held_at,
+        checkout_version=7,
     )
     session = _Session(
         _Result(rows=[order]),
@@ -1234,6 +1759,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
         _Result(rows=[(order.id, "PS5 1")]),
         _Result(rows=[]),  # paid_by_order — nothing paid on a held order
         _Result(rows=[]),  # refunded_by_order
+        _Result(rows=[]),  # accepted, unresolved refund requests
     )
 
     response = await pos_router.list_orders(
@@ -1243,6 +1769,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
     )
 
     assert response[0].held_at == held_at
+    assert response[0].checkout_version == 7
     assert response[0].source_label == "PS5 1"
     assert response[0].paid_minor == 0
     assert response[0].refundable_minor == 0
@@ -1268,6 +1795,7 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
         customer_name=None,
         created_at=datetime(2026, 7, 15, 10, tzinfo=UTC),
         held_at=None,
+        checkout_version=3,
     )
     session = _Session(
         _Result(rows=[order]),
@@ -1275,97 +1803,11 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
         _Result(rows=[]),  # station_by_order
         _Result(rows=[(order.id, 1_000)]),  # paid_by_order
         _Result(rows=[(order.id, 400)]),  # refunded_by_order — one prior partial refund
+        _Result(rows=[]),  # accepted, unresolved refund requests
     )
 
     response = await pos_router.list_orders(session, tenant, status_filter=["paid"])
 
+    assert response[0].checkout_version == 3
     assert response[0].paid_minor == 1_000
     assert response[0].refundable_minor == 600
-
-
-# ---------------------------------------------------------------------------
-# _incremental_restock_fraction — cumulative-safe refund-restock proportion
-#
-# Found by re-audit: computing each refund's restock fraction against the
-# order's full taxable total (rather than cumulatively) double-restocks
-# inventory across multiple partial refunds on the same order. Repro from
-# the audit: taxable=900, tip=100 (total_minor=1000, fully paid). Two
-# sequential Rs500 partial refunds each naively computed fraction=500/900,
-# restocking 55.6% twice — 111% of what was ever deducted.
-# ---------------------------------------------------------------------------
-
-
-def test_incremental_restock_fraction_single_full_refund() -> None:
-    fraction = pos_router._incremental_restock_fraction(
-        refunded_before=0, refund_amount=900, taxable_total_minor=900
-    )
-    assert fraction == pytest.approx(1.0)
-
-
-def test_incremental_restock_fraction_single_partial_refund() -> None:
-    fraction = pos_router._incremental_restock_fraction(
-        refunded_before=0, refund_amount=450, taxable_total_minor=900
-    )
-    assert fraction == pytest.approx(0.5)
-
-
-def test_incremental_restock_fraction_two_partial_refunds_sum_to_full_not_double() -> None:
-    # Exact repro from the audit: taxable=900, tip=100. First Rs500 refund,
-    # then the remaining Rs500 — together they must restock exactly 100%
-    # of the order, not ~111%.
-    taxable_total = 900
-
-    first = pos_router._incremental_restock_fraction(
-        refunded_before=0, refund_amount=500, taxable_total_minor=taxable_total
-    )
-    assert first == pytest.approx(500 / 900)
-
-    second = pos_router._incremental_restock_fraction(
-        refunded_before=500, refund_amount=500, taxable_total_minor=taxable_total
-    )
-    # Only the remaining 400/900 should restock this time, not another 500/900.
-    assert second == pytest.approx(400 / 900)
-
-    assert first + second == pytest.approx(1.0)
-
-
-def test_incremental_restock_fraction_three_way_split_sums_to_one() -> None:
-    taxable_total = 900
-    fractions = []
-    refunded_so_far = 0
-    for amount in (300, 300, 300):
-        fractions.append(
-            pos_router._incremental_restock_fraction(
-                refunded_before=refunded_so_far,
-                refund_amount=amount,
-                taxable_total_minor=taxable_total,
-            )
-        )
-        refunded_so_far += amount
-    assert sum(fractions) == pytest.approx(1.0)
-
-
-def test_incremental_restock_fraction_clamps_when_refund_exceeds_taxable_total() -> None:
-    # A refund can legitimately exceed the taxable total if it also covers
-    # the tip (Refund.amount_minor isn't split from tip) — must clamp at
-    # 100% restocked, never go over or negative on a later call.
-    fraction = pos_router._incremental_restock_fraction(
-        refunded_before=0, refund_amount=1000, taxable_total_minor=900
-    )
-    assert fraction == pytest.approx(1.0)
-
-    # A further refund attempt after the order is already fully restocked
-    # must restock nothing more (not go negative).
-    fraction = pos_router._incremental_restock_fraction(
-        refunded_before=1000, refund_amount=100, taxable_total_minor=900
-    )
-    assert fraction == 0.0
-
-
-def test_incremental_restock_fraction_zero_taxable_total_is_a_noop() -> None:
-    assert (
-        pos_router._incremental_restock_fraction(
-            refunded_before=0, refund_amount=500, taxable_total_minor=0
-        )
-        == 0.0
-    )

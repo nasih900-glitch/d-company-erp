@@ -540,6 +540,7 @@ class OrderPricingService:
                     Customer.deleted_at.is_(None),
                     CustomerMembership.starts_at <= now,
                     CustomerMembership.expires_at > now,
+                    CustomerMembership.revoked_at.is_(None),
                     MembershipTier.company_id == company_id,
                     MembershipTier.deleted_at.is_(None),
                 )

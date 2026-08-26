@@ -1,7 +1,8 @@
 """Reports endpoints — daily, monthly, quarterly, yearly P&L.
 
-Powered by app/services/reports/aggregator.py — real SQL aggregation
-against orders, payments, expenses, event_tickets.
+Powered by app/services/reports/aggregator.py — real SQL aggregation against
+orders, payments, and expenses. Event tickets contribute operational counts;
+only their linked paid POS orders contribute financial values.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ from app.models import (
     OrderLine,
     Refund,
 )
-from app.services.pos.pricing import split_tax_from_inclusive_minor
 from app.services.reports import (
     PnLReport,
     ReportsAggregator,
@@ -57,10 +57,14 @@ class RevenueDTO(BaseModel):
     gaming_minor: int
     hookah_minor: int
     event_tickets_minor: int
+    memberships_minor: int
     delivery_aggregator_minor: int
     other_minor: int
     manual_collections_minor: int
     discounts_and_points_redeemed_minor: int
+    rounding_income_minor: int
+    rounding_expense_minor: int
+    round_off_minor: int
     total_minor: int
 
 
@@ -89,6 +93,7 @@ class ExpenseLineDTO(BaseModel):
 
 
 class ReportDTO(BaseModel):
+    accounting_basis: Literal["operational_receipt"] = "operational_receipt"
     period: Literal["daily", "monthly", "quarterly", "yearly", "custom"]
     label: str
     period_start: date
@@ -98,6 +103,7 @@ class ReportDTO(BaseModel):
     orders_count: int
     tickets_count: int
     avg_ticket_minor: int
+    unissued_paid_orders_count: int
 
     revenue: RevenueDTO
     tax_collected: TaxDTO
@@ -105,7 +111,11 @@ class ReportDTO(BaseModel):
     # Same value as revenue.manual_collections_minor, repeated at the report
     # level so exports and accounting clients cannot mistake it for an order.
     manual_collections_minor: int
+    tips_collected_minor: int
     refunds_issued_minor: int
+    settled_refunds_issued_minor: int
+    membership_refunds_issued_minor: int
+    refunded_tips_minor: int
     net_payments_received_minor: int
     expenses: list[ExpenseLineDTO] = Field(default_factory=list)
     expense_total_minor: int
@@ -149,6 +159,7 @@ class TaxComplianceDTO(BaseModel):
 
 def _to_dto(r: PnLReport) -> ReportDTO:
     return ReportDTO(
+        accounting_basis="operational_receipt",
         period=r.period,
         label=r.label,
         period_start=r.period_start,
@@ -157,15 +168,20 @@ def _to_dto(r: PnLReport) -> ReportDTO:
         orders_count=r.orders_count,
         tickets_count=r.tickets_count,
         avg_ticket_minor=r.avg_ticket_minor,
+        unissued_paid_orders_count=r.unissued_paid_orders_count,
         revenue=RevenueDTO(
             food_minor=r.revenue.food_minor,
             gaming_minor=r.revenue.gaming_minor,
             hookah_minor=r.revenue.hookah_minor,
             event_tickets_minor=r.revenue.event_tickets_minor,
+            memberships_minor=r.revenue.memberships_minor,
             delivery_aggregator_minor=r.revenue.delivery_aggregator_minor,
             other_minor=r.revenue.other_minor,
             manual_collections_minor=r.revenue.manual_collections_minor,
             discounts_and_points_redeemed_minor=r.revenue.discounts_and_points_redeemed_minor,
+            rounding_income_minor=r.revenue.rounding_income_minor,
+            rounding_expense_minor=r.revenue.rounding_expense_minor,
+            round_off_minor=r.revenue.round_off_minor,
             total_minor=r.revenue.total_minor,
         ),
         tax_collected=TaxDTO(
@@ -186,7 +202,11 @@ def _to_dto(r: PnLReport) -> ReportDTO:
             total_minor=r.payments_received.total_minor,
         ),
         manual_collections_minor=r.manual_collections_minor,
+        tips_collected_minor=r.tips_collected_minor,
         refunds_issued_minor=r.refunds_issued_minor,
+        settled_refunds_issued_minor=r.settled_refunds_issued_minor,
+        membership_refunds_issued_minor=r.membership_refunds_issued_minor,
+        refunded_tips_minor=r.refunded_tips_minor,
         net_payments_received_minor=r.net_payments_received_minor,
         expenses=[
             ExpenseLineDTO(category=e.category, amount_minor=e.amount_minor)
@@ -385,9 +405,13 @@ async def tax_compliance(
     if order_ids:
         line_rows = (
             await session.execute(
-                select(OrderLine, Order.delivery_via)
+                select(OrderLine, Order.delivery_via, MenuItem.type)
                 .join(Order, Order.id == OrderLine.order_id)
-                .where(OrderLine.order_id.in_(order_ids))
+                .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+                .where(
+                    OrderLine.order_id.in_(order_ids),
+                    OrderLine.voided_at.is_(None),
+                )
             )
         ).all()
 
@@ -395,8 +419,9 @@ async def tax_compliance(
     taxable_minor = 0
     gst_collected_minor = 0
     aggregator_delivery_minor = 0
+    event_ticket_revenue_minor = 0
     checked_order_lines = 0
-    for line, delivery_via in line_rows:
+    for line, delivery_via, item_type in line_rows:
         checked_order_lines += 1
         line_sum_by_order[line.order_id] = (
             line_sum_by_order.get(line.order_id, 0) + int(line.line_total_minor or 0)
@@ -411,34 +436,30 @@ async def tax_compliance(
                 + int(line.igst_minor or 0)
                 + int(line.cess_minor or 0)
             )
+        if item_type == "event":
+            # Only a paid POS order is financial evidence for an event sale.
+            event_ticket_revenue_minor += int(line.line_total_minor or 0)
 
-    event_rows = (
-        await session.execute(
-            select(EventTicket.price_paid_minor, EventTicket.order_id, Event.tax_rate)
-            .join(Event, Event.id == EventTicket.event_id)
-            .where(
-                Event.company_id == tenant.company_id,
-                EventTicket.order_id.is_(None),
-                EventTicket.created_at >= start_dt,
-                EventTicket.created_at < end_dt,
-                EventTicket.status.in_(("sold", "checked_in")),
+    # A historical unlinked ticket remains an operational attendance record,
+    # but it has no POS order/payment/invoice evidence and therefore cannot be
+    # included in revenue or GST. Count it solely for the critical data-quality
+    # issue below.
+    unlinked_event_tickets = int(
+        (
+            await session.execute(
+                select(func.count(EventTicket.id))
+                .join(Event, Event.id == EventTicket.event_id)
+                .where(
+                    Event.company_id == tenant.company_id,
+                    EventTicket.order_id.is_(None),
+                    EventTicket.created_at >= start_dt,
+                    EventTicket.created_at < end_dt,
+                    EventTicket.status.in_(("sold", "checked_in")),
+                )
             )
-        )
-    ).all()
-    event_ticket_revenue_minor = 0
-    event_ticket_tax_minor = 0
-    for ticket in event_rows:
-        amount = int(ticket.price_paid_minor or 0)
-        event_ticket_revenue_minor += amount
-        ticket_taxable, cgst, sgst, igst = split_tax_from_inclusive_minor(
-            amount,
-            Decimal(str(ticket.tax_rate or 0)),
-            True,
-        )
-        taxable_minor += ticket_taxable
-        event_ticket_tax_minor += cgst + sgst + igst
-    gst_collected_minor += event_ticket_tax_minor
-
+        ).scalar_one()
+        or 0
+    )
     issues: list[TaxComplianceIssueDTO] = []
     gst_registered = _registered_for_gst(company)
     gstin = (company.gstin or "").strip().upper() if company and company.gstin else None
@@ -674,14 +695,19 @@ async def tax_compliance(
         action="Shorten branch code or invoice prefix before issuing more invoices.",
         count=invoice_too_long,
     )
-    unlinked_event_tickets = sum(1 for t in event_rows if t.order_id is None)
     _issue(
         issues,
-        severity="warning",
+        severity="critical",
         area="Event tickets",
-        title="Direct event tickets are not tied to POS payments",
-        detail="Event ticket GST is included in reports, but ticket payment method is not reconciled through POS yet.",
-        action="Prefer selling event tickets through POS or reconcile cash/UPI manually until event-POS payment is wired.",
+        title="Historical event tickets have no verified POS sale",
+        detail=(
+            "These tickets are excluded from P&L, GST, and the ledger because "
+            "they have no linked paid order, payment, shift, or invoice."
+        ),
+        action=(
+            "Reconcile each ticket to documented payment and a valid POS sale, "
+            "or document it as complimentary/cancelled before filing accounts."
+        ),
         count=unlinked_event_tickets,
     )
 
@@ -775,16 +801,17 @@ async def _refund_adjustments_by_rate(
         if eco
         else (or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),)
     )
+    refund_at = func.coalesce(Refund.settled_at, Refund.created_at)
     refund_rows = (
         await session.execute(
             select(Refund, Order)
             .join(Order, Order.id == Refund.order_id)
             .where(
                 Order.company_id == company_id,
-                Refund.created_at < end_exclusive,
+                refund_at < end_exclusive,
                 *delivery_filter,
             )
-            .order_by(Refund.order_id, Refund.created_at, Refund.id)
+            .order_by(Refund.order_id, refund_at, Refund.id)
         )
     ).all()
     order_ids = {order.id for _, order in refund_rows}
@@ -793,7 +820,10 @@ async def _refund_adjustments_by_rate(
 
     line_rows = (
         await session.execute(
-            select(OrderLine).where(OrderLine.order_id.in_(order_ids))
+            select(OrderLine).where(
+                OrderLine.order_id.in_(order_ids),
+                OrderLine.voided_at.is_(None),
+            )
         )
     ).scalars().all()
     components: dict[UUID, dict[float, dict[str, int]]] = {}
@@ -819,7 +849,7 @@ async def _refund_adjustments_by_rate(
         before = running.get(order.id, 0)
         after = before + int(refund.amount_minor or 0)
         running[order.id] = after
-        if refund.created_at < start_at:
+        if (getattr(refund, "settled_at", None) or refund.created_at) < start_at:
             continue
         # order.total_minor includes any tip folded on at payment time;
         # a tip is never part of the taxable bill, so proportioning
@@ -886,6 +916,7 @@ async def gstr1_csv(
                 sale_at < end_dt,
                 Order.status.in_(("paid", "refunded")),
                 or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
+                OrderLine.voided_at.is_(None),
             )
         )
     ).all()
@@ -920,34 +951,6 @@ async def gstr1_csv(
             cess=-vals["cess"],
         )
 
-    event_rows = (
-        await session.execute(
-            select(EventTicket.price_paid_minor, Event.tax_rate)
-            .join(Event, Event.id == EventTicket.event_id)
-            .where(
-                Event.company_id == tenant.company_id,
-                EventTicket.order_id.is_(None),
-                EventTicket.created_at >= start_dt,
-                EventTicket.created_at < end_dt,
-                EventTicket.status.in_(("sold", "checked_in")),
-            )
-        )
-    ).all()
-    for ticket in event_rows:
-        taxable, cgst, sgst, igst = split_tax_from_inclusive_minor(
-            int(ticket.price_paid_minor or 0),
-            Decimal(str(ticket.tax_rate or 0)),
-            True,
-        )
-        _add_tax_bucket(
-            by_rate,
-            rate=float(ticket.tax_rate or 0),
-            taxable=taxable,
-            cgst=cgst,
-            sgst=sgst,
-            igst=igst,
-        )
-
     eco_rows = (
         await session.execute(
             select(
@@ -962,6 +965,7 @@ async def gstr1_csv(
                 Order.status.in_(("paid", "refunded")),
                 Order.delivery_via.isnot(None),
                 Order.delivery_via != "inhouse",
+                OrderLine.voided_at.is_(None),
             )
             .group_by(OrderLine.tax_rate)
         )
@@ -1052,6 +1056,7 @@ async def gstr3b_csv(
                     sale_at < end_dt,
                     Order.status.in_(("paid", "refunded")),
                     or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
+                    OrderLine.voided_at.is_(None),
                 )
             )
         ).scalar_one()
@@ -1079,6 +1084,7 @@ async def gstr3b_csv(
                     Order.status.in_(("paid", "refunded")),
                     Order.delivery_via.isnot(None),
                     Order.delivery_via != "inhouse",
+                    OrderLine.voided_at.is_(None),
                 )
             )
         ).scalar_one()
@@ -1094,28 +1100,6 @@ async def gstr3b_csv(
     eco_supply_minor -= sum(
         values["taxable"] for values in eco_refund_adjustments.values()
     )
-    event_taxable_minor = 0
-    event_rows = (
-        await session.execute(
-            select(EventTicket.price_paid_minor, Event.tax_rate)
-            .join(Event, Event.id == EventTicket.event_id)
-            .where(
-                Event.company_id == tenant.company_id,
-                EventTicket.order_id.is_(None),
-                EventTicket.created_at >= start_dt,
-                EventTicket.created_at < end_dt,
-                EventTicket.status.in_(("sold", "checked_in")),
-            )
-        )
-    ).all()
-    for ticket in event_rows:
-        taxable, _, _, _ = split_tax_from_inclusive_minor(
-            int(ticket.price_paid_minor or 0),
-            Decimal(str(ticket.tax_rate or 0)),
-            True,
-        )
-        event_taxable_minor += taxable
-
     rows: list[list] = [
         ["GSTR-3B Summary — accountant review"],
         ["Company", company.name if company else "D Company"],
@@ -1127,7 +1111,7 @@ async def gstr3b_csv(
         ["", "Total taxable value ₹", "IGST ₹", "CGST ₹", "SGST ₹", "Cess ₹"],
         [
             "Outward taxable supplies (other than zero-rated)",
-            f"{(normal_taxable_minor + event_taxable_minor) / 100:.2f}",
+            f"{normal_taxable_minor / 100:.2f}",
             f"{rep.tax_collected.igst_minor / 100:.2f}",
             f"{rep.tax_collected.cgst_minor / 100:.2f}",
             f"{rep.tax_collected.sgst_minor / 100:.2f}",

@@ -263,13 +263,14 @@ def _empty_ledger_session(*, asset_rows: list) -> _QueuedSession:
             _Result(rows=[]),  # payments
             _Result(scalar="Asia/Kolkata"),
             _Result(rows=[]),  # manual collections
+            _Result(rows=[]),  # membership payments
+            _Result(rows=[]),  # membership refund settlements
             _Result(rows=[]),  # orders
             _Result(rows=[]),  # stock
             _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital entries
-            _Result(rows=[]),  # direct event tickets
             _Result(rows=asset_rows),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
         ]
@@ -335,12 +336,15 @@ async def test_reports_aggregator_subtracts_depreciation_from_net_profit() -> No
             _Result(one=SimpleNamespace(n=0, gross=0, tips=0, cgst=0, sgst=0, igst=0, cess=0)),
             _Result(scalar=0),  # delivery
             _Result(scalar=0),  # discounts / points
+            _Result(one=SimpleNamespace(income=0, expense=0)),  # invoice rounding
             _Result(rows=[]),  # revenue by menu item type
-            _Result(rows=[]),  # event tickets
+            _Result(scalar=0),  # operational event ticket count
             _Result(rows=[]),  # COGS movements
             _Result(rows=[]),  # manual collections
+            _Result(rows=[]),  # membership payments
             _Result(rows=[]),  # payments
             _Result(rows=[]),  # refunds
+            _Result(scalar=0),  # membership refund settlements
             _Result(rows=[asset]),  # assets (depreciation)
             _Result(rows=[]),  # expenses
         ]

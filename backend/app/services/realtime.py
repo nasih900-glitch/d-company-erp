@@ -83,6 +83,8 @@ manager = ConnectionManager()
 # a manually-placed call site could.
 _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/pos/shifts", "shifts"),
+    ("/pos/refund-requests", "orders"),
+    ("/pos/customer-spend-reconciliations", "customers"),
     ("/tables", "tables"),
     ("/pos/orders", "orders"),
     ("/gaming/sessions", "gaming"),
@@ -112,3 +114,58 @@ def resource_for_path(path: str) -> str | None:
         if substring in path:
             return resource
     return None
+
+
+def resources_for_path(path: str) -> tuple[str, ...]:
+    """All caches invalidated by a successful write on ``path``.
+
+    Membership collection/refund mutates more than the entitlement table: it
+    changes shift collection/drawer totals, customer lifetime spend, and
+    finance/report aggregates. Broadcasting only ``memberships`` left every
+    other terminal displaying stale money until its next poll.
+    """
+    primary = resource_for_path(path)
+    if primary is None:
+        return ()
+    normalized_path = path.rstrip("/")
+    if primary == "memberships":
+        return ("memberships", "shifts", "customers", "finance")
+    if "/pos/customer-spend-reconciliations" in path:
+        # This owner correction writes Customer.total_spent_minor directly.
+        # Customer screens and finance/LTV aggregates both read that value.
+        return ("customers", "finance")
+    if "/pos/refund-requests" in path:
+        return ("orders", "shifts", "customers", "finance")
+    if "/pos/orders/" in normalized_path and normalized_path.endswith("/payments"):
+        # Every accepted payment changes shift collections and finance/report
+        # aggregates. When it settles the balance, the same route also runs
+        # _finalize_order, which updates customer visits, spend, and loyalty
+        # and deducts any recipe ingredients from inventory. Path-only
+        # invalidation therefore has to include both completion resources for
+        # this route, while ordinary unpaid-order edits remain narrowly scoped.
+        return (
+            "orders",
+            "tables",
+            "kitchen",
+            "shifts",
+            "customers",
+            "finance",
+            "inventory",
+        )
+    if "/pos/orders/" in normalized_path and normalized_path.endswith("/finalize-zero"):
+        # Zero-total settlement has no shift collection to refresh, but it does
+        # run the shared finalizer: customer metrics, finance/report facts
+        # (including the completed sale/COGS boundary), and recipe inventory
+        # can change.
+        return ("orders", "tables", "kitchen", "customers", "finance", "inventory")
+    if "/pos/orders" in path:
+        # Table rounds, line edits/cancellations, held handoff, checkout claims,
+        # and whole-order void can change these three operational screens. The
+        # financial completion routes are handled above rather than widening
+        # every draft-order edit to unrelated customer and finance reads.
+        return ("orders", "tables", "kitchen")
+    if "/gaming/sessions" in path and (
+        "/send-to-pos" in path or "/reconcile-to-pos" in path
+    ):
+        return ("gaming", "orders")
+    return (primary,)

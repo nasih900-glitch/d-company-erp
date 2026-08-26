@@ -12,14 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.models import (
+    GRN,
     Batch,
     Branch,
-    GRN,
     GRNLine,
     Ingredient,
     MenuItem,
@@ -170,6 +170,14 @@ class SupplierRead(BaseModel):
     payment_terms: str | None
 
 
+class InventoryBranchRead(BaseModel):
+    """Least-privilege branch reference for stock movement forms."""
+
+    id: UUID
+    name: str
+    code: str | None = None
+
+
 class SupplierCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     contact: str | None = None
@@ -250,6 +258,23 @@ class RecipeUpdate(BaseModel):
 # ============================================================================
 # INGREDIENTS
 # ============================================================================
+@router.get("/branches", response_model=list[InventoryBranchRead])
+async def list_inventory_branches(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("inventory.read")),
+) -> list[InventoryBranchRead]:
+    """Return only branches the inventory operator is allowed to use."""
+
+    stmt = select(Branch).where(
+        Branch.company_id == tenant.company_id,
+        Branch.deleted_at.is_(None),
+    )
+    if tenant.branch_id is not None:
+        stmt = stmt.where(Branch.id == tenant.branch_id)
+    rows = (await session.execute(stmt.order_by(Branch.name))).scalars().all()
+    return [InventoryBranchRead(id=row.id, name=row.name, code=row.code) for row in rows]
+
+
 @router.get("/ingredients", response_model=list[IngredientRead])
 async def list_ingredients(
     session: SessionDep,
@@ -952,7 +977,7 @@ async def post_adjustment(
                     Batch.branch_id == payload.branch_id,
                     Batch.qty_on_hand > 0,
                 )
-                .order_by(Batch.received_at)
+                .order_by(Batch.received_at, Batch.id)
                 .limit(1)
                 .with_for_update()
             )
@@ -971,7 +996,7 @@ async def post_adjustment(
                     Batch.ingredient_id == payload.ingredient_id,
                     Batch.branch_id == payload.branch_id,
                 )
-                .order_by(Batch.received_at.desc())
+                .order_by(Batch.received_at.desc(), Batch.id.desc())
                 .limit(1)
                 .with_for_update()
             )

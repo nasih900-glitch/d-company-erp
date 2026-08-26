@@ -34,7 +34,13 @@ async def session() -> AsyncIterator[AsyncSession]:
 @pytest_asyncio.fixture
 async def client() -> AsyncIterator[AsyncClient]:
     app = create_app()
-    transport = ASGITransport(app=app)
+    suffix = uuid4().hex[:16]
+    client_host = "2001:db8::" + ":".join(
+        suffix[index : index + 4] for index in range(0, len(suffix), 4)
+    )
+    # Exercise the same trust boundary as production: request.client is set by
+    # the ASGI server/transport, never by a caller-controlled forwarding header.
+    transport = ASGITransport(app=app, client=(client_host, 40_000))
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 

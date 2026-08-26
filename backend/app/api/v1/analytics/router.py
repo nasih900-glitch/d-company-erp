@@ -31,6 +31,7 @@ class DashboardKPIs(BaseModel):
     revenue_gaming_minor: int
     revenue_hookah_minor: int
     revenue_events_minor: int
+    revenue_memberships_minor: int
     revenue_manual_collections_minor: int
     discounts_and_points_redeemed_minor: int
     revenue_total_minor: int
@@ -102,6 +103,7 @@ async def dashboard(
         revenue_gaming_minor=report.revenue.gaming_minor,
         revenue_hookah_minor=report.revenue.hookah_minor,
         revenue_events_minor=report.revenue.event_tickets_minor,
+        revenue_memberships_minor=report.revenue.memberships_minor,
         revenue_manual_collections_minor=report.manual_collections_minor,
         discounts_and_points_redeemed_minor=report.revenue.discounts_and_points_redeemed_minor,
         revenue_total_minor=report.gross_revenue_minor,
@@ -143,6 +145,9 @@ async def export_csv(
     writer.writerow(["Net revenue", report.net_revenue_minor, f"{report.net_revenue_minor / 100:.2f}"])
     writer.writerow(["Net profit", report.net_profit_minor, f"{report.net_profit_minor / 100:.2f}"])
     writer.writerow(["Average ticket", report.avg_ticket_minor, f"{report.avg_ticket_minor / 100:.2f}"])
+    writer.writerow(["Tips collected (staff liability)", report.tips_collected_minor, f"{report.tips_collected_minor / 100:.2f}"])
+    writer.writerow(["Refunds issued", report.refunds_issued_minor, f"{report.refunds_issued_minor / 100:.2f}"])
+    writer.writerow(["Refunded tips", report.refunded_tips_minor, f"{report.refunded_tips_minor / 100:.2f}"])
     writer.writerow(["Orders count", report.orders_count, ""])
     writer.writerow(["Event tickets count", report.tickets_count, ""])
     writer.writerow([])
@@ -151,6 +156,7 @@ async def export_csv(
     writer.writerow(["Gaming", report.revenue.gaming_minor, f"{report.revenue.gaming_minor / 100:.2f}"])
     writer.writerow(["Shisha", report.revenue.hookah_minor, f"{report.revenue.hookah_minor / 100:.2f}"])
     writer.writerow(["Events", report.revenue.event_tickets_minor, f"{report.revenue.event_tickets_minor / 100:.2f}"])
+    writer.writerow(["Memberships", report.revenue.memberships_minor, f"{report.revenue.memberships_minor / 100:.2f}"])
     writer.writerow(["Delivery aggregators", report.revenue.delivery_aggregator_minor, f"{report.revenue.delivery_aggregator_minor / 100:.2f}"])
     writer.writerow(["Other", report.revenue.other_minor, f"{report.revenue.other_minor / 100:.2f}"])
     writer.writerow([
@@ -162,6 +168,16 @@ async def export_csv(
         "Less: discounts & points redeemed",
         -report.revenue.discounts_and_points_redeemed_minor,
         f"{-report.revenue.discounts_and_points_redeemed_minor / 100:.2f}",
+    ])
+    writer.writerow([
+        "Invoice round-up",
+        report.revenue.rounding_income_minor,
+        f"{report.revenue.rounding_income_minor / 100:.2f}",
+    ])
+    writer.writerow([
+        "Less: invoice round-down",
+        -report.revenue.rounding_expense_minor,
+        f"{-report.revenue.rounding_expense_minor / 100:.2f}",
     ])
     writer.writerow([])
     writer.writerow(["Tax", "Amount minor", "Amount INR"])
@@ -179,6 +195,8 @@ async def export_csv(
     writer.writerow(["QR", report.payments_received.qr_minor, f"{report.payments_received.qr_minor / 100:.2f}"])
     writer.writerow(["Wallet", report.payments_received.wallet_minor, f"{report.payments_received.wallet_minor / 100:.2f}"])
     writer.writerow(["Other", report.payments_received.other_minor, f"{report.payments_received.other_minor / 100:.2f}"])
+    writer.writerow(["Less: settled refunds", -report.settled_refunds_issued_minor, f"{-report.settled_refunds_issued_minor / 100:.2f}"])
+    writer.writerow(["Net payment movement", report.net_payments_received_minor, f"{report.net_payments_received_minor / 100:.2f}"])
     writer.writerow([])
     writer.writerow(["Expense category", "Amount minor", "Amount INR"])
     for expense in report.expenses:

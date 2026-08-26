@@ -10,12 +10,15 @@ prefix like /public/{company_slug}/menu.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.db import SessionDep
 from app.models import Company, MenuCategory, MenuItem
 
@@ -43,7 +46,63 @@ class PublicMenuDTO(BaseModel):
     items: list[PublicItemDTO]
 
 
+class ClientCompatibilityDTO(BaseModel):
+    platform: Literal["android", "ios"]
+    current_version_code: int
+    minimum_supported_version_code: int
+    latest_version_code: int
+    status: Literal["supported", "update_available", "update_required"]
+    update_url: str | None
+    message: str
+    checked_at: datetime
+
+
 # ---------------------------------------------------------------- endpoints
+@router.get("/client-compatibility", response_model=ClientCompatibilityDTO)
+async def client_compatibility(
+    platform: Literal["android", "ios"],
+    version_code: int = Query(ge=1),
+) -> ClientCompatibilityDTO:
+    """Return the server-authoritative minimum/latest native build contract."""
+    settings = get_settings()
+    if platform == "android":
+        minimum = settings.android_min_supported_version_code
+        latest = settings.android_latest_version_code
+        update_url = str(settings.android_update_url) if settings.android_update_url else None
+    else:
+        minimum = settings.ios_min_supported_version_code
+        latest = settings.ios_latest_version_code
+        update_url = str(settings.ios_update_url) if settings.ios_update_url else None
+
+    if version_code < minimum:
+        compatibility_status = "update_required"
+        default_message = (
+            "This app version is no longer compatible with the ERP server. "
+            "Update before continuing; saved offline work will remain on this device."
+        )
+    elif version_code < latest:
+        compatibility_status = "update_available"
+        default_message = "A newer app version is available. You can continue for now."
+    else:
+        compatibility_status = "supported"
+        default_message = "This app version is supported."
+
+    return ClientCompatibilityDTO(
+        platform=platform,
+        current_version_code=version_code,
+        minimum_supported_version_code=minimum,
+        latest_version_code=latest,
+        status=compatibility_status,
+        update_url=update_url,
+        message=(
+            default_message
+            if compatibility_status == "supported"
+            else settings.client_update_message or default_message
+        ),
+        checked_at=datetime.now(UTC),
+    )
+
+
 @router.get("/menu", response_model=PublicMenuDTO)
 async def public_menu(session: SessionDep) -> PublicMenuDTO:
     """Public read-only menu — what QR-at-the-table customers see.

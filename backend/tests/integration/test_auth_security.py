@@ -4,8 +4,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import delete, text
 
-from app.models import Role, UserRole
 from app.core.security import decode_token
+from app.models import Role, UserRole
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -84,3 +84,7 @@ async def test_me_masks_protected_owner_role(client, session, seed_owner) -> Non
     assert me.status_code == 200
     assert me.json()["roles"] == ["owner"]
     assert me.json()["protected_access"] is True
+    assert me.json()["audit_access"] is True
+    assert "finance.write" in me.json()["effective_permissions"]
+    assert "admin.audit.read" in me.json()["effective_permissions"]
+    assert "admin.system" in me.json()["effective_permissions"]

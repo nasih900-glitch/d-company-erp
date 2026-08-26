@@ -2,9 +2,11 @@
 
 Aggregates over a date range from these tables:
   - orders          → revenue (split by order.type: dine_in, takeaway, delivery)
-  - payments        → method split (cash, upi, card, qr, wallet)
+  - payments        → POS method split (cash, upi, card, qr, wallet)
+  - membership_payments → paid membership revenue + settlement method
   - order_lines     → revenue by menu_item type (food, drink, dessert, gaming, event)
-  - event_tickets   → event ticket revenue (separate stream)
+  - event_tickets   → operational attendance count only; financial truth comes
+                      from paid POS orders
   - expenses        → expense buckets (by category)
   - stock_movements → COGS approximation (sale-type movements × cost)
 
@@ -26,7 +28,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BusinessRuleError
@@ -40,6 +42,8 @@ from app.models import (
     Expense,
     ExpenseCategory,
     ManualCollection,
+    MembershipPayment,
+    MembershipRefundSettlement,
     MenuItem,
     Order,
     OrderLine,
@@ -48,7 +52,6 @@ from app.models import (
     StockMovement,
 )
 from app.services.accounting.depreciation import asset_depreciation_expense_minor
-from app.services.pos.pricing import split_tax_from_inclusive_minor
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
 
@@ -121,7 +124,10 @@ class RevenueBreakdown:
     food_minor: int = 0          # food + drinks + desserts
     gaming_minor: int = 0        # gaming-type menu items (PS5/VR/sim per-session items)
     hookah_minor: int = 0        # hookah flavors + sessions
-    event_tickets_minor: int = 0  # event ticket sales
+    event_tickets_minor: int = 0  # event items settled through paid POS orders
+    # Paid terms only. CustomerMembership by itself is an entitlement, not
+    # evidence that cash/card/UPI was actually collected.
+    memberships_minor: int = 0
     delivery_aggregator_minor: int = 0  # delivery via Zomato/Swiggy (9(5))
     other_minor: int = 0
     # Revenue received outside itemized POS billing.  It remains explicit so
@@ -130,10 +136,21 @@ class RevenueBreakdown:
     # food/gaming/hookah/other above are summed from OrderLine.line_total_minor,
     # which does NOT reflect an order-level manual discount or points
     # redemption (both applied after line pricing). delivery_aggregator_minor
-    # already uses Order.total_minor and is already net. Subtracted here so
-    # gross_revenue_minor reflects what was actually collected, not the
+    # is sourced from the already-discounted Order total. Subtracted here so
+    # gross_revenue_minor reflects what was actually invoiced, not the
     # pre-discount line total.
     discounts_and_points_redeemed_minor: int = 0
+    # Invoice rounding is an order-level settlement adjustment, so it cannot
+    # be attributed honestly to Food/Gaming/etc. Keep the two sides visible
+    # (matching ledger accounts 4900 and 5800) while including their net effect
+    # in the headline revenue. Without this, category line totals can differ
+    # from issued invoices and payments by the cumulative round-off amount.
+    rounding_income_minor: int = 0
+    rounding_expense_minor: int = 0
+
+    @property
+    def round_off_minor(self) -> int:
+        return self.rounding_income_minor - self.rounding_expense_minor
 
     @property
     def total_minor(self) -> int:
@@ -142,10 +159,12 @@ class RevenueBreakdown:
             + self.gaming_minor
             + self.hookah_minor
             + self.event_tickets_minor
+            + self.memberships_minor
             + self.delivery_aggregator_minor
             + self.other_minor
             + self.manual_collections_minor
             - self.discounts_and_points_redeemed_minor
+            + self.round_off_minor
         )
 
 
@@ -209,8 +228,20 @@ class PnLReport:
     revenue: RevenueBreakdown
     tax_collected: TaxBreakdown
     payments_received: PaymentBreakdown
+    # Paid/refunded legacy orders that have a settlement timestamp but no
+    # immutable invoice timestamp. They remain in the operational report on
+    # their closed_at cohort so payment/refund money is not silently omitted,
+    # but the missing invoice is an explicit reconciliation warning.
+    unissued_paid_orders_count: int = 0
+    # Tips are collected in the same payment as the bill but remain a staff
+    # liability, not cafe revenue. Expose them so payment movement can foot to
+    # revenue without pretending the difference is unexplained income.
+    tips_collected_minor: int = 0
     refunds_issued_minor: int = 0
     settled_refunds_issued_minor: int = 0
+    # Full reversals of paid membership terms, also included in both totals
+    # above. Kept explicit so Finance can explain the movement.
+    membership_refunds_issued_minor: int = 0
     # Portion of refunds_issued_minor that was a refund of tip (never part of
     # revenue to begin with — see net_revenue_minor below). Tracked
     # separately so refunds_issued_minor keeps reporting the full cash amount
@@ -324,20 +355,19 @@ class ReportsAggregator:
         start_at, end_at = local_date_bounds_utc(
             period_start, period_end, timezone_name
         )
+        # New sales use the immutable invoice timestamp. Older paid/refunded
+        # rows can pre-date invoice issuance; use their recorded close timestamp
+        # as an explicit legacy fallback so Reports, Insights and the ledger
+        # cannot disagree about the sale cohort. The count below keeps this
+        # fallback visible as a reconciliation warning rather than silently
+        # pretending those rows are complete invoices.
         sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
 
         # ---------- Orders aggregation ----------
-        # Total orders + average ticket. Deliberately "paid" only, NOT
-        # "paid, refunded" — Order.status only becomes "refunded" once the
-        # order has been refunded down to zero (see pos/router.py's refund
-        # endpoint), meaning it kept no revenue at all. Counting it as a
-        # completed sale would inflate both the order count and the average
-        # ticket size with money that was handed back. A *partial* refund
-        # leaves status="paid", so that order still counts here — correctly,
-        # since it's still substantially a real sale. This is intentionally
-        # narrower than the revenue/tax/payments queries below, which stay
-        # gross-inclusive-of-refunds by design (net_revenue_minor is where
-        # refunds get subtracted, in aggregate rather than per-category).
+        # Count settled sales by their issued-invoice time, with the explicit
+        # legacy close-time fallback above. A later full refund changes status
+        # to "refunded"; filtering only "paid" would rewrite the denominator
+        # of an already-closed historical report.
         orders_q = select(
             func.count(Order.id).label("n"),
             func.coalesce(func.sum(Order.total_minor), 0).label("gross"),
@@ -346,31 +376,46 @@ class ReportsAggregator:
             func.coalesce(func.sum(Order.sgst_minor), 0).label("sgst"),
             func.coalesce(func.sum(Order.igst_minor), 0).label("igst"),
             func.coalesce(func.sum(Order.cess_minor), 0).label("cess"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Order.invoice_issued_at.is_(None), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("unissued"),
         ).where(
             Order.company_id == company_id,
             sale_at >= start_at,
             sale_at < end_at,
-            Order.status == "paid",
+            Order.status.in_(("paid", "refunded")),
         )
         orders_row = (await self.session.execute(orders_q)).one()
         orders_count = int(orders_row.n)
-        # total_minor includes any tip folded on at payment time (see
-        # record_payment) — a tip isn't part of the "ticket" the average
-        # is meant to describe, so it's excluded here the same way it's
-        # already excluded from the refund-proportion math.
         gross_total = int(orders_row.gross) - int(orders_row.tips)
-        avg_ticket = gross_total // orders_count if orders_count else 0
+        # Final average ticket is calculated after refund aggregation below,
+        # from reconciled invoice/category totals rather than this count query.
+        avg_ticket = 0
         order_cgst = int(orders_row.cgst)
         order_sgst = int(orders_row.sgst)
         order_igst = int(orders_row.igst)
         order_cess = int(orders_row.cess)
+        unissued_paid_orders_count = int(getattr(orders_row, "unissued", 0) or 0)
 
         # Revenue by order type (food vs gaming menu items vs delivery)
         # food = order_lines joined to menu_items.type in (food, drink, dessert)
         # gaming = menu_items.type = 'gaming'
         # delivery_aggregator = orders.delivery_via NOT NULL AND NOT 'inhouse'
         delivery_q = select(
-            func.coalesce(func.sum(Order.total_minor), 0).label("d")
+            func.coalesce(
+                func.sum(
+                    Order.total_minor
+                    - func.coalesce(Order.round_off_minor, 0)
+                    - func.coalesce(Order.tip_minor, 0)
+                ),
+                0,
+            ).label("d")
         ).where(
             Order.company_id == company_id,
             sale_at >= start_at,
@@ -399,6 +444,39 @@ class ReportsAggregator:
             (await self.session.execute(discounts_q)).scalar_one() or 0
         )
 
+        # Round-off is stored on Order, not OrderLine. Aggregate both signs
+        # across every invoiced order (including delivery orders) and add the
+        # net exactly once below. Delivery revenue above is therefore backed
+        # out to its pre-round, tip-exclusive invoice value first.
+        rounding_q = select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Order.round_off_minor > 0, Order.round_off_minor),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("income"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Order.round_off_minor < 0, -Order.round_off_minor),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("expense"),
+        ).where(
+            Order.company_id == company_id,
+            sale_at >= start_at,
+            sale_at < end_at,
+            Order.status.in_(("paid", "refunded")),
+        )
+        rounding_row = (await self.session.execute(rounding_q)).one()
+        rounding_income = int(rounding_row.income or 0)
+        rounding_expense = int(rounding_row.expense or 0)
+
         # Revenue by menu item type (excluding aggregator orders)
         type_q = (
             select(
@@ -413,12 +491,14 @@ class ReportsAggregator:
                 sale_at < end_at,
                 Order.status.in_(("paid", "refunded")),
                 or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
+                OrderLine.voided_at.is_(None),
             )
             .group_by(MenuItem.type)
         )
         food_total = 0
         gaming_total = 0
         hookah_total = 0
+        event_total = 0
         other_total = 0
         for row in (await self.session.execute(type_q)).all():
             t = row.type
@@ -429,48 +509,39 @@ class ReportsAggregator:
                 gaming_total += amt
             elif t == "hookah":
                 hookah_total += amt
+            elif t == "event":
+                # Event revenue is financial only after it passes through a
+                # paid POS order. Standalone EventTicket.price_paid_minor is a
+                # configured price, not evidence that money was collected.
+                event_total += amt
             else:
                 other_total += amt
 
-        # ---------- Event tickets ----------
-        tickets_q = (
-            select(
-                EventTicket.price_paid_minor,
-                EventTicket.order_id,
-                Event.tax_rate,
-                Branch.state_code,
-            )
-            .join(Event, Event.id == EventTicket.event_id)
-            .join(Branch, Branch.id == Event.branch_id)
-            .where(
-                Event.company_id == company_id,
-                EventTicket.created_at >= start_at,
-                EventTicket.created_at < end_at,
-                EventTicket.status.in_(("sold", "checked_in")),
-            )
+        # ---------- Event ticket operational count ----------
+        # Keep attendance useful without treating an unlinked ticket's
+        # configured price as paid revenue or GST. A future POS integration
+        # will contribute financial values through the paid Order/OrderLine
+        # aggregation above.
+        tickets_count = int(
+            (
+                await self.session.execute(
+                    select(func.count(EventTicket.id))
+                    .join(Event, Event.id == EventTicket.event_id)
+                    .where(
+                        Event.company_id == company_id,
+                        EventTicket.created_at >= start_at,
+                        EventTicket.created_at < end_at,
+                        EventTicket.status.in_(("sold", "checked_in")),
+                    )
+                )
+            ).scalar_one()
+            or 0
         )
-        ticket_rows = (await self.session.execute(tickets_q)).all()
-        tickets_count = len(ticket_rows)
-        tickets_total = 0
-        ticket_cgst = ticket_sgst = ticket_igst = 0
-        for ticket in ticket_rows:
-            if ticket.order_id is not None:
-                continue
-            amount = int(ticket.price_paid_minor or 0)
-            tickets_total += amount
-            _, cgst, sgst, igst = split_tax_from_inclusive_minor(
-                amount,
-                Decimal(str(ticket.tax_rate or 0)),
-                True,
-            )
-            ticket_cgst += cgst
-            ticket_sgst += sgst
-            ticket_igst += igst
 
         tax = TaxBreakdown(
-            cgst_minor=order_cgst + ticket_cgst,
-            sgst_minor=order_sgst + ticket_sgst,
-            igst_minor=order_igst + ticket_igst,
+            cgst_minor=order_cgst,
+            sgst_minor=order_sgst,
+            igst_minor=order_igst,
             cess_minor=order_cess,
         )
 
@@ -510,11 +581,14 @@ class ReportsAggregator:
             food_minor=food_total,
             gaming_minor=gaming_total,
             hookah_minor=hookah_total,
-            event_tickets_minor=tickets_total,
+            event_tickets_minor=event_total,
+            memberships_minor=0,
             delivery_aggregator_minor=delivery_total,
             other_minor=other_total,
             manual_collections_minor=0,
             discounts_and_points_redeemed_minor=discounts_and_points_total,
+            rounding_income_minor=rounding_income,
+            rounding_expense_minor=rounding_expense,
         )
 
         # ---------- Manual daily collections ----------
@@ -540,12 +614,48 @@ class ReportsAggregator:
             gaming_minor=revenue.gaming_minor,
             hookah_minor=revenue.hookah_minor,
             event_tickets_minor=revenue.event_tickets_minor,
+            memberships_minor=revenue.memberships_minor,
             delivery_aggregator_minor=revenue.delivery_aggregator_minor,
             other_minor=revenue.other_minor,
             manual_collections_minor=manual_total,
             discounts_and_points_redeemed_minor=(
                 revenue.discounts_and_points_redeemed_minor
             ),
+            rounding_income_minor=revenue.rounding_income_minor,
+            rounding_expense_minor=revenue.rounding_expense_minor,
+        )
+
+        # ---------- Paid memberships ----------
+        membership_q = (
+            select(
+                MembershipPayment.method,
+                func.coalesce(func.sum(MembershipPayment.amount_minor), 0).label("amount"),
+            )
+            .where(
+                MembershipPayment.company_id == company_id,
+                MembershipPayment.paid_at >= start_at,
+                MembershipPayment.paid_at < end_at,
+            )
+            .group_by(MembershipPayment.method)
+        )
+        membership_by_method: dict[str, int] = {}
+        for row in (await self.session.execute(membership_q)).all():
+            membership_by_method[str(row.method)] = int(row.amount or 0)
+        membership_total = sum(membership_by_method.values())
+        revenue = RevenueBreakdown(
+            food_minor=revenue.food_minor,
+            gaming_minor=revenue.gaming_minor,
+            hookah_minor=revenue.hookah_minor,
+            event_tickets_minor=revenue.event_tickets_minor,
+            memberships_minor=membership_total,
+            delivery_aggregator_minor=revenue.delivery_aggregator_minor,
+            other_minor=revenue.other_minor,
+            manual_collections_minor=revenue.manual_collections_minor,
+            discounts_and_points_redeemed_minor=(
+                revenue.discounts_and_points_redeemed_minor
+            ),
+            rounding_income_minor=revenue.rounding_income_minor,
+            rounding_expense_minor=revenue.rounding_expense_minor,
         )
 
         # ---------- Payments breakdown ----------
@@ -575,23 +685,41 @@ class ReportsAggregator:
             elif m == "wallet": wallet = amt
             else:             other_pay += amt
         payments = PaymentBreakdown(
-            cash_minor=cash + manual_by_method.get("cash", 0),
-            upi_minor=upi + manual_by_method.get("upi", 0),
-            card_minor=card + manual_by_method.get("card", 0),
+            cash_minor=(
+                cash
+                + manual_by_method.get("cash", 0)
+                + membership_by_method.get("cash", 0)
+            ),
+            upi_minor=(
+                upi
+                + manual_by_method.get("upi", 0)
+                + membership_by_method.get("upi", 0)
+            ),
+            card_minor=(
+                card
+                + manual_by_method.get("card", 0)
+                + membership_by_method.get("card", 0)
+            ),
             bank_minor=bank + manual_by_method.get("bank", 0),
-            qr_minor=qr, wallet_minor=wallet, other_minor=other_pay,
+            qr_minor=qr,
+            wallet_minor=wallet,
+            # Razorpay is only a declared rail until provider settlement is
+            # integrated; keep it visible as Other rather than inventing a
+            # bank/card classification.
+            other_minor=other_pay + membership_by_method.get("razorpay", 0),
         )
 
+        refund_at = func.coalesce(Refund.settled_at, Refund.created_at)
         refund_rows = (
             await self.session.execute(
                 select(Refund, Order)
                 .join(Order, Order.id == Refund.order_id)
                 .where(
                     Order.company_id == company_id,
-                    Refund.created_at >= start_at,
-                    Refund.created_at < end_at,
+                    refund_at >= start_at,
+                    refund_at < end_at,
                 )
-                .order_by(Refund.created_at, Refund.id)
+                .order_by(refund_at, Refund.id)
             )
         ).all()
         refund_order_ids = {refund.order_id for refund, _ in refund_rows}
@@ -605,7 +733,7 @@ class ReportsAggregator:
                     )
                     .where(
                         Refund.order_id.in_(refund_order_ids),
-                        Refund.created_at < start_at,
+                        refund_at < start_at,
                     )
                     .group_by(Refund.order_id)
                 )
@@ -618,6 +746,7 @@ class ReportsAggregator:
         settled_refunds_issued = 0
         refund_cgst = refund_sgst = refund_igst = refund_cess = 0
         refund_tips = 0
+        cohort_refunds_for_average = 0
         running = dict(prior_by_order)
         for refund, order in refund_rows:
             amount = int(refund.amount_minor or 0)
@@ -649,17 +778,61 @@ class ReportsAggregator:
             order_total = int(order.total_minor or 0)
             tip_before = max(0, min(before, order_total) - total)
             tip_after = max(0, min(after, order_total) - total)
-            refund_tips += tip_after - tip_before
+            refunded_tip_delta = tip_after - tip_before
+            refund_tips += refunded_tip_delta
+            invoice_at = getattr(order, "invoice_issued_at", None) or getattr(
+                order, "closed_at", None
+            )
+            if invoice_at is not None and start_at <= invoice_at < end_at:
+                # AOV is a sale-cohort metric: a return for an older invoice
+                # changes this period's net revenue/payment movement, but must
+                # not reduce the average value of unrelated new receipts.
+                cohort_refunds_for_average += amount - refunded_tip_delta
             running[order.id] = after
             refunds_issued += amount
             if refund.settlement_method != "store_credit":
                 settled_refunds_issued += amount
+
+        membership_refunds_issued = int(
+            (
+                await self.session.execute(
+                    select(
+                        func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0)
+                    ).where(
+                        MembershipRefundSettlement.company_id == company_id,
+                        MembershipRefundSettlement.settled_at >= start_at,
+                        MembershipRefundSettlement.settled_at < end_at,
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        # Memberships have no GST/tip allocation in this dedicated path, so
+        # their full reversal reduces revenue and payment movement directly.
+        refunds_issued += membership_refunds_issued
+        settled_refunds_issued += membership_refunds_issued
 
         tax = TaxBreakdown(
             cgst_minor=tax.cgst_minor - refund_cgst,
             sgst_minor=tax.sgst_minor - refund_sgst,
             igst_minor=tax.igst_minor - refund_igst,
             cess_minor=tax.cess_minor - refund_cess,
+        )
+
+        # Average ticket is the period's issued, tip-exclusive invoice cohort
+        # less refunds issued in the same period for that same cohort. Manual
+        # collections have no receipt denominator; refunds for older invoices
+        # belong to net revenue/payment movement but not today's AOV.
+        net_invoiced_for_average = gross_total - cohort_refunds_for_average
+        avg_ticket = (
+            int(
+                (
+                    Decimal(max(0, net_invoiced_for_average))
+                    / Decimal(orders_count)
+                ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            )
+            if orders_count
+            else 0
         )
 
         # ---------- Depreciation ----------
@@ -721,11 +894,14 @@ class ReportsAggregator:
             orders_count=orders_count,
             tickets_count=tickets_count,
             avg_ticket_minor=avg_ticket,
+            unissued_paid_orders_count=unissued_paid_orders_count,
             revenue=revenue,
             tax_collected=tax,
             payments_received=payments,
+            tips_collected_minor=int(orders_row.tips or 0),
             refunds_issued_minor=refunds_issued,
             settled_refunds_issued_minor=settled_refunds_issued,
+            membership_refunds_issued_minor=membership_refunds_issued,
             refunded_tips_minor=refund_tips,
             cogs_minor=cogs_minor,
             expenses=expense_lines,

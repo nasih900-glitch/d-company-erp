@@ -14,13 +14,20 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.errors import (
+    BusinessRuleError,
+    ConflictError,
+    ForbiddenError,
+    GamingSourceShiftClosedError,
+    NotFoundError,
+)
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
+    AuditLog,
     Branch,
     Company,
     GamingBooking,
@@ -152,6 +159,27 @@ class SessionCancel(BaseModel):
         if not value:
             raise ValueError("cancellation reason cannot be blank")
         return value
+
+
+class SessionReconcileToPos(BaseModel):
+    target_shift_id: UUID
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def require_meaningful_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("reconciliation reason must be at least 3 characters")
+        return normalized
+
+
+class SessionReconcileToPosRead(BaseModel):
+    order_id: UUID
+    amount_minor: int
+    source_shift_id: UUID
+    target_shift_id: UUID
+    already_linked: bool
 
 
 class BookingCreate(BaseModel):
@@ -659,6 +687,7 @@ async def extend_session_with_package(
     session_id: UUID,
     payload: SessionExtend,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
     """Add a paid extension package on top of a running package session.
@@ -667,6 +696,21 @@ async def extend_session_with_package(
     have no fixed price to extend and just keep running (use the plain timer
     endpoint above to move their reminder alarm instead).
     """
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return SessionRead.model_validate(existing_response["body"])
+
+    # Different idempotency keys represent distinct purchased extensions.
+    # Lock the session before reading its current totals so concurrent devices
+    # apply their increments serially instead of both writing from the same
+    # stale amount/timer snapshot and losing one purchase.
     gs = (
         await session.execute(
             select(GamingSession).where(GamingSession.id == session_id).with_for_update()
@@ -714,7 +758,14 @@ async def extend_session_with_package(
     gs.amount_minor = int(gs.amount_minor or 0) + extension.price_minor + extra_surcharge
     gs.timer_minutes = int(gs.timer_minutes or 0) + extension.duration_minutes
     await session.flush()
-    return session_read(gs)
+    response = session_read(gs)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 @router.post("/sessions/{session_id}/stop", response_model=SessionRead)
@@ -956,6 +1007,112 @@ async def _reprice_session_order_for_customer(
     )
 
 
+async def _create_session_pos_order(
+    session,
+    *,
+    gaming_session: GamingSession,
+    station: Station,
+    target_shift: Shift,
+    company_id: UUID,
+    opened_by: UUID,
+) -> Order:
+    """Create one held POS order without rewriting session provenance."""
+    item = await _ensure_session_menu_item(
+        session,
+        company_id=company_id,
+        station=station,
+    )
+
+    tax_rate = Decimal(
+        str(
+            gaming_session.tax_rate
+            if gaming_session.tax_rate is not None
+            else station.tax_rate
+        )
+    )
+    rate_includes_tax = (
+        gaming_session.rate_includes_tax
+        if gaming_session.rate_includes_tax is not None
+        else station.rate_includes_tax
+    )
+    amount_minor = int(gaming_session.amount_minor or 0)
+    priced = await OrderPricingService(session).price_time_based_line(
+        company_id=company_id,
+        branch_id=target_shift.branch_id,
+        amount_minor=amount_minor,
+        tax_rate=tax_rate,
+        rate_includes_tax=rate_includes_tax,
+        customer_phone=gaming_session.customer_phone,
+        item_type=_MENU_TYPE_FOR_STATION.get(station.type, "gaming"),
+    )
+    order_total_minor, round_off_minor = _round_to_rupee(priced.total_minor)
+
+    now = datetime.now(timezone.utc)
+    note = (
+        f"{gaming_session.billable_minutes or 0} min @ "
+        f"{gaming_session.rate_per_hour_minor / 100:.2f}/hr"
+    )
+    order = Order(
+        id=uuid4(),
+        company_id=company_id,
+        branch_id=target_shift.branch_id,
+        terminal_id=target_shift.terminal_id,
+        shift_id=target_shift.id,
+        opened_by=opened_by,
+        table_id=None,
+        type="session",
+        status="held",
+        opened_at=now,
+        held_at=now,
+        subtotal_minor=priced.taxable_minor,
+        cgst_minor=priced.cgst_minor,
+        sgst_minor=priced.sgst_minor,
+        igst_minor=priced.igst_minor,
+        cess_minor=0,
+        discount_minor=priced.discount_minor,
+        tax_minor=priced.cgst_minor + priced.sgst_minor + priced.igst_minor,
+        round_off_minor=round_off_minor,
+        total_minor=order_total_minor,
+        customer_name=gaming_session.customer_name,
+        customer_phone=gaming_session.customer_phone,
+        notes=f"{station.name} — {note}",
+    )
+    session.add(order)
+    await session.flush()
+
+    session.add(
+        OrderLine(
+            id=uuid4(),
+            order_id=order.id,
+            menu_item_id=item.id,
+            qty=1,
+            unit_price_minor=priced.total_minor,
+            line_total_minor=priced.total_minor,
+            discount_minor=priced.discount_minor,
+            hsn_or_sac=(
+                gaming_session.sac_code or station.sac_code or item.hsn_code or ""
+            ),
+            tax_rate=float(tax_rate),
+            taxable_value_minor=priced.taxable_minor,
+            cgst_minor=priced.cgst_minor,
+            sgst_minor=priced.sgst_minor,
+            igst_minor=priced.igst_minor,
+            cess_minor=0,
+            note=note,
+        )
+    )
+    gaming_session.order_id = order.id
+    await session.flush()
+    if order.customer_phone:
+        await _reprice_session_order_for_customer(
+            session,
+            order=order,
+            company_id=company_id,
+        )
+        await session.flush()
+    return order
+
+
 @router.post("/sessions/{session_id}/send-to-pos", status_code=status.HTTP_201_CREATED)
 async def send_session_to_pos(
     session_id: UUID,
@@ -1006,7 +1163,24 @@ async def send_session_to_pos(
             select(Shift).where(Shift.id == gs.shift_id).with_for_update()
         )
     ).scalar_one_or_none()
-    shift = require_open_operational_shift(
+    # A closed source shift is precisely the recoverable condition. Detect it
+    # after tenant/branch validation but before comparing terminals: the
+    # protected owner may intentionally recover an old terminal's session onto
+    # the current operational terminal through the dedicated endpoint.
+    if shift is None or shift.company_id != tenant.company_id:
+        raise NotFoundError("Shift not found for this company.")
+    if shift.branch_id != station.branch_id:
+        raise BusinessRuleError(
+            "Shift branch does not match the gaming station branch."
+        )
+    if shift.branch_id != tenant.branch_id:
+        raise BusinessRuleError("Shift belongs to a different branch.")
+    if shift.status != "open":
+        raise GamingSourceShiftClosedError(
+            "The session's original shift is closed. Ask the protected owner to "
+            "reconcile this stopped session to the current terminal's open shift."
+        )
+    shift = require_operational_shift_scope(
         shift,
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
@@ -1016,82 +1190,152 @@ async def send_session_to_pos(
         resource_name="gaming station",
     )
 
-    item = await _ensure_session_menu_item(session, company_id=tenant.company_id, station=station)
-
-    tax_rate = Decimal(str(gs.tax_rate if gs.tax_rate is not None else station.tax_rate))
-    rate_includes_tax = (
-        gs.rate_includes_tax if gs.rate_includes_tax is not None else station.rate_includes_tax
+    order = await _create_session_pos_order(
+        session,
+        gaming_session=gs,
+        station=station,
+        target_shift=shift,
+        company_id=tenant.company_id,
+        opened_by=tenant.user_id,
     )
-    amount_minor = int(gs.amount_minor or 0)
-    priced = await OrderPricingService(session).price_time_based_line(
+    return {"order_id": str(order.id), "amount_minor": int(order.total_minor)}
+
+
+@router.post(
+    "/sessions/{session_id}/reconcile-to-pos",
+    response_model=SessionReconcileToPosRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def reconcile_session_to_pos(
+    session_id: UUID,
+    payload: SessionReconcileToPos,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("admin.audit.read")),
+) -> SessionReconcileToPosRead:
+    """Move an ended bill off a closed source shift without rewriting history."""
+    if not tenant.audit_access:
+        raise ForbiddenError(
+            "Only the protected owner can reconcile a stopped session to another shift."
+        )
+    if tenant.terminal_id is None:
+        raise BusinessRuleError(
+            "Select the POS terminal used by this device before reconciling a session."
+        )
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before reconciling a session."
+        )
+
+    gs = (
+        await session.execute(
+            select(GamingSession).where(GamingSession.id == session_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not gs or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if station.branch_id != tenant.branch_id:
+        raise BusinessRuleError(
+            "The gaming station belongs to a different branch than this terminal."
+        )
+
+    if gs.order_id is not None:
+        existing_order = await session.get(Order, gs.order_id)
+        existing_order = require_operational_order(
+            existing_order,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+            terminal_id=tenant.terminal_id,
+            operation="resuming a reconciled session sent to POS",
+        )
+        return SessionReconcileToPosRead(
+            order_id=existing_order.id,
+            amount_minor=int(existing_order.total_minor),
+            source_shift_id=gs.shift_id,
+            target_shift_id=existing_order.shift_id,
+            already_linked=True,
+        )
+    if gs.status != "ended":
+        raise BusinessRuleError(
+            "Only an ended session can be reconciled. Stop the session first."
+        )
+    if int(gs.amount_minor or 0) <= 0:
+        raise BusinessRuleError(
+            "The session has no billable amount. Cancel it with a reason instead."
+        )
+
+    source_shift = await session.get(Shift, gs.shift_id)
+    if not source_shift or source_shift.company_id != tenant.company_id:
+        raise NotFoundError("The session's original shift was not found for this company.")
+    if source_shift.branch_id != station.branch_id:
+        raise BusinessRuleError(
+            "The session's original shift does not match the gaming station branch."
+        )
+    if source_shift.status == "open":
+        raise BusinessRuleError(
+            "The session's original shift is still open. Use Send to POS normally."
+        )
+    if source_shift.status not in {"closed", "reconciled"}:
+        raise BusinessRuleError(
+            "The session's original shift has an unsupported status and cannot be reconciled."
+        )
+
+    target_shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == payload.target_shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    target_shift = require_open_operational_shift(
+        target_shift,
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
-        amount_minor=amount_minor,
-        tax_rate=tax_rate,
-        rate_includes_tax=rate_includes_tax,
-        customer_phone=gs.customer_phone,
-        item_type=_MENU_TYPE_FOR_STATION.get(station.type, "gaming"),
+        terminal_id=tenant.terminal_id,
+        operation="reconciling a stopped session to POS",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
     )
-    order_total_minor, round_off_minor = _round_to_rupee(priced.total_minor)
 
-    now = datetime.now(timezone.utc)
-    note = f"{gs.billable_minutes or 0} min @ {gs.rate_per_hour_minor / 100:.2f}/hr"
-    order = Order(
-        id=uuid4(),
+    source_shift_id = gs.shift_id
+    order = await _create_session_pos_order(
+        session,
+        gaming_session=gs,
+        station=station,
+        target_shift=target_shift,
         company_id=tenant.company_id,
-        branch_id=shift.branch_id,
-        terminal_id=shift.terminal_id,
-        shift_id=gs.shift_id,
         opened_by=tenant.user_id,
-        table_id=None,
-        type="session",
-        status="held",
-        opened_at=now,
-        held_at=now,
-        subtotal_minor=priced.taxable_minor,
-        cgst_minor=priced.cgst_minor,
-        sgst_minor=priced.sgst_minor,
-        igst_minor=priced.igst_minor,
-        cess_minor=0,
-        discount_minor=priced.discount_minor,
-        tax_minor=priced.cgst_minor + priced.sgst_minor + priced.igst_minor,
-        round_off_minor=round_off_minor,
-        total_minor=order_total_minor,
-        customer_name=gs.customer_name,
-        customer_phone=gs.customer_phone,
-        notes=f"{station.name} — {note}",
     )
-    session.add(order)
-    await session.flush()
-
-    ol = OrderLine(
-        id=uuid4(),
-        order_id=order.id,
-        menu_item_id=item.id,
-        qty=1,
-        unit_price_minor=priced.total_minor,
-        line_total_minor=priced.total_minor,
-        discount_minor=priced.discount_minor,
-        hsn_or_sac=gs.sac_code or station.sac_code or item.hsn_code or "",
-        tax_rate=float(tax_rate),
-        taxable_value_minor=priced.taxable_minor,
-        cgst_minor=priced.cgst_minor,
-        sgst_minor=priced.sgst_minor,
-        igst_minor=priced.igst_minor,
-        cess_minor=0,
-        note=note,
-    )
-    session.add(ol)
-    gs.order_id = order.id
-    await session.flush()
-    if order.customer_phone:
-        await _reprice_session_order_for_customer(
-            session,
-            order=order,
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
             company_id=tenant.company_id,
+            action="gaming_session_reconcile_to_pos",
+            entity_type="GamingSession",
+            entity_id=str(gs.id),
+            before={
+                "source_shift_id": str(source_shift_id),
+                "order_id": None,
+            },
+            after={
+                "source_shift_id": str(source_shift_id),
+                "target_shift_id": str(target_shift.id),
+                "order_id": str(order.id),
+                "reason": payload.reason,
+            },
+            terminal_id=tenant.terminal_id,
+            reason=payload.reason,
         )
-        await session.flush()
-    return {"order_id": str(order.id), "amount_minor": int(order.total_minor)}
+    )
+    await session.flush()
+    return SessionReconcileToPosRead(
+        order_id=order.id,
+        amount_minor=int(order.total_minor),
+        source_shift_id=source_shift_id,
+        target_shift_id=target_shift.id,
+        already_linked=False,
+    )
 
 
 def _booking_read(bk: GamingBooking, *, station_code: str) -> BookingRead:

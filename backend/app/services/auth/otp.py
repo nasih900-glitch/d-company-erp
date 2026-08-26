@@ -15,6 +15,7 @@ from fastapi import Request
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.config import get_settings
 from app.core.errors import BusinessRuleError, RateLimitError, ServiceUnavailableError
 from app.models import AuditLog, AuthOtpChallenge
@@ -66,11 +67,7 @@ def masked_security_email() -> str:
 
 
 def request_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    value = forwarded.split(",", 1)[0].strip() if forwarded else None
-    if not value and request.client:
-        value = request.client.host
-    return value[:64] if value else None
+    return trusted_client_ip(request)
 
 
 def _purpose_label(purpose: str) -> str:
@@ -155,20 +152,22 @@ async def create_challenge(
         raise RateLimitError("too many security-code requests; wait 10 minutes and try again")
 
     await session.execute(
-        delete(AuthOtpChallenge).where(
-            AuthOtpChallenge.created_at < now - timedelta(days=1)
-        )
+        delete(AuthOtpChallenge).where(AuthOtpChallenge.created_at < now - timedelta(days=1))
     )
     active = (
-        await session.execute(
-            select(AuthOtpChallenge).where(
-                AuthOtpChallenge.company_id == company_id,
-                AuthOtpChallenge.purpose == purpose,
-                AuthOtpChallenge.target_email == target_email,
-                AuthOtpChallenge.consumed_at.is_(None),
+        (
+            await session.execute(
+                select(AuthOtpChallenge).where(
+                    AuthOtpChallenge.company_id == company_id,
+                    AuthOtpChallenge.purpose == purpose,
+                    AuthOtpChallenge.target_email == target_email,
+                    AuthOtpChallenge.consumed_at.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for old in active:
         old.consumed_at = now
 
@@ -182,7 +181,7 @@ async def create_challenge(
         failed_attempts=0,
         requested_by_user_id=requested_by_user_id,
         requested_ip=ip,
-        request_user_agent=(request.headers.get("user-agent") or "")[:500] or None,
+        request_user_agent=audit_user_agent(request),
         pending_name=pending_name,
         pending_phone=pending_phone,
         pending_role_code=pending_role_code,
@@ -202,7 +201,7 @@ async def create_challenge(
             before=None,
             after={"purpose": purpose, "target_email": target_email},
             ip=ip,
-            user_agent=request.headers.get("user-agent"),
+            user_agent=audit_user_agent(request),
         )
     )
     # Persist before the external email side effect so a delivered code is always verifiable.
@@ -247,9 +246,7 @@ async def consume_challenge(
 ) -> AuthOtpChallenge:
     challenge = (
         await session.execute(
-            select(AuthOtpChallenge)
-            .where(AuthOtpChallenge.id == challenge_id)
-            .with_for_update()
+            select(AuthOtpChallenge).where(AuthOtpChallenge.id == challenge_id).with_for_update()
         )
     ).scalar_one_or_none()
     settings = get_settings()

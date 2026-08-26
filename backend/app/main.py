@@ -20,6 +20,7 @@ from app.core.db import async_engine
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import (
+    ClientCompatibilityMiddleware,
     IdempotencyMiddleware,
     RealtimeBroadcastMiddleware,
     RequestBodyLimitMiddleware,
@@ -72,6 +73,19 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(
+        ClientCompatibilityMiddleware,
+        android_minimum=settings.android_min_supported_version_code,
+        android_latest=settings.android_latest_version_code,
+        android_update_url=(
+            str(settings.android_update_url) if settings.android_update_url else None
+        ),
+        ios_minimum=settings.ios_min_supported_version_code,
+        ios_latest=settings.ios_latest_version_code,
+        ios_update_url=str(settings.ios_update_url) if settings.ios_update_url else None,
+        require_native_headers=settings.require_native_version_headers,
+        message=settings.client_update_message,
     )
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(TimingMiddleware)

@@ -1,10 +1,19 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
-from app.core.errors import AuthError
-from app.core.permissions import AUDITOR_ACCESS, PERMISSIONS, ROLE_PERMISSIONS, _has_permission
+from app.core.errors import AuthError, ForbiddenError
+from app.core.permissions import (
+    AUDITOR_ACCESS,
+    HIGH_TRUST_PERMISSIONS,
+    PERMISSIONS,
+    ROLE_PERMISSIONS,
+    _has_permission,
+    effective_permissions,
+    modules_for_permissions,
+    requires_any,
+)
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.security import issue_pricing_token
 from app.core.tenant import TenantContext
@@ -14,21 +23,82 @@ def test_super_owner_has_all_permissions() -> None:
     assert ROLE_PERMISSIONS["super_owner"] == set(PERMISSIONS.keys())
 
 
-def test_every_legacy_title_has_every_non_audit_permission() -> None:
-    # "staff" and "auditor" are the deliberate exceptions — see tests below.
-    expected = set(PERMISSIONS) - {"admin.audit.read"}
-    for role in ROLE_PERMISSIONS.keys() - {"super_owner", "staff", "auditor"}:
-        assert ROLE_PERMISSIONS[role] == expected
+def test_low_privilege_roles_keep_only_their_operational_permissions() -> None:
+    expected = {
+        "cashier": {
+            "pos.read",
+            "pos.write",
+            "pos.void",
+            "pos.shift.open",
+            "pos.shift.close",
+            "tables.read",
+            "tables.write",
+            "tables.reservations.write",
+            "menu.read",
+            "gaming.read",
+            "kitchen.read",
+            "staff.attendance.write",
+        },
+        "kitchen": {
+            "kitchen.read",
+            "kitchen.write",
+            "menu.read",
+            "staff.attendance.write",
+        },
+        "gaming_supervisor": {
+            "pos.read",
+            "menu.read",
+            "gaming.read",
+            "gaming.write",
+            "gaming.tournament.manage",
+            "staff.attendance.write",
+        },
+        "staff": {
+            "pos.read",
+            "pos.write",
+            "tables.read",
+            "tables.write",
+            "tables.reservations.write",
+            "menu.read",
+            "kitchen.read",
+            "staff.attendance.write",
+        },
+    }
+    for role, permissions in expected.items():
+        assert ROLE_PERMISSIONS[role] == permissions
+
+
+def test_low_privilege_roles_never_default_to_sensitive_business_actions() -> None:
+    denied = {
+        "admin.system",
+        "admin.audit.read",
+        "staff.write",
+        "staff.payroll.write",
+        "finance.write",
+        "finance.partner.write",
+        "finance.assets.write",
+        "pos.refund",
+        "pos.discount.large",
+        "inventory.adjust.large",
+    }
+    for role in ("cashier", "kitchen", "gaming_supervisor", "staff"):
+        assert ROLE_PERMISSIONS[role].isdisjoint(denied), role
 
 
 def test_staff_role_has_no_inventory_or_insights_reports_access() -> None:
     staff_perms = ROLE_PERMISSIONS["staff"]
-    for perm in ("inventory.read", "inventory.write", "inventory.adjust.large",
-                 "analytics.read", "analytics.export", "admin.audit.read"):
+    for perm in (
+        "inventory.read",
+        "inventory.write",
+        "inventory.adjust.large",
+        "analytics.read",
+        "analytics.export",
+        "admin.audit.read",
+    ):
         assert perm not in staff_perms
-    # Everything else standard (POS, tables, gaming, etc.) stays available.
+    # Service-staff order and table workflows remain available.
     assert "pos.write" in staff_perms
-    assert "gaming.write" in staff_perms
+    assert "tables.write" in staff_perms
 
 
 def test_audit_read_is_protected_owner_only() -> None:
@@ -43,20 +113,44 @@ def test_auditor_role_is_read_only() -> None:
 
     # Read (and export) access needed to review finance/ops for an audit.
     for perm in (
-        "finance.read", "analytics.read", "analytics.export", "pos.read",
-        "inventory.read", "staff.read", "tables.read", "menu.read", "gaming.read",
+        "finance.read",
+        "analytics.read",
+        "analytics.export",
+        "pos.read",
+        "inventory.read",
+        "staff.read",
+        "tables.read",
+        "menu.read",
+        "gaming.read",
     ):
         assert perm in auditor_perms
 
     # No write/refund/void/shift/admin permission of any kind survives.
     mutating = {
-        "pos.write", "pos.void", "pos.refund", "pos.discount.large",
-        "pos.shift.open", "pos.shift.close", "tables.write",
-        "tables.reservations.write", "menu.write", "inventory.write",
-        "inventory.adjust.large", "gaming.write", "gaming.tournament.manage",
-        "finance.write", "finance.partner.write", "finance.assets.write",
-        "ocr.upload", "ocr.verify", "staff.write", "staff.attendance.write",
-        "staff.payroll.write", "admin.audit.read", "admin.system",
+        "pos.write",
+        "pos.void",
+        "pos.refund",
+        "pos.discount.large",
+        "pos.shift.open",
+        "pos.shift.close",
+        "tables.write",
+        "tables.reservations.write",
+        "menu.write",
+        "inventory.write",
+        "inventory.adjust.large",
+        "gaming.write",
+        "gaming.tournament.manage",
+        "kitchen.write",
+        "finance.write",
+        "finance.partner.write",
+        "finance.assets.write",
+        "ocr.upload",
+        "ocr.verify",
+        "staff.write",
+        "staff.attendance.write",
+        "staff.payroll.write",
+        "admin.audit.read",
+        "admin.system",
     }
     assert auditor_perms.isdisjoint(mutating)
     # Every permission granted is declared and every mutating one accounted for.
@@ -78,8 +172,12 @@ async def test_auditor_role_module_override_cannot_grant_write_access() -> None:
         new=AsyncMock(return_value=True),
     ):
         for perm in (
-            "pos.write", "pos.void", "pos.refund",
-            "pos.discount.large", "pos.shift.open", "pos.shift.close",
+            "pos.write",
+            "pos.void",
+            "pos.refund",
+            "pos.discount.large",
+            "pos.shift.open",
+            "pos.shift.close",
         ):
             assert await _has_permission(None, auditor, perm) is False
 
@@ -88,6 +186,81 @@ async def test_auditor_role_module_override_cannot_grant_write_access() -> None:
         # only the write-shaped permissions bundled inside it that get
         # clamped for 'auditor'.
         assert await _has_permission(None, auditor, "pos.read") is True
+
+
+async def test_module_override_cannot_widen_high_trust_permissions() -> None:
+    """A coarse module allow must not turn cashier POS access into refunds or
+    turn ordinary staff visibility into role administration."""
+    for role, permission in (
+        ("cashier", "pos.refund"),
+        ("cashier", "pos.discount.large"),
+        ("staff", "pos.shift.open"),
+        ("kitchen", "staff.write"),
+        ("gaming_supervisor", "finance.partner.write"),
+    ):
+        assert permission in HIGH_TRUST_PERMISSIONS
+        tenant = _tenant(protected_access=False, roles=(role,))
+        with patch(
+            "app.core.permissions._module_override",
+            new=AsyncMock(return_value=True),
+        ):
+            assert await _has_permission(None, tenant, permission) is False
+
+
+async def test_effective_permissions_are_batched_and_keep_safety_ceilings() -> None:
+    staff = _tenant(protected_access=False, roles=("staff",))
+    result = MagicMock()
+    result.all.return_value = [
+        ("staff", "finance", True),
+        ("staff", "tables", False),
+    ]
+    session = AsyncMock()
+    session.execute.return_value = result
+
+    granted = await effective_permissions(session, staff)
+
+    assert session.execute.await_count == 1
+    assert "finance.read" in granted
+    assert "finance.write" not in granted
+    assert "finance.partner.write" not in granted
+    assert "tables.read" not in granted
+    assert "staff.attendance.write" in granted
+    assert modules_for_permissions(granted) == sorted(
+        {"finance", "kitchen", "menu", "pos", "staff"}
+    )
+
+
+async def test_effective_permissions_keep_admin_access_audit_only() -> None:
+    co_owner = _tenant(protected_access=True, audit_access=False, roles=("co_owner",))
+    session = AsyncMock()
+
+    granted = await effective_permissions(session, co_owner)
+
+    session.execute.assert_not_awaited()
+    assert "finance.write" in granted
+    assert "admin.audit.read" not in granted
+    assert "admin.system" not in granted
+
+
+async def test_attendance_roster_accepts_read_or_attendance_permission() -> None:
+    dependency = requires_any("staff.read", "staff.attendance.write")
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=None),
+    ):
+        kitchen = _tenant(protected_access=False, roles=("kitchen",))
+        auditor = _tenant(protected_access=False, roles=("auditor",))
+        unknown = _tenant(protected_access=False, roles=("unknown",))
+
+        assert await dependency(None, kitchen) is kitchen
+        assert await dependency(None, auditor) is auditor
+        with pytest.raises(ForbiddenError):
+            await dependency(None, unknown)
+
+
+def test_requires_any_rejects_an_empty_contract() -> None:
+    with pytest.raises(ValueError, match="at least one permission"):
+        requires_any()
 
 
 def test_pricing_control_requires_the_current_users_unlock_token() -> None:
@@ -128,7 +301,8 @@ async def test_protected_access_never_leaks_admin_audit_read() -> None:
     # admin.audit.read, only audit_access does.
     co_owner = _tenant(protected_access=True, audit_access=False, roles=("co_owner",))
     assert await _has_permission(None, co_owner, "admin.audit.read") is False
-    # The blanket bypass still applies to every other permission.
+    assert await _has_permission(None, co_owner, "admin.system") is False
+    # The blanket bypass still applies to operational permissions.
     assert await _has_permission(None, co_owner, "finance.write") is True
     assert await _has_permission(None, co_owner, "staff.write") is True
 
@@ -136,10 +310,13 @@ async def test_protected_access_never_leaks_admin_audit_read() -> None:
 async def test_audit_access_grants_admin_audit_read_regardless_of_role() -> None:
     super_owner = _tenant(protected_access=True, audit_access=True, roles=("super_owner",))
     assert await _has_permission(None, super_owner, "admin.audit.read") is True
+    assert await _has_permission(None, super_owner, "admin.system") is True
 
 
 def _tenant(
-    protected_access: bool, audit_access: bool = False, roles: tuple[str, ...] = ("owner",),
+    protected_access: bool,
+    audit_access: bool = False,
+    roles: tuple[str, ...] = ("owner",),
 ) -> TenantContext:
     return TenantContext(
         user_id=uuid4(),

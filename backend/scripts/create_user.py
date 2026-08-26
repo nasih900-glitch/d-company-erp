@@ -6,15 +6,17 @@ Usage:
 
 Roles:
     super_owner       — protected full access (Nasih)
-    owner             — business owner title; all standard modules
-    partner           — business partner title; all standard modules
-    manager           — operations manager title; all standard modules
-    cashier           — cashier title; all standard modules
-    kitchen           — kitchen team title; all standard modules
-    gaming_supervisor — gaming team title; all standard modules
-    auditor           — audit staff title; all standard modules
+    co_owner          — full operational access, no Audit Log or Access Control
+    owner             — operational, finance, asset, and payroll access
+    partner           — read-only business and finance visibility
+    manager           — daily operations and staff management
+    cashier           — POS, table orders, and shift operation
+    kitchen           — kitchen display and ticket status
+    gaming_supervisor — gaming sessions, bookings, and tournaments
+    auditor           — read-only finance and operational review (not the Audit Log)
+    staff             — table service, kitchen progress, and attendance
 
-Only the protected owner role can open the Audit Log.
+Only the protected ``super_owner`` role can open the Audit Log.
 
 Idempotent: re-running with the same email updates name/password/role instead of
 creating duplicates.
@@ -34,6 +36,7 @@ from app.models import Company, Role, User, UserRole
 
 ROLES = {
     "super_owner",
+    "co_owner",
     "owner",
     "partner",
     "manager",
@@ -112,7 +115,7 @@ def main() -> None:
         "--role",
         required=True,
         choices=sorted(ROLES),
-        help="auditor = read-only across all modules (good for an overseas friend)",
+        help="auditor = read-only across finance and operational review modules",
     )
     args = p.parse_args()
     asyncio.run(upsert_user(args.email, args.name, args.password, args.role))

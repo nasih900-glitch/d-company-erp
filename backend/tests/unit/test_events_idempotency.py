@@ -1,25 +1,23 @@
-"""Database-free tests for POST /events/{event_id}/tickets idempotency.
+"""Fail-closed contract for direct event-ticket writes.
 
-ticket_no is computed fresh from the current sold count on every call
-(_ticket_number(event_id, starts_at, sold + i + 1)), so it is NOT a safe
-dedup fallback — a retry after a dropped response would recompute a higher
-sold count and mint brand-new, non-colliding ticket numbers, silently
-double-issuing tickets and double-consuming capacity. Idempotency-Key is
-therefore mandatory here, same reasoning as Inventory's GRN/adjustment
-writes (see test_inventory_router_idempotency.py) and Finance's
-expenses/assets (see test_expenses_idempotency.py).
+Ticket reads and check-in remain operational for historical records, but a
+new ticket cannot be minted until ticket issuance and POS settlement are one
+atomic workflow.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 
-import app.api.v1.events.router as events_router
-from app.api.v1.events.router import TicketRead, TicketSell, sell_tickets
+from app.api.v1.events.router import (
+    TicketSell,
+    check_in_ticket,
+    list_tickets,
+    sell_tickets,
+)
 from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
 
@@ -30,158 +28,145 @@ USER_ID = UUID("44444444-4444-4444-4444-444444444444")
 
 def _tenant() -> TenantContext:
     return TenantContext(
-        user_id=USER_ID, company_id=COMPANY_ID, branch_id=None,
-        terminal_id=None, roles=("owner",),
+        user_id=USER_ID,
+        company_id=COMPANY_ID,
+        branch_id=None,
+        terminal_id=None,
+        roles=("owner",),
     )
 
 
-def _request() -> SimpleNamespace:
-    return SimpleNamespace(
+def _payload() -> TicketSell:
+    return TicketSell(
+        customer_name="Rahul",
+        customer_phone="9876543210",
+        seat=None,
+        qty=2,
+        note=None,
+    )
+
+
+class _NoDatabaseSession:
+    """Any attempted reservation, query, flush, or mutation fails the test."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"disabled ticket sale touched the database via {name}")
+
+
+@pytest.mark.asyncio
+async def test_sell_tickets_rejects_before_reservation_or_database_mutation() -> None:
+    request = SimpleNamespace(
         state=SimpleNamespace(
-            idempotency_key="ticket-sale-2026-08-22-v1",
-            idempotency_request_hash="request-hash",
+            idempotency_key="must-not-be-reserved",
+            idempotency_request_hash="must-not-be-reserved",
         )
     )
 
+    with pytest.raises(BusinessRuleError) as error:
+        await sell_tickets(
+            EVENT_ID,
+            _payload(),
+            _NoDatabaseSession(),
+            request,
+            _tenant(),
+        )
 
-def _payload(**overrides) -> TicketSell:
-    fields = {
-        "customer_name": "Rahul",
-        "customer_phone": "9876543210",
-        "seat": None,
-        "qty": 2,
-        "note": None,
-        **overrides,
-    }
-    return TicketSell(**fields)
-
-
-def _event(*, capacity: int = 50, status: str = "scheduled") -> SimpleNamespace:
-    return SimpleNamespace(
-        id=EVENT_ID, company_id=COMPANY_ID, name="Champions League Final",
-        starts_at=datetime(2026, 8, 22, 20, 0, tzinfo=UTC), capacity=capacity,
-        base_ticket_price_minor=25000, status=status, deleted_at=None,
-    )
+    assert error.value.code == "business_rule"
+    assert "temporarily disabled" in error.value.message
+    assert "POS order, payment, shift, or invoice" in error.value.message
+    assert "existing tickets can still be viewed and checked in" in error.value.message
 
 
 class _Result:
-    def __init__(self, *, scalar=None) -> None:
+    def __init__(self, scalar=None, rows=None) -> None:
         self.scalar = scalar
+        self.rows = rows or []
 
     def scalar_one_or_none(self):
         return self.scalar
 
-    def scalar_one(self):
-        return self.scalar
+    def scalars(self):
+        return self
 
-
-class _QueuedSession:
-    def __init__(self, results: list[_Result]) -> None:
-        self.results = list(results)
-        self.added: list = []
-        self.flushes = 0
-
-    async def execute(self, statement):
-        assert self.results, f"Unexpected SQL statement: {statement}"
-        return self.results.pop(0)
-
-    def add(self, entity) -> None:
-        self.added.append(entity)
-
-    async def flush(self) -> None:
-        self.flushes += 1
+    def all(self):
+        return self.rows
 
 
 @pytest.mark.asyncio
-async def test_sell_tickets_requires_idempotency_key() -> None:
-    session = _QueuedSession([])
-    bare_request = SimpleNamespace(state=SimpleNamespace())
-
-    with pytest.raises(BusinessRuleError, match="Idempotency-Key"):
-        await sell_tickets(EVENT_ID, _payload(), session, bare_request, _tenant())
-    assert session.added == []
-
-
-@pytest.mark.asyncio
-async def test_sell_tickets_persists_correct_rows(monkeypatch) -> None:
-    async def reserve(*_args, **_kwargs):
-        return None
-
-    async def store(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(events_router, "check_or_reserve", reserve)
-    monkeypatch.setattr(events_router, "store_response", store)
-
-    session = _QueuedSession([_Result(scalar=_event()), _Result(scalar=0)])
-    result = await sell_tickets(EVENT_ID, _payload(qty=2), session, _request(), _tenant())
-
-    assert session.flushes == 2
-    assert len(session.added) == 2
-    assert len(result) == 2
-    assert result[0].ticket_no != result[1].ticket_no
-    assert all(t.price_paid_minor == 25000 for t in result)
-    assert all(t.status == "sold" for t in result)
-
-
-@pytest.mark.asyncio
-async def test_sell_tickets_rejects_when_capacity_exceeded(monkeypatch) -> None:
-    async def reserve(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(events_router, "check_or_reserve", reserve)
-
-    session = _QueuedSession([_Result(scalar=_event(capacity=3)), _Result(scalar=2)])
-
-    with pytest.raises(BusinessRuleError, match="capacity exceeded"):
-        await sell_tickets(EVENT_ID, _payload(qty=2), session, _request(), _tenant())
-    assert session.added == []
-
-
-@pytest.mark.asyncio
-async def test_sell_tickets_is_idempotent_on_exact_replay(monkeypatch) -> None:
-    existing = [
-        TicketRead(
-            id=uuid4(), ticket_no="EVT-20260822-2222-0001", event_id=EVENT_ID,
-            event_name="Champions League Final", customer_name="Rahul",
-            customer_phone="9876543210", seat=None, price_paid_minor=25000,
-            status="sold", checked_in_at=None,
-        ),
-        TicketRead(
-            id=uuid4(), ticket_no="EVT-20260822-2222-0002", event_id=EVENT_ID,
-            event_name="Champions League Final", customer_name="Rahul",
-            customer_phone="9876543210", seat=None, price_paid_minor=25000,
-            status="sold", checked_in_at=None,
-        ),
-    ]
-
-    async def replay(*_args, **_kwargs):
-        return {
-            "status_code": 201,
-            "body": {"tickets": [t.model_dump(mode="json") for t in existing]},
-        }
-
-    monkeypatch.setattr(events_router, "check_or_reserve", replay)
-
-    class _NoMutationSession:
-        def __getattr__(self, name):
-            raise AssertionError(f"Replay attempted database mutation via {name}")
-
-    response = await sell_tickets(
-        EVENT_ID, _payload(qty=2), _NoMutationSession(), _request(), _tenant(),
+async def test_historical_unlinked_ticket_remains_readable() -> None:
+    event = SimpleNamespace(
+        id=EVENT_ID,
+        company_id=COMPANY_ID,
+        name="Champions League Final",
+        deleted_at=None,
     )
-    assert response == existing
+    ticket = SimpleNamespace(
+        id=uuid4(),
+        event_id=EVENT_ID,
+        order_id=None,
+        ticket_no="EVT-20260822-2222-0001",
+        customer_name="Rahul",
+        customer_phone="9876543210",
+        seat=None,
+        price_paid_minor=25_000,
+        status="sold",
+        checked_in_at=None,
+    )
+
+    class _HistoricalReadSession:
+        def __init__(self) -> None:
+            self.results = [_Result(scalar=event), _Result(rows=[ticket])]
+
+        async def execute(self, _statement):
+            return self.results.pop(0)
+
+    session = _HistoricalReadSession()
+    response = await list_tickets(EVENT_ID, session, _tenant())
+
+    assert not session.results
+    assert len(response) == 1
+    assert response[0].id == ticket.id
+    assert response[0].status == "sold"
 
 
 @pytest.mark.asyncio
-async def test_sell_tickets_rejects_when_event_not_scheduled_or_live(monkeypatch) -> None:
-    async def reserve(*_args, **_kwargs):
-        return None
+async def test_historical_unlinked_ticket_can_still_be_checked_in() -> None:
+    event = SimpleNamespace(
+        id=EVENT_ID,
+        company_id=COMPANY_ID,
+        name="Champions League Final",
+        deleted_at=None,
+    )
+    ticket = SimpleNamespace(
+        id=uuid4(),
+        event_id=EVENT_ID,
+        order_id=None,
+        ticket_no="EVT-20260822-2222-0001",
+        customer_name="Rahul",
+        customer_phone="9876543210",
+        seat=None,
+        price_paid_minor=25_000,
+        status="sold",
+        checked_in_at=None,
+        checked_in_by=None,
+    )
 
-    monkeypatch.setattr(events_router, "check_or_reserve", reserve)
+    class _HistoricalSession:
+        async def execute(self, _statement):
+            return _Result(event)
 
-    session = _QueuedSession([_Result(scalar=_event(status="ended"))])
+        async def get(self, _model, entity_id):
+            assert entity_id == ticket.id
+            return ticket
 
-    with pytest.raises(BusinessRuleError, match="cannot sell tickets"):
-        await sell_tickets(EVENT_ID, _payload(), session, _request(), _tenant())
-    assert session.added == []
+    response = await check_in_ticket(
+        EVENT_ID,
+        ticket.id,
+        _HistoricalSession(),
+        _tenant(),
+    )
+
+    assert response.status == "checked_in"
+    assert response.id == ticket.id
+    assert ticket.checked_in_by == USER_ID
+    assert ticket.checked_in_at is not None

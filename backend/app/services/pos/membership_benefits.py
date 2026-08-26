@@ -75,6 +75,7 @@ async def _candidate_membership(
                 Customer.deleted_at.is_(None),
                 CustomerMembership.starts_at <= at,
                 CustomerMembership.expires_at > at,
+                CustomerMembership.revoked_at.is_(None),
                 MembershipTier.company_id == company_id,
                 MembershipTier.deleted_at.is_(None),
             )
@@ -192,7 +193,12 @@ async def reserve_membership_benefits(
     tier: MembershipTier | None = None
     if candidate:
         membership = locked.get(candidate[0].id)
-        if membership is None or membership.starts_at > now or membership.expires_at <= now:
+        if (
+            membership is None
+            or membership.starts_at > now
+            or membership.expires_at <= now
+            or membership.revoked_at is not None
+        ):
             membership = None
         else:
             tier = (
@@ -337,6 +343,15 @@ async def consume_membership_benefits(
         raise BusinessRuleError("membership reservation cannot be settled; membership is missing")
     for row in pending:
         membership = locked[row.membership_id]
+        if (
+            membership.revoked_at is not None
+            or membership.starts_at > at
+            or membership.expires_at <= at
+        ):
+            raise BusinessRuleError(
+                "This bill contains a membership benefit that is no longer active. "
+                "Reprice or void the bill before payment."
+            )
         _apply_legacy_usage_counter(membership, row)
         row.consumed_at = at
 

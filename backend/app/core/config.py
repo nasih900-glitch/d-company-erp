@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +66,21 @@ class Settings(BaseSettings):
         ge=1024,
         le=100 * 1024 * 1024,
     )
+    # Native release compatibility is server-controlled. Raising the minimum
+    # lets operations block a build whose local schema/API contract is no
+    # longer safe, without shipping another already-obsolete APK first.
+    android_min_supported_version_code: int = Field(default=1, ge=1)
+    android_latest_version_code: int = Field(default=2, ge=1)
+    android_update_url: AnyHttpUrl | None = None
+    ios_min_supported_version_code: int = Field(default=1, ge=1)
+    ios_latest_version_code: int = Field(default=1, ge=1)
+    ios_update_url: AnyHttpUrl | None = None
+    client_update_message: str | None = Field(default=None, max_length=500)
+    require_native_version_headers: bool = False
+    # A shared Tables/Gaming bill is leased while one POS device confirms and
+    # collects payment. Ten minutes covers a realistic cash/UPI interaction;
+    # clients still fail closed and reacquire after expiry or any bill change.
+    checkout_claim_ttl_seconds: int = Field(default=600, ge=30, le=600)
 
     # ----- cors -----
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
@@ -102,11 +117,38 @@ class Settings(BaseSettings):
                     "JWT_SECRET must be set to a strong non-default value "
                     "(>=32 chars) when ENV is prod or staging"
                 )
+        if self.android_latest_version_code < self.android_min_supported_version_code:
+            raise ValueError(
+                "ANDROID_LATEST_VERSION_CODE cannot be lower than "
+                "ANDROID_MIN_SUPPORTED_VERSION_CODE"
+            )
+        if self.ios_latest_version_code < self.ios_min_supported_version_code:
+            raise ValueError(
+                "IOS_LATEST_VERSION_CODE cannot be lower than "
+                "IOS_MIN_SUPPORTED_VERSION_CODE"
+            )
+        if self.env in {"prod", "staging"}:
+            for label, update_url in (
+                ("ANDROID_UPDATE_URL", self.android_update_url),
+                ("IOS_UPDATE_URL", self.ios_update_url),
+            ):
+                if update_url and update_url.scheme != "https":
+                    raise ValueError(f"{label} must use HTTPS in prod or staging")
         return self
 
     @field_validator("account_security_company_id", mode="before")
     @classmethod
     def _blank_company_id_is_none(cls, v: object) -> object:
+        return None if v == "" else v
+
+    @field_validator(
+        "android_update_url",
+        "ios_update_url",
+        "client_update_message",
+        mode="before",
+    )
+    @classmethod
+    def _blank_optional_text_is_none(cls, v: object) -> object:
         return None if v == "" else v
 
 

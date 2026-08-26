@@ -6,6 +6,10 @@ Floats and Decimals are forbidden in money math; convert at the boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
+from typing import TypeAlias
+
+Weight: TypeAlias = Decimal | int | float | str
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +69,12 @@ class Money:
             )
 
     def __str__(self) -> str:
-        return f"{self.minor / 100:.2f} {self.currency}"
+        sign = "-" if self.minor < 0 else ""
+        whole, fraction = divmod(abs(self.minor), 100)
+        return f"{sign}{whole}.{fraction:02d} {self.currency}"
 
 
-def apportion(total_minor: int, weights: list[float]) -> list[int]:
+def apportion(total_minor: int, weights: list[Weight]) -> list[int]:
     """Split an integer amount by weights so shares sum EXACTLY to the total.
 
     Largest-remainder method: floor each share, then hand out the few minor
@@ -81,13 +87,27 @@ def apportion(total_minor: int, weights: list[float]) -> list[int]:
         return []
     if total_minor == 0:
         return [0] * len(weights)
-    weight_total = sum(weights)
+    try:
+        exact_weights = [Decimal(str(weight)) for weight in weights]
+    except Exception as exc:
+        raise ValueError("weights must be finite non-negative numbers") from exc
+    if any(not weight.is_finite() or weight < 0 for weight in exact_weights):
+        raise ValueError("weights must be finite non-negative numbers")
+    # Normalize every finite Decimal to a common integer scale, then do the
+    # entire largest-remainder calculation with integers. Decimal division is
+    # context-rounded; close ownership percentages must not let that context
+    # decide which partner receives the final paise.
+    scale = max(0, *(-weight.as_tuple().exponent for weight in exact_weights))
+    integer_weights = [int(weight.scaleb(scale)) for weight in exact_weights]
+    weight_total = sum(integer_weights)
+    if weight_total <= 0:
+        raise ValueError("at least one weight must be positive")
     sign = 1 if total_minor >= 0 else -1
     magnitude = abs(total_minor)
-    raw = [magnitude * w / weight_total for w in weights]
-    floors = [int(r) for r in raw]
+    divisions = [divmod(magnitude * weight, weight_total) for weight in integer_weights]
+    floors = [quotient for quotient, _ in divisions]
     remainder = magnitude - sum(floors)
-    order = sorted(range(len(weights)), key=lambda i: raw[i] - floors[i], reverse=True)
+    order = sorted(range(len(weights)), key=lambda i: divisions[i][1], reverse=True)
     for i in order[:remainder]:
         floors[i] += 1
     return [sign * f for f in floors]

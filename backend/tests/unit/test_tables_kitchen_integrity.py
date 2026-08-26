@@ -153,6 +153,7 @@ async def test_kitchen_queue_is_branch_scoped_includes_held_and_returns_notes() 
         kitchen_state=None,
     )
     line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note="No onions",
@@ -191,6 +192,7 @@ async def test_kitchen_queue_uses_active_lines_and_late_line_wait_time() -> None
         kitchen_state="received",
     )
     served_line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note=None,
@@ -198,6 +200,7 @@ async def test_kitchen_queue_uses_active_lines_and_late_line_wait_time() -> None
         created_at=now - timedelta(days=2),
     )
     late_line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=2,
         note="Late batch",
@@ -236,6 +239,7 @@ async def test_kitchen_queue_hides_orders_when_every_kitchen_line_is_served() ->
         kitchen_state=None,
     )
     line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note=None,
@@ -277,6 +281,7 @@ async def test_kitchen_queue_does_not_resurface_legacy_completed_orders(
     # This is how every line looks in production under the old KDS: the
     # order mirror advanced, but the DB default on each line stayed queued.
     line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note=None,
@@ -309,6 +314,7 @@ async def test_kitchen_queue_preserves_legacy_unfinished_null_state_as_queued() 
         status="held",
     )
     line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note=None,
@@ -360,6 +366,7 @@ async def test_kitchen_transition_locks_order_and_advances_only_lagging_lines() 
         kitchen_ready_at=now - timedelta(minutes=2),
     )
     late_line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note="Late",
@@ -367,6 +374,7 @@ async def test_kitchen_transition_locks_order_and_advances_only_lagging_lines() 
         created_at=now - timedelta(minutes=3),
     )
     ready_line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note=None,
@@ -413,6 +421,7 @@ async def test_kitchen_transition_materializes_legacy_ready_lines_before_serving
         kitchen_ready_at=now,
     )
     legacy_line = SimpleNamespace(
+        id=uuid4(),
         order_id=order_id,
         qty=1,
         note=None,

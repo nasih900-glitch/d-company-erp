@@ -525,13 +525,14 @@ async def test_ledger_debits_tips_payable_and_credits_chosen_method_account() ->
             _Result(rows=[]),  # order payments
             _Result(scalar="Asia/Kolkata"),  # company_timezone
             _Result(rows=[]),  # manual collections
+            _Result(rows=[]),  # membership payments
+            _Result(rows=[]),  # membership refund settlements
             _Result(rows=[]),  # orders
             _Result(rows=[]),  # stock movements
             _Result(rows=[]),  # refunds
             _Result(rows=[payout]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital entries
-            _Result(rows=[]),  # direct event tickets
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
         ]
@@ -565,11 +566,19 @@ async def test_ledger_maps_cash_method_to_cash_account() -> None:
     payout = _payout(method="cash", amount_minor=10_000)
     session = _QueuedSession(
         [
-            _Result(rows=[]), _Result(scalar="Asia/Kolkata"), _Result(rows=[]),
-            _Result(rows=[]), _Result(rows=[]), _Result(rows=[]),
+            _Result(rows=[]),  # order payments
+            _Result(scalar="Asia/Kolkata"),  # company_timezone
+            _Result(rows=[]),  # manual collections
+            _Result(rows=[]),  # membership payments
+            _Result(rows=[]),  # membership refund settlements
+            _Result(rows=[]),  # orders
+            _Result(rows=[]),  # stock movements
+            _Result(rows=[]),  # refunds
             _Result(rows=[payout]),  # tip payouts
-            _Result(rows=[]), _Result(rows=[]), _Result(rows=[]),
-            _Result(rows=[]), _Result(rows=[]),
+            _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # capital entries
+            _Result(rows=[]),  # assets (depreciation)
+            _Result(rows=[]),  # approved posted journals
         ]
     )
     start_at, end_exclusive = local_date_bounds_utc(
@@ -591,11 +600,19 @@ async def test_ledger_excludes_voided_tip_payouts() -> None:
     equivalent test) rather than relying on filtering in Python."""
     session = _QueuedSession(
         [
-            _Result(rows=[]), _Result(scalar="Asia/Kolkata"), _Result(rows=[]),
-            _Result(rows=[]), _Result(rows=[]), _Result(rows=[]),
+            _Result(rows=[]),  # order payments
+            _Result(scalar="Asia/Kolkata"),  # company_timezone
+            _Result(rows=[]),  # manual collections
+            _Result(rows=[]),  # membership payments
+            _Result(rows=[]),  # membership refund settlements
+            _Result(rows=[]),  # orders
+            _Result(rows=[]),  # stock movements
+            _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts — the SQL excludes the voided row itself
-            _Result(rows=[]), _Result(rows=[]), _Result(rows=[]),
-            _Result(rows=[]), _Result(rows=[]),
+            _Result(rows=[]),  # expenses
+            _Result(rows=[]),  # capital entries
+            _Result(rows=[]),  # assets (depreciation)
+            _Result(rows=[]),  # approved posted journals
         ]
     )
 
@@ -604,7 +621,7 @@ async def test_ledger_excludes_voided_tip_payouts() -> None:
     )
     assert [line for line in lines if line.ref_type == "tip_payout"] == []
 
-    tip_payout_sql = str(session.statements[6])
+    tip_payout_sql = str(session.statements[8])
     assert "tip_payouts.voided_at IS NULL" in tip_payout_sql
     assert "tip_payouts.company_id" in tip_payout_sql
 

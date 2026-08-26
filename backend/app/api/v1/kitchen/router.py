@@ -21,12 +21,13 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request, status as http_status
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError
+from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
@@ -49,11 +50,30 @@ _KITCHEN_ITEM_TYPES = {"food", "drink", "dessert"}
 
 
 class KitchenLineDTO(BaseModel):
+    id: UUID
+    client_line_id: UUID | None = None
     menu_item_id: UUID
     name: str
     type: str  # food/drink/dessert only
     qty: float
     notes: str | None = None
+    released_at: datetime
+    round_no: int
+
+
+class KitchenCancellationDTO(BaseModel):
+    line_id: UUID
+    client_line_id: UUID | None = None
+    menu_item_id: UUID
+    name: str
+    type: str
+    qty: float
+    notes: str | None = None
+    released_at: datetime
+    round_no: int
+    voided_at: datetime
+    voided_by: UUID | None
+    reason: str
 
 
 class KitchenOrderDTO(BaseModel):
@@ -66,6 +86,14 @@ class KitchenOrderDTO(BaseModel):
     kitchen_state: str  # received / preparing / ready / served
     minutes_waiting: int
     lines: list[KitchenLineDTO]
+    pending_cancellations: list[KitchenCancellationDTO] = Field(default_factory=list)
+
+
+class KitchenCancellationAckRead(BaseModel):
+    order_id: UUID
+    line_id: UUID
+    acknowledged_at: datetime
+    acknowledged_by: UUID
 
 
 class StateUpdate(BaseModel):
@@ -144,12 +172,40 @@ def _effective_line_statuses(order: Order, lines: list[OrderLine]) -> list[str]:
 
 
 def _wait_started_at(lines: list[OrderLine], fallback: datetime) -> datetime:
-    created = [
-        created_at
+    released = [
+        released_at
         for line in lines
-        if (created_at := getattr(line, "created_at", None)) is not None
+        if (
+            released_at := getattr(line, "kitchen_released_at", None)
+            or getattr(line, "created_at", None)
+        )
+        is not None
     ]
-    return min(created) if created else fallback
+    return min(released) if released else fallback
+
+
+def _released_at(line: OrderLine, fallback: datetime) -> datetime:
+    # Missing attributes only occur in old unit fixtures. Migration 0037
+    # materializes every ticket the legacy KDS had already received.
+    return (
+        getattr(line, "kitchen_released_at", None)
+        or getattr(line, "created_at", None)
+        or fallback
+    )
+
+
+def _round_no(line: OrderLine) -> int:
+    return max(1, int(getattr(line, "kitchen_round_no", None) or 1))
+
+
+def _require_idempotency(request: Request) -> tuple[str, str]:
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    if not key or not request_hash:
+        raise BusinessRuleError(
+            "Idempotency-Key header required to acknowledge a kitchen cancellation."
+        )
+    return str(key), str(request_hash)
 
 
 def _next_ready_at(
@@ -169,7 +225,7 @@ def _next_ready_at(
 @router.get("/queue", response_model=list[KitchenOrderDTO])
 async def kitchen_queue(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.read")),
+    tenant: TenantContext = Depends(requires("kitchen.read")),
     include_served: bool = False,
 ) -> list[KitchenOrderDTO]:
     """Active kitchen work, or today's history when served lines are requested.
@@ -181,12 +237,51 @@ async def kitchen_queue(
     hookah, and event-only orders do not clutter the kitchen iPad.
     """
     branch_id = _current_branch_id(tenant)
+    released_kitchen_line = (
+        select(OrderLine.id)
+        .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+        .where(
+            OrderLine.order_id == Order.id,
+            OrderLine.kitchen_released_at.is_not(None),
+            MenuItem.company_id == tenant.company_id,
+            MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+        )
+        .exists()
+    )
+    active_kitchen_work = (
+        select(OrderLine.id)
+        .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+        .where(
+            OrderLine.order_id == Order.id,
+            OrderLine.kitchen_released_at.is_not(None),
+            OrderLine.voided_at.is_(None),
+            or_(
+                OrderLine.kitchen_status.is_(None),
+                OrderLine.kitchen_status != "served",
+            ),
+            MenuItem.company_id == tenant.company_id,
+            MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+        )
+        .exists()
+    )
+    pending_cancellation = (
+        select(OrderLine.id)
+        .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+        .where(
+            OrderLine.order_id == Order.id,
+            OrderLine.kitchen_released_at.is_not(None),
+            OrderLine.voided_at.is_not(None),
+            OrderLine.kitchen_void_acknowledged_at.is_(None),
+            MenuItem.company_id == tenant.company_id,
+            MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+        )
+        .exists()
+    )
     stmt = (
         select(Order)
         .where(
             Order.company_id == tenant.company_id,
             Order.branch_id == branch_id,
-            Order.status.in_(("paid", "open", "held")),
         )
         .order_by(Order.opened_at)
     )
@@ -201,36 +296,18 @@ async def kitchen_queue(
         stmt = stmt.where(
             Order.opened_at >= today_start,
             Order.opened_at < tomorrow_start,
+            released_kitchen_line,
         )
     else:
-        # Never age active work out at midnight. The EXISTS also prevents a
-        # full historical order scan while retaining late lines on old tabs.
-        active_kitchen_work = (
-            select(OrderLine.id)
-            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
-            .where(
-                OrderLine.order_id == Order.id,
-                OrderLine.voided_at.is_(None),
-                or_(
-                    OrderLine.kitchen_status.is_(None),
-                    OrderLine.kitchen_status != "served",
-                ),
-                MenuItem.company_id == tenant.company_id,
-                MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
-            )
-            .exists()
-        )
-        # Old served and paid/null-mirror rows still have line_status=queued.
-        # Keep them out of the SQL candidate set so a production deploy cannot
-        # flood KDS with historical tickets. New writes always set a mirror.
+        # Never age live work or an unacknowledged cancellation out at midnight.
+        # A void order is included only while kitchen still owes the ack.
         stmt = stmt.where(
-            active_kitchen_work,
             or_(
-                Order.kitchen_state.in_(("received", "preparing", "ready")),
                 and_(
-                    Order.kitchen_state.is_(None),
-                    Order.status.in_(("open", "held")),
+                    Order.status.in_(("paid", "open", "held")),
+                    active_kitchen_work,
                 ),
+                pending_cancellation,
             ),
         )
     orders = (await session.execute(stmt)).scalars().all()
@@ -243,17 +320,26 @@ async def kitchen_queue(
         .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
         .where(
             OrderLine.order_id.in_(order_ids),
-            OrderLine.voided_at.is_(None),
+            OrderLine.kitchen_released_at.is_not(None),
             MenuItem.company_id == tenant.company_id,
             MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
         )
-        .order_by(OrderLine.created_at, OrderLine.id)
+        .order_by(OrderLine.kitchen_released_at, OrderLine.created_at, OrderLine.id)
     )
     if not include_served:
         line_stmt = line_stmt.where(
             or_(
-                OrderLine.kitchen_status.is_(None),
-                OrderLine.kitchen_status != "served",
+                and_(
+                    OrderLine.voided_at.is_(None),
+                    or_(
+                        OrderLine.kitchen_status.is_(None),
+                        OrderLine.kitchen_status != "served",
+                    ),
+                ),
+                and_(
+                    OrderLine.voided_at.is_not(None),
+                    OrderLine.kitchen_void_acknowledged_at.is_(None),
+                ),
             )
         )
     lines = (await session.execute(line_stmt)).all()
@@ -283,12 +369,24 @@ async def kitchen_queue(
     out: list[KitchenOrderDTO] = []
     for o in orders:
         all_rows = rows_by_order.get(o.id, [])
-        all_lines = [line for line, _item in all_rows]
-        effective_statuses = _effective_line_statuses(o, all_lines)
+        active_source_rows = [
+            (line, item)
+            for line, item in all_rows
+            if getattr(line, "voided_at", None) is None
+        ]
+        pending_cancel_rows = [
+            (line, item)
+            for line, item in all_rows
+            if getattr(line, "voided_at", None) is not None
+            and getattr(line, "kitchen_void_acknowledged_at", None) is None
+        ]
+        effective_statuses = _effective_line_statuses(
+            o, [line for line, _item in active_source_rows]
+        )
         active_rows = [
             (line, item, effective_status)
             for (line, item), effective_status in zip(
-                all_rows,
+                active_source_rows,
                 effective_statuses,
                 strict=True,
             )
@@ -298,7 +396,7 @@ async def kitchen_queue(
             [
                 (line, item, effective_status)
                 for (line, item), effective_status in zip(
-                    all_rows,
+                    active_source_rows,
                     effective_statuses,
                     strict=True,
                 )
@@ -306,14 +404,15 @@ async def kitchen_queue(
             if include_served
             else active_rows
         )
-        if not visible_rows:
+        if not visible_rows and not pending_cancel_rows:
             continue
         state = _state_from_statuses(
             [effective_status for _line, _item, effective_status in visible_rows]
         )
         wait_started_at = _wait_started_at(
             [line for line, _item, _status in active_rows]
-            or [line for line, _item, _status in visible_rows],
+            or [line for line, _item, _status in visible_rows]
+            or [line for line, _item in pending_cancel_rows],
             o.opened_at,
         )
         minutes_waiting = max(0, int((now - wait_started_at).total_seconds() // 60))
@@ -329,13 +428,35 @@ async def kitchen_queue(
                 minutes_waiting=minutes_waiting,
                 lines=[
                     KitchenLineDTO(
+                        id=line.id,
+                        client_line_id=getattr(line, "client_line_id", None),
                         menu_item_id=item.id,
                         name=item.name,
                         type=item.type,
                         qty=float(line.qty),
                         notes=line.note,
+                        released_at=_released_at(line, o.opened_at),
+                        round_no=_round_no(line),
                     )
                     for line, item, _status in visible_rows
+                ],
+                pending_cancellations=[
+                    KitchenCancellationDTO(
+                        line_id=line.id,
+                        client_line_id=getattr(line, "client_line_id", None),
+                        menu_item_id=item.id,
+                        name=item.name,
+                        type=item.type,
+                        qty=float(line.qty),
+                        notes=line.note,
+                        released_at=_released_at(line, o.opened_at),
+                        round_no=_round_no(line),
+                        voided_at=line.voided_at,
+                        voided_by=line.voided_by,
+                        reason=(getattr(line, "void_reason", None) or "Legacy cancellation"),
+                    )
+                    for line, item in pending_cancel_rows
+                    if line.voided_at is not None
                 ],
             )
         )
@@ -347,7 +468,7 @@ async def set_kitchen_state(
     order_id: UUID,
     payload: StateUpdate,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.write")),
+    tenant: TenantContext = Depends(requires("kitchen.write")),
 ) -> KitchenOrderDTO:
     branch_id = _current_branch_id(tenant)
     order = (
@@ -374,6 +495,7 @@ async def set_kitchen_state(
             .where(
                 OrderLine.order_id == order_id,
                 OrderLine.voided_at.is_(None),
+                OrderLine.kitchen_released_at.is_not(None),
                 MenuItem.company_id == tenant.company_id,
                 MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
             )
@@ -448,12 +570,95 @@ async def set_kitchen_state(
         ),
         lines=[
             KitchenLineDTO(
+                id=ol.id,
+                client_line_id=getattr(ol, "client_line_id", None),
                 menu_item_id=mi.id,
                 name=mi.name,
                 type=mi.type,
                 qty=float(ol.qty),
                 notes=ol.note,
+                released_at=_released_at(ol, order.opened_at),
+                round_no=_round_no(ol),
             )
             for ol, mi in rows
         ],
     )
+
+
+@router.post(
+    "/orders/{order_id}/cancellations/{line_id}/acknowledge",
+    response_model=KitchenCancellationAckRead,
+    status_code=http_status.HTTP_200_OK,
+)
+async def acknowledge_kitchen_cancellation(
+    order_id: UUID,
+    line_id: UUID,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("kitchen.write")),
+) -> KitchenCancellationAckRead:
+    """Persist kitchen's acknowledgement of one released-line cancellation."""
+    branch_id = _current_branch_id(tenant)
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return KitchenCancellationAckRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order)
+            .where(
+                Order.id == order_id,
+                Order.company_id == tenant.company_id,
+                Order.branch_id == branch_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if order is None:
+        raise NotFoundError("Kitchen order not found for this branch.")
+    line = (
+        await session.execute(
+            select(OrderLine)
+            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+            .where(
+                OrderLine.id == line_id,
+                OrderLine.order_id == order.id,
+                MenuItem.company_id == tenant.company_id,
+                MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+            )
+            .with_for_update(of=OrderLine)
+        )
+    ).scalar_one_or_none()
+    if line is None:
+        raise NotFoundError("Kitchen cancellation not found for this order.")
+    if line.voided_at is None or line.kitchen_released_at is None:
+        raise BusinessRuleError(
+            "This item is not a released kitchen cancellation. Refresh the queue."
+        )
+    if line.kitchen_void_acknowledged_at is None:
+        line.kitchen_void_acknowledged_at = datetime.now(UTC)
+        line.kitchen_void_acknowledged_by = tenant.user_id
+        await session.flush()
+
+    assert line.kitchen_void_acknowledged_at is not None
+    assert line.kitchen_void_acknowledged_by is not None
+    response = KitchenCancellationAckRead(
+        order_id=order.id,
+        line_id=line.id,
+        acknowledged_at=line.kitchen_void_acknowledged_at,
+        acknowledged_by=line.kitchen_void_acknowledged_by,
+    )
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=http_status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response

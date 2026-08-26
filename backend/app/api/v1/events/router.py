@@ -4,7 +4,7 @@ Endpoints:
   GET    /events/upcoming                       — list scheduled events
   POST   /events                                — create event (manager)
   GET    /events/{event_id}                     — event detail (capacity remaining)
-  POST   /events/{event_id}/tickets             — sell a ticket
+  POST   /events/{event_id}/tickets             — disabled until atomic POS sale
   POST   /events/{event_id}/tickets/{ticket_id}/check-in
   GET    /events/{event_id}/tickets             — list tickets for an event (manager)
 
@@ -23,7 +23,6 @@ from sqlalchemy import and_, func, select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError
-from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.pricing_lock import require_pricing_unlock
 from app.core.tenant import TenantContext
@@ -75,6 +74,14 @@ class EventRead(BaseModel):
     tax_rate: float
     status: str
     poster_url: str | None
+
+
+class EventBranchRead(BaseModel):
+    """Least-privilege branch reference for event forms."""
+
+    id: UUID
+    name: str
+    code: str | None = None
 
 
 class TicketSell(BaseModel):
@@ -274,6 +281,23 @@ async def list_all_events(
     return out
 
 
+@router.get("/branches", response_model=list[EventBranchRead])
+async def list_event_branches(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.read")),
+) -> list[EventBranchRead]:
+    """Return only branches the event operator is allowed to use."""
+
+    stmt = select(Branch).where(
+        Branch.company_id == tenant.company_id,
+        Branch.deleted_at.is_(None),
+    )
+    if tenant.branch_id is not None:
+        stmt = stmt.where(Branch.id == tenant.branch_id)
+    rows = (await session.execute(stmt.order_by(Branch.name))).scalars().all()
+    return [EventBranchRead(id=row.id, name=row.name, code=row.code) for row in rows]
+
+
 @router.get("/{event_id}", response_model=EventRead)
 async def get_event(
     event_id: UUID,
@@ -297,84 +321,19 @@ async def sell_tickets(
     request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> list[TicketRead]:
-    """Sell N tickets to the same customer.
+    """Fail closed until ticket issuance is part of an atomic POS sale.
 
-    Each ticket gets its own row + sequential ticket_no. Payment is recorded
-    against the parent Order (next iteration wires this into the POS pipeline);
-    for now we record price_paid_minor on the ticket as the GST-inclusive amount.
-
-    ticket_no is computed fresh from the current sold count on every call, so
-    it is NOT a safe dedup fallback — a retry after a dropped response would
-    recompute a higher sold count and mint brand-new, non-colliding ticket
-    numbers, silently double-issuing tickets and double-consuming capacity.
-    Idempotency-Key is therefore mandatory here, same reasoning as
-    Inventory's GRN/adjustment writes (see inventory/router.py's
-    _require_idempotency).
+    A standalone EventTicket has no shift, payment, invoice, or settlement
+    evidence. Recording its configured price as if money was collected would
+    corrupt revenue and GST. Historical tickets remain readable/check-in-able,
+    but no new ticket may be minted through this incomplete write path.
     """
-    key = getattr(request.state, "idempotency_key", None)
-    request_hash = getattr(request.state, "idempotency_request_hash", None)
-    if not key or not str(key).strip() or not request_hash:
-        raise BusinessRuleError("Idempotency-Key header required for ticket sale writes")
-    idempotency_key, idempotency_hash = str(key), str(request_hash)
-    replay = await check_or_reserve(
-        session,
-        key=idempotency_key,
-        request_hash=idempotency_hash,
-        user_id=tenant.user_id,
-        terminal_id=None,
+    raise BusinessRuleError(
+        "Direct event ticket sales are temporarily disabled because this flow "
+        "does not create a POS order, payment, shift, or invoice. Record the "
+        "event charge through POS; existing tickets can still be viewed and "
+        "checked in."
     )
-    if replay:
-        return [TicketRead.model_validate(t) for t in replay["body"]["tickets"]]
-
-    ev = await _event_or_404(session, event_id, tenant.company_id, lock=True)
-    if ev.status not in {"scheduled", "live"}:
-        raise BusinessRuleError(f"event status={ev.status}, cannot sell tickets")
-
-    sold = await _sold_count(session, event_id)
-    if sold + payload.qty > ev.capacity:
-        raise BusinessRuleError(
-            f"capacity exceeded — {ev.capacity - sold} seat(s) remaining"
-        )
-
-    out: list[TicketRead] = []
-    for i in range(payload.qty):
-        tno = _ticket_number(ev.id, ev.starts_at, sold + i + 1)
-        ticket = EventTicket(
-            id=uuid4(),
-            event_id=ev.id,
-            ticket_no=tno,
-            order_id=None,  # wired in POS-integration pass
-            customer_name=payload.customer_name,
-            customer_phone=payload.customer_phone,
-            seat=payload.seat,
-            price_paid_minor=ev.base_ticket_price_minor,
-            status="sold",
-            sold_by=tenant.user_id,
-            note=payload.note,
-        )
-        session.add(ticket)
-        await session.flush()
-        out.append(
-            TicketRead(
-                id=ticket.id,
-                ticket_no=ticket.ticket_no,
-                event_id=ev.id,
-                event_name=ev.name,
-                customer_name=ticket.customer_name,
-                customer_phone=ticket.customer_phone,
-                seat=ticket.seat,
-                price_paid_minor=ticket.price_paid_minor,
-                status=ticket.status,
-                checked_in_at=ticket.checked_in_at,
-            )
-        )
-    await store_response(
-        session,
-        key=idempotency_key,
-        status_code=status.HTTP_201_CREATED,
-        body={"tickets": [t.model_dump(mode="json") for t in out]},
-    )
-    return out
 
 
 @router.post("/{event_id}/tickets/{ticket_id}/check-in", response_model=TicketRead)

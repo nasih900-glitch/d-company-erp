@@ -235,12 +235,15 @@ async def test_report_includes_manual_revenue_and_payments_but_not_aov() -> None
             ),
             _Result(scalar=0),  # delivery
             _Result(scalar=0),  # discounts / points
+            _Result(one=SimpleNamespace(income=0, expense=0)),  # invoice rounding
             _Result(rows=[SimpleNamespace(type="food", amount=5_000)]),
-            _Result(rows=[]),  # event tickets
+            _Result(scalar=0),  # operational event ticket count
             _Result(rows=[]),  # COGS movements
             _Result(rows=[cash, upi, voided]),
+            _Result(rows=[]),  # membership payments
             _Result(rows=[SimpleNamespace(method="cash", amount=5_000)]),
             _Result(rows=[]),  # refunds
+            _Result(scalar=0),  # membership refund settlements
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # expenses
         ]
@@ -272,12 +275,11 @@ async def test_report_includes_manual_revenue_and_payments_but_not_aov() -> None
 
 
 @pytest.mark.asyncio
-async def test_orders_count_and_avg_ticket_exclude_fully_refunded_orders() -> None:
-    """A fully-refunded order (status='refunded') kept no revenue at all —
-    counting it as a completed sale would inflate both the order count and
-    the average ticket with money that was handed back. The orders_count
-    query must filter status == 'paid' only, unlike the revenue/tax/payments
-    queries, which stay gross-inclusive-of-refunds by design.
+async def test_orders_count_uses_stable_issued_invoice_cohort() -> None:
+    """A later refund must not rewrite an old report's receipt denominator.
+
+    Both paid and refunded issued invoices remain in the sale-date cohort;
+    same-period refunds reduce the numerator separately.
     """
     session = _QueuedSession(
         [
@@ -289,12 +291,15 @@ async def test_orders_count_and_avg_ticket_exclude_fully_refunded_orders() -> No
             ),
             _Result(scalar=0),  # delivery
             _Result(scalar=0),  # discounts / points
+            _Result(one=SimpleNamespace(income=0, expense=0)),  # invoice rounding
             _Result(rows=[SimpleNamespace(type="food", amount=5_000)]),
-            _Result(rows=[]),  # event tickets
+            _Result(scalar=0),  # operational event ticket count
             _Result(rows=[]),  # COGS movements
             _Result(rows=[]),  # manual collections
+            _Result(rows=[]),  # membership payments
             _Result(rows=[SimpleNamespace(method="cash", amount=5_000)]),
             _Result(rows=[]),  # refunds
+            _Result(scalar=0),  # membership refund settlements
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # expenses
         ]
@@ -312,8 +317,8 @@ async def test_orders_count_and_avg_ticket_exclude_fully_refunded_orders() -> No
     assert report.avg_ticket_minor == 5_000
 
     orders_sql = str(session.statements[1])
-    assert "orders.status = :status_1" in orders_sql
-    assert "orders.status IN" not in orders_sql
+    assert "orders.status IN" in orders_sql
+    assert "orders.status = :status_1" not in orders_sql
 
 
 @pytest.mark.asyncio
@@ -339,13 +344,14 @@ async def test_ledger_uses_business_date_company_timezone_and_balances() -> None
             _Result(rows=[]),  # order payments
             _Result(scalar="Asia/Kolkata"),
             _Result(rows=[backfilled_cash, backfilled_upi, voided]),
+            _Result(rows=[]),  # membership payments
+            _Result(rows=[]),  # membership refund settlements
             _Result(rows=[]),  # orders
             _Result(rows=[]),  # stock movements
             _Result(rows=[]),  # refunds
             _Result(rows=[]),  # tip payouts
             _Result(rows=[]),  # expenses
             _Result(rows=[]),  # capital
-            _Result(rows=[]),  # direct event tickets
             _Result(rows=[]),  # assets (depreciation)
             _Result(rows=[]),  # approved posted journals
         ]

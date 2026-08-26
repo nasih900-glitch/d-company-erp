@@ -1,9 +1,9 @@
 """Real-time WebSocket push — broadcast-on-write, end to end.
 
 Needs a real Postgres connection (creates a company/branch/terminal/owner
-and actually opens a shift through the HTTP API), so it's skipped when run
-against the sandboxed local environment the same way every other
-integration test in this suite is.
+and actually opens a shift through the HTTP API). Database unavailability is
+a real integration failure; this test must not silently turn event-loop or
+connection defects into a skip.
 
 Uses a plain sync test with its own asyncio.run() for DB setup rather than
 the usual async pytest-asyncio fixtures, so the WebSocket portion can use
@@ -16,34 +16,60 @@ from __future__ import annotations
 import asyncio
 from uuid import uuid4
 
-import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from starlette.testclient import TestClient
 
-from app.core.db import AsyncSessionLocal
+from app.core.config import get_settings
+from app.core.db import _async_url, async_engine
 from app.core.security import hash_password, issue_access_token
 from app.main import create_app
 from app.models import Branch, Company, Role, Terminal, User, UserRole
 
 
 async def _seed_owner() -> dict:
-    async with AsyncSessionLocal() as session:
-        company = Company(id=uuid4(), name="RealtimeTestCo")
-        branch = Branch(id=uuid4(), company_id=company.id, name="Main")
-        terminal = Terminal(id=uuid4(), branch_id=branch.id, name="POS-T1", device_id=f"t-{uuid4()}")
-        owner_role = Role(id=uuid4(), company_id=company.id, code="owner", name="Owner", permissions=[])
-        owner = User(
-            id=uuid4(),
-            company_id=company.id,
-            email=f"owner-{uuid4().hex[:8]}@test.local",
-            name="Owner",
-            password_hash=hash_password("password1234"),
-            status="active",
-        )
-        session.add_all([company, branch, terminal, owner_role, owner])
-        await session.flush()
-        session.add(UserRole(id=uuid4(), user_id=owner.id, role_id=owner_role.id))
-        await session.commit()
-        return {"company": company, "branch": branch, "terminal": terminal, "owner": owner}
+    # The full suite's shared async engine has already been used by pytest's
+    # session event loop. asyncio.run() below intentionally creates a separate
+    # loop for Starlette TestClient compatibility, so seeding through that
+    # pooled engine can reuse a connection owned by the wrong loop. A
+    # short-lived NullPool engine keeps every connection on this loop.
+    engine = create_async_engine(
+        _async_url(str(get_settings().database_url)),
+        poolclass=NullPool,
+    )
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            company = Company(id=uuid4(), name="RealtimeTestCo")
+            branch = Branch(id=uuid4(), company_id=company.id, name="Main")
+            terminal = Terminal(
+                id=uuid4(),
+                branch_id=branch.id,
+                name="POS-T1",
+                device_id=f"t-{uuid4()}",
+            )
+            owner_role = Role(
+                id=uuid4(),
+                company_id=company.id,
+                code="owner",
+                name="Owner",
+                permissions=[],
+            )
+            owner = User(
+                id=uuid4(),
+                company_id=company.id,
+                email=f"owner-{uuid4().hex[:8]}@test.local",
+                name="Owner",
+                password_hash=hash_password("password1234"),
+                status="active",
+            )
+            session.add_all([company, branch, terminal, owner_role, owner])
+            await session.flush()
+            session.add(UserRole(id=uuid4(), user_id=owner.id, role_id=owner_role.id))
+            await session.commit()
+            return {"company": company, "branch": branch, "terminal": terminal, "owner": owner}
+    finally:
+        await engine.dispose()
 
 
 def _token_for(seed: dict) -> str:
@@ -56,28 +82,34 @@ def _token_for(seed: dict) -> str:
 
 
 def test_ws_accepts_valid_token_and_receives_broadcast_on_shift_open():
-    try:
-        seed = asyncio.run(_seed_owner())
-    except Exception as exc:
-        pytest.skip(f"local Postgres unavailable: {exc}")
+    seed = asyncio.run(_seed_owner())
     token = _token_for(seed)
 
+    # TestClient runs the ASGI app on its own loop. Replace (without trying to
+    # close) any pool connections retained from pytest's async loop so the
+    # request below cannot inherit a cross-loop asyncpg connection.
+    asyncio.run(async_engine.dispose(close=False))
     app = create_app()
-    with TestClient(app) as client:
-        with client.websocket_connect("/api/v1/ws") as ws:
-            ws.send_text(f'{{"token": "{token}"}}')
-            hello = ws.receive_json()
-            assert hello == {"type": "connected"}
+    try:
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/v1/ws") as ws:
+                ws.send_text(f'{{"token": "{token}"}}')
+                hello = ws.receive_json()
+                assert hello == {"type": "connected"}
 
-            resp = client.post(
-                "/api/v1/pos/shifts/open",
-                json={"opening_float_minor": 50000},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "X-Terminal-Id": str(seed["terminal"].id),
-                },
-            )
-            assert resp.status_code == 201, resp.text
+                resp = client.post(
+                    "/api/v1/pos/shifts/open",
+                    json={"opening_float_minor": 50000},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "X-Terminal-Id": str(seed["terminal"].id),
+                    },
+                )
+                assert resp.status_code == 201, resp.text
 
-            message = ws.receive_json()
-            assert message == {"type": "changed", "resource": "shifts"}
+                message = ws.receive_json()
+                assert message == {"type": "changed", "resource": "shifts"}
+    finally:
+        # TestClient's loop is gone now. Detach its pool before the next async
+        # pytest fixture runs on the suite's long-lived event loop.
+        asyncio.run(async_engine.dispose(close=False))

@@ -47,14 +47,14 @@ DEFAULT_ACCOUNTS: list[dict[str, str]] = [
 DEFAULT_ROLES: list[tuple[str, str]] = [
     ("super_owner", "Super owner — protected full access"),
     ("co_owner", "Co-owner — full operational access, no audit log/Access Control"),
-    ("owner", "Business owner title — all standard modules"),
-    ("partner", "Business partner title — all standard modules"),
-    ("manager", "Operations manager title — all standard modules"),
-    ("cashier", "Cashier title — all standard modules"),
-    ("kitchen", "Kitchen team title — all standard modules"),
-    ("gaming_supervisor", "Gaming team title — all standard modules"),
-    ("auditor", "Audit staff title — all standard modules"),
-    ("staff", "General staff — no Inventory or Insights/Reports access by default"),
+    ("owner", "Business owner — operational, finance, asset, and payroll access"),
+    ("partner", "Business partner — read-only business and finance visibility"),
+    ("manager", "Operations manager — daily operations and staff management"),
+    ("cashier", "Cashier — POS, table orders, and shift operation"),
+    ("kitchen", "Kitchen team — kitchen display and ticket status only"),
+    ("gaming_supervisor", "Gaming team — sessions, bookings, and tournaments"),
+    ("auditor", "External auditor / CA — read-only finance and operational access"),
+    ("staff", "General service staff — table orders, kitchen progress, and attendance"),
 ]
 
 

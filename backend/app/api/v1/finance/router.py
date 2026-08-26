@@ -9,7 +9,7 @@ screen needs.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
@@ -36,7 +36,7 @@ from app.models import (
     Expense,
     ExpenseCategory,
     ManualCollection,
-    MembershipTier,
+    MembershipPayment,
     OcrExtraction,
     OcrUpload,
     Partner,
@@ -87,6 +87,14 @@ class ExpenseCreate(BaseModel):
     invoice_no: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
     ocr_extraction_id: UUID | None = None
+
+
+class FinanceBranchRead(BaseModel):
+    """Least-privilege branch reference used by finance entry forms."""
+
+    id: UUID
+    name: str
+    code: str | None = None
 
 
 class ExpenseRead(BaseModel):
@@ -237,9 +245,13 @@ class CapitalEntryRead(BaseModel):
 
 
 class PLReport(BaseModel):
+    accounting_basis: Literal["operational_receipt"] = "operational_receipt"
     period_start: date
     period_end: date
     revenue_minor: int
+    # Named receipt stream so native Finance can explain a changed headline
+    # instead of forcing owners to leave the screen and infer the source.
+    memberships_minor: int
     cogs_minor: int
     gross_profit_minor: int
     expenses_minor: int
@@ -375,6 +387,42 @@ async def _validate_expense_references(
 
 
 # ============================================================================
+# REFERENCE DATA
+# ============================================================================
+def _scope_to_tenant_branch(
+    stmt: Any,
+    branch_column: Any,
+    tenant: TenantContext,
+) -> Any:
+    """Apply the authenticated branch boundary to a finance read.
+
+    Company scope alone is insufficient for branch-assigned managers: their
+    role intentionally carries ``finance.read``, but ``TenantContext.branch_id``
+    is still the row-level boundary used throughout the operational API.
+    """
+
+    if tenant.branch_id is not None:
+        return stmt.where(branch_column == tenant.branch_id)
+    return stmt
+
+
+@router.get("/branches", response_model=list[FinanceBranchRead])
+async def list_finance_branches(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+) -> list[FinanceBranchRead]:
+    """Branches the caller may use on finance forms, without admin access."""
+
+    stmt = select(Branch).where(
+        Branch.company_id == tenant.company_id,
+        Branch.deleted_at.is_(None),
+    )
+    stmt = _scope_to_tenant_branch(stmt, Branch.id, tenant)
+    rows = (await session.execute(stmt.order_by(Branch.name))).scalars().all()
+    return [FinanceBranchRead(id=row.id, name=row.name, code=row.code) for row in rows]
+
+
+# ============================================================================
 # EXPENSES
 # ============================================================================
 @router.get("/expenses", response_model=list[ExpenseRead])
@@ -388,6 +436,7 @@ async def list_expenses(
         Expense.company_id == tenant.company_id,
         Expense.deleted_at.is_(None),
     )
+    stmt = _scope_to_tenant_branch(stmt, Expense.branch_id, tenant)
     timezone_name = await company_timezone(session, tenant.company_id)
     if from_date:
         from_at, _ = local_date_bounds_utc(from_date, from_date, timezone_name)
@@ -482,7 +531,12 @@ async def update_expense(
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseRead:
     ex = await session.get(Expense, expense_id)
-    if not ex or ex.company_id != tenant.company_id or ex.deleted_at:
+    if (
+        not ex
+        or ex.company_id != tenant.company_id
+        or ex.deleted_at
+        or not tenant.in_branch(ex.branch_id)
+    ):
         raise NotFoundError("expense not found")
     next_category_id = payload.category_id or ex.category_id
     await _validate_expense_references(
@@ -511,7 +565,12 @@ async def delete_expense(
     tenant: TenantContext = Depends(requires("finance.write")),
 ):
     ex = await session.get(Expense, expense_id)
-    if not ex or ex.company_id != tenant.company_id or ex.deleted_at:
+    if (
+        not ex
+        or ex.company_id != tenant.company_id
+        or ex.deleted_at
+        or not tenant.in_branch(ex.branch_id)
+    ):
         raise NotFoundError("expense not found")
     ex.deleted_at = datetime.now(timezone.utc)
     await session.flush()
@@ -1364,14 +1423,12 @@ async def list_assets(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.read")),
 ) -> list[AssetRead]:
-    rows = (
-        await session.execute(
-            select(Asset).where(
-                Asset.company_id == tenant.company_id,
-                Asset.deleted_at.is_(None),
-            )
-        )
-    ).scalars().all()
+    stmt = select(Asset).where(
+        Asset.company_id == tenant.company_id,
+        Asset.deleted_at.is_(None),
+    )
+    stmt = _scope_to_tenant_branch(stmt, Asset.branch_id, tenant)
+    rows = (await session.execute(stmt)).scalars().all()
     now = datetime.now(timezone.utc)
     return [_asset_read(r, as_of=now) for r in rows]
 
@@ -1453,9 +1510,11 @@ async def profit_loss(
         label=f"{period_start.isoformat()} to {period_end.isoformat()}",
     )
     return PLReport(
+        accounting_basis="operational_receipt",
         period_start=period_start,
         period_end=period_end,
         revenue_minor=report.net_revenue_minor,
+        memberships_minor=report.revenue.memberships_minor,
         cogs_minor=report.cogs_minor,
         gross_profit_minor=report.gross_profit_minor,
         expenses_minor=report.expense_total_minor,
@@ -1498,9 +1557,7 @@ async def partner_profit_split(
             .order_by(Partner.name)
         )
     ).scalars().all()
-    shares = apportion(
-        report.net_profit_minor, [float(p.share_pct) for p in partners]
-    )
+    shares = apportion(report.net_profit_minor, [p.share_pct for p in partners])
     return PartnerPLReport(
         period_start=period_start,
         period_end=period_end,
@@ -1556,7 +1613,6 @@ async def distributable_profit(
         label="trailing 90 days",
     )
     avg_monthly_cost_minor = (trailing.cogs_minor + trailing.expense_total_minor) // 3
-    reserve_minor = avg_monthly_cost_minor * DISTRIBUTION_RESERVE_MONTHS
 
     partners = (
         await session.execute(
@@ -1596,7 +1652,10 @@ async def distributable_profit(
         reserve_months=DISTRIBUTION_RESERVE_MONTHS,
         liquid_cash_minor=liquid_cash_minor,
     )
-    shares = apportion(capacity.safe_to_distribute_minor, [float(p.share_pct) for p in partners])
+    shares = apportion(
+        capacity.safe_to_distribute_minor,
+        [p.share_pct for p in partners],
+    )
 
     return DistributableProfitReport(
         as_of=today,
@@ -1651,32 +1710,46 @@ async def business_metrics(
         label=f"{period_start.isoformat()} to {period_end.isoformat()}",
     )
 
-    # MRR/ARR is a snapshot of memberships active RIGHT NOW, not a period sum.
+    # Active members follow the current entitlement state, including legacy
+    # entitlement-only records that intentionally have no inferred payment.
+    # An accepted/settled refund leaves revoked_at set; a cash refund withdrawn
+    # because no money left restores revoked_at to NULL and must therefore
+    # restore this KPI as well. MRR/ARR is narrower: only a contract that will
+    # actually auto-renew *and* has an immutable payment snapshot is recurring
+    # revenue. Manual protected-owner terms set auto_renew=False, so they
+    # contribute membership revenue without pretending to be SaaS-style MRR.
     now = datetime.now(timezone.utc)
     membership_rows = (
         await session.execute(
             select(
                 CustomerMembership.billing_cycle,
-                MembershipTier.monthly_price_minor,
-                MembershipTier.annual_price_minor,
+                CustomerMembership.auto_renew,
+                MembershipPayment.amount_minor,
             )
-            .join(MembershipTier, MembershipTier.id == CustomerMembership.tier_id)
+            .outerjoin(
+                MembershipPayment,
+                MembershipPayment.membership_id == CustomerMembership.id,
+            )
             .join(Customer, Customer.id == CustomerMembership.customer_id)
             .where(
                 Customer.company_id == tenant.company_id,
                 Customer.deleted_at.is_(None),
                 CustomerMembership.starts_at <= now,
                 CustomerMembership.expires_at > now,
+                CustomerMembership.revoked_at.is_(None),
             )
         )
     ).all()
     active_members_count = len(membership_rows)
     mrr_total = 0
-    for billing_cycle, monthly_price, annual_price in membership_rows:
-        if billing_cycle == "annual" and annual_price:
-            mrr_total += int(annual_price) // 12
-        else:
-            mrr_total += int(monthly_price or 0)
+    for billing_cycle, auto_renew, paid_amount in membership_rows:
+        if not auto_renew:
+            continue
+        mrr_total += (
+            int(paid_amount or 0) // 12
+            if billing_cycle == "annual"
+            else int(paid_amount or 0)
+        )
 
     period_start_at, period_end_exclusive = local_date_bounds_utc(
         period_start, period_end, timezone_name

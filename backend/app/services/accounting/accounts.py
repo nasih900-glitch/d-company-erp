@@ -77,6 +77,7 @@ GAMING_REVENUE = AccountDefinition("4100", "Revenue — Gaming", "revenue", "cr"
 HOOKAH_REVENUE = AccountDefinition("4150", "Revenue — Hookah", "revenue", "cr")
 STREAMING_REVENUE = AccountDefinition("4160", "Revenue — Streaming", "revenue", "cr")
 EVENT_REVENUE = AccountDefinition("4200", "Revenue — Events", "revenue", "cr")
+MEMBERSHIP_REVENUE = AccountDefinition("4250", "Membership Revenue", "revenue", "cr")
 MANUAL_COLLECTION_REVENUE = AccountDefinition("4300", "Manual Collection Revenue", "revenue", "cr")
 ROUNDING_INCOME = AccountDefinition("4900", "Rounding Income", "revenue", "cr")
 
@@ -161,6 +162,7 @@ DEFAULT_CHART_OF_ACCOUNTS: tuple[AccountDefinition, ...] = (
     HOOKAH_REVENUE,
     STREAMING_REVENUE,
     EVENT_REVENUE,
+    MEMBERSHIP_REVENUE,
     MANUAL_COLLECTION_REVENUE,
     ROUNDING_INCOME,
     COST_OF_GOODS_SOLD,

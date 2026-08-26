@@ -186,7 +186,10 @@ async def on_order_paid(event: OrderPaid) -> None:
             await session.execute(
                 select(OrderLine, MenuItem.name)
                 .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
-                .where(OrderLine.order_id == order.id)
+                .where(
+                    OrderLine.order_id == order.id,
+                    OrderLine.voided_at.is_(None),
+                )
             )
         ).all()
 

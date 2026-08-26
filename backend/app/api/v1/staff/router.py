@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, NotFoundError
-from app.core.permissions import ROLE_DESCRIPTIONS, requires
-from app.core.roles import PROTECTED_OWNER_ROLE, public_roles
+from app.core.errors import BusinessRuleError, ForbiddenError, NotFoundError
+from app.core.permissions import ROLE_DESCRIPTIONS, requires, requires_any
+from app.core.roles import CO_OWNER_ROLE, FULL_ACCESS_ROLES, PROTECTED_OWNER_ROLE, public_roles
 from app.core.tenant import TenantContext
 from app.models import Attendance, Branch, Role, User, UserRole
 
@@ -90,8 +90,13 @@ async def _raw_roles_for_user(session, user_id: UUID) -> list[str]:
 async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: str) -> None:
     if role_code == PROTECTED_OWNER_ROLE:
         raise BusinessRuleError("protected owner access cannot be assigned from Staff")
-    if PROTECTED_OWNER_ROLE in await _raw_roles_for_user(session, user_id):
+    if role_code == CO_OWNER_ROLE and not tenant.audit_access:
+        raise ForbiddenError("Only the protected owner can assign co-owner access.")
+    current_roles = set(await _raw_roles_for_user(session, user_id))
+    if PROTECTED_OWNER_ROLE in current_roles:
         raise BusinessRuleError("protected owner role cannot be changed from Staff")
+    if CO_OWNER_ROLE in current_roles and not tenant.audit_access:
+        raise ForbiddenError("Only the protected owner can change co-owner access.")
     role = (
         await session.execute(
             select(Role).where(Role.company_id == tenant.company_id, Role.code == role_code)
@@ -182,10 +187,17 @@ async def update_user(
     is_self = u.id == tenant.user_id
     current_roles = await _raw_roles_for_user(session, u.id)
     is_protected_owner = PROTECTED_OWNER_ROLE in current_roles
+    is_internal_owner = bool(FULL_ACCESS_ROLES.intersection(current_roles))
     if is_self and (payload.role_code is not None or payload.status == "suspended"):
         raise BusinessRuleError("you cannot remove or suspend your own access")
     if is_protected_owner and payload.status == "suspended":
         raise BusinessRuleError("protected owner cannot be suspended from Staff")
+    if (
+        is_internal_owner
+        and not tenant.audit_access
+        and (payload.role_code is not None or payload.status is not None)
+    ):
+        raise ForbiddenError("Only the protected owner can change owner access.")
     if payload.name is not None:
         u.name = payload.name
     if payload.phone is not None:
@@ -234,8 +246,11 @@ async def delete_user(
         raise NotFoundError("user not found")
     if u.id == tenant.user_id:
         raise BusinessRuleError("you cannot delete your own account")
-    if PROTECTED_OWNER_ROLE in await _raw_roles_for_user(session, u.id):
+    target_roles = set(await _raw_roles_for_user(session, u.id))
+    if PROTECTED_OWNER_ROLE in target_roles:
         raise BusinessRuleError("protected owner cannot be deleted")
+    if CO_OWNER_ROLE in target_roles and not tenant.audit_access:
+        raise ForbiddenError("Only the protected owner can remove a co-owner.")
     u.deleted_at = datetime.now(timezone.utc)
     u.status = "suspended"
     u.auth_version += 1
@@ -247,14 +262,21 @@ async def list_roles(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.read")),
 ) -> list[dict]:
+    hidden_roles = {PROTECTED_OWNER_ROLE}
+    if not tenant.audit_access:
+        hidden_roles.add(CO_OWNER_ROLE)
     rows = (
-        await session.execute(
-            select(Role).where(
-                Role.company_id == tenant.company_id,
-                Role.code != "super_owner",
+        (
+            await session.execute(
+                select(Role).where(
+                    Role.company_id == tenant.company_id,
+                    Role.code.notin_(hidden_roles),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         {
             "code": r.code,
@@ -371,7 +393,9 @@ async def clock_out(
 @router.get("/attendance/on-shift", response_model=list[OnShiftRead])
 async def list_on_shift(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("staff.read")),
+    tenant: TenantContext = Depends(
+        requires_any("staff.read", "staff.attendance.write")
+    ),
 ) -> list[OnShiftRead]:
     stmt = (
         select(Attendance, User.name, User.email, Branch.name)

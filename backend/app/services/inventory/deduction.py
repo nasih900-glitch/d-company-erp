@@ -22,10 +22,14 @@ edited or deactivated between the sale and a later refund.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Batch,
@@ -35,6 +39,11 @@ from app.models import (
     RecipeLine,
     StockMovement,
 )
+
+# A shortage still needs a durable batch anchor because StockMovement.batch_id
+# is non-null and refunds reverse the exact original movement.  This marker
+# distinguishes a zero cost that means "unknown" from a genuine free item.
+UNCOSTED_SHORTAGE_LOT_CODE = "SYSTEM-UNCOSTED-SHORTAGE"
 
 
 async def deduct_for_order(
@@ -51,6 +60,11 @@ async def deduct_for_order(
     don't have recipes yet, e.g. a bottled drink resold as-is).
     """
     movements_written = 0
+    # Soft-voided order lines remain immutable audit evidence and must never
+    # consume or restore physical stock as part of the paid bill.
+    order_lines = [
+        line for line in order_lines if getattr(line, "voided_at", None) is None
+    ]
 
     # Collect distinct menu_item_ids in this order
     menu_item_ids = list({ln.menu_item_id for ln in order_lines})
@@ -80,22 +94,40 @@ async def deduct_for_order(
     for rl in recipe_lines:
         lines_by_recipe.setdefault(rl.recipe_id, []).append(rl)
 
-    # For each order line, deduct the recipe's ingredients × qty
+    # Aggregate before taking any locks.  A transaction can cover multiple
+    # menu items whose recipes reference the same ingredients in different
+    # orders.  Locking as we encounter recipe lines would let two payments
+    # acquire ingredient A/B in opposite orders and deadlock.  One combined
+    # deduction per ingredient, acquired in canonical UUID order, also avoids
+    # fragmenting the audit trail merely because an ingredient appears in
+    # more than one line.
+    required_by_ingredient: dict[UUID, float] = {}
     for order_line in order_lines:
         recipe = recipes_by_item.get(order_line.menu_item_id)
         if not recipe:
             continue
         for rl in lines_by_recipe.get(recipe.id, []):
-            qty_needed = float(rl.qty) * (1 + float(rl.wastage_pct or 0)) * float(order_line.qty)
-            await _deduct_ingredient(
+            qty_needed = (
+                float(rl.qty)
+                * (1 + float(rl.wastage_pct or 0))
+                * float(order_line.qty)
+            )
+            required_by_ingredient[rl.ingredient_id] = (
+                required_by_ingredient.get(rl.ingredient_id, 0.0) + qty_needed
+            )
+
+    for ingredient_id, qty_needed in sorted(
+        required_by_ingredient.items(), key=lambda item: item[0].int
+    ):
+        if qty_needed > 0:
+            movements_written += await _deduct_ingredient(
                 session,
-                ingredient_id=rl.ingredient_id,
+                ingredient_id=ingredient_id,
                 branch_id=branch_id,
                 qty_needed=qty_needed,
                 order_id=order_id,
                 created_by=created_by,
             )
-            movements_written += 1
 
     return movements_written
 
@@ -108,7 +140,7 @@ async def _deduct_ingredient(
     qty_needed: float,
     order_id: UUID,
     created_by: UUID | None,
-) -> None:
+) -> int:
     """Consume qty_needed from the ingredient's batches using FIFO.
 
     Writes one StockMovement per batch consumed.
@@ -116,6 +148,20 @@ async def _deduct_ingredient(
     low-stock alert stays accurate.
     """
     remaining = qty_needed
+    movements_written = 0
+
+    # Global inventory-write lock hierarchy: Ingredient, then Batch.  Manual
+    # adjustments and GRNs already start with Ingredient; doing the same here
+    # prevents a sale (formerly Batch -> Ingredient) from deadlocking against
+    # an adjustment (Ingredient -> Batch).  The ingredient row also serializes
+    # every batch mutation for this ingredient, including the shortage path.
+    ing = (
+        await session.execute(
+            select(Ingredient).where(Ingredient.id == ingredient_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not ing:
+        return 0
 
     # Pull batches in FIFO order (oldest first), only those with stock
     batches = (
@@ -126,7 +172,7 @@ async def _deduct_ingredient(
                 Batch.branch_id == branch_id,
                 Batch.qty_on_hand > 0,
             )
-            .order_by(Batch.received_at)
+            .order_by(Batch.received_at, Batch.id)
             .with_for_update()
         )
     ).scalars().all()
@@ -150,12 +196,56 @@ async def _deduct_ingredient(
                 note=f"Auto-deducted for order {order_id}",
             )
         )
+        movements_written += 1
         remaining -= take
 
-    # If we still have remaining (stock was short), log a negative adjustment
-    # against the most recent batch so the audit trail shows what happened.
-    if remaining > 0 and batches:
-        last = batches[-1]
+    # If stock is short, keep the shortage and its later refund algebraically
+    # reversible.  The batch balance goes negative by the same quantity as the
+    # movement; otherwise refunding the movement would create phantom stock.
+    # With no historical batch, create an explicit system deficit batch whose
+    # zero cost is labelled UNKNOWN rather than silently treating the sale as
+    # genuinely free.
+    if remaining > 0:
+        last = batches[-1] if batches else (
+            await session.execute(
+                select(Batch)
+                .where(
+                    Batch.ingredient_id == ingredient_id,
+                    Batch.branch_id == branch_id,
+                )
+                .order_by(Batch.received_at.desc(), Batch.id.desc())
+                .limit(1)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if last is None:
+            last = Batch(
+                id=uuid4(),
+                ingredient_id=ingredient_id,
+                branch_id=branch_id,
+                supplier_id=None,
+                grn_id=None,
+                received_at=datetime.now(UTC),
+                expires_at=None,
+                qty_initial=0,
+                qty_on_hand=-remaining,
+                cost_per_unit_minor=0,
+                lot_code=UNCOSTED_SHORTAGE_LOT_CODE,
+            )
+            session.add(last)
+        else:
+            last.qty_on_hand = float(last.qty_on_hand or 0) - remaining
+
+        cost_per_unit_minor = int(last.cost_per_unit_minor or 0)
+        cost_unknown = (
+            cost_per_unit_minor <= 0
+            or last.lot_code == UNCOSTED_SHORTAGE_LOT_CODE
+        )
+        note_suffix = (
+            "cost basis unknown; reconcile inventory costing"
+            if cost_unknown
+            else "restock soon"
+        )
         session.add(
             StockMovement(
                 id=uuid4(),
@@ -165,20 +255,16 @@ async def _deduct_ingredient(
                 ref_type="order",
                 ref_id=order_id,
                 qty_delta=-remaining,
-                cost_per_unit_minor=int(last.cost_per_unit_minor),
+                cost_per_unit_minor=cost_per_unit_minor,
                 created_by=created_by,
-                note=f"Negative stock — order {order_id} (restock soon)",
+                note=f"Negative stock — order {order_id} ({note_suffix})",
             )
         )
+        movements_written += 1
 
-    # Update rolling current_qty
-    ing = (
-        await session.execute(
-            select(Ingredient).where(Ingredient.id == ingredient_id).with_for_update()
-        )
-    ).scalar_one_or_none()
-    if ing:
-        ing.current_qty = float(ing.current_qty or 0) - qty_needed
+    # The ingredient row remains locked from before the batch reads above.
+    ing.current_qty = float(ing.current_qty or 0) - qty_needed
+    return movements_written
 
 
 async def restock_for_refund(
@@ -216,11 +302,19 @@ async def restock_for_refund(
 
     sale_movements = (
         await session.execute(
-            select(StockMovement).where(
+            select(StockMovement)
+            .join(Batch, Batch.id == StockMovement.batch_id)
+            .where(
                 StockMovement.ref_type == "order",
                 StockMovement.ref_id == order_id,
                 StockMovement.type == "sale",
+                StockMovement.branch_id == branch_id,
+                Batch.branch_id == branch_id,
             )
+            # Refunds can span several ingredients/batches.  Process them in
+            # the same canonical Ingredient -> Batch order as deductions so
+            # concurrent refund/payment transactions cannot invert locks.
+            .order_by(Batch.ingredient_id, Batch.id, StockMovement.id)
         )
     ).scalars().all()
 
@@ -261,14 +355,39 @@ async def _restock_ingredient(
     reversal, and Ingredient.current_qty (what the low-stock alert and
     analytics dashboard read) is always updated.
     """
-    batch = (
+    # Batch.ingredient_id is immutable.  Read that identifier without taking
+    # a row lock, then follow the global Ingredient -> Batch lock hierarchy.
+    # Filtering both reads by branch also prevents an inconsistent caller from
+    # writing a movement for a batch outside the refund's branch.
+    ingredient_id = (
         await session.execute(
-            select(Batch).where(Batch.id == batch_id).with_for_update()
+            select(Batch.ingredient_id).where(
+                Batch.id == batch_id,
+                Batch.branch_id == branch_id,
+            )
         )
     ).scalar_one_or_none()
     # A batch must have existed for the original deduction to have drawn
     # from it, so this should never be missing in practice — but if it
     # somehow is, there's no ingredient to credit without it, so skip.
+    if ingredient_id is None:
+        return
+
+    ing = (
+        await session.execute(
+            select(Ingredient).where(Ingredient.id == ingredient_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not ing:
+        return
+
+    batch = (
+        await session.execute(
+            select(Batch)
+            .where(Batch.id == batch_id, Batch.branch_id == branch_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if not batch:
         return
 
@@ -288,10 +407,4 @@ async def _restock_ingredient(
         )
     )
 
-    ing = (
-        await session.execute(
-            select(Ingredient).where(Ingredient.id == batch.ingredient_id).with_for_update()
-        )
-    ).scalar_one_or_none()
-    if ing:
-        ing.current_qty = float(ing.current_qty or 0) + qty_to_restock
+    ing.current_qty = float(ing.current_qty or 0) + qty_to_restock

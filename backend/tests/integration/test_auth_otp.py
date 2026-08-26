@@ -194,7 +194,7 @@ async def test_legacy_staff_account_writes_cannot_bypass_otp(
 
 
 @pytest.mark.asyncio
-async def test_standard_account_reaches_all_non_audit_modules_only(
+async def test_standard_owner_reaches_operational_modules_but_not_protected_admin(
     client,
     seed_owner,
 ) -> None:
@@ -222,14 +222,16 @@ async def test_standard_account_reaches_all_non_audit_modules_only(
         "/api/v1/tables/floors",
         "/api/v1/menu/categories",
         "/api/v1/inventory/ingredients",
+        "/api/v1/inventory/branches",
         "/api/v1/gaming/stations",
         "/api/v1/events/upcoming",
+        "/api/v1/events/branches",
         "/api/v1/finance/expenses",
+        "/api/v1/finance/branches",
         "/api/v1/ocr/queue",
         "/api/v1/staff/users",
         "/api/v1/analytics/dashboard",
         "/api/v1/reports/daily",
-        "/api/v1/settings/company",
         "/api/v1/customers",
         "/api/v1/memberships/tiers",
         "/api/v1/kitchen/queue",
@@ -239,6 +241,9 @@ async def test_standard_account_reaches_all_non_audit_modules_only(
     for path in module_paths:
         response = await client.get(path, headers=headers)
         assert response.status_code == 200, f"{path}: {response.text}"
+
+    settings = await client.get("/api/v1/settings/company", headers=headers)
+    assert settings.status_code == 403
 
     audit = await client.post(
         "/api/v1/admin/audit/unlock",

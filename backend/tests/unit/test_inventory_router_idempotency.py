@@ -23,6 +23,7 @@ violation directly via a fake session's flush().
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -64,8 +65,10 @@ class _Session:
         self.flush_count = 0
         self.rollback_count = 0
         self.flush_error = flush_error
+        self.statements: list = []
 
     async def execute(self, statement):
+        self.statements.append(statement)
         if not self.results:
             raise AssertionError(f"unexpected database statement: {statement}")
         return self.results.pop(0)
@@ -105,7 +108,11 @@ async def test_create_ingredient_converts_unique_sku_violation_to_a_clean_confli
     tenant = _tenant()
     session = _Session(
         _Result(scalar=None),  # this request's own SKU pre-check — sees nothing yet
-        flush_error=IntegrityError("INSERT INTO ingredients ...", {}, Exception("uq_ingredient_sku")),
+        flush_error=IntegrityError(
+            "INSERT INTO ingredients ...",
+            {},
+            Exception("uq_ingredient_sku"),
+        ),
     )
 
     with pytest.raises(ConflictError, match="COFFEE-001"):
@@ -124,8 +131,16 @@ async def test_create_ingredient_converts_unique_sku_violation_to_a_clean_confli
 async def test_create_ingredient_replay_returns_stored_response_without_touching_the_db() -> None:
     tenant = _tenant()
     session = _Session()  # zero queued results — proves no DB statement runs on a replay
-    stored_body = {"id": str(uuid4()), "sku": "COFFEE-001", "name": "Coffee Beans", "base_unit": "g",
-                    "current_qty": 0.0, "reorder_threshold": 0.0, "reorder_qty": 0.0, "avg_cost_minor": 0}
+    stored_body = {
+        "id": str(uuid4()),
+        "sku": "COFFEE-001",
+        "name": "Coffee Beans",
+        "base_unit": "g",
+        "current_qty": 0.0,
+        "reorder_threshold": 0.0,
+        "reorder_qty": 0.0,
+        "avg_cost_minor": 0,
+    }
 
     with patch.object(
         inventory_router, "check_or_reserve", AsyncMock(return_value={"body": stored_body}),
@@ -155,7 +170,11 @@ async def test_post_grn_without_idempotency_key_is_rejected() -> None:
         await inventory_router.post_grn(
             inventory_router.GrnPost(
                 branch_id=uuid4(), supplier_id=uuid4(),
-                lines=[inventory_router.GrnLineIn(ingredient_id=uuid4(), qty=5, unit_cost_minor=100)],
+                lines=[
+                    inventory_router.GrnLineIn(
+                        ingredient_id=uuid4(), qty=5, unit_cost_minor=100
+                    )
+                ],
             ),
             session,
             _Request(),
@@ -183,7 +202,11 @@ async def test_post_grn_replay_returns_the_stored_response_without_creating_a_se
         result = await inventory_router.post_grn(
             inventory_router.GrnPost(
                 branch_id=uuid4(), supplier_id=uuid4(),
-                lines=[inventory_router.GrnLineIn(ingredient_id=uuid4(), qty=5, unit_cost_minor=100)],
+                lines=[
+                    inventory_router.GrnLineIn(
+                        ingredient_id=uuid4(), qty=5, unit_cost_minor=100
+                    )
+                ],
             ),
             session,
             _Request(_WithIdempotencyState("grn:local-1", "hash")),
@@ -235,3 +258,49 @@ async def test_post_adjustment_replay_returns_the_stored_response_without_double
 
     assert result == stored_body
     assert session.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_post_adjustment_locks_ingredient_before_deterministic_fifo_batch() -> None:
+    """Adjustment follows the same Ingredient -> Batch order as sale/refund."""
+    tenant = _tenant()
+    branch_id = uuid4()
+    ingredient_id = uuid4()
+    ingredient = SimpleNamespace(
+        id=ingredient_id,
+        company_id=tenant.company_id,
+        deleted_at=None,
+        current_qty=10.0,
+    )
+    batch = SimpleNamespace(
+        id=uuid4(),
+        qty_on_hand=10.0,
+        cost_per_unit_minor=50,
+    )
+    session = _Session(_Result(scalar=ingredient), _Result(scalar=batch))
+
+    with (
+        patch.object(inventory_router, "check_or_reserve", AsyncMock(return_value=None)),
+        patch.object(inventory_router, "_require_writable_branch", AsyncMock()),
+        patch.object(inventory_router, "store_response", AsyncMock()),
+    ):
+        await inventory_router.post_adjustment(
+            inventory_router.StockAdjustment(
+                ingredient_id=ingredient_id,
+                branch_id=branch_id,
+                qty_delta=-2,
+                type="waste",
+            ),
+            session,
+            _Request(_WithIdempotencyState("adjustment:lock-order", "hash")),
+            tenant,
+        )
+
+    assert len(session.statements) == 2
+    ingredient_sql = str(session.statements[0]).upper()
+    batch_sql = str(session.statements[1]).upper()
+    assert "FROM INGREDIENTS" in ingredient_sql
+    assert "FOR UPDATE" in ingredient_sql
+    assert "FROM BATCHES" in batch_sql
+    assert "ORDER BY BATCHES.RECEIVED_AT, BATCHES.ID" in batch_sql
+    assert "FOR UPDATE" in batch_sql

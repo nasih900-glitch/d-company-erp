@@ -167,6 +167,11 @@ def render_pnl_email(
     {_money_row("Delivery aggregators", report.revenue.delivery_aggregator_minor)}
     {_money_row("Other", report.revenue.other_minor)}
     {_money_row("Manual collections (not itemized orders)", report.manual_collections_minor)}
+    {_money_row("Invoice round-up", report.revenue.rounding_income_minor)}
+    {_money_row("Less: invoice round-down", -report.revenue.rounding_expense_minor)}
+    {_money_row("Tips collected (staff liability)", report.tips_collected_minor)}
+    {_money_row("Less: refunds issued", -report.refunds_issued_minor)}
+    {_money_row("Add back: refunded tips", report.refunded_tips_minor)}
     <tr><td style="padding:6px 0;color:#6b7280;border-top:1px solid #e5e7eb;">Orders</td><td align="right" style="padding:6px 0;font-family:monospace;border-top:1px solid #e5e7eb;">{report.orders_count}</td></tr>
     <tr><td style="padding:6px 0;color:#6b7280;">Average order</td><td align="right" style="padding:6px 0;font-family:monospace;">{_rs(report.avg_ticket_minor)}</td></tr>
     <tr><td style="padding:6px 0;color:#6b7280;">GST collected</td><td align="right" style="padding:6px 0;font-family:monospace;">{_rs(report.tax_collected.total_minor)}</td></tr>

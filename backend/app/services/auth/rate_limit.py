@@ -8,6 +8,7 @@ from fastapi import Request
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from app.core.client_ip import trusted_client_ip
 from app.core.config import get_settings
 from app.core.errors import RateLimitError, ServiceUnavailableError
 from app.core.logging import get_logger
@@ -24,10 +25,7 @@ return count
 
 
 def _request_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:64]
-    return (request.client.host if request.client else "unknown")[:64]
+    return trusted_client_ip(request) or "unknown"
 
 
 def _key(kind: str, value: str) -> str:

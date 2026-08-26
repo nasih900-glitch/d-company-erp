@@ -9,6 +9,7 @@ materialized view layer later if Postgres struggles.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -21,8 +22,19 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
-    Batch, Branch, Ingredient, ManualCollection, MenuItem, Order, OrderLine,
-    Recipe, RecipeLine, Refund, StockMovement,
+    Batch,
+    Branch,
+    Ingredient,
+    ManualCollection,
+    MembershipPayment,
+    MembershipRefundSettlement,
+    MenuItem,
+    Order,
+    OrderLine,
+    Recipe,
+    RecipeLine,
+    Refund,
+    StockMovement,
 )
 
 router = APIRouter()
@@ -69,6 +81,28 @@ class RecipeMarginDTO(BaseModel):
     margin_pct: float
 
 
+class CostingIssueDTO(BaseModel):
+    menu_item_id: UUID
+    sku: str
+    name: str
+    type: str
+    issue: Literal["missing_recipe", "empty_recipe", "missing_ingredient_cost"]
+    detail: str
+
+
+class CostingCoverageDTO(BaseModel):
+    """Current catalogue coverage for automatic inventory COGS."""
+
+    inventory_item_count: int
+    fully_costed_item_count: int
+    incomplete_item_count: int
+    missing_recipe_count: int
+    empty_recipe_count: int
+    missing_ingredient_cost_count: int
+    is_complete: bool
+    issues: list[CostingIssueDTO]
+
+
 class TopItemDTO(BaseModel):
     menu_item_id: UUID
     name: str
@@ -82,6 +116,7 @@ class GrowthPeriodDTO(BaseModel):
     revenue_minor: int
     refunds_minor: int
     manual_collections_minor: int
+    memberships_minor: int
     orders_count: int
     avg_ticket_minor: int
 
@@ -217,6 +252,269 @@ async def recipe_margin(
     return out
 
 
+_INVENTORY_COSTED_MENU_TYPES = frozenset({"food", "drink", "dessert", "hookah"})
+
+
+def _build_costing_coverage(
+    items: list[MenuItem],
+    recipes: list[Recipe],
+    recipe_lines: list[tuple[RecipeLine, Ingredient]],
+    branches: list[Branch] | None = None,
+    fifo_costed_pairs: set[tuple[UUID, UUID]] | None = None,
+) -> CostingCoverageDTO:
+    """Classify catalogue costing without treating an unknown cost as zero.
+
+    When branch/FIFO evidence is supplied, every ingredient in a recipe must
+    have a defensible next-sale cost in every active branch.  A company-wide
+    average or a costed batch in another branch is not enough: deduction is
+    branch-local and consumes the actual FIFO batches.
+    """
+    recipes_by_item = {recipe.menu_item_id: recipe for recipe in recipes}
+    lines_by_recipe: dict[UUID, list[tuple[RecipeLine, Ingredient]]] = {}
+    for recipe_line, ingredient in recipe_lines:
+        lines_by_recipe.setdefault(recipe_line.recipe_id, []).append(
+            (recipe_line, ingredient)
+        )
+
+    issues: list[CostingIssueDTO] = []
+    missing_recipe_count = 0
+    empty_recipe_count = 0
+    missing_ingredient_cost_count = 0
+    for item in items:
+        recipe = recipes_by_item.get(item.id)
+        if recipe is None:
+            missing_recipe_count += 1
+            issues.append(CostingIssueDTO(
+                menu_item_id=item.id,
+                sku=item.sku,
+                name=item.name,
+                type=item.type,
+                issue="missing_recipe",
+                detail=(
+                    "No active recipe is linked, so sales of this item create "
+                    "no automatic COGS."
+                ),
+            ))
+            continue
+
+        lines = lines_by_recipe.get(recipe.id, [])
+        if not lines:
+            empty_recipe_count += 1
+            issues.append(CostingIssueDTO(
+                menu_item_id=item.id,
+                sku=item.sku,
+                name=item.name,
+                type=item.type,
+                issue="empty_recipe",
+                detail=(
+                    "The active recipe has no ingredients, so its calculated "
+                    "cost is unknown."
+                ),
+            ))
+            continue
+
+        missing_cost_details: set[str] = set()
+        for _, ingredient in lines:
+            if int(ingredient.avg_cost_minor or 0) <= 0:
+                missing_cost_details.add(f"{ingredient.name} (average cost missing)")
+            if branches is not None and fifo_costed_pairs is not None:
+                for branch in branches:
+                    if (ingredient.id, branch.id) not in fifo_costed_pairs:
+                        missing_cost_details.add(
+                            f"{ingredient.name} at {branch.name}"
+                        )
+        if missing_cost_details:
+            missing_ingredient_cost_count += 1
+            issues.append(CostingIssueDTO(
+                menu_item_id=item.id,
+                sku=item.sku,
+                name=item.name,
+                type=item.type,
+                issue="missing_ingredient_cost",
+                detail=(
+                    "The cost basis is incomplete for: "
+                    + ", ".join(sorted(missing_cost_details))
+                    + ". Reconcile unknown-cost sales and receive costed stock "
+                    "in each listed branch before relying on this item's margin."
+                ),
+            ))
+
+    incomplete = len(issues)
+    return CostingCoverageDTO(
+        inventory_item_count=len(items),
+        fully_costed_item_count=len(items) - incomplete,
+        incomplete_item_count=incomplete,
+        missing_recipe_count=missing_recipe_count,
+        empty_recipe_count=empty_recipe_count,
+        missing_ingredient_cost_count=missing_ingredient_cost_count,
+        is_complete=incomplete == 0,
+        issues=issues,
+    )
+
+
+def _fifo_costed_pairs(
+    positive_batch_rows: list[tuple[UUID, UUID, int]],
+    latest_batch_rows: list[tuple[UUID, UUID, int]],
+    unresolved_uncosted_pairs: set[tuple[UUID, UUID]] | None = None,
+) -> set[tuple[UUID, UUID]]:
+    """Return ingredient/branch pairs with a defensible FIFO cost basis.
+
+    If stock is available, every positive on-hand batch must carry a positive
+    cost because a sufficiently large sale can consume all of them.  If stock
+    is exhausted, deduction falls back to the deterministic latest historical
+    batch, so that exact batch must be costed.  A batch in another branch never
+    satisfies the pair.
+    """
+    positive_state: dict[tuple[UUID, UUID], bool] = {}
+    for ingredient_id, branch_id, cost_per_unit_minor in positive_batch_rows:
+        pair = (ingredient_id, branch_id)
+        positive_state[pair] = (
+            positive_state.get(pair, True) and int(cost_per_unit_minor or 0) > 0
+        )
+
+    latest_cost = {
+        (ingredient_id, branch_id): int(cost_per_unit_minor or 0)
+        for ingredient_id, branch_id, cost_per_unit_minor in latest_batch_rows
+    }
+    verified = {pair for pair, is_costed in positive_state.items() if is_costed}
+    verified.update(
+        pair
+        for pair, cost_per_unit_minor in latest_cost.items()
+        if pair not in positive_state and cost_per_unit_minor > 0
+    )
+    # A later costed GRN must not hide an earlier zero-cost sale that has not
+    # been fully reversed. Its missing COGS still overstates historical profit.
+    verified.difference_update(unresolved_uncosted_pairs or set())
+    return verified
+
+
+@router.get("/inventory/costing-coverage", response_model=CostingCoverageDTO)
+async def costing_coverage(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+) -> CostingCoverageDTO:
+    """Show whether sellable physical items have verifiable recipe costs.
+
+    Service types such as gaming, streaming, and events are intentionally
+    excluded. Missing costing does not block a cashier sale, but Finance must
+    disclose it instead of presenting understated COGS as complete.
+    """
+    branches = (
+        await session.execute(
+            select(Branch).where(
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            ).order_by(Branch.name, Branch.id)
+        )
+    ).scalars().all()
+    items = (
+        await session.execute(
+            select(MenuItem).where(
+                MenuItem.company_id == tenant.company_id,
+                MenuItem.deleted_at.is_(None),
+                MenuItem.is_available.is_(True),
+                MenuItem.type.in_(_INVENTORY_COSTED_MENU_TYPES),
+            ).order_by(MenuItem.name)
+        )
+    ).scalars().all()
+    if not items:
+        return _build_costing_coverage([], [], [])
+
+    recipes = (
+        await session.execute(
+            select(Recipe).where(
+                Recipe.menu_item_id.in_([item.id for item in items]),
+                Recipe.is_active.is_(True),
+            )
+        )
+    ).scalars().all()
+    if not recipes:
+        return _build_costing_coverage(list(items), [], [])
+
+    recipe_lines = (
+        await session.execute(
+            select(RecipeLine, Ingredient)
+            .join(Ingredient, Ingredient.id == RecipeLine.ingredient_id)
+            .where(
+                RecipeLine.recipe_id.in_([recipe.id for recipe in recipes]),
+                Ingredient.company_id == tenant.company_id,
+                Ingredient.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    ingredient_ids = {ingredient.id for _, ingredient in recipe_lines}
+    fifo_costed_pairs: set[tuple[UUID, UUID]] = set()
+    branch_ids = [branch.id for branch in branches]
+    if ingredient_ids and branch_ids:
+        positive_batch_rows = (
+            await session.execute(
+                select(
+                    Batch.ingredient_id,
+                    Batch.branch_id,
+                    Batch.cost_per_unit_minor,
+                ).where(
+                    Batch.ingredient_id.in_(ingredient_ids),
+                    Batch.branch_id.in_(branch_ids),
+                    Batch.qty_on_hand > 0,
+                )
+            )
+        ).all()
+        ranked_latest = (
+            select(
+                Batch.ingredient_id.label("ingredient_id"),
+                Batch.branch_id.label("branch_id"),
+                Batch.cost_per_unit_minor.label("cost_per_unit_minor"),
+                func.row_number().over(
+                    partition_by=(Batch.ingredient_id, Batch.branch_id),
+                    order_by=(Batch.received_at.desc(), Batch.id.desc()),
+                ).label("row_number"),
+            )
+            .where(
+                Batch.ingredient_id.in_(ingredient_ids),
+                Batch.branch_id.in_(branch_ids),
+            )
+            .subquery()
+        )
+        latest_batch_rows = (
+            await session.execute(
+                select(
+                    ranked_latest.c.ingredient_id,
+                    ranked_latest.c.branch_id,
+                    ranked_latest.c.cost_per_unit_minor,
+                ).where(ranked_latest.c.row_number == 1)
+            )
+        ).all()
+        unresolved_uncosted_rows = (
+            await session.execute(
+                select(Batch.ingredient_id, Batch.branch_id)
+                .join(StockMovement, StockMovement.batch_id == Batch.id)
+                .where(
+                    Batch.ingredient_id.in_(ingredient_ids),
+                    Batch.branch_id.in_(branch_ids),
+                    StockMovement.type.in_(("sale", "refund_restock")),
+                    StockMovement.cost_per_unit_minor <= 0,
+                )
+                .group_by(Batch.ingredient_id, Batch.branch_id)
+                .having(func.sum(StockMovement.qty_delta) < 0)
+            )
+        ).all()
+        fifo_costed_pairs = _fifo_costed_pairs(
+            list(positive_batch_rows),
+            list(latest_batch_rows),
+            {
+                (ingredient_id, branch_id)
+                for ingredient_id, branch_id in unresolved_uncosted_rows
+            },
+        )
+    return _build_costing_coverage(
+        list(items),
+        list(recipes),
+        list(recipe_lines),
+        list(branches),
+        fifo_costed_pairs,
+    )
+
+
 # ---------------------------------------------------------------- GROWTH
 def _date_range_for_period(period: str, today: date) -> tuple[tuple[date, date], tuple[date, date], str, str]:
     """Return ((cur_start, cur_end), (prev_start, prev_end), cur_label, prev_label)."""
@@ -290,6 +588,7 @@ async def _period_stats(
     # the revenue figure sitting above it. Net it out here the same way it's
     # netted in ReportsAggregator, just without that service's proportional
     # cross-period tax allocation, which this simple growth headline doesn't need.
+    refund_at = func.coalesce(Refund.settled_at, Refund.created_at)
     refunds_minor = int(
         (
             await session.execute(
@@ -298,7 +597,7 @@ async def _period_stats(
                 .join(Order, Order.id == Refund.order_id)
                 .where(
                     Order.company_id == company_id,
-                    Refund.created_at >= f_dt, Refund.created_at < t_dt,
+                    refund_at >= f_dt, refund_at < t_dt,
                 )
             )
         ).scalar_one()
@@ -317,15 +616,48 @@ async def _period_stats(
         ).scalar_one()
         or 0
     )
+    membership_revenue = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(MembershipPayment.amount_minor), 0)).where(
+                    MembershipPayment.company_id == company_id,
+                    MembershipPayment.paid_at >= f_dt,
+                    MembershipPayment.paid_at < t_dt,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    membership_refunds = int(
+        (
+            await session.execute(
+                select(
+                    func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0)
+                ).where(
+                    MembershipRefundSettlement.company_id == company_id,
+                    MembershipRefundSettlement.settled_at >= f_dt,
+                    MembershipRefundSettlement.settled_at < t_dt,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
     # Manual collections are revenue but not orders. They affect growth and
     # cash movement, while AOV remains based only on itemized POS orders.
-    net_order_revenue = order_revenue - refunds_minor
+    refunds_minor += membership_refunds
+    net_order_revenue = order_revenue - (refunds_minor - membership_refunds)
     avg = net_order_revenue // n if n else 0
     return GrowthPeriodDTO(
         label="",
-        revenue_minor=net_order_revenue + manual_revenue,
+        revenue_minor=(
+            net_order_revenue
+            + manual_revenue
+            + membership_revenue
+            - membership_refunds
+        ),
         refunds_minor=refunds_minor,
         manual_collections_minor=manual_revenue,
+        memberships_minor=membership_revenue,
         orders_count=n,
         avg_ticket_minor=avg,
     )
@@ -377,6 +709,7 @@ async def top_items(
                 Order.company_id == tenant.company_id,
                 sale_at >= f_dt, sale_at < t_dt,
                 Order.status.in_(("paid", "refunded")),
+                OrderLine.voided_at.is_(None),
             )
             .group_by(MenuItem.id, MenuItem.name, MenuItem.type)
             .order_by(func.sum(OrderLine.line_total_minor).desc())

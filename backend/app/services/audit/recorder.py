@@ -19,7 +19,7 @@ To add a model to the audit trail, just add its class to TRACKED below.
 from __future__ import annotations
 
 import contextvars
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -39,6 +39,7 @@ from app.models import (
     Company,
     Customer,
     CustomerMembership,
+    CustomerSpendReconciliation,
     Event,
     EventTicket,
     Expense,
@@ -52,6 +53,23 @@ from app.models import (
     JournalLine,
     ManualCollection,
     MembershipBenefitReservation,
+    MembershipCustomerSpendApplication,
+    MembershipEvidenceReconciliation,
+    MembershipPayment,
+    MembershipPaymentAttemptResolution,
+    MembershipPaymentCashCollection,
+    MembershipPaymentCompletion,
+    MembershipPaymentProviderAction,
+    MembershipPaymentRequest,
+    MembershipPaymentRequestResolution,
+    MembershipRefund,
+    MembershipRefundAttemptRecovery,
+    MembershipRefundAttemptResolution,
+    MembershipRefundCashHandoff,
+    MembershipRefundCompletion,
+    MembershipRefundProviderAction,
+    MembershipRefundResolution,
+    MembershipRefundSettlement,
     MembershipTier,
     MenuCategory,
     MenuItem,
@@ -61,10 +79,18 @@ from app.models import (
     OcrUpload,
     OcrVerification,
     Order,
+    OrderCheckoutClaim,
     OrderLine,
     Partner,
     Payment,
     PayrollEntry,
+    PosRefundCashHandoff,
+    PosRefundCashHandoffCompletion,
+    PosRefundEvidenceReconciliation,
+    PosRefundProviderPayoutStart,
+    PosRefundProviderSettlement,
+    PosRefundRequest,
+    PosRefundWithdrawal,
     PurchaseOrder,
     PurchaseOrderLine,
     Recipe,
@@ -90,12 +116,17 @@ from app.models import (
 actor_ctx: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "audit_actor", default=None,
 )
+request_ctx: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "audit_request", default=None,
+)
 
 
 def set_actor(*, user_id: UUID | None, company_id: UUID,
+              terminal_id: UUID | None = None,
               ip: str | None = None, user_agent: str | None = None) -> None:
     actor_ctx.set({
         "user_id": user_id, "company_id": company_id,
+        "terminal_id": terminal_id,
         "ip": ip, "user_agent": user_agent,
     })
 
@@ -104,21 +135,66 @@ def clear_actor() -> None:
     actor_ctx.set(None)
 
 
+def set_request_context(
+    *,
+    request_id: str,
+    client_platform: str,
+    client_version_code: int | None,
+    client_action_id: str | None,
+    client_reported_at: datetime | None,
+    client_was_offline: bool,
+) -> None:
+    """Capture request provenance independently of authentication.
+
+    `created_at` remains the authoritative server timestamp. A client-reported
+    timestamp is retained only as evidence for later offline reconciliation;
+    accounting and ordering logic must never depend on it.
+    """
+    request_ctx.set({
+        "request_id": request_id,
+        "client_platform": client_platform,
+        "client_version_code": client_version_code,
+        "client_action_id": client_action_id,
+        "client_reported_at": client_reported_at,
+        "client_was_offline": client_was_offline,
+        "synced_at": datetime.now(UTC) if client_was_offline else None,
+    })
+
+
+def clear_request_context() -> None:
+    request_ctx.set(None)
+
+
 # ---------------------------------------------------------------------------
 # Tracked models — every write to one of these writes an audit row.
 # ---------------------------------------------------------------------------
 TRACKED: set[type] = {
-    Account, Asset, Attendance,
+    Account, Asset, Attendance, CustomerSpendReconciliation,
     Batch, Branch, Company, Customer, CustomerMembership,
     Event, EventTicket,
     Expense, ExpenseCategory,
     Floor, GRN, GRNLine, GamingBooking, GamingSession,
     Ingredient, JournalEntry, JournalLine,
-    ManualCollection, MembershipBenefitReservation, MembershipTier,
+    ManualCollection, MembershipBenefitReservation, MembershipCustomerSpendApplication,
+    MembershipEvidenceReconciliation, MembershipPayment,
+    MembershipPaymentCashCollection, MembershipPaymentCompletion,
+    MembershipPaymentAttemptResolution,
+    MembershipPaymentProviderAction,
+    MembershipPaymentRequest, MembershipPaymentRequestResolution, MembershipRefund,
+    MembershipRefundAttemptRecovery, MembershipRefundAttemptResolution,
+    MembershipRefundCashHandoff,
+    MembershipRefundCompletion,
+    MembershipRefundProviderAction,
+    MembershipRefundResolution, MembershipRefundSettlement, MembershipTier,
     MenuCategory, MenuItem, MenuModifier, MenuVariant,
     OcrExtraction, OcrUpload, OcrVerification,
-    Order, OrderLine, Partner, CapitalEntry,
-    Payment, PayrollEntry, PurchaseOrder, PurchaseOrderLine,
+    Order, OrderCheckoutClaim, OrderLine, Partner, CapitalEntry,
+    Payment, PayrollEntry, PosRefundCashHandoff, PosRefundCashHandoffCompletion,
+    PosRefundEvidenceReconciliation,
+    PosRefundProviderPayoutStart,
+    PosRefundProviderSettlement,
+    PosRefundRequest, PosRefundWithdrawal,
+    PurchaseOrder, PurchaseOrderLine,
     Recipe, RecipeLine, Refund, Reservation,
     Shift, Station, StockMovement, Supplier,
     Table, Terminal, TipPayout, Tournament, User, UserRole,
@@ -126,7 +202,7 @@ TRACKED: set[type] = {
 
 
 # Fields we redact from the audit record (sensitive)
-_REDACT = {"password_hash", "mfa_secret", "payment_key_secret"}
+_REDACT = {"password_hash", "mfa_secret", "payment_key_secret", "token_hash"}
 
 
 def _serialize(obj: Any) -> dict | None:
@@ -201,6 +277,59 @@ def _company_id_of(obj: Any) -> UUID | None:
     return getattr(obj, "company_id", None)
 
 
+_REASON_FIELDS = (
+    "reason",
+    "comment",
+    "notes",
+    "note",
+    "void_reason",
+    "cancel_reason",
+    "cancellation_reason",
+    "adjustment_reason",
+)
+
+
+def _reason_of(obj: Any) -> str | None:
+    if isinstance(obj, AuditLog):
+        for snapshot in (obj.after, obj.before):
+            if not isinstance(snapshot, dict):
+                continue
+            for field in _REASON_FIELDS:
+                value = snapshot.get(field)
+                if value is not None and str(value).strip():
+                    return str(value).strip()[:500]
+        return None
+    for field in _REASON_FIELDS:
+        value = getattr(obj, field, None)
+        if value is not None and str(value).strip():
+            return str(value).strip()[:500]
+    return None
+
+
+def _audit_context_fields(obj: Any | None = None) -> dict[str, Any]:
+    actor = actor_ctx.get() or {}
+    request = request_ctx.get() or {}
+    return {
+        "ip": actor.get("ip"),
+        "user_agent": actor.get("user_agent"),
+        "terminal_id": actor.get("terminal_id"),
+        "request_id": request.get("request_id"),
+        "client_platform": request.get("client_platform"),
+        "client_version_code": request.get("client_version_code"),
+        "client_action_id": request.get("client_action_id"),
+        "client_reported_at": request.get("client_reported_at"),
+        "client_was_offline": request.get("client_was_offline"),
+        "synced_at": request.get("synced_at"),
+        "reason": _reason_of(obj) if obj is not None else None,
+    }
+
+
+def _enrich_manual_audit_row(row: AuditLog) -> None:
+    for field, value in _audit_context_fields(row).items():
+        if getattr(row, field, None) is None and value is not None:
+            setattr(row, field, value)
+
+
 # ---------------------------------------------------------------------------
 # Event hook
 # ---------------------------------------------------------------------------
@@ -212,14 +341,27 @@ def install_audit_listeners() -> None:
 
     @event.listens_for(Session, "before_flush")
     def _before_flush(session: Session, flush_context, instances):
+        for obj in session.dirty:
+            if isinstance(obj, AuditLog) and session.is_modified(
+                obj, include_collections=False
+            ):
+                raise ValueError("audit log is append-only and cannot be updated")
+        for obj in session.deleted:
+            if isinstance(obj, AuditLog):
+                raise ValueError("audit log is append-only and cannot be deleted")
+
         actor = actor_ctx.get()
         # Fall back to system actor if the request didn't set one (worker, seed).
         company_id = actor["company_id"] if actor else None
         actor_user = actor["user_id"] if actor else None
-        ip = actor["ip"] if actor else None
-        ua = actor["user_agent"] if actor else None
-
         rows_to_add: list[AuditLog] = []
+
+        # Explicit security/auth entries are constructed by their endpoint.
+        # Enrich them here too so they receive the same request/device/offline
+        # provenance as automatically recorded model mutations.
+        for obj in list(session.new):
+            if isinstance(obj, AuditLog):
+                _enrich_manual_audit_row(obj)
 
         # Inserts
         for obj in list(session.new):
@@ -236,7 +378,7 @@ def install_audit_listeners() -> None:
                 entity_id=_entity_id(obj),
                 before=None,
                 after=_serialize(obj),
-                ip=ip, user_agent=ua,
+                **_audit_context_fields(obj),
             ))
 
         # Updates
@@ -267,7 +409,7 @@ def install_audit_listeners() -> None:
                 entity_id=_entity_id(obj),
                 before={k: v["before"] for k, v in diff.items()},
                 after={k: v["after"] for k, v in diff.items()},
-                ip=ip, user_agent=ua,
+                **_audit_context_fields(obj),
             ))
 
         # Hard deletes
@@ -285,7 +427,7 @@ def install_audit_listeners() -> None:
                 entity_id=_entity_id(obj),
                 before=_serialize(obj),
                 after=None,
-                ip=ip, user_agent=ua,
+                **_audit_context_fields(obj),
             ))
 
         for row in rows_to_add:

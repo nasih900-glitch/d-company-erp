@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import Depends, Header, Request
 from sqlalchemy import select
 
+from app.core.client_ip import audit_user_agent, trusted_client_ip
 from app.core.db import SessionDep
 from app.core.errors import AuthError, TenantViolation
 from app.core.roles import has_full_access, has_protected_owner_access, public_roles
@@ -116,8 +117,9 @@ async def get_tenant_context(
     set_actor(
         user_id=user_id,
         company_id=company_id,
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
+        terminal_id=terminal_id,
+        ip=trusted_client_ip(request),
+        user_agent=audit_user_agent(request),
     )
 
     return TenantContext(

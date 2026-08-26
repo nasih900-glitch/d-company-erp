@@ -1,5 +1,7 @@
 """Money is the single source of truth for all financial math."""
 
+from decimal import Decimal
+
 import pytest
 
 from app.core.money import Money, apportion
@@ -42,6 +44,7 @@ def test_currency_validation() -> None:
 
 def test_str() -> None:
     assert str(Money(12345, "INR")) == "123.45 INR"
+    assert str(Money(-5, "INR")) == "-0.05 INR"
 
 
 class TestApportion:
@@ -77,3 +80,21 @@ class TestApportion:
         shares = apportion(7, [1, 1, 1])
         assert sum(shares) == 7
         assert max(shares) - min(shares) <= 1
+
+    def test_large_value_uses_exact_decimal_weights(self) -> None:
+        total = 9_007_199_254_740_991
+        shares = apportion(
+            total,
+            [
+                Decimal("33.3333333334"),
+                Decimal("33.3333333333"),
+                Decimal("33.3333333333"),
+            ],
+        )
+        assert sum(shares) == total
+        assert shares[0] >= shares[1] == shares[2]
+
+    @pytest.mark.parametrize("weights", [[0, 0], [-1, 2], ["NaN", 1]])
+    def test_invalid_weights_fail_closed(self, weights) -> None:
+        with pytest.raises(ValueError):
+            apportion(100, weights)

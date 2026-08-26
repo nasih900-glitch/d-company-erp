@@ -1,6 +1,7 @@
 """Events module — projector screenings (football, cricket, movies, esports).
 
-A second revenue stream alongside food and per-hour gaming stations.
+A second operational offering alongside food and per-hour gaming stations.
+Revenue exists only when the ticket is linked to a settled POS order.
 GST treatment: SAC 999692 (amusement & recreation), 18% (CGST 9% + SGST 9%) —
 same as gaming sessions. See docs/INDIA_TAX_COMPLIANCE.md §6.
 
@@ -97,7 +98,8 @@ class EventTicket(Base, TimestampMixin):
     )
     # Human-readable ticket code shown on the printed slip. E.g. "EVT-2026-CL-001".
     ticket_no: Mapped[str] = mapped_column(String(40), nullable=False)
-    # The sale order this ticket was paid for. NULL only on comped/staff tickets.
+    # The sale order this ticket was paid for. NULL means legacy, complimentary,
+    # or otherwise unverified and must never be treated as financial evidence.
     order_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL")
     )

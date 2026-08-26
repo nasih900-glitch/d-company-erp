@@ -22,6 +22,7 @@ from app.models import (
     MembershipBenefitReservation,
     MembershipTier,
     Order,
+    Shift,
 )
 from app.services.audit.recorder import TRACKED
 from app.services.pos.membership_benefits import (
@@ -100,11 +101,27 @@ def _tenant(*, protected_access: bool = False) -> TenantContext:
 
 
 def _request() -> SimpleNamespace:
+    action_id = "membership-subscribe-test"
     return SimpleNamespace(
         state=SimpleNamespace(
-            idempotency_key="membership-subscribe-test",
+            idempotency_key=action_id,
             idempotency_request_hash="request-hash",
-        )
+        ),
+        headers={"X-Client-Action-Id": action_id},
+    )
+
+
+def _open_shift(tenant: TenantContext, *, at: datetime) -> Shift:
+    return Shift(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        opened_by=tenant.user_id,
+        opened_at=at - timedelta(hours=1),
+        opening_float_minor=0,
+        expected_minor=0,
+        status="open",
     )
 
 
@@ -149,7 +166,10 @@ async def test_cancelled_auto_renew_stays_active_until_paid_term_expires() -> No
         amount_paid_minor=199_900,
     )
     response = await memberships_router._subscription_to_read(
-        _Session(entities={(MembershipTier, tier.id): tier}),
+        _Session(
+            _Result(scalar=None),
+            entities={(MembershipTier, tier.id): tier},
+        ),
         membership,
     )
     assert response.cancelled_at is not None
@@ -166,6 +186,9 @@ async def test_only_protected_owner_can_mint_manual_membership_entitlement() -> 
             memberships_router.SubscribeRequest(
                 customer_id=uuid4(),
                 tier_id=uuid4(),
+                shift_id=uuid4(),
+                expected_amount_minor=199_900,
+                collected_at=datetime.now(UTC),
                 billing_cycle="monthly",
                 paid_via="cash",
             ),
@@ -177,7 +200,9 @@ async def test_only_protected_owner_can_mint_manual_membership_entitlement() -> 
 
 
 @pytest.mark.asyncio
-async def test_subscription_locks_customer_and_rejects_unexpired_overlap(monkeypatch) -> None:
+async def test_payment_prepare_locks_customer_and_rejects_unexpired_overlap(
+    monkeypatch,
+) -> None:
     async def reserve(*_args, **_kwargs):
         return None
 
@@ -190,6 +215,7 @@ async def test_subscription_locks_customer_and_rejects_unexpired_overlap(monkeyp
         phone="9000000000",
     )
     now = datetime.now(UTC)
+    shift = _open_shift(tenant, at=now)
     overlapping = CustomerMembership(
         id=uuid4(),
         customer_id=customer.id,
@@ -201,15 +227,53 @@ async def test_subscription_locks_customer_and_rejects_unexpired_overlap(monkeyp
         amount_paid_minor=199_900,
     )
     session = _Session(
+        _Result(scalar=shift),
+        _Result(scalar=None),  # no request already uses this action ID
+        _Result(scalar=None),  # no resolved legacy action
         _Result(scalar=customer),
         _Result(scalar=overlapping),
     )
 
-    with pytest.raises(BusinessRuleError, match="already has a membership term"):
-        await memberships_router.subscribe(
-            memberships_router.SubscribeRequest(
+    with pytest.raises(BusinessRuleError, match="already has an unexpired membership"):
+        await memberships_router.prepare_membership_payment(
+            memberships_router.MembershipPaymentRequestCreate(
                 customer_id=customer.id,
                 tier_id=uuid4(),
+                shift_id=shift.id,
+                expected_amount_minor=199_900,
+                billing_cycle="monthly",
+                paid_via="upi",
+                client_action_id="membership-subscribe-test",
+            ),
+            session,
+            _request(),
+            tenant,
+    )
+    assert session.statements[0]._for_update_arg is not None  # exact shift
+    assert session.statements[3]._for_update_arg is not None  # customer
+    assert session.statements[4]._for_update_arg is not None  # overlapping term
+
+
+@pytest.mark.asyncio
+async def test_legacy_direct_collection_is_refused_without_minting_entitlement(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(memberships_router, "check_or_reserve", reserve)
+    tenant = _tenant(protected_access=True)
+    now = datetime.now(UTC)
+    shift = _open_shift(tenant, at=now)
+    session = _Session()
+    with pytest.raises(BusinessRuleError, match="Direct membership collection is disabled"):
+        await memberships_router.subscribe(
+            memberships_router.SubscribeRequest(
+                customer_id=uuid4(),
+                tier_id=uuid4(),
+                shift_id=shift.id,
+                expected_amount_minor=199_900,
+                collected_at=now,
                 billing_cycle="monthly",
                 paid_via="upi",
             ),
@@ -217,60 +281,9 @@ async def test_subscription_locks_customer_and_rejects_unexpired_overlap(monkeyp
             _request(),
             tenant,
         )
-    assert session.statements[0]._for_update_arg is not None
-    assert session.statements[1]._for_update_arg is not None
 
-
-@pytest.mark.asyncio
-async def test_manual_entitlement_records_declared_rail_without_claiming_auto_renewal(
-    monkeypatch,
-) -> None:
-    async def reserve(*_args, **_kwargs):
-        return None
-
-    async def store(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(memberships_router, "check_or_reserve", reserve)
-    monkeypatch.setattr(memberships_router, "store_response", store)
-
-    tenant = _tenant(protected_access=True)
-    customer = Customer(
-        id=uuid4(),
-        company_id=tenant.company_id,
-        phone="9000000000",
-    )
-    tier = MembershipTier(
-        id=uuid4(),
-        company_id=tenant.company_id,
-        code="gold",
-        name="Gold",
-        monthly_price_minor=199_900,
-    )
-    session = _Session(
-        _Result(scalar=customer),
-        _Result(scalar=None),
-        _Result(scalar=tier),
-        entities={(MembershipTier, tier.id): tier},
-    )
-
-    response = await memberships_router.subscribe(
-        memberships_router.SubscribeRequest(
-            customer_id=customer.id,
-            tier_id=tier.id,
-            billing_cycle="monthly",
-            paid_via="upi",
-        ),
-        session,
-        _request(),
-        tenant,
-    )
-
-    created = session.added[0]
-    assert created.auto_renew is False
-    assert "declared payment rail=upi" in created.notes
-    assert response.tier_code == "gold"
-    assert response.is_active is True
+    assert session.statements == []
+    assert session.added == []
 
 
 def test_reservation_never_exceeds_the_remaining_period_allowance() -> None:
@@ -573,6 +586,8 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
     session = _Session(_Result(scalar=order), _Result(scalar=shift))
     stored = []
     finalized = []
+    consumed_claims = []
+    checkout_claim = object()
 
     async def _reserve(*_args, **_kwargs):
         return None
@@ -590,10 +605,19 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
     async def _store(*_args, **kwargs):
         stored.append(kwargs)
 
+    async def _validate_claim(*_args, **kwargs):
+        assert kwargs["token"] == "membership-checkout-claim-token"
+        return checkout_claim
+
+    async def _consume_claim(_session, claim):
+        consumed_claims.append(claim)
+
     monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
     monkeypatch.setattr(pos_router, "_paid_total", _paid)
     monkeypatch.setattr(pos_router, "_finalize_order", _finalize)
     monkeypatch.setattr(pos_router, "store_response", _store)
+    monkeypatch.setattr(pos_router, "validate_checkout_claim", _validate_claim)
+    monkeypatch.setattr(pos_router, "consume_checkout_claim", _consume_claim)
     request = SimpleNamespace(
         state=SimpleNamespace(
             idempotency_key="zero-membership-order-1",
@@ -608,6 +632,7 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
         request,
         background_tasks,
         tenant,
+        "membership-checkout-claim-token",
     )
 
     assert len(finalized) == 1
@@ -626,6 +651,7 @@ async def test_zero_total_finalization_is_replay_safe_and_uses_shared_finalizer(
         "invoice_issued_at": now.isoformat(),
     }
     assert stored[0]["status_code"] == 200
+    assert consumed_claims == [checkout_claim]
 
     async def _replay(*_args, **_kwargs):
         return {"body": response, "status_code": 200}
@@ -670,9 +696,16 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
         customer_phone="9000000000",
         customer_name="Member",
     )
-    order_line = SimpleNamespace(menu_item_id=uuid4(), qty=1)
+    order_line = SimpleNamespace(
+        menu_item_id=uuid4(),
+        qty=1,
+        kitchen_released_at=None,
+        kitchen_round_no=None,
+        kitchen_status="queued",
+    )
+    session_item = SimpleNamespace(type="gaming")
     session = _Session(
-        _Result(rows=[order_line]),
+        _Result(rows=[(order_line, session_item)]),
         entities={(Branch, branch.id): branch},
     )
     events = []

@@ -1,46 +1,24 @@
 """SQLAlchemy models — re-exported so Alembic autogenerate picks them up."""
 
-from app.models.base import Base, TimestampMixin, SoftDeleteMixin, TenantMixin
-from app.models.tenant import Company, Branch, Terminal
-from app.models.user import User, Role, UserRole, Attendance, PayrollEntry
-from app.models.menu import MenuCategory, MenuItem, MenuVariant, MenuModifier
-from app.models.inventory import (
-    Ingredient,
-    Recipe,
-    RecipeLine,
-    Batch,
-    StockMovement,
-    Supplier,
-    PurchaseOrder,
-    PurchaseOrderLine,
-    GRN,
-    GRNLine,
-)
-from app.models.pos import Order, OrderLine, Payment, Refund, Shift
-from app.models.tables import Floor, Table, Reservation
-from app.models.gaming import Station, GamingSession, GamingBooking, GamingPackage, Tournament
+from app.models.access_control import RolePermissionOverride
+from app.models.audit import AuditLog
+from app.models.auth_challenge import AuthOtpChallenge
+from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
+from app.models.customer import Customer, PointsRedemption
+from app.models.events import Event, EventTicket
 from app.models.finance import (
     Account,
-    JournalEntry,
-    JournalLine,
-    Partner,
+    Asset,
     CapitalEntry,
     Expense,
     ExpenseCategory,
+    JournalEntry,
+    JournalLine,
     ManualCollection,
-    Asset,
+    Partner,
     TipPayout,
 )
-from app.models.ocr import OcrUpload, OcrExtraction, OcrVerification
-from app.models.audit import AuditLog
-from app.models.auth_challenge import AuthOtpChallenge
-from app.models.customer import Customer, PointsRedemption
-from app.models.membership import (
-    CustomerMembership,
-    MembershipBenefitReservation,
-    MembershipTier,
-)
-from app.models.events import Event, EventTicket
+from app.models.gaming import GamingBooking, GamingPackage, GamingSession, Station, Tournament
 from app.models.idempotency_key import IdempotencyKey
 from app.models.india import (
     GstRateSlab,
@@ -50,7 +28,61 @@ from app.models.india import (
     SacCode,
     StateCode,
 )
-from app.models.access_control import RolePermissionOverride
+from app.models.inventory import (
+    GRN,
+    Batch,
+    GRNLine,
+    Ingredient,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    Recipe,
+    RecipeLine,
+    StockMovement,
+    Supplier,
+)
+from app.models.membership import (
+    CustomerMembership,
+    MembershipBenefitReservation,
+    MembershipCustomerSpendApplication,
+    MembershipEvidenceReconciliation,
+    MembershipPayment,
+    MembershipPaymentAttemptResolution,
+    MembershipPaymentCashCollection,
+    MembershipPaymentCompletion,
+    MembershipPaymentProviderAction,
+    MembershipPaymentRequest,
+    MembershipPaymentRequestResolution,
+    MembershipRefund,
+    MembershipRefundAttemptRecovery,
+    MembershipRefundCashHandoff,
+    MembershipRefundCompletion,
+    MembershipRefundAttemptResolution,
+    MembershipRefundProviderAction,
+    MembershipRefundResolution,
+    MembershipRefundSettlement,
+    MembershipTier,
+)
+from app.models.menu import MenuCategory, MenuItem, MenuModifier, MenuVariant
+from app.models.ocr import OcrExtraction, OcrUpload, OcrVerification
+from app.models.pos import (
+    CustomerSpendReconciliation,
+    Order,
+    OrderCheckoutClaim,
+    OrderLine,
+    Payment,
+    PosRefundCashHandoff,
+    PosRefundCashHandoffCompletion,
+    PosRefundEvidenceReconciliation,
+    PosRefundProviderPayoutStart,
+    PosRefundProviderSettlement,
+    PosRefundRequest,
+    PosRefundWithdrawal,
+    Refund,
+    Shift,
+)
+from app.models.tables import Floor, Reservation, Table
+from app.models.tenant import Branch, Company, Terminal
+from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
     "Account",
@@ -64,6 +96,7 @@ __all__ = [
     "CapitalEntry",
     "Company",
     "Customer",
+    "CustomerSpendReconciliation",
     "CustomerMembership",
     "Event",
     "EventTicket",
@@ -85,6 +118,23 @@ __all__ = [
     "JournalLine",
     "MembershipTier",
     "MembershipBenefitReservation",
+    "MembershipCustomerSpendApplication",
+    "MembershipEvidenceReconciliation",
+    "MembershipPayment",
+    "MembershipPaymentCashCollection",
+    "MembershipPaymentCompletion",
+    "MembershipPaymentProviderAction",
+    "MembershipPaymentAttemptResolution",
+    "MembershipPaymentRequest",
+    "MembershipPaymentRequestResolution",
+    "MembershipRefund",
+    "MembershipRefundAttemptRecovery",
+    "MembershipRefundAttemptResolution",
+    "MembershipRefundCashHandoff",
+    "MembershipRefundCompletion",
+    "MembershipRefundProviderAction",
+    "MembershipRefundResolution",
+    "MembershipRefundSettlement",
     "ManualCollection",
     "MenuCategory",
     "MenuItem",
@@ -94,11 +144,19 @@ __all__ = [
     "OcrUpload",
     "OcrVerification",
     "Order",
+    "OrderCheckoutClaim",
     "OrderLine",
     "Partner",
     "Payment",
     "PayrollEntry",
     "PointsRedemption",
+    "PosRefundCashHandoff",
+    "PosRefundCashHandoffCompletion",
+    "PosRefundEvidenceReconciliation",
+    "PosRefundProviderPayoutStart",
+    "PosRefundProviderSettlement",
+    "PosRefundRequest",
+    "PosRefundWithdrawal",
     "PurchaseOrder",
     "PurchaseOrderLine",
     "Recipe",
