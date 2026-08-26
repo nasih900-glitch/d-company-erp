@@ -5,7 +5,13 @@ import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.db.LocalRefundEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
+import cloud.dcompany.erp.core.db.RefundState
+import cloud.dcompany.erp.core.db.ResolvedOpenShift
+import cloud.dcompany.erp.core.db.ShiftActor
+import cloud.dcompany.erp.core.db.ShiftResolutionPolicy
+import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.Order
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,8 +29,31 @@ val REFUND_REASONS = listOf(
     "other" to "Other",
 )
 
-/** A refund the server definitively refused — the cash is already gone, someone must reconcile it. */
-data class RejectedRefund(val invoiceNo: String?, val amountMinor: Long, val reason: String)
+data class RefundTask(
+    val localId: String,
+    val invoiceNo: String?,
+    val amountMinor: Long,
+    val reasonCode: String,
+    val createdAtMillis: Long,
+    val state: String,
+    val mode: String?,
+    val settlementMethod: String?,
+    val serverRequestId: String?,
+    val acceptedAtMillis: Long?,
+    val handoffStartedAtMillis: Long?,
+    val settledAtMillis: Long?,
+    val withdrawalAtMillis: Long?,
+    val receiptNo: String?,
+    val error: String?,
+)
+
+private data class RefundOperationalContext(
+    val everSynced: Boolean,
+    val online: Boolean,
+    val shift: ResolvedOpenShift?,
+    val actor: ShiftActor?,
+    val protectedAccess: Boolean,
+)
 
 data class RefundsUiState(
     val orders: List<Order> = emptyList(),
@@ -32,9 +61,12 @@ data class RefundsUiState(
     val selected: Order? = null,
     val busy: Boolean = false,
     val notice: String? = null,
-    /** A refundable-orders pull has completed at least once on this device. */
     val everSynced: Boolean = false,
-    val rejected: List<RejectedRefund> = emptyList(),
+    val online: Boolean = false,
+    val tasks: List<RefundTask> = emptyList(),
+    val canManageMoney: Boolean = false,
+    val protectedAccess: Boolean = false,
+    val moneyAccessMessage: String? = null,
 ) {
     val visible: List<Order>
         get() {
@@ -45,23 +77,13 @@ data class RefundsUiState(
 }
 
 /**
- * Room-backed like Gaming/Tables — the paid-order list is a shared,
- * wholesale-replaced cache (any terminal can refund any paid order, see
- * [RefundOrderCacheEntity]), and a refund captured on this tablet is queued
- * in [LocalRefundEntity] until it syncs. Unlike Shift/Gaming there is no
- * local "create" leg to wait on: an order id is only ever one this app has
- * already pulled from the server, so a refund is always ready to push the
- * moment it's captured (see SyncEngine.pushRefunds).
+ * POS refunds are four distinct facts, never one optimistic button:
  *
- * Offline scope here was a deliberate call, not an oversight: this café runs
- * one active cashier/terminal at a time, so the double-refund risk a naive
- * offline queue would normally create (two terminals both refunding the same
- * order past its paid balance before either sees the other) cannot happen in
- * practice. The server is still the last word — the netting below only
- * prevents an already-doomed second attempt from being *entered*, using
- * `refundableMinor` (the server's own paid-minus-already-refunded figure,
- * see [RefundOrderCacheEntity]) further reduced by whatever this device
- * itself still has queued and unsynced.
+ * 1. capture a shift-bound request and obtain server acceptance;
+ * 2. obtain a live, server-persisted cash-handover window;
+ * 3. physically pay once and durably queue settlement;
+ * 4. receive authoritative settlement/receipt, or have a protected owner
+ *    withdraw the accepted request only when no cash was handed over.
  */
 class RefundsViewModel : ViewModel() {
 
@@ -72,32 +94,56 @@ class RefundsViewModel : ViewModel() {
     private val selectedId = MutableStateFlow<String?>(null)
     private val busy = MutableStateFlow(false)
     private val notice = MutableStateFlow<String?>(null)
+    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(
+        appCtx.terminalStore.terminalIdFlow,
+    )
 
     val state: StateFlow<RefundsUiState> = combine(
         db.refundDao().observeRefundableOrders(),
-        db.refundDao().observePendingLocalRefunds(),
+        db.refundDao().observeUnresolvedRefunds(),
         combine(query, selectedId, ::Pair),
         combine(busy, notice, ::Pair),
-        combine(db.syncMetaDao().observe("orders"), db.refundDao().observeRejectedRefunds(), ::Pair),
-    ) { cache, pending, qs, ui, metaAndRejected ->
+        combine(
+            db.syncMetaDao().observe("orders"),
+            appCtx.connectivity.online,
+            resolvedShift,
+            appCtx.shiftCache.profile,
+        ) { meta, online, shift, profile ->
+            val actor = profile?.let { ShiftActor(it.userId, it.protectedAccess) }
+            RefundOperationalContext(
+                everSynced = meta != null,
+                online = online,
+                shift = shift,
+                actor = actor,
+                protectedAccess = profile?.protectedAccess == true,
+            )
+        },
+    ) { cache, unresolved, qs, ui, context ->
         val (q, selId) = qs
         val (isBusy, noticeMsg) = ui
-        val (meta, rejectedRows) = metaAndRejected
-        // Multiple partial refunds against the same order can be queued
-        // offline before any of them sync — sum them all, not just the
-        // latest, so the shown balance reflects everything already promised.
-        val pendingByOrder = pending.groupBy { it.orderId }
-            .mapValues { (_, rows) -> rows.sumOf { it.amountMinor } }
-        val orders = cache.map { it.toOrder(pendingByOrder[it.id] ?: 0L) }
+        val unresolvedOrderIds = unresolved.mapTo(mutableSetOf()) { it.orderId }
+        val orders = cache
+            .asSequence()
+            .filter { it.refundableMinor > 0 && it.id !in unresolvedOrderIds }
+            .map(RefundOrderCacheEntity::toOrder)
+            .toList()
+        val canManageMoney = context.shift?.canManageMoney(context.actor) == true
         RefundsUiState(
             orders = orders,
             query = q,
             selected = orders.firstOrNull { it.id == selId },
             busy = isBusy,
             notice = noticeMsg,
-            everSynced = meta != null,
-            rejected = rejectedRows.map {
-                RejectedRefund(it.invoiceNo, it.amountMinor, it.lastError ?: "Server refused this.")
+            everSynced = context.everSynced,
+            online = context.online,
+            tasks = unresolved.map(LocalRefundEntity::toTask),
+            canManageMoney = canManageMoney,
+            protectedAccess = context.protectedAccess,
+            moneyAccessMessage = when {
+                context.shift == null ->
+                    "Open this tablet's POS shift before requesting or paying a refund."
+                !canManageMoney -> context.shift.moneyAccessMessage(context.actor)
+                else -> null
             },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RefundsUiState())
@@ -114,53 +160,304 @@ class RefundsViewModel : ViewModel() {
 
     fun search(q: String) { query.value = q }
 
-    fun select(order: Order?) { selectedId.value = order?.id }
+    fun select(order: Order?) {
+        if (order != null && !state.value.canManageMoney) {
+            notice.value = state.value.moneyAccessMessage
+                ?: "Only the shift opener or a protected owner may request a refund."
+            return
+        }
+        selectedId.value = order?.id
+    }
 
     fun dismissNotice() { notice.value = null }
 
-    /**
-     * Captures the refund locally and returns immediately — same guarantee
-     * every other offline write in this app has. "Cannot be undone from this
-     * app" (the confirmation dialog's own words) stays true either way; what
-     * changes offline is only when the money actually moves through the
-     * server's books, not whether the cashier's action here is final.
-     */
-    fun refund(order: Order, amountMinor: Long, reasonCode: String, note: String?) {
+    fun refund(
+        order: Order,
+        amountMinor: Long,
+        reasonCode: String,
+        mode: String,
+        externalReference: String?,
+        note: String?,
+    ) {
         if (busy.value) return
+        val cleanReference = externalReference?.trim()?.takeIf(String::isNotEmpty)
+        val validation = when {
+            amountMinor <= 0 -> "Refund amount must be greater than ₹0."
+            amountMinor > order.refundableMinor ->
+                "The amount is above this tablet's latest refundable balance. Refresh and try again."
+            REFUND_REASONS.none { it.first == reasonCode } -> "Choose a valid refund reason."
+            mode !in setOf("cash", "original") -> "Choose cash or the original non-cash rail."
+            mode == "original" && (cleanReference?.length ?: 0) < 3 ->
+                "Complete the original card/UPI/QR/wallet refund first and enter its provider reference."
+            else -> null
+        }
+        if (validation != null) {
+            notice.value = validation
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val terminalId = appCtx.terminalStore.terminalId()
+        val profile = appCtx.shiftCache.profile.value
+
         busy.value = true
         viewModelScope.launch {
-            db.refundDao().insertLocalRefund(
-                LocalRefundEntity(
-                    localId = UUID.randomUUID().toString(),
-                    orderId = order.id,
-                    invoiceNo = order.invoiceNo,
-                    reasonCode = reasonCode,
-                    amountMinor = amountMinor,
-                    // Backend RefundCreate.note caps at 500 chars — clamp here
-                    // too so an over-length note fails at capture, not as a
-                    // silent rejection discovered only via the banner below.
-                    note = note?.trim()?.takeIf { it.isNotEmpty() }?.take(500),
-                    createdAtMillis = System.currentTimeMillis(),
-                ),
-            )
-            busy.value = false
-            selectedId.value = null
-            notice.value = if (appCtx.connectivity.online.value) {
-                "Refund queued — sending now."
-            } else {
-                "Refund saved on this tablet. It will go through as soon as the connection returns."
+            try {
+                val verifiedTerminalId = terminalId
+                    ?: error("This tablet has no verified POS terminal. Reconnect first.")
+                val verifiedProfile = profile
+                    ?: error("The signed-in employee could not be verified. Reconnect first.")
+                val branchId = verifiedProfile.branchId
+                    ?: error("This employee has no branch assignment. Ask an owner to correct access.")
+                val localId = UUID.randomUUID().toString()
+                val capturedAt = System.currentTimeMillis()
+                var captured = false
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val openShift = ShiftResolutionPolicy.resolve(
+                            db.shiftDao().currentForTerminal(verifiedTerminalId),
+                            db.shiftDao().serverOpen(verifiedTerminalId),
+                        ) ?: error("Open this tablet's POS shift before requesting a refund.")
+                        val actor = ShiftActor(verifiedProfile.userId, verifiedProfile.protectedAccess)
+                        require(openShift.canManageMoney(actor)) {
+                            openShift.moneyAccessMessage(actor)
+                                ?: "Only the shift opener or a protected owner may request this refund."
+                        }
+                        val shiftBranch = openShift.server?.branchId ?: openShift.local?.branchId
+                        require(shiftBranch == branchId) {
+                            "The open shift does not match this employee's branch. Refresh before refunding."
+                        }
+                        captured = db.refundDao().captureIfNoUnresolved(
+                            LocalRefundEntity(
+                                localId = localId,
+                                clientActionId = localId,
+                                orderId = order.id,
+                                invoiceNo = order.invoiceNo,
+                                shiftId = openShift.shiftId,
+                                serverShiftId = openShift.server?.serverShiftId ?: openShift.local?.serverShiftId,
+                                branchId = branchId,
+                                terminalId = verifiedTerminalId,
+                                capturedByUserId = verifiedProfile.userId,
+                                reasonCode = reasonCode,
+                                amountMinor = amountMinor,
+                                expectedPaidMinor = order.paidMinor,
+                                expectedRefundableMinor = order.refundableMinor,
+                                mode = mode,
+                                note = note?.trim()?.takeIf(String::isNotEmpty)?.take(500),
+                                externalReference = if (mode == "original") cleanReference else null,
+                                providerSettledAtMillis = if (mode == "original") capturedAt else null,
+                                createdAtMillis = capturedAt,
+                            ),
+                        )
+                    }
+                ) return@launch
+                if (!captured) {
+                    notice.value =
+                        "This order already has an unresolved refund. Finish that exact task first."
+                    return@launch
+                }
+                selectedId.value = null
+                if (!appCtx.connectivity.online.value) {
+                    notice.value = if (mode == "cash") {
+                        "Refund request saved offline. Do not give cash. Server acceptance is required after reconnection."
+                    } else {
+                        "Provider payout evidence is saved offline. Do not repeat the provider refund. " +
+                            "This shift stays blocked until the ERP records it after reconnection."
+                    }
+                    appCtx.sync.requestSync()
+                    return@launch
+                }
+
+                appCtx.sync.sync()
+                val saved = db.refundDao().refundById(localId)
+                notice.value = when (saved?.state) {
+                    RefundState.ACCEPTED_CASH_DUE ->
+                        "Server accepted ${saved.amountMinor}. Start the server-confirmed handover before touching cash."
+                    RefundState.SETTLED ->
+                        "Refund settled on ${saved.settlementMethod ?: "the original rail"}. " +
+                            (saved.receiptNo?.let { "Receipt $it." } ?: "The server receipt is recorded.")
+                    RefundState.REQUEST_REJECTED -> if (mode == "original") {
+                        "The ERP refused the record after provider evidence was captured: " +
+                            (saved.lastError ?: "review required") +
+                            ". Do not repeat the external refund; retry this same task or ask an owner."
+                    } else {
+                        "Server refused the request: ${saved.lastError ?: "review required"}. No cash is authorised."
+                    }
+                    else ->
+                        "Server confirmation is still pending. Do not repeat the refund or hand over cash; reconnect and refresh."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                notice.value = "Refund request could not be completed: ${e.message ?: "unknown error"}"
+            } finally {
+                busy.value = false
             }
+        }
+    }
+
+    fun retryRejected(localId: String) = guardedAction { scopeLease ->
+        var queued = false
+        if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                queued = db.refundDao().retryRejected(localId) == 1
+            }
+        ) return@guardedAction
+        if (queued) {
+            notice.value =
+                "The same refund action was queued again. Do not repeat any cash or provider payout while it syncs."
             appCtx.sync.requestSync()
+        }
+    }
+
+    fun cancelRejected(localId: String) = guardedAction { scopeLease ->
+        var mode: String? = null
+        var cancelled = false
+        if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                val row = db.refundDao().refundById(localId)
+                mode = row?.mode
+                if (mode == "cash") {
+                    cancelled = db.refundDao().cancelRejectedRequest(localId) == 1
+                }
+            }
+        ) return@guardedAction
+        if (mode != "cash") {
+            notice.value =
+                "A non-cash provider payout cannot be discarded locally. Retry the same task or ask an owner to reconcile it."
+        } else if (cancelled) {
+            notice.value = "Refused cash request cancelled. The server authorised no payout."
+        }
+    }
+
+    fun beginCashHandoff(localId: String) {
+        if (busy.value) return
+        if (!appCtx.connectivity.online.value) {
+            notice.value =
+                "Starting a cash handover requires a live server confirmation. Reconnect; do not touch cash yet."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        busy.value = true
+        viewModelScope.launch {
+            try {
+                val result = appCtx.sync.beginPosRefundCashHandoff(localId)
+                notice.value = if (result.status == RefundState.CASH_HANDOFF_IN_PROGRESS) {
+                    "Server handover opened for ${result.amountMinor}. Verify the customer, hand over that amount once, then confirm immediately."
+                } else {
+                    "Refund is already ${result.status}. Refresh before touching cash."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.refundDao().noteAmbiguousServerResult(
+                        localId,
+                        "Could not verify whether handover started: ${e.message ?: "connection lost"}",
+                    )
+                }
+                notice.value =
+                    "Could not verify the server handover. Do not give cash. Refresh first; a retry uses the same reference."
+                appCtx.sync.requestSync()
+            } finally {
+                busy.value = false
+            }
+        }
+    }
+
+    fun confirmCashHandedOver(localId: String) = guardedAction { scopeLease ->
+        val paidAt = System.currentTimeMillis()
+        var changed = false
+        if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                changed = db.refundDao().confirmCashHandedOver(localId, paidAt) == 1
+            }
+        ) return@guardedAction
+        if (!changed) {
+            notice.value =
+                "Cash settlement was not queued because the server handover state changed. " +
+                    "Do not pay again; refresh and verify the task."
+            return@guardedAction
+        }
+        if (appCtx.connectivity.online.value) appCtx.sync.sync() else appCtx.sync.requestSync()
+        val saved = db.refundDao().refundById(localId)
+        notice.value = if (saved?.state == RefundState.SETTLED) {
+            "Cash refund settled." + (saved.receiptNo?.let { " Receipt $it." } ?: "")
+        } else {
+            "Cash handover is saved and waiting for server settlement. Do not pay this customer again after a restart."
+        }
+    }
+
+    fun withdrawCashRefund(localId: String, reason: String) = guardedAction { scopeLease ->
+        if (appCtx.shiftCache.profile.value?.protectedAccess != true) {
+            notice.value = "Only a protected owner may withdraw an accepted cash refund."
+            return@guardedAction
+        }
+        val cleanReason = reason.trim()
+        if (cleanReason.length < 3) {
+            notice.value = "Enter why no cash was handed over (at least 3 characters)."
+            return@guardedAction
+        }
+        var changed = false
+        if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                changed = db.refundDao().requestWithdrawal(
+                    localId,
+                    cleanReason.take(500),
+                    System.currentTimeMillis(),
+                ) == 1
+            }
+        ) return@guardedAction
+        if (!changed) {
+            notice.value =
+                "This refund is no longer eligible for withdrawal. Refresh; if cash was given, never withdraw it."
+            return@guardedAction
+        }
+        if (appCtx.connectivity.online.value) appCtx.sync.sync() else appCtx.sync.requestSync()
+        val saved = db.refundDao().refundById(localId)
+        notice.value = if (saved?.state == RefundState.WITHDRAWN) {
+            "Unpaid cash refund withdrawn. No drawer or customer balance was changed."
+        } else {
+            "Withdrawal saved. No cash may be handed over while server confirmation is pending."
+        }
+    }
+
+    private fun guardedAction(action: suspend (cloud.dcompany.erp.core.auth.CacheScopeLease) -> Unit) {
+        if (busy.value) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        busy.value = true
+        viewModelScope.launch {
+            try {
+                action(scopeLease)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                notice.value = "Refund task could not be updated: ${e.message ?: "local storage error"}."
+            } finally {
+                busy.value = false
+            }
         }
     }
 }
 
-private fun RefundOrderCacheEntity.toOrder(pendingRefundedMinor: Long): Order = Order(
+private fun RefundOrderCacheEntity.toOrder(): Order = Order(
     id = id,
     invoiceNo = invoiceNo,
     status = status,
     type = type,
     totalMinor = totalMinor,
     paidMinor = paidMinor,
-    refundableMinor = (refundableMinor - pendingRefundedMinor).coerceAtLeast(0),
+    refundableMinor = refundableMinor,
+)
+
+private fun LocalRefundEntity.toTask() = RefundTask(
+    localId = localId,
+    invoiceNo = invoiceNo,
+    amountMinor = amountMinor,
+    reasonCode = reasonCode,
+    createdAtMillis = createdAtMillis,
+    state = state,
+    mode = mode,
+    settlementMethod = settlementMethod,
+    serverRequestId = serverRequestId,
+    acceptedAtMillis = acceptedAtMillis,
+    handoffStartedAtMillis = cashHandoffStartedAtMillis,
+    settledAtMillis = settledAtMillis,
+    withdrawalAtMillis = withdrawalAtMillis,
+    receiptNo = receiptNo,
+    error = lastError,
 )

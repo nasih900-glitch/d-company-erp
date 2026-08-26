@@ -39,8 +39,46 @@ interface InventoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertLocalIngredient(row: LocalIngredientEntity)
 
-    @Query("SELECT * FROM local_ingredients WHERE state = 'pending' ORDER BY createdAtMillis ASC")
+    @Query(
+        "SELECT * FROM local_ingredients " +
+            "WHERE state IN ('pending', 'create_attempted') ORDER BY createdAtMillis ASC",
+    )
     suspend fun pushableIngredients(): List<LocalIngredientEntity>
+
+    /**
+     * Atomically freezes a create payload before its first network attempt.
+     * A concurrent local edit/delete wins only if it commits before this CAS;
+     * once claimed, retries must send the unchanged row and stable key.
+     */
+    @Query(
+        "UPDATE local_ingredients SET state = 'create_attempted', lastError = NULL " +
+            "WHERE localId = :localId AND serverId IS NULL AND state = 'pending' " +
+            "AND version = :expectedVersion",
+    )
+    suspend fun claimIngredientCreate(localId: String, expectedVersion: Long): Int
+
+    @Query(
+        "UPDATE local_ingredients SET sku = :sku, name = :name, baseUnit = :baseUnit, " +
+            "reorderThreshold = :reorderThreshold, reorderQty = :reorderQty, " +
+            "pendingDelete = 0, state = 'pending', lastError = NULL, version = version + 1 " +
+            "WHERE localId = :localId AND serverId IS NULL " +
+            "AND state IN ('pending', 'rejected') AND version = :expectedVersion",
+    )
+    suspend fun updateMutableIngredientCreate(
+        localId: String,
+        expectedVersion: Long,
+        sku: String,
+        name: String,
+        baseUnit: String,
+        reorderThreshold: Double,
+        reorderQty: Double,
+    ): Int
+
+    @Query(
+        "DELETE FROM local_ingredients WHERE localId = :localId AND serverId IS NULL " +
+            "AND state IN ('pending', 'rejected')",
+    )
+    suspend fun deleteMutableIngredientCreate(localId: String): Int
 
     @Query("SELECT COUNT(*) FROM local_ingredients WHERE state = 'rejected'")
     fun observeRejectedIngredientCount(): Flow<Int>
@@ -54,8 +92,18 @@ interface InventoryDao {
     )
     suspend fun markIngredientSynced(localId: String, expectedVersion: Long): Int
 
-    @Query("UPDATE local_ingredients SET state = 'rejected', lastError = :error WHERE localId = :localId")
-    suspend fun markIngredientRejected(localId: String, error: String)
+    /** Mirrors markIngredientSynced's CAS so a stale refusal cannot park a newer edit. */
+    @Query(
+        "UPDATE local_ingredients SET state = 'rejected', lastError = :error " +
+            "WHERE localId = :localId AND version = :expectedVersion",
+    )
+    suspend fun markIngredientRejected(localId: String, error: String, expectedVersion: Long): Int
+
+    @Query(
+        "UPDATE local_ingredients SET state = 'pending', lastError = NULL, version = version + 1 " +
+            "WHERE localId = :localId AND state = 'rejected'",
+    )
+    suspend fun retryRejectedIngredient(localId: String): Int
 
     @Query("DELETE FROM local_ingredients WHERE state = 'synced'")
     suspend fun deleteSyncedIngredients()
@@ -92,8 +140,40 @@ interface InventoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertLocalSupplier(row: LocalSupplierEntity)
 
-    @Query("SELECT * FROM local_suppliers WHERE state = 'pending' ORDER BY createdAtMillis ASC")
+    @Query(
+        "SELECT * FROM local_suppliers " +
+            "WHERE state IN ('pending', 'create_attempted') ORDER BY createdAtMillis ASC",
+    )
     suspend fun pushableSuppliers(): List<LocalSupplierEntity>
+
+    @Query(
+        "UPDATE local_suppliers SET state = 'create_attempted', lastError = NULL " +
+            "WHERE localId = :localId AND serverId IS NULL AND state = 'pending' " +
+            "AND version = :expectedVersion",
+    )
+    suspend fun claimSupplierCreate(localId: String, expectedVersion: Long): Int
+
+    @Query(
+        "UPDATE local_suppliers SET name = :name, contact = :contact, gstin = :gstin, " +
+            "paymentTerms = :paymentTerms, pendingDelete = 0, state = 'pending', " +
+            "lastError = NULL, version = version + 1 " +
+            "WHERE localId = :localId AND serverId IS NULL " +
+            "AND state IN ('pending', 'rejected') AND version = :expectedVersion",
+    )
+    suspend fun updateMutableSupplierCreate(
+        localId: String,
+        expectedVersion: Long,
+        name: String,
+        contact: String?,
+        gstin: String?,
+        paymentTerms: String?,
+    ): Int
+
+    @Query(
+        "DELETE FROM local_suppliers WHERE localId = :localId AND serverId IS NULL " +
+            "AND state IN ('pending', 'rejected')",
+    )
+    suspend fun deleteMutableSupplierCreate(localId: String): Int
 
     @Query("SELECT COUNT(*) FROM local_suppliers WHERE state = 'rejected'")
     fun observeRejectedSupplierCount(): Flow<Int>
@@ -107,8 +187,18 @@ interface InventoryDao {
     )
     suspend fun markSupplierSynced(localId: String, expectedVersion: Long): Int
 
-    @Query("UPDATE local_suppliers SET state = 'rejected', lastError = :error WHERE localId = :localId")
-    suspend fun markSupplierRejected(localId: String, error: String)
+    /** Mirrors markSupplierSynced's CAS so a stale refusal cannot park a newer edit. */
+    @Query(
+        "UPDATE local_suppliers SET state = 'rejected', lastError = :error " +
+            "WHERE localId = :localId AND version = :expectedVersion",
+    )
+    suspend fun markSupplierRejected(localId: String, error: String, expectedVersion: Long): Int
+
+    @Query(
+        "UPDATE local_suppliers SET state = 'pending', lastError = NULL, version = version + 1 " +
+            "WHERE localId = :localId AND state = 'rejected'",
+    )
+    suspend fun retryRejectedSupplier(localId: String): Int
 
     @Query("DELETE FROM local_suppliers WHERE state = 'synced'")
     suspend fun deleteSyncedSuppliers()

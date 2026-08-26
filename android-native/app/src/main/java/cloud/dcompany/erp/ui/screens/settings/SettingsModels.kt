@@ -4,6 +4,42 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.ZoneId
 
+internal sealed interface DestructiveSettingsAction {
+    data object DiscardCompanyEdits : DestructiveSettingsAction
+    data class DiscardBranchForm(val branchName: String, val isNew: Boolean) : DestructiveSettingsAction
+    data class DeleteTerminal(val terminalName: String) : DestructiveSettingsAction
+}
+
+internal data class SettingsConfirmation(
+    val title: String,
+    val body: String,
+    val confirmLabel: String,
+)
+
+internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsConfirmation = when (action) {
+    DestructiveSettingsAction.DiscardCompanyEdits -> SettingsConfirmation(
+        title = "Discard company changes?",
+        body = "Your unsaved company, tax, timezone and payment-QR edits will be lost.",
+        confirmLabel = "Discard changes",
+    )
+    is DestructiveSettingsAction.DiscardBranchForm -> SettingsConfirmation(
+        title = if (action.isNew) "Discard new branch?" else "Discard branch edits?",
+        body = if (action.isNew) {
+            "The unsaved branch setup for ${action.branchName.ifBlank { "this branch" }} will be lost."
+        } else {
+            "Unsaved hours, licence, tax and address edits for " +
+                "${action.branchName.ifBlank { "this branch" }} will be lost."
+        },
+        confirmLabel = "Discard edits",
+    )
+    is DestructiveSettingsAction.DeleteTerminal -> SettingsConfirmation(
+        title = "Delete ${action.terminalName}?",
+        body = "This removes the till assignment. It cannot be deleted if shifts, orders, or audit " +
+            "history depend on it. Confirm only if this terminal is genuinely unused.",
+        confirmLabel = "Delete terminal",
+    )
+}
+
 /**
  * Wire models copied field-for-field from the FastAPI schemas rather than
  * guessed — a wrong name here fails at runtime, not compile time:
@@ -155,8 +191,16 @@ private val upiVpaPattern = Regex("^[A-Za-z0-9.\\-_]{2,256}@[A-Za-z]{2,64}$")
 private val hhmmPattern = Regex("^([01]\\d|2[0-3]):[0-5]\\d$")
 private val stateCodePattern = Regex("^\\d{2}$")
 private val fssaiPattern = Regex("^\\d{14}$")
+private const val TERMINAL_DEVICE_ID_MAX_LENGTH = 100
 
 val gstRegistrationTypes = listOf("regular", "composition", "unregistered", "sez")
+
+fun terminalDeviceIdError(value: String): String? =
+    if (value.trim().length > TERMINAL_DEVICE_ID_MAX_LENGTH) {
+        "Tablet device ID must be $TERMINAL_DEVICE_ID_MAX_LENGTH characters or fewer."
+    } else {
+        null
+    }
 
 // ---------------------------------------------------------------- form state
 

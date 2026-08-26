@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.finance
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.FinanceAccess
+import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
+import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.ExpenseCacheEntity
 import cloud.dcompany.erp.core.db.LocalAssetEntity
@@ -10,26 +13,71 @@ import cloud.dcompany.erp.core.db.LocalCapitalEntryEntity
 import cloud.dcompany.erp.core.db.LocalExpenseEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.db.cached
-import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
-import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.Serializable
 import java.util.UUID
 
-private const val PL_CACHE_KEY = "finance_pnl"
-private const val METRICS_CACHE_KEY = "finance_metrics"
-private const val DISTRIBUTABLE_CACHE_KEY = "finance_distributable"
-private const val PARTNERS_CACHE_KEY = "finance_partners"
-private const val CATEGORIES_CACHE_KEY = "finance_expense_categories"
-private const val BRANCHES_CACHE_KEY = "finance_branches"
+/** Shared by SyncEngine's serialized writer and this Room-observing screen. */
+internal object FinanceSnapshotKeys {
+    const val PNL = "finance_pnl"
+    const val METRICS = "finance_metrics"
+    const val DISTRIBUTABLE = "finance_distributable"
+    const val PARTNERS = "finance_partners"
+    const val CATEGORIES = "finance_expense_categories"
+    const val BRANCHES = "finance_branches"
+    const val ROW_SCOPE = "finance_row_cache_scope"
+}
+
+/** Identity boundary for finance read caches. User id is intentionally not
+ * included: two authorized users in the same company/branch may share the
+ * same operational data, while a company or assigned-branch change must
+ * never reuse it. */
+@Serializable
+internal data class FinanceCacheScope(
+    val companyId: String,
+    val branchId: String?,
+) {
+    fun key(base: String): String =
+        "$base|company=$companyId|branch=${branchId ?: "all"}"
+
+    companion object {
+        fun from(profile: MeResponse?): FinanceCacheScope? = profile?.let {
+            val companyId = it.companyId.trim()
+            if (companyId.isEmpty()) null else FinanceCacheScope(
+                companyId = companyId,
+                branchId = it.branchId?.trim()?.takeIf(String::isNotEmpty),
+            )
+        }
+    }
+}
+
+/** The row caches predate tenant columns, so they are shown only after their
+ * durable scope marker is verified. Branch-assigned users additionally see
+ * only their branch even if an old/broken backend returned broader data. */
+internal fun <T> visibleFinanceRows(
+    rows: List<T>,
+    scope: FinanceCacheScope?,
+    cacheScopeVerified: Boolean,
+    branchId: (T) -> String,
+): List<T> {
+    if (scope == null || !cacheScopeVerified) return emptyList()
+    val assignedBranch = scope.branchId ?: return rows
+    return rows.filter { branchId(it) == assignedBranch }
+}
 
 /** Which modal is up. Owned by the ViewModel so a rotation does not lose track of which form it was. */
 sealed interface FinanceDialog {
@@ -98,7 +146,9 @@ data class FinanceUiState(
      */
     val periodIdle: Boolean
         get() = pl != null &&
-            pl.revenueMinor == 0L && pl.cogsMinor == 0L && pl.expensesMinor == 0L
+            pl.revenueMinor == 0L && pl.membershipsMinor == 0L &&
+            pl.cogsMinor == 0L && pl.expensesMinor == 0L &&
+            pl.depreciationMinor == 0L && pl.netProfitMinor == 0L
 
     fun categoryName(id: String): String = categoryNames[id] ?: "—"
 }
@@ -124,7 +174,7 @@ class FinanceViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
-    private val api = ApiClient.create<FinanceApi>()
+    @Volatile private var access = FinanceAccess()
 
     private val pl = MutableStateFlow<ProfitAndLoss?>(null)
     private val metrics = MutableStateFlow<BusinessMetrics?>(null)
@@ -134,17 +184,31 @@ class FinanceViewModel : ViewModel() {
     private val categoryNames = MutableStateFlow<Map<String, String>>(emptyMap())
     private val loading = MutableStateFlow(true)
     private val loadError = MutableStateFlow<String?>(null)
+    private val activeScope = MutableStateFlow<FinanceCacheScope?>(null)
+    private val rowCacheScopeVerified = MutableStateFlow(false)
+    private val financeRefreshError = appCtx.sync.resourceRefreshErrors
+        .map { it["finance"] }
+        .distinctUntilChanged()
 
     private val dialog = MutableStateFlow<FinanceDialog?>(null)
     private val busy = MutableStateFlow(false)
     private val formError = MutableStateFlow<String?>(null)
     private val notice = MutableStateFlow<String?>(null)
+    private var loadJob: Job? = null
 
     private data class FormState(
         val dialog: FinanceDialog?,
         val busy: Boolean,
         val formError: String?,
         val notice: String?,
+    )
+
+    private data class ReferenceState(
+        val partners: List<Partner>,
+        val branches: List<Branch>,
+        val categoryNames: Map<String, String>,
+        val scope: FinanceCacheScope?,
+        val rowCacheScopeVerified: Boolean,
     )
 
     val state: StateFlow<FinanceUiState> = combine(
@@ -157,17 +221,29 @@ class FinanceViewModel : ViewModel() {
             db.financeDao().observeAssetCache(),
             db.financeDao().observeLocalAssets(),
         ) { cache, local -> cache to local },
-        combine(partners, branches, categoryNames) { p, b, c -> Triple(p, b, c) },
+        combine(
+            partners,
+            branches,
+            categoryNames,
+            activeScope,
+            rowCacheScopeVerified,
+        ) { p, b, c, scope, verified -> ReferenceState(p, b, c, scope, verified) },
         combine(
             db.financeDao().observeLocalCapitalEntries(),
-            combine(loading, loadError) { l, e -> l to e },
+            combine(loading, loadError, financeRefreshError) { l, localError, refreshError ->
+                l to (localError ?: refreshError)
+            },
             combine(dialog, busy, formError, notice) { d, bs, fe, n -> FormState(d, bs, fe, n) },
         ) { capitalEntries, loadingAndError, form -> Triple(capitalEntries, loadingAndError, form) },
     ) { plMetricsDistributable, expenseData, assetData, refData, rest ->
         val (p, m, d) = plMetricsDistributable
         val (expenseCache, localExpenses) = expenseData
         val (assetCache, localAssets) = assetData
-        val (partnerList, branchList, catNames) = refData
+        val partnerList = refData.partners
+        val branchList = refData.branches
+        val catNames = refData.categoryNames
+        val scope = refData.scope
+        val cacheScopeVerified = refData.rowCacheScopeVerified
         val (capitalEntries, loadingAndError, form) = rest
         val (isLoading, err) = loadingAndError
 
@@ -177,14 +253,38 @@ class FinanceViewModel : ViewModel() {
             pl = p,
             metrics = m,
             distributable = d,
-            expenses = expenseCache.map { it.toExpense() },
-            assets = assetCache.map { it.toAsset() },
+            expenses = visibleFinanceRows(
+                expenseCache,
+                scope,
+                cacheScopeVerified,
+                ExpenseCacheEntity::branchId,
+            ).map { it.toExpense() },
+            assets = visibleFinanceRows(
+                assetCache,
+                scope,
+                cacheScopeVerified,
+                AssetCacheEntity::branchId,
+            ).map { it.toAsset() },
             partners = partnerList,
             branches = branchList,
             categoryNames = catNames,
-            pendingExpenses = localExpenses.map { it.toPendingRow(catNames) },
-            pendingAssets = localAssets.map { it.toPendingRow() },
-            pendingCapitalEntries = capitalEntries.map { it.toPendingRow(partnerList) },
+            pendingExpenses = visibleFinanceRows(
+                localExpenses,
+                scope,
+                scope != null,
+                LocalExpenseEntity::branchId,
+            ).map { it.toPendingRow(catNames) },
+            pendingAssets = visibleFinanceRows(
+                localAssets,
+                scope,
+                scope != null,
+                LocalAssetEntity::branchId,
+            ).map { it.toPendingRow() },
+            pendingCapitalEntries = if (scope == null) {
+                emptyList()
+            } else {
+                capitalEntries.map { it.toPendingRow(partnerList) }
+            },
             dialog = form.dialog,
             busy = form.busy,
             formError = form.formError,
@@ -193,108 +293,180 @@ class FinanceViewModel : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FinanceUiState())
 
     init {
+        observeSnapshot<ProfitAndLoss>(FinanceSnapshotKeys.PNL) { pl.value = it }
+        observeSnapshot<BusinessMetrics>(FinanceSnapshotKeys.METRICS) { metrics.value = it }
+        observeSnapshot<DistributableProfit>(FinanceSnapshotKeys.DISTRIBUTABLE) {
+            distributable.value = it
+        }
+        observeSnapshot<List<Partner>>(FinanceSnapshotKeys.PARTNERS) {
+            partners.value = it.orEmpty()
+        }
+        observeSnapshot<Map<String, String>>(FinanceSnapshotKeys.CATEGORIES) {
+            categoryNames.value = it.orEmpty()
+        }
+        observeSnapshot<List<Branch>>(FinanceSnapshotKeys.BRANCHES) {
+            branches.value = it.orEmpty()
+        }
+        viewModelScope.launch {
+            appCtx.shiftCache.profile.collect { profile ->
+                val scope = FinanceCacheScope.from(profile)
+                if (scope != activeScope.value) {
+                    activeScope.value = scope
+                    rowCacheScopeVerified.value = false
+                    clearSensitiveReadState()
+                }
+            }
+        }
         load()
     }
 
     // -------------------------------------------------------------- loading
 
     fun load() {
+        val requestedScope = FinanceCacheScope.from(appCtx.shiftCache.profile.value)
+        if (requestedScope == null) {
+            loadJob?.cancel()
+            activeScope.value = null
+            rowCacheScopeVerified.value = false
+            clearSensitiveReadState()
+            loading.value = false
+            loadError.value = "Your signed-in company could not be verified. Sign in again before viewing Finance."
+            return
+        }
+        if (activeScope.value != requestedScope) {
+            activeScope.value = requestedScope
+            rowCacheScopeVerified.value = false
+            clearSensitiveReadState()
+        }
         loading.value = true
         loadError.value = null
-        appCtx.sync.requestSync()
-        viewModelScope.launch {
-            // Cached-first, same "stale but labelled" idiom InventoryViewModel
-            // uses for branches — shown immediately, replaced the instant a
-            // fresh fetch succeeds.
-            db.reportSnapshotDao().cached<ProfitAndLoss>(PL_CACHE_KEY)?.let { (c, _) -> pl.value = c }
-            db.reportSnapshotDao().cached<BusinessMetrics>(METRICS_CACHE_KEY)?.let { (c, _) -> metrics.value = c }
-            db.reportSnapshotDao().cached<DistributableProfit>(DISTRIBUTABLE_CACHE_KEY)
-                ?.let { (c, _) -> distributable.value = c }
-            db.reportSnapshotDao().cached<List<Partner>>(PARTNERS_CACHE_KEY)?.let { (c, _) -> partners.value = c }
-            db.reportSnapshotDao().cached<Map<String, String>>(CATEGORIES_CACHE_KEY)
-                ?.let { (c, _) -> categoryNames.value = c }
-            db.reportSnapshotDao().cached<List<Branch>>(BRANCHES_CACHE_KEY)?.let { (c, _) -> branches.value = c }
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
+            if (appCtx.cacheIsolation.currentLease() == null) {
+                failLoadIfCurrent(
+                    requestedScope,
+                    "Finance is waiting for this account to finish opening. Try again in a moment.",
+                )
+                return@launch
+            }
+            val storedRowScope = db.reportSnapshotDao()
+                .cached<FinanceCacheScope>(FinanceSnapshotKeys.ROW_SCOPE)
+                ?.first
+            if (!isCurrentScope(requestedScope)) return@launch
+            if (storedRowScope != requestedScope) {
+                if (!appCtx.sync.clearFinanceReadCachesForScopeChange(requestedScope)) {
+                    failLoadIfCurrent(
+                        requestedScope,
+                        "Finance could not safely prepare this account's saved figures. Sign in again before continuing.",
+                    )
+                    return@launch
+                }
+            }
+            if (!isCurrentScope(requestedScope)) return@launch
+            rowCacheScopeVerified.value = true
+
+            if (!isCurrentScope(requestedScope)) return@launch
+            appCtx.sync.requestSync()
 
             try {
-                // Expenses/assets refresh through the same on-demand pull
-                // SyncEngine already exposes (populates Room, observed
-                // reactively above) — run alongside, not before, the direct
-                // reads below so a slow report fetch doesn't delay it.
-                val financeRefresh = async {
-                    try {
-                        appCtx.sync.refresh("finance")
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        // Best effort — a failed background refresh must not
-                        // fail the whole screen load.
-                    }
+                appCtx.sync.refresh("finance")
+                if (isCurrentScope(requestedScope)) {
+                    loading.value = false
+                    loadError.value = null
                 }
-                coroutineScope {
-                    val plDeferred = async { api.profitAndLoss() }
-                    val metricsDeferred = async { api.metrics() }
-                    val distributableDeferred = async { api.distributable() }
-                    val partnersDeferred = async { api.partners() }
-                    val branchesDeferred = async { api.branches() }
-                    val categoriesDeferred = async {
-                        try {
-                            api.expenseCategories()
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            emptyList()
-                        }
-                    }
-
-                    val freshPl = plDeferred.await()
-                    val freshMetrics = metricsDeferred.await()
-                    val freshDistributable = distributableDeferred.await()
-                    val freshPartners = partnersDeferred.await()
-                    val freshBranches = branchesDeferred.await()
-                    val freshCategoryNames = categoriesDeferred.await().associate { it.id to it.name }
-
-                    pl.value = freshPl
-                    metrics.value = freshMetrics
-                    distributable.value = freshDistributable
-                    partners.value = freshPartners
-                    branches.value = freshBranches
-                    categoryNames.value = freshCategoryNames
-
-                    db.reportSnapshotDao().store(PL_CACHE_KEY, freshPl)
-                    db.reportSnapshotDao().store(METRICS_CACHE_KEY, freshMetrics)
-                    db.reportSnapshotDao().store(DISTRIBUTABLE_CACHE_KEY, freshDistributable)
-                    db.reportSnapshotDao().store(PARTNERS_CACHE_KEY, freshPartners)
-                    db.reportSnapshotDao().store(CATEGORIES_CACHE_KEY, freshCategoryNames)
-                    db.reportSnapshotDao().store(BRANCHES_CACHE_KEY, freshBranches)
-                }
-                financeRefresh.await()
-                loading.value = false
-                loadError.value = null
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: ApiException) {
-                // Keep whatever was already on screen: stale-but-labelled beats
-                // an empty screen when the wifi drops mid-refresh.
-                loading.value = false
-                loadError.value = e.message
             } catch (e: Exception) {
-                loading.value = false
-                loadError.value = "Could not read the finance figures: ${e.message ?: "unexpected error"}"
+                if (isCurrentScope(requestedScope)) {
+                    loading.value = false
+                    // refresh() contains the diagnostic logging and publishes
+                    // its sanitized, resource-scoped error separately.
+                    loadError.value = "Could not refresh Finance. Saved figures are still shown."
+                }
             }
         }
     }
 
+    /** Room is the sole delivery path for manual and realtime Finance reads. */
+    private inline fun <reified T> observeSnapshot(
+        baseKey: String,
+        crossinline publish: (T?) -> Unit,
+    ) {
+        viewModelScope.launch {
+            activeScope.flatMapLatest { scope ->
+                if (scope == null) flowOf(null)
+                else db.reportSnapshotDao().observe(scope.key(baseKey))
+            }.collect { row ->
+                val value = row?.let {
+                    runCatching { ApiClient.json.decodeFromString<T>(it.jsonBody) }.getOrNull()
+                }
+                publish(value)
+            }
+        }
+    }
+
+    private fun isCurrentScope(scope: FinanceCacheScope): Boolean =
+        activeScope.value == scope && FinanceCacheScope.from(appCtx.shiftCache.profile.value) == scope
+
+    private fun failLoadIfCurrent(scope: FinanceCacheScope, message: String) {
+        if (!isCurrentScope(scope)) return
+        loading.value = false
+        loadError.value = message
+    }
+
+    private fun clearSensitiveReadState() {
+        pl.value = null
+        metrics.value = null
+        distributable.value = null
+        partners.value = emptyList()
+        branches.value = emptyList()
+        categoryNames.value = emptyMap()
+        loadError.value = null
+        dialog.value = null
+        formError.value = null
+        notice.value = null
+    }
+
     // ------------------------------------------------------------- dialogs
 
+    fun updateAccess(next: FinanceAccess) {
+        access = next
+    }
+
+    private fun requireExpenseWrite(): Boolean = authorizeAction(access.canRecordExpenses) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
+    private fun requireAssetWrite(): Boolean = authorizeAction(access.canManageAssets) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
+    private fun requireCapitalWrite(): Boolean = authorizeAction(access.canRecordPartnerCapital) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
     fun openExpenseForm() {
+        if (!requireExpenseWrite()) return
+        if (branches.value.isEmpty() || categoryNames.value.isEmpty()) {
+            notice.value =
+                "Expense entry is unavailable because branches or expense categories have not loaded. Refresh Finance and try again."
+            return
+        }
         dialog.value = FinanceDialog.ExpenseForm
     }
 
     fun openAssetForm() {
+        if (!requireAssetWrite()) return
+        if (branches.value.isEmpty()) {
+            notice.value =
+                "Asset entry is unavailable because branches have not loaded. Refresh Finance and try again."
+            return
+        }
         dialog.value = FinanceDialog.AssetForm
     }
 
     fun openCapitalEntryForm(partner: Partner) {
+        if (!requireCapitalWrite()) return
         dialog.value = FinanceDialog.CapitalEntryForm(partner)
     }
 
@@ -318,7 +490,7 @@ class FinanceViewModel : ViewModel() {
         vendorName: String,
         invoiceNo: String,
         note: String,
-    ) = localMutate {
+    ) = localMutate(access.canRecordExpenses) {
         db.financeDao().insertLocalExpense(
             LocalExpenseEntity(
                 localId = UUID.randomUUID().toString(),
@@ -334,8 +506,13 @@ class FinanceViewModel : ViewModel() {
     }
 
     fun retryExpense(localId: String) {
+        if (!requireExpenseWrite()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.financeDao().retryExpense(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.financeDao().retryExpense(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
         }
     }
@@ -351,7 +528,7 @@ class FinanceViewModel : ViewModel() {
         usefulLifeMonths: Int,
         salvageMinor: Long,
         notesText: String,
-    ) = localMutate {
+    ) = localMutate(access.canManageAssets) {
         db.financeDao().insertLocalAsset(
             LocalAssetEntity(
                 localId = UUID.randomUUID().toString(),
@@ -366,8 +543,13 @@ class FinanceViewModel : ViewModel() {
     }
 
     fun retryAsset(localId: String) {
+        if (!requireAssetWrite()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.financeDao().retryAsset(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.financeDao().retryAsset(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
         }
     }
@@ -382,7 +564,7 @@ class FinanceViewModel : ViewModel() {
         settlementAccount: String,
         sourceRef: String,
         note: String,
-    ) = localMutate {
+    ) = localMutate(access.canRecordPartnerCapital) {
         db.financeDao().insertLocalCapitalEntry(
             LocalCapitalEntryEntity(
                 localId = UUID.randomUUID().toString(),
@@ -396,8 +578,13 @@ class FinanceViewModel : ViewModel() {
     }
 
     fun retryCapitalEntry(localId: String) {
+        if (!requireCapitalWrite()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.financeDao().retryCapitalEntry(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.financeDao().retryCapitalEntry(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
         }
     }
@@ -409,17 +596,24 @@ class FinanceViewModel : ViewModel() {
      * the whole point is that this succeeds instantly offline too. Same shape
      * as InventoryViewModel.localMutate.
      */
-    private fun localMutate(block: suspend () -> String) {
+    private fun localMutate(allowed: Boolean, block: suspend () -> String) {
+        if (!authorizeAction(allowed) { notice.value = VIEW_ONLY_MESSAGE }) return
         if (busy.value) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
         viewModelScope.launch {
             try {
-                val message = block()
+                var message = ""
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        message = block()
+                    }
+                ) return@launch
                 busy.value = false
                 dialog.value = null
                 formError.value = null
                 notice.value = message
+                appCtx.sync.requestSync()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

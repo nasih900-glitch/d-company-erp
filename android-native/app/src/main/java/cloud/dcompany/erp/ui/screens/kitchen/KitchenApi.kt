@@ -2,7 +2,10 @@ package cloud.dcompany.erp.ui.screens.kitchen
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
+import retrofit2.http.POST
+import retrofit2.http.Header
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -10,8 +13,9 @@ import retrofit2.http.Query
  * Kitchen Display System endpoints. Built with ApiClient.create<KitchenApi>()
  * so this feature owns its own surface instead of piling into ErpApi.
  *
- * Neither call moves money, so neither carries an Idempotency-Key: the advance
- * is naturally idempotent (see KitchenState) and the queue is a plain read.
+ * No call moves money. Ticket advance is naturally idempotent (see
+ * KitchenState), while cancellation acknowledgement carries an explicit
+ * Idempotency-Key because it is a durable, audited staff action.
  */
 interface KitchenApi {
 
@@ -31,5 +35,14 @@ interface KitchenApi {
     suspend fun setState(
         @Path("id") orderId: String,
         @Body body: KitchenStateUpdate,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): KitchenOrder
+
+    @POST("kitchen/orders/{orderId}/cancellations/{lineId}/acknowledge")
+    suspend fun acknowledgeCancellation(
+        @Path("orderId") orderId: String,
+        @Path("lineId") lineId: String,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): KitchenCancellationAck
 }

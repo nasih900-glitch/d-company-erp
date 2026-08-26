@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 interface RefundDao {
 
     // ------------------------------------------------------------ order cache
-    @Query("SELECT * FROM refund_order_cache WHERE status = 'paid' ORDER BY invoiceNo DESC")
+    @Query("SELECT * FROM refund_order_cache WHERE status IN ('paid', 'refunded') ORDER BY invoiceNo DESC")
     fun observeRefundableOrders(): Flow<List<RefundOrderCacheEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -20,11 +20,6 @@ interface RefundDao {
     @Query("DELETE FROM refund_order_cache WHERE id NOT IN (:keepIds)")
     suspend fun deleteOrderCacheNotIn(keepIds: List<String>)
 
-    /**
-     * Wholesale-replaced like the gaming session cache — the server is
-     * authoritative for every order's paid/refunded status, this tablet
-     * never edits these rows locally.
-     */
     @Transaction
     suspend fun replaceOrderCache(rows: List<RefundOrderCacheEntity>) {
         upsertOrderCache(rows)
@@ -35,31 +30,189 @@ interface RefundDao {
     @Insert
     suspend fun insertLocalRefund(refund: LocalRefundEntity)
 
-    /** Still-unsynced refunds, netted against their order's cached refundableMinor at read time. */
-    @Query("SELECT * FROM local_refunds WHERE state = 'pending' ORDER BY createdAtMillis DESC")
-    fun observePendingLocalRefunds(): Flow<List<LocalRefundEntity>>
-
-    @Query("SELECT COUNT(*) FROM local_refunds WHERE state = 'rejected'")
-    fun observeRejectedCount(): Flow<Int>
-
-    /**
-     * Real cash already left the drawer on the strength of this app's own
-     * "cannot be undone" confirmation before the server had a say — a
-     * refund it later refuses needs to be seen, not just counted. Refunds is
-     * the one resource in this app where that's true today.
-     */
-    @Query("SELECT * FROM local_refunds WHERE state = 'rejected' ORDER BY createdAtMillis DESC")
-    fun observeRejectedRefunds(): Flow<List<LocalRefundEntity>>
-
-    @Query("SELECT * FROM local_refunds WHERE state = 'pending' ORDER BY createdAtMillis ASC")
-    suspend fun pushableRefunds(): List<LocalRefundEntity>
+    /** Adopt an unresolved request recovered from this exact branch/terminal. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRecoveredRefund(refund: LocalRefundEntity): Long
 
     @Query(
-        "UPDATE local_refunds SET state = 'synced', settlementMethod = :settlementMethod " +
-            "WHERE localId = :localId",
+        "SELECT * FROM local_refunds WHERE state IN (" +
+            "'request_pending', 'request_rejected', 'accepted_cash_due', " +
+            "'cash_handoff_in_progress', 'cash_settle_pending', 'cash_settle_rejected', " +
+            "'withdrawal_pending', 'withdrawal_rejected', " +
+            "'legacy_reconciliation_required') " +
+            "ORDER BY CASE state " +
+            "WHEN 'cash_handoff_in_progress' THEN 0 " +
+            "WHEN 'accepted_cash_due' THEN 1 " +
+            "WHEN 'cash_settle_pending' THEN 2 " +
+            "WHEN 'withdrawal_pending' THEN 2 " +
+            "WHEN 'legacy_reconciliation_required' THEN 3 " +
+            "WHEN 'cash_settle_rejected' THEN 4 " +
+            "WHEN 'withdrawal_rejected' THEN 4 " +
+            "WHEN 'request_rejected' THEN 5 ELSE 6 END, createdAtMillis DESC",
     )
-    suspend fun markRefundSynced(localId: String, settlementMethod: String?)
+    fun observeUnresolvedRefunds(): Flow<List<LocalRefundEntity>>
 
-    @Query("UPDATE local_refunds SET state = 'rejected', lastError = :error WHERE localId = :localId")
-    suspend fun markRefundRejected(localId: String, error: String)
+    @Query("SELECT * FROM local_refunds WHERE localId = :localId LIMIT 1")
+    suspend fun refundById(localId: String): LocalRefundEntity?
+
+    @Query("SELECT * FROM local_refunds WHERE clientActionId = :clientActionId LIMIT 1")
+    suspend fun refundByClientActionId(clientActionId: String): LocalRefundEntity?
+
+    @Query("SELECT * FROM local_refunds WHERE serverRequestId = :serverRequestId LIMIT 1")
+    suspend fun refundByServerRequestId(serverRequestId: String): LocalRefundEntity?
+
+    @Query(
+        "SELECT COUNT(*) FROM local_refunds WHERE orderId = :orderId AND state IN (" +
+            "'request_pending', 'request_rejected', 'accepted_cash_due', " +
+            "'cash_handoff_in_progress', 'cash_settle_pending', 'cash_settle_rejected', " +
+            "'withdrawal_pending', 'withdrawal_rejected', 'legacy_reconciliation_required')",
+    )
+    suspend fun unresolvedRefundCountForOrder(orderId: String): Int
+
+    /** Serializes stale-dialog and rapid-tap duplicate capture on this device. */
+    @Transaction
+    suspend fun captureIfNoUnresolved(refund: LocalRefundEntity): Boolean {
+        if (unresolvedRefundCountForOrder(refund.orderId) != 0) return false
+        insertLocalRefund(refund)
+        return true
+    }
+
+    @Query(
+        "SELECT COUNT(*) FROM local_refunds WHERE state IN (" +
+            "'request_rejected', 'cash_settle_rejected', 'withdrawal_rejected', " +
+            "'legacy_reconciliation_required')",
+    )
+    fun observeRejectedCount(): Flow<Int>
+
+    @Query("SELECT * FROM local_refunds WHERE state = 'request_pending' ORDER BY createdAtMillis ASC")
+    suspend fun pushableRefundRequests(): List<LocalRefundEntity>
+
+    @Query("SELECT * FROM local_refunds WHERE state = 'cash_settle_pending' ORDER BY settledAtMillis ASC")
+    suspend fun pushableCashSettlements(): List<LocalRefundEntity>
+
+    @Query("SELECT * FROM local_refunds WHERE state = 'withdrawal_pending' ORDER BY withdrawalAtMillis ASC")
+    suspend fun pushableWithdrawals(): List<LocalRefundEntity>
+
+    @Query(
+        "SELECT * FROM local_refunds WHERE state NOT IN ('settled', 'withdrawn', 'synced', 'cancelled') " +
+            "AND clientActionId IS NOT NULL ORDER BY createdAtMillis ASC",
+    )
+    suspend fun reconcilableRefunds(): List<LocalRefundEntity>
+
+    @Query(
+        "UPDATE local_refunds SET state = :state, serverRequestId = :serverRequestId, " +
+            "serverRefundId = :serverRefundId, serverShiftId = :serverShiftId, " +
+            "branchId = COALESCE(branchId, :branchId), terminalId = COALESCE(terminalId, :terminalId), " +
+            "settlementMethod = :settlementMethod, acceptedAtMillis = :acceptedAtMillis, " +
+            "cashHandoffStartedAtMillis = :cashHandoffStartedAtMillis, " +
+            "settledAtMillis = :settledAtMillis, withdrawalAtMillis = :withdrawalAtMillis, " +
+            "externalReference = COALESCE(:externalReference, externalReference), " +
+            "receiptNo = :receiptNo, lastError = :lastError " +
+            "WHERE localId = :localId AND state != 'legacy_reconciliation_required'",
+    )
+    suspend fun applyServerState(
+        localId: String,
+        state: String,
+        serverRequestId: String,
+        serverRefundId: String?,
+        serverShiftId: String,
+        branchId: String,
+        terminalId: String,
+        settlementMethod: String,
+        acceptedAtMillis: Long,
+        cashHandoffStartedAtMillis: Long?,
+        settledAtMillis: Long?,
+        withdrawalAtMillis: Long?,
+        externalReference: String?,
+        receiptNo: String?,
+        lastError: String?,
+    ): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'request_rejected', lastError = :error " +
+            "WHERE localId = :localId AND state = 'request_pending'",
+    )
+    suspend fun markRequestRejected(localId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_refunds SET lastError = :error WHERE localId = :localId " +
+            "AND state IN ('request_pending', 'accepted_cash_due')",
+    )
+    suspend fun noteAmbiguousServerResult(localId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'request_pending', lastError = NULL " +
+            "WHERE localId = :localId AND state = 'request_rejected'",
+    )
+    suspend fun retryRejectedRequest(localId: String): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'cash_settle_pending', lastError = NULL " +
+            "WHERE localId = :localId AND state = 'cash_settle_rejected'",
+    )
+    suspend fun retryRejectedSettlement(localId: String): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'withdrawal_pending', lastError = NULL " +
+            "WHERE localId = :localId AND state = 'withdrawal_rejected'",
+    )
+    suspend fun retryRejectedWithdrawal(localId: String): Int
+
+    @Transaction
+    suspend fun retryRejected(localId: String): Int {
+        if (retryRejectedRequest(localId) == 1) return 1
+        if (retryRejectedSettlement(localId) == 1) return 1
+        return retryRejectedWithdrawal(localId)
+    }
+
+    /** Safe only after a definitive request refusal: the server reserved nothing. */
+    @Query(
+        "UPDATE local_refunds SET state = 'cancelled', lastError = NULL " +
+            "WHERE localId = :localId AND state = 'request_rejected'",
+    )
+    suspend fun cancelRejectedRequest(localId: String): Int
+
+    /** Server must confirm the guarded handover window before this can run. */
+    @Query(
+        "UPDATE local_refunds SET state = 'cash_settle_pending', settledAtMillis = :settledAtMillis, " +
+            "lastError = NULL WHERE localId = :localId " +
+            "AND state = 'cash_handoff_in_progress' AND serverRequestId IS NOT NULL " +
+            "AND settlementMethod = 'cash'",
+    )
+    suspend fun confirmCashHandedOver(localId: String, settledAtMillis: Long): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'withdrawal_pending', withdrawalReason = :reason, " +
+            "withdrawalAtMillis = :withdrawalAtMillis, lastError = NULL " +
+            "WHERE localId = :localId AND state IN ('accepted_cash_due', 'cash_handoff_in_progress') " +
+            "AND serverRequestId IS NOT NULL AND settlementMethod = 'cash'",
+    )
+    suspend fun requestWithdrawal(localId: String, reason: String, withdrawalAtMillis: Long): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'cash_settle_rejected', lastError = :error " +
+            "WHERE localId = :localId AND state = 'cash_settle_pending'",
+    )
+    suspend fun markCashSettlementRejected(localId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_refunds SET state = 'withdrawal_rejected', lastError = :error " +
+            "WHERE localId = :localId AND state = 'withdrawal_pending'",
+    )
+    suspend fun markWithdrawalRejected(localId: String, error: String): Int
+
+    /** Exact-shift gate; unrelated completed shifts do not block this one. */
+    @Query(
+        "SELECT COUNT(*) FROM local_refunds WHERE state IN (" +
+            "'request_pending', 'request_rejected', 'accepted_cash_due', " +
+            "'cash_handoff_in_progress', 'cash_settle_pending', 'cash_settle_rejected', " +
+            "'withdrawal_pending', 'withdrawal_rejected') " +
+            "AND (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND serverShiftId = :serverShiftId) " +
+            "OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))",
+    )
+    suspend fun unresolvedMoneyCountForShift(localShiftId: String, serverShiftId: String?): Int
+
+    /** Unknown-shift v19 history is a separate, explicit reconciliation gate. */
+    @Query("SELECT COUNT(*) FROM local_refunds WHERE state = 'legacy_reconciliation_required'")
+    suspend fun legacyReconciliationCount(): Int
 }

@@ -55,8 +55,12 @@ interface StaffDao {
     )
     suspend fun markSynced(localId: String, expectedVersion: Long): Int
 
-    @Query("UPDATE local_staff SET state = 'rejected', lastError = :error WHERE localId = :localId")
-    suspend fun markRejected(localId: String, error: String)
+    /** A refusal for an older in-flight snapshot must not park a newer edit. */
+    @Query(
+        "UPDATE local_staff SET state = 'rejected', lastError = :error " +
+            "WHERE localId = :localId AND version = :expectedVersion",
+    )
+    suspend fun markRejected(localId: String, error: String, expectedVersion: Long): Int
 
     /** Cache already reflects these once the pull after a push completes — nothing left to keep. */
     @Query("DELETE FROM local_staff WHERE state = 'synced'")

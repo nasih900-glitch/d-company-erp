@@ -21,6 +21,12 @@ data class IngredientCacheEntity(
 
 object IngredientWriteState {
     const val PENDING = "pending"
+    /**
+     * The create POST may already have committed remotely. While this state is
+     * present its payload is immutable and every retry must reuse it verbatim
+     * with the same idempotency key.
+     */
+    const val CREATE_ATTEMPTED = "create_attempted"
     const val SYNCED = "synced"
     const val REJECTED = "rejected"
 }
@@ -71,6 +77,8 @@ data class SupplierCacheEntity(
 
 object SupplierWriteState {
     const val PENDING = "pending"
+    /** Supplier equivalent of [IngredientWriteState.CREATE_ATTEMPTED]. */
+    const val CREATE_ATTEMPTED = "create_attempted"
     const val SYNCED = "synced"
     const val REJECTED = "rejected"
 }

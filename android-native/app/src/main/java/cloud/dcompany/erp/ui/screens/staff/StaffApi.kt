@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -101,10 +102,17 @@ interface StaffApi {
     suspend fun list(): List<StaffUser>
 
     @PATCH("staff/users/{id}")
-    suspend fun update(@Path("id") id: String, @Body body: StaffUserUpdateBody): StaffUser
+    suspend fun update(
+        @Path("id") id: String,
+        @Body body: StaffUserUpdateBody,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): StaffUser
 
     @DELETE("staff/users/{id}")
-    suspend fun delete(@Path("id") id: String)
+    suspend fun delete(
+        @Path("id") id: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    )
 
     @GET("staff/roles")
     suspend fun roles(): List<StaffRole>

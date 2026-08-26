@@ -1,25 +1,16 @@
-# Builds installers for all platforms on tag push (e.g. v1.0.0) and uploads
-# them as a GitHub Release. The download page reads from the latest release.
+# Builds the supported Android release on a tag push (e.g. v3.1.0) and attaches
+# the signed APK/AAB to a GitHub Release. Web production deploys are handled by
+# the existing VPS deployment workflow, not by this installer workflow.
 #
 # Required GitHub secrets (set in repo → Settings → Secrets and variables → Actions):
-#   APPLE_CERTIFICATE_BASE64        — .p12 of Developer ID Application cert
-#   APPLE_CERTIFICATE_PASSWORD      — password for the .p12
-#   APPLE_SIGNING_IDENTITY          — "Developer ID Application: D Company (TEAMID)"
-#   APPLE_ID                        — Apple ID email for notarization
-#   APPLE_APP_SPECIFIC_PASSWORD     — app-specific password
-#   APPLE_TEAM_ID                   — 10-char team ID
-#   WINDOWS_CERT_BASE64             — .pfx of Authenticode cert (or use Azure Trusted Signing)
-#   WINDOWS_CERT_PASSWORD           — password for the .pfx
 #   ANDROID_KEYSTORE_BASE64         — release.keystore
 #   ANDROID_KEYSTORE_PASSWORD
 #   ANDROID_KEY_ALIAS
 #   ANDROID_KEY_PASSWORD
-#   API_URL                         — e.g. https://api.dcompany.cloud/api/v1
-#
-# If a secret is missing, the corresponding job still builds, but the artifact
-# is unsigned (will trigger OS warnings on first launch).
+# Android signing secrets are mandatory. The Android job fails closed before
+# building if any are absent, so an unsigned APK/AAB can never reach a release.
 
-name: Release installers
+name: Release Android
 
 on:
   push:
@@ -27,136 +18,178 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ----------------------------------------------------------- Mac (.dmg)
-  build-macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: 'aarch64-apple-darwin,x86_64-apple-darwin' }
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with: { workspaces: frontend/src-tauri -> target }
-      - name: Install JS deps
-        run: cd frontend && npm install --no-audit --no-fund
-      - name: Build .dmg (universal)
-        env:
-          VITE_API_URL: ${{ secrets.API_URL }}
-          VITE_APP_VERSION: ${{ github.ref_name }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: cd frontend && npm run tauri:build:mac
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-dmg
-          path: frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-
-  # --------------------------------------------------------- Windows (.exe / .msi)
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: 'x86_64-pc-windows-msvc' }
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: frontend/src-tauri -> target }
-      - name: Install JS deps
-        run: cd frontend && npm install --no-audit --no-fund
-      - name: Build installers
-        env:
-          VITE_API_URL: ${{ secrets.API_URL }}
-          VITE_APP_VERSION: ${{ github.ref_name }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.WINDOWS_CERT_BASE64 }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        run: cd frontend && npm run tauri:build:win
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: |
-            frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-
   # ----------------------------------------------------------- Android (.apk / .aab)
   build-android:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - name: Verify Android tag and source version
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_REF_TYPE" != "tag" ]; then
+            echo "Android releases must run from a v* Git tag, not a branch." >&2
+            exit 1
+          fi
+          python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
       - uses: actions/setup-java@v4
-        with: { distribution: 'temurin', java-version: '17' }
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android-native/*.gradle.kts
+            android-native/gradle.properties
+            android-native/gradle/wrapper/gradle-wrapper.properties
+            android-native/app/*.gradle.kts
       - uses: android-actions/setup-android@v3
-      - name: Install JS deps
-        run: cd frontend && npm install --no-audit --no-fund
-      - name: Build web bundle
+      - name: Require Android signing secrets
         env:
-          VITE_API_URL: ${{ secrets.API_URL }}
-          VITE_APP_VERSION: ${{ github.ref_name }}
-        run: cd frontend && npm run build
-      - name: Sync Capacitor
-        run: cd frontend && npx cap sync android
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD
+          do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Missing required Android signing secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
       - name: Decode keystore
-        if: env.HAS_ANDROID_KEYSTORE == 'true'
         env:
-          HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && 'true' || 'false' }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > frontend/android/app/release.keystore
-          cat > frontend/android/keystore.properties <<EOF
-          storeFile=release.keystore
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android-native/dcompany-release.keystore
+          cat > android-native/keystore.properties <<EOF
+          storeFile=dcompany-release.keystore
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
           EOF
-      - name: Build .apk and .aab
-        run: cd frontend/android && ./gradlew assembleRelease bundleRelease
-      - uses: actions/upload-artifact@v4
+          test -s android-native/dcompany-release.keystore
+      - name: Build, lint, and run JVM tests
+        working-directory: android-native
+        run: ./gradlew --no-daemon --stacktrace lintRelease testReleaseUnitTest assembleRelease bundleRelease
+      - name: Run Android instrumentation tests
+        uses: reactivecircus/android-emulator-runner@v2
         with:
-          name: android-apk
-          path: |
-            frontend/android/app/build/outputs/apk/release/*.apk
-            frontend/android/app/build/outputs/bundle/release/*.aab
-
-  # ----------------------------------------------------------- iOS (.ipa, archive only)
-  # NOTE: App Store submission still requires a manual Xcode → Distribute App
-  # step the first time. CI produces the archive; you upload via Transporter.app.
-  build-ios:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
-      - name: Install JS deps
-        run: cd frontend && npm install --no-audit --no-fund
-      - name: Build web bundle
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: cd android-native && ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
+      - name: Verify signatures and package release metadata
         env:
-          VITE_API_URL: ${{ secrets.API_URL }}
-          VITE_APP_VERSION: ${{ github.ref_name }}
-        run: cd frontend && npm run build
-      - name: Sync Capacitor
-        run: cd frontend && npx cap sync ios
-      - name: Archive (unsigned — sign locally for App Store)
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          cd frontend/ios/App
-          xcodebuild -project App.xcodeproj -scheme App \
-            -configuration Release -destination 'generic/platform=iOS' \
-            -archivePath build/App.xcarchive archive \
-            CODE_SIGNING_ALLOWED=NO
+          set -euo pipefail
+          apk='android-native/app/build/outputs/apk/release/app-release.apk'
+          aab='android-native/app/build/outputs/bundle/release/app-release.aab'
+          metadata='android-native/app/build/outputs/apk/release/output-metadata.json'
+          package_dir='android-native/app/build/outputs/release-package'
+          safe_release_ref="$(printf '%s' "$RELEASE_REF" | sed 's/[^A-Za-z0-9._-]/-/g')"
+
+          test -s "$apk"
+          test -s "$aab"
+          test -s "$metadata"
+          test -n "$safe_release_ref"
+
+          python3 scripts/verify_android_release_version.py \
+            --tag "$RELEASE_REF" \
+            --metadata "$metadata"
+
+          apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose "$apk"
+          jarsigner -verify "$aab" > "$RUNNER_TEMP/aab-signature-verification.txt"
+          grep -q '^jar verified\.$' "$RUNNER_TEMP/aab-signature-verification.txt"
+
+          mkdir -p "$package_dir"
+          cp "$apk" "$package_dir/d-company-erp-${safe_release_ref}.apk"
+          cp "$aab" "$package_dir/d-company-erp-${safe_release_ref}.aab"
+          cp "$metadata" "$package_dir/output-metadata.json"
+          (
+            cd "$package_dir"
+            sha256sum ./*.apk ./*.aab > SHA256SUMS
+          )
+
+          export APK_PATH="$apk"
+          export METADATA_PATH="$metadata"
+          export MANIFEST_PATH="$package_dir/release-manifest.json"
+          export SIGNING_CERT_SHA256
+          SIGNING_CERT_SHA256="$(
+            "$apksigner" verify --print-certs "$apk" |
+              sed -n 's/^Signer #1 certificate SHA-256 digest: //p' |
+              head -1
+          )"
+          test -n "$SIGNING_CERT_SHA256"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path(os.environ["METADATA_PATH"]).read_text())
+          element = metadata["elements"][0]
+          manifest = {
+              "application_id": metadata["applicationId"],
+              "variant": metadata["variantName"],
+              "version_code": element["versionCode"],
+              "version_name": element["versionName"],
+              "git_sha": os.environ["RELEASE_SHA"],
+              "release_ref": os.environ["RELEASE_REF"],
+              "workflow_run_id": os.environ["RELEASE_RUN_ID"],
+              "workflow_run_attempt": os.environ["RELEASE_RUN_ATTEMPT"],
+              "api_base_url": "https://dcompany.duckdns.org/api/v1/",
+              "signing_certificate_sha256": os.environ["SIGNING_CERT_SHA256"],
+          }
+          Path(os.environ["MANIFEST_PATH"]).write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ios-archive
-          path: frontend/ios/App/build/App.xcarchive
+          name: android-native-release
+          if-no-files-found: error
+          retention-days: 30
+          path: android-native/app/build/outputs/release-package/*
+      - name: Upload Android test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-native-release-reports
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            android-native/app/build/reports/lint-results-*.html
+            android-native/app/build/reports/tests/
+            android-native/app/build/reports/androidTests/
+            android-native/app/build/test-results/
+            android-native/app/build/outputs/androidTest-results/
 
   # -------------------------------------------------------- Release page
   release:
-    needs: [build-macos, build-windows, build-android, build-ios]
+    needs: build-android
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
@@ -168,8 +201,4 @@ jobs:
           name: 'D Company ERP ${{ github.ref_name }}'
           generate_release_notes: true
           files: |
-            artifacts/macos-dmg/*.dmg
-            artifacts/windows-installer/nsis/*.exe
-            artifacts/windows-installer/msi/*.msi
-            artifacts/android-apk/apk/release/*.apk
-            artifacts/android-apk/bundle/release/*.aab
+            artifacts/android-native-release/*

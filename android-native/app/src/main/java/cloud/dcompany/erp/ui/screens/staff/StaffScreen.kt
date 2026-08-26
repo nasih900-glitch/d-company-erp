@@ -43,7 +43,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.StaffAccess
+import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
@@ -57,22 +61,54 @@ import java.util.Locale
  * this screen only ever touches identity and access, never money.
  */
 @Composable
-fun StaffScreen() {
-    val vm: StaffViewModel = viewModel()
+fun StaffScreen(profile: MeResponse, access: StaffAccess) {
+    val factory = remember(profile.userId, access) {
+        viewModelFactory { initializer { StaffViewModel(profile, access) } }
+    }
+    val vm: StaffViewModel = viewModel(
+        key = "staff:${profile.userId}:$access",
+        factory = factory,
+    )
     val state by vm.state.collectAsState()
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Header(loading = state.loading, onRefresh = vm::retry, onAdd = vm::startCreateLogin)
-        Spacer(Modifier.height(14.dp))
-        AttendanceCard(state, onClockIn = vm::clockIn, onClockOut = vm::clockOut, onDismissError = vm::dismissAttendanceError)
+        Header(
+            loading = state.syncing,
+            attendanceOnly = !state.canReadDirectory,
+            canManage = state.canManageDirectory,
+            onRefresh = vm::retry,
+            onAdd = vm::startCreateLogin,
+        )
+        if (state.canReadDirectory || state.canUseAttendance) {
+            Spacer(Modifier.height(14.dp))
+            AttendanceCard(
+                state,
+                canClock = state.canUseAttendance,
+                onClockIn = vm::clockIn,
+                onClockOut = vm::clockOut,
+                onDismissError = vm::dismissAttendanceError,
+            )
+        }
         Spacer(Modifier.height(14.dp))
 
-        state.notice?.let {
+        state.notice?.takeIf { state.canManageDirectory }?.let {
             NoticeBanner(it, vm::dismissNotice)
             Spacer(Modifier.height(10.dp))
         }
 
         when {
+            !state.canReadDirectory -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Attendance access",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Brand.Foreground,
+                )
+                Text(
+                    "Your account can clock in and out, but it cannot view or manage staff logins.",
+                    color = Brand.ForegroundMuted,
+                )
+            }
+
             state.loading -> CentredBlock {
                 CircularProgressIndicator(color = Brand.Gold)
                 Text("Loading staff…", color = Brand.ForegroundMuted)
@@ -89,7 +125,9 @@ fun StaffScreen() {
 
             state.rows.isEmpty() -> CentredBlock {
                 Text("No staff yet", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Button(onClick = vm::startCreateLogin) { Text("Add staff") }
+                if (state.canManageDirectory) {
+                    Button(onClick = vm::startCreateLogin) { Text("Add staff") }
+                }
             }
 
             else -> LazyColumn(
@@ -104,13 +142,14 @@ fun StaffScreen() {
                         onResetPassword = { vm.startPasswordReset(row) },
                         onRetrySync = { vm.retrySync(row) },
                         onCancelRemoval = { vm.cancelPendingRemoval(row) },
+                        canManage = state.canManageDirectory,
                     )
                 }
             }
         }
     }
 
-    state.editor?.let { editor ->
+    state.editor?.takeIf { state.canManageDirectory }?.let { editor ->
         EditDialog(
             editor = editor,
             roles = state.roles,
@@ -122,7 +161,7 @@ fun StaffScreen() {
         )
     }
 
-    state.deleteConfirmFor?.let { row ->
+    state.deleteConfirmFor?.takeIf { state.canManageDirectory }?.let { row ->
         AlertDialog(
             onDismissRequest = vm::cancelDelete,
             title = { Text("Remove ${row.name}?") },
@@ -142,7 +181,7 @@ fun StaffScreen() {
         )
     }
 
-    state.createDraft?.let { draft ->
+    state.createDraft?.takeIf { state.canManageDirectory }?.let { draft ->
         CreateLoginDialog(
             draft = draft,
             challenge = state.createChallenge,
@@ -157,7 +196,7 @@ fun StaffScreen() {
         )
     }
 
-    state.passwordReset?.let { draft ->
+    state.passwordReset?.takeIf { state.canManageDirectory }?.let { draft ->
         PasswordResetDialog(
             draft = draft,
             challenge = state.passwordResetChallenge,
@@ -176,7 +215,13 @@ fun StaffScreen() {
 // ------------------------------------------------------------------ header
 
 @Composable
-private fun Header(loading: Boolean, onRefresh: () -> Unit, onAdd: () -> Unit) {
+private fun Header(
+    loading: Boolean,
+    attendanceOnly: Boolean,
+    canManage: Boolean,
+    onRefresh: () -> Unit,
+    onAdd: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -185,14 +230,14 @@ private fun Header(loading: Boolean, onRefresh: () -> Unit, onAdd: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text("Staff", style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
             Text(
-                "Logins, roles, and attendance",
+                if (attendanceOnly) "Clock in, clock out, and see who's on shift" else "Logins, roles, and attendance",
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.ForegroundMuted,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onRefresh, enabled = !loading) { Text("Refresh") }
-            Button(onClick = onAdd) { Text("Add staff") }
+            if (canManage) Button(onClick = onAdd) { Text("Add staff") }
         }
     }
 }
@@ -202,6 +247,7 @@ private fun Header(loading: Boolean, onRefresh: () -> Unit, onAdd: () -> Unit) {
 @Composable
 private fun AttendanceCard(
     state: StaffUiState,
+    canClock: Boolean,
     onClockIn: () -> Unit,
     onClockOut: () -> Unit,
     onDismissError: () -> Unit,
@@ -215,10 +261,12 @@ private fun AttendanceCard(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Attendance", style = MaterialTheme.typography.titleMedium, color = Brand.Foreground)
-            Button(
-                onClick = if (state.clockedIn) onClockOut else onClockIn,
-                enabled = !state.clockingInOrOut,
-            ) { Text(if (state.clockedIn) "Clock out" else "Clock in") }
+            if (canClock) {
+                Button(
+                    onClick = if (state.clockedIn) onClockOut else onClockIn,
+                    enabled = !state.clockingInOrOut,
+                ) { Text(if (state.clockedIn) "Clock out" else "Clock in") }
+            }
         }
         state.attendanceError?.let {
             Spacer(Modifier.height(8.dp))
@@ -262,6 +310,7 @@ private fun StaffRowCard(
     onResetPassword: () -> Unit,
     onRetrySync: () -> Unit,
     onCancelRemoval: () -> Unit,
+    canManage: Boolean,
 ) {
     Column(
         Modifier
@@ -288,7 +337,7 @@ private fun StaffRowCard(
                     Text(it, style = MaterialTheme.typography.bodySmall, color = Brand.ForegroundMuted)
                 }
             }
-            if (!row.pendingDelete) {
+            if (canManage && !row.pendingDelete) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = onResetPassword) { Text("Password") }
                     TextButton(onClick = onEdit) { Text("Edit") }
@@ -296,7 +345,7 @@ private fun StaffRowCard(
                 }
             }
         }
-        if (row.pendingDelete) {
+        if (canManage && row.pendingDelete) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "Pending removal — will sync when back online",
@@ -306,9 +355,9 @@ private fun StaffRowCard(
                 )
                 TextButton(onClick = onCancelRemoval) { Text("Cancel") }
             }
-        } else if (row.pendingLocalId != null) {
+        } else if (canManage && row.pendingLocalId != null) {
             Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
-        } else if (row.rejectedError != null) {
+        } else if (canManage && row.rejectedError != null) {
             Spacer(Modifier.height(6.dp))
             Column(
                 Modifier

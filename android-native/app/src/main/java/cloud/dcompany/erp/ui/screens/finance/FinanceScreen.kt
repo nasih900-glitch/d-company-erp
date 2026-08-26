@@ -37,6 +37,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,11 +53,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.FinanceAccess
+import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import kotlin.math.abs
-import kotlin.math.roundToLong
 
 /**
  * Finance — read-only.
@@ -70,19 +73,25 @@ import kotlin.math.roundToLong
  * genuinely safe to take out.
  */
 @Composable
-fun FinanceScreen() {
+fun FinanceScreen(access: FinanceAccess = FinanceAccess()) {
     val vm: FinanceViewModel = viewModel()
     val state by vm.state.collectAsState()
-    FinanceContent(state, vm)
+    SideEffect { vm.updateAccess(access) }
+    FinanceContent(state, vm, access)
 }
 
 @Composable
-private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel) {
+private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: FinanceAccess) {
     var tab by remember { mutableStateOf(0) }
     val tabs = listOf("Overview", "Expenses", "Assets", "Partners")
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
         Header(state, onRefresh = vm::load)
+        if (access.isViewOnly) {
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                ViewOnlyNotice()
+            }
+        }
 
         when {
             // Nothing to show yet and it failed: this is the whole screen.
@@ -128,20 +137,22 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel) {
                     state.pendingCapitalEntries.isNotEmpty()
                 ) {
                     Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        PendingFinanceChangesPanel(state, vm)
+                        PendingFinanceChangesPanel(state, vm, access)
                     }
                 }
                 when (tab) {
                     0 -> OverviewTab(state)
-                    1 -> ExpensesTab(state, vm)
-                    2 -> AssetsTab(state, vm)
-                    else -> PartnersTab(state, vm)
+                    1 -> ExpensesTab(state, vm, access.canRecordExpenses)
+                    2 -> AssetsTab(state, vm, access.canManageAssets)
+                    else -> PartnersTab(state, vm, access.canRecordPartnerCapital)
                 }
 
                 when (val dialog = state.dialog) {
-                    FinanceDialog.ExpenseForm -> ExpenseCreateDialog(state, vm)
-                    FinanceDialog.AssetForm -> AssetCreateDialog(state, vm)
-                    is FinanceDialog.CapitalEntryForm -> CapitalEntryCreateDialog(dialog.partner, state, vm)
+                    FinanceDialog.ExpenseForm -> if (access.canRecordExpenses) ExpenseCreateDialog(state, vm)
+                    FinanceDialog.AssetForm -> if (access.canManageAssets) AssetCreateDialog(state, vm)
+                    is FinanceDialog.CapitalEntryForm -> if (access.canRecordPartnerCapital) {
+                        CapitalEntryCreateDialog(dialog.partner, state, vm)
+                    }
                     null -> {}
                 }
             }
@@ -164,7 +175,7 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
                     color = Brand.Foreground,
                 )
                 Text(
-                    "P&L · expenses · partner capital",
+                    "Management P&L (receipt basis) · expenses · partner capital",
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -270,6 +281,13 @@ private fun OverviewTab(state: FinanceUiState) {
             SectionTitle("Profit and loss")
             Spacer(Modifier.height(6.dp))
             PlRow("Net revenue (after GST)", pl.revenueMinor)
+            if (pl.membershipsMinor > 0) {
+                PlRow(
+                    "Included: membership receipts",
+                    pl.membershipsMinor,
+                    sub = "prepaid terms already included in net revenue above",
+                )
+            }
             PlRow(
                 "Less: cost of goods sold",
                 pl.cogsMinor,
@@ -308,11 +326,10 @@ private fun OverviewTab(state: FinanceUiState) {
                         "${countLabel(metrics.ordersCount, "order")} this period",
                     ),
                     StatSpec(
-                        "MRR",
-                        metrics.mrrMinor.asRupees(),
-                        "${countLabel(metrics.activeMembersCount, "active member")} right now",
+                        "Active memberships",
+                        metrics.activeMembersCount.toString(),
+                        "unexpired, non-revoked terms active right now",
                     ),
-                    StatSpec("ARR", metrics.arrMinor.asRupees(), "MRR × 12"),
                     StatSpec(
                         "Customer LTV (all-time)",
                         metrics.ltvMinor.asRupees(),
@@ -341,9 +358,8 @@ private fun OverviewTab(state: FinanceUiState) {
                 ),
             )
             Note(
-                "These are the metrics that actually fit a single-location, self-funded " +
-                    "business — not SaaS/VC fundraising metrics like Rule of 40 or " +
-                    "TAM/SAM/SOM, which don't apply here.",
+                "Memberships are prepaid manual terms, not recurring subscriptions. " +
+                    "MRR/ARR stay hidden until recurring billing is operating.",
             )
         }
 
@@ -358,11 +374,14 @@ private fun OverviewTab(state: FinanceUiState) {
 // EXPENSES
 // ============================================================================
 @Composable
-private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel) {
+private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
     if (state.expenses.isEmpty()) {
         Column(Modifier.fillMaxSize()) {
+            if (!canWrite) {
+                ViewOnlyNotice("Expenses are view only — ask an owner or manager to record one.")
+            }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
-                Button(onClick = vm::openExpenseForm) { Text("New expense") }
+                Button(onClick = vm::openExpenseForm, enabled = canWrite) { Text("New expense") }
             }
             EmptyBlock(
                 title = "No expenses recorded yet",
@@ -378,6 +397,11 @@ private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (!canWrite) {
+            item {
+                ViewOnlyNotice("Expenses are view only — ask an owner or manager to record one.")
+            }
+        }
         item {
             Row(
                 Modifier.fillMaxWidth(),
@@ -390,7 +414,7 @@ private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = Brand.ForegroundMuted,
                 )
-                Button(onClick = vm::openExpenseForm) { Text("New expense") }
+                Button(onClick = vm::openExpenseForm, enabled = canWrite) { Text("New expense") }
             }
         }
         items(state.expenses, key = { it.id }) { expense ->
@@ -458,11 +482,14 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
 // ASSETS
 // ============================================================================
 @Composable
-private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel) {
+private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
     if (state.assets.isEmpty()) {
         Column(Modifier.fillMaxSize()) {
+            if (!canWrite) {
+                ViewOnlyNotice("Assets are view only — ask an owner to register equipment.")
+            }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
-                Button(onClick = vm::openAssetForm) { Text("New asset") }
+                Button(onClick = vm::openAssetForm, enabled = canWrite) { Text("New asset") }
             }
             EmptyBlock(
                 title = "No assets registered yet",
@@ -479,6 +506,11 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (!canWrite) {
+            item {
+                ViewOnlyNotice("Assets are view only — ask an owner to register equipment.")
+            }
+        }
         item {
             Row(
                 Modifier.fillMaxWidth(),
@@ -490,7 +522,7 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = Brand.ForegroundMuted,
                 )
-                Button(onClick = vm::openAssetForm) { Text("New asset") }
+                Button(onClick = vm::openAssetForm, enabled = canWrite) { Text("New asset") }
             }
         }
         items(state.assets, key = { it.id }) { asset -> AssetRow(asset) }
@@ -550,7 +582,7 @@ private fun AssetRow(asset: Asset) {
 // PARTNERS
 // ============================================================================
 @Composable
-private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel) {
+private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
     val distributable = state.distributable
 
     Column(
@@ -560,6 +592,11 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (!canWrite) {
+            ViewOnlyNotice(
+                "Partner capital is view only — ask a protected owner to record a movement.",
+            )
+        }
         if (distributable != null) {
             DistributableCard(distributable)
         }
@@ -586,7 +623,12 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel) {
 
         val shareByPartnerId = distributable?.partners.orEmpty().associateBy { it.partnerId }
         state.partners.forEach { partner ->
-            PartnerCard(partner, shareByPartnerId[partner.id], onRecordCapital = { vm.openCapitalEntryForm(partner) })
+            PartnerCard(
+                partner,
+                shareByPartnerId[partner.id],
+                canRecordCapital = canWrite,
+                onRecordCapital = { vm.openCapitalEntryForm(partner) },
+            )
         }
 
         Note(
@@ -667,6 +709,7 @@ private fun DistributableCard(d: DistributableProfit) {
 private fun PartnerCard(
     partner: Partner,
     share: DistributablePartnerShare?,
+    canRecordCapital: Boolean,
     onRecordCapital: () -> Unit,
 ) {
     Panel {
@@ -730,7 +773,11 @@ private fun PartnerCard(
             }
         }
         Spacer(Modifier.height(10.dp))
-        OutlinedButton(onClick = onRecordCapital, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = onRecordCapital,
+            enabled = canRecordCapital,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Text("Record capital movement")
         }
     }
@@ -952,7 +999,11 @@ private fun EmptyBlock(title: String, body: String) {
 // PENDING FINANCE CHANGES — mirrors Inventory's PendingStockChangesPanel
 // ============================================================================
 @Composable
-private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewModel) {
+private fun PendingFinanceChangesPanel(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    access: FinanceAccess,
+) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
@@ -965,6 +1016,7 @@ private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewMod
                     (row.vendorName?.let { " · $it" } ?: ""),
                 rejected = row.rejected,
                 error = row.error,
+                canRetry = access.canRecordExpenses,
                 onRetry = { vm.retryExpense(row.localId) },
             )
         }
@@ -973,6 +1025,7 @@ private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewMod
                 text = "New asset: ${row.name} (${row.purchaseMinor.asRupees()})",
                 rejected = row.rejected,
                 error = row.error,
+                canRetry = access.canManageAssets,
                 onRetry = { vm.retryAsset(row.localId) },
             )
         }
@@ -982,6 +1035,7 @@ private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewMod
                 text = "$verb ${row.partnerName}: ${row.amountMinor.asRupees()}",
                 rejected = row.rejected,
                 error = row.error,
+                canRetry = access.canRecordPartnerCapital,
                 onRetry = { vm.retryCapitalEntry(row.localId) },
             )
         }
@@ -989,7 +1043,13 @@ private fun PendingFinanceChangesPanel(state: FinanceUiState, vm: FinanceViewMod
 }
 
 @Composable
-private fun FinancePendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
+private fun FinancePendingRow(
+    text: String,
+    rejected: Boolean,
+    error: String?,
+    canRetry: Boolean,
+    onRetry: () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
@@ -998,7 +1058,7 @@ private fun FinancePendingRow(text: String, rejected: Boolean, error: String?, o
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+            if (rejected) TextButton(onClick = onRetry, enabled = canRetry) { Text("Retry") }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
@@ -1043,7 +1103,11 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         error = localError ?: state.formError,
         onDismiss = vm::closeDialog,
         onConfirm = {
-            val amountMinor = amountRupees.toRupeesMinor()
+            val amountMinor = parseRupeesToMinor(amountRupees)
+            if (amountMinor == null) {
+                localError = "Amount must be rupees with no more than 2 decimal places."
+                return@FormDialog
+            }
             if (amountMinor <= 0) {
                 localError = "Enter an amount greater than ₹0."
                 return@FormDialog
@@ -1109,13 +1173,17 @@ private fun AssetCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         error = localError ?: state.formError,
         onDismiss = vm::closeDialog,
         onConfirm = {
-            val purchaseMinor = purchaseRupees.toRupeesMinor()
-            val salvageMinor = salvageRupees.ifBlank { "0" }.toRupeesMinor()
+            val purchaseMinor = parseRupeesToMinor(purchaseRupees)
+            val salvageMinor = parseRupeesToMinor(salvageRupees.ifBlank { "0" })
             val lifeMonths = usefulLifeMonths.toIntOrNull() ?: 0
             when {
                 name.isBlank() -> localError = "Enter a name for this asset."
                 branchId.isBlank() -> localError = "Pick a branch."
+                purchaseMinor == null ->
+                    localError = "Purchase cost must be rupees with no more than 2 decimal places."
                 purchaseMinor <= 0 -> localError = "Enter a purchase cost greater than ₹0."
+                salvageMinor == null ->
+                    localError = "Salvage value must be rupees with no more than 2 decimal places."
                 lifeMonths <= 0 -> localError = "Useful life must be a whole number of months greater than 0."
                 salvageMinor > purchaseMinor -> localError = "Salvage value cannot exceed the purchase cost."
                 else -> {
@@ -1179,9 +1247,11 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
         error = localError ?: state.formError,
         onDismiss = vm::closeDialog,
         onConfirm = {
-            val amountMinor = amountRupees.toRupeesMinor()
+            val amountMinor = parseRupeesToMinor(amountRupees)
             val trimmedRef = sourceRef.trim()
             when {
+                amountMinor == null ->
+                    localError = "Amount must be rupees with no more than 2 decimal places."
                 amountMinor <= 0 -> localError = "Enter an amount greater than ₹0."
                 trimmedRef.isBlank() ->
                     localError = "Enter the unique bank, UPI, or cash-voucher reference that proves this movement."
@@ -1337,10 +1407,5 @@ private fun filterDecimal(raw: String): String {
     }
     return sb.toString()
 }
-
-/** Rupees typed by a human -> whole paise, rounded not truncated (the exact
- * same IEEE-754 edge case Menu/Inventory's own equivalents guard against —
- * .toLong() on rupees*100 can silently truncate a value like 2.66). */
-private fun String.toRupeesMinor(): Long = ((toDoubleOrNull() ?: 0.0) * 100).roundToLong()
 
 private fun nowIso(): String = java.time.OffsetDateTime.now().toString()

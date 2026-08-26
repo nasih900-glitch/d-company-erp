@@ -73,7 +73,12 @@ fun AnalyticsScreen() {
         Box(Modifier.fillMaxSize()) {
             when (state.tab) {
                 AnalyticsTab.Today -> TodayTab(state, vm::retryToday)
-                AnalyticsTab.Growth -> GrowthTab(state, vm::selectGrowthPeriod, vm::retryGrowth)
+                AnalyticsTab.Growth -> GrowthTab(
+                    state,
+                    vm::selectGrowthPeriod,
+                    vm::retryGrowth,
+                    vm::retryTopItems,
+                )
             }
         }
     }
@@ -84,10 +89,20 @@ fun AnalyticsScreen() {
 @Composable
 private fun TodayTab(state: AnalyticsUiState, onRetry: () -> Unit) {
     val dashboard = state.dashboard
-    when {
-        dashboard != null -> TodayBody(dashboard, state.todayLoading, state.dashboardFetchedAtMillis)
-        state.todayError != null -> ErrorPanel(state.todayError, onRetry)
-        else -> LoadingPanel()
+    when (cachedDataPresentation(dashboard != null, state.todayLoading, state.todayError)) {
+        CachedDataPresentation.INITIAL_LOADING -> LoadingPanel()
+        CachedDataPresentation.BLOCKING_ERROR -> ErrorPanel(state.todayError!!, onRetry)
+        CachedDataPresentation.FRESH -> TodayBody(
+            dashboard!!,
+            state.todayLoading,
+            state.dashboardFetchedAtMillis,
+        )
+        CachedDataPresentation.STALE -> Column(Modifier.fillMaxSize()) {
+            StaleDataBanner("Today's saved figures", state.todayError!!, onRetry)
+            Box(Modifier.weight(1f)) {
+                TodayBody(dashboard!!, state.todayLoading, state.dashboardFetchedAtMillis)
+            }
+        }
     }
 }
 
@@ -200,6 +215,7 @@ private fun GrowthTab(
     state: AnalyticsUiState,
     onSelectPeriod: (GrowthPeriodOption) -> Unit,
     onRetry: () -> Unit,
+    onRetryTopItems: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -218,28 +234,43 @@ private fun GrowthTab(
         }
         Spacer(Modifier.height(12.dp))
         val growth = state.growth
-        when {
-            growth != null -> GrowthBody(growth, state.topItems, state.growthLoading, state.growthFetchedAtMillis)
-            state.growthError != null -> ErrorPanel(state.growthError, onRetry)
-            else -> LoadingPanel()
+        when (cachedDataPresentation(growth != null, state.growthLoading, state.growthError)) {
+            CachedDataPresentation.INITIAL_LOADING -> LoadingPanel()
+            CachedDataPresentation.BLOCKING_ERROR -> ErrorPanel(state.growthError!!, onRetry)
+            CachedDataPresentation.FRESH -> GrowthBody(
+                growth!!,
+                state,
+                onRetryTopItems,
+            )
+            CachedDataPresentation.STALE -> Column(Modifier.fillMaxSize()) {
+                StaleDataBanner("Saved growth comparison", state.growthError!!, onRetry)
+                Box(Modifier.weight(1f)) {
+                    GrowthBody(growth!!, state, onRetryTopItems)
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun GrowthBody(growth: GrowthData, topItems: List<TopItem>, refreshing: Boolean, fetchedAtMillis: Long?) {
+private fun GrowthBody(
+    growth: GrowthData,
+    state: AnalyticsUiState,
+    onRetryTopItems: () -> Unit,
+) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (fetchedAtMillis != null) {
+        if (state.growthFetchedAtMillis != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
+                    "As of ${relativeAge(state.growthFetchedAtMillis)}" +
+                        if (state.growthLoading) " · refreshing…" else "",
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.GoldMuted,
                 )
-                if (refreshing) {
+                if (state.growthLoading) {
                     Spacer(Modifier.size(8.dp))
                     CircularProgressIndicator(Modifier.size(12.dp), color = Brand.Gold, strokeWidth = 2.dp)
                 }
@@ -270,6 +301,15 @@ private fun GrowthBody(growth: GrowthData, topItems: List<TopItem>, refreshing: 
                 color = Brand.ForegroundMuted,
             )
         }
+        if (growth.current.membershipsMinor > 0 || growth.previous.membershipsMinor > 0) {
+            Text(
+                "Paid memberships: ${growth.current.membershipsMinor.asRupees()} this period, " +
+                    "${growth.previous.membershipsMinor.asRupees()} in ${growth.previous.label}. " +
+                    "They do not increase POS order counts or top-item totals.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.ForegroundMuted,
+            )
+        }
         if (growth.current.refundsMinor > 0) {
             Text(
                 "${growth.current.refundsMinor.asRupees()} refunded this period.",
@@ -278,12 +318,51 @@ private fun GrowthBody(growth: GrowthData, topItems: List<TopItem>, refreshing: 
             )
         }
 
-        SectionCard {
+        TopItemsCard(state, onRetryTopItems)
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
+    SectionCard {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             CardTitle("Top items (this month)")
-            if (topItems.isEmpty()) {
+            if (state.topItemsLoading) {
+                Spacer(Modifier.weight(1f))
+                CircularProgressIndicator(Modifier.size(14.dp), color = Brand.Gold, strokeWidth = 2.dp)
+            }
+        }
+        when (
+            supplementalListPresentation(
+                hasSnapshot = state.topItemsFetchedAtMillis != null,
+                isEmpty = state.topItems.isEmpty(),
+                error = state.topItemsError,
+            )
+        ) {
+            SupplementalListPresentation.INITIAL_LOADING ->
+                Text("Loading top items…", color = Brand.ForegroundMuted)
+            SupplementalListPresentation.BLOCKING_ERROR -> InlineListError(
+                state.topItemsError!!,
+                onRetry,
+            )
+            SupplementalListPresentation.FRESH_EMPTY ->
                 Text("Nothing sold yet this month.", color = Brand.ForegroundMuted)
-            } else {
-                topItems.forEachIndexed { index, item ->
+            SupplementalListPresentation.STALE_EMPTY -> {
+                InlineListError(
+                    "${state.topItemsError} The saved empty result may be out of date.",
+                    onRetry,
+                )
+            }
+            SupplementalListPresentation.FRESH_CONTENT,
+            SupplementalListPresentation.STALE_CONTENT -> {
+                if (state.topItemsError != null) {
+                    InlineListError(
+                        "${state.topItemsError} Showing saved item rankings.",
+                        onRetry,
+                    )
+                }
+                state.topItems.forEachIndexed { index, item ->
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -307,7 +386,43 @@ private fun GrowthBody(growth: GrowthData, topItems: List<TopItem>, refreshing: 
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
+        state.topItemsFetchedAtMillis?.let { fetchedAt ->
+            Text(
+                "As of ${relativeAge(fetchedAt)}" + if (state.topItemsLoading) " · refreshing…" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.GoldMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InlineListError(message: String, onRetry: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        Button(onClick = onRetry) { Text("Retry") }
+    }
+}
+
+@Composable
+private fun StaleDataBanner(title: String, message: String, onRetry: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)
+            .clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .border(BorderStroke(1.dp, Brand.Danger), Radius.shapeMd)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("$title may be out of date", color = Brand.Danger, fontWeight = FontWeight.Bold)
+            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        Button(onClick = onRetry) { Text("Retry") }
     }
 }
 

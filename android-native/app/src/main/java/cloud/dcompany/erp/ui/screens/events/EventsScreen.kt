@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,11 +51,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.EventsAccess
+import cloud.dcompany.erp.core.money.minorToRupeesInput
+import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
-import kotlin.math.roundToLong
 
 /**
  * Events — a hybrid of Menu's shape (CRUD header entity behind a pricing
@@ -63,16 +67,33 @@ import kotlin.math.roundToLong
  * doc for the full reasoning.
  */
 @Composable
-fun EventsScreen() {
+fun EventsScreen(access: EventsAccess = EventsAccess()) {
     val vm: EventsViewModel = viewModel()
     val state by vm.state.collectAsState()
-    EventsContent(state, vm)
+    SideEffect { vm.updateAccess(access) }
+    EventsContent(state, vm, access)
 }
 
 @Composable
-private fun EventsContent(state: EventsUiState, vm: EventsViewModel) {
+private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Header(state, vm)
+        Header(state, vm, access)
+
+        if (!access.canManageEvents) {
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                ViewOnlyNotice(
+                    if (access.canCheckInTickets) {
+                        "Event scheduling is view only — you can still check in existing tickets."
+                    } else {
+                        "Events are view only — ask a manager if an event action is required."
+                    },
+                )
+            }
+        } else if (!access.canCheckInTickets) {
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                ViewOnlyNotice("Ticket check-in is view only for this account.")
+            }
+        }
 
         if (state.notice != null) {
             Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -86,7 +107,7 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel) {
         }
         if (state.pendingTicketSales.isNotEmpty() || state.pendingCheckIns.isNotEmpty()) {
             Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                PendingEventChangesPanel(state, vm)
+                PendingEventChangesPanel(state, vm, access)
             }
         }
 
@@ -108,14 +129,18 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel) {
                     "create one to start selling tickets.",
             )
 
-            else -> EventsList(state, vm)
+            else -> EventsList(state, vm, access)
         }
 
         when (val dialog = state.dialog) {
-            is EventsDialog.EventForm -> EventFormDialog(dialog.editing, state, vm)
-            is EventsDialog.SellTickets -> SellTicketsDialog(dialog.event, state, vm)
-            is EventsDialog.Tickets -> TicketsDialog(dialog.event, state, vm)
-            is EventsDialog.ConfirmDelete -> ConfirmDialog(
+            is EventsDialog.EventForm -> if (access.canManageEvents) {
+                EventFormDialog(dialog.editing, state, vm)
+            }
+            is EventsDialog.SellTickets -> if (access.canCheckInTickets) {
+                SellTicketsDialog(dialog.event, state, vm)
+            }
+            is EventsDialog.Tickets -> TicketsDialog(dialog.event, state, vm, access.canCheckInTickets)
+            is EventsDialog.ConfirmDelete -> if (access.canManageEvents) ConfirmDialog(
                 title = "Delete ${dialog.event.name}?",
                 body = if (dialog.event.sold > 0) {
                     "This event has sold tickets — cancel it instead (Mark cancelled) rather than deleting."
@@ -130,14 +155,14 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel) {
             )
             null -> {}
         }
-        if (state.showPricingUnlock) {
+        if (state.showPricingUnlock && access.canManageEvents) {
             PricingUnlockDialog(onDismiss = vm::dismissPricingUnlock, onUnlocked = vm::pricingUnlocked)
         }
     }
 }
 
 @Composable
-private fun Header(state: EventsUiState, vm: EventsViewModel) {
+private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
     Column {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -147,7 +172,7 @@ private fun Header(state: EventsUiState, vm: EventsViewModel) {
             Column(Modifier.weight(1f)) {
                 Text("Events", style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
                 Text(
-                    "Screenings · ticket sales · check-in",
+                    "Screenings · event scheduling · existing ticket check-in",
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -156,7 +181,9 @@ private fun Header(state: EventsUiState, vm: EventsViewModel) {
                 OutlinedButton(onClick = vm::retry, enabled = !state.syncing) {
                     Text(if (state.syncing) "Refreshing…" else "Refresh")
                 }
-                Button(onClick = vm::openCreateForm) { Text("New event") }
+                Button(onClick = vm::openCreateForm, enabled = access.canManageEvents) {
+                    Text("New event")
+                }
             }
         }
         if (state.syncing) {
@@ -173,7 +200,7 @@ private fun Header(state: EventsUiState, vm: EventsViewModel) {
 // LIST
 // ============================================================================
 @Composable
-private fun EventsList(state: EventsUiState, vm: EventsViewModel) {
+private fun EventsList(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -181,17 +208,17 @@ private fun EventsList(state: EventsUiState, vm: EventsViewModel) {
     ) {
         if (state.upcoming.isNotEmpty()) {
             item { SectionTitle("Upcoming") }
-            items(state.upcoming, key = { it.id }) { event -> EventCard(event, vm) }
+            items(state.upcoming, key = { it.id }) { event -> EventCard(event, vm, access) }
         }
         if (state.past.isNotEmpty()) {
             item { SectionTitle("Past / cancelled") }
-            items(state.past, key = { it.id }) { event -> EventCard(event, vm) }
+            items(state.past, key = { it.id }) { event -> EventCard(event, vm, access) }
         }
     }
 }
 
 @Composable
-private fun EventCard(event: Event, vm: EventsViewModel) {
+private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
     val soldFraction = if (event.capacity > 0) event.sold.toFloat() / event.capacity else 0f
     val progressColor = when {
         soldFraction >= 0.9f -> Brand.Danger
@@ -243,24 +270,42 @@ private fun EventCard(event: Event, vm: EventsViewModel) {
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (event.status in setOf("scheduled", "live") && event.remaining > 0) {
-                Button(onClick = { vm.openSellTickets(event) }) { Text("Sell tickets") }
+                Button(onClick = {}, enabled = false) { Text("POS billing required") }
             }
             OutlinedButton(onClick = { vm.openTickets(event) }) { Text("Tickets (${event.sold})") }
-            TextButton(onClick = { vm.openEditForm(event) }) { Text("Edit") }
+            TextButton(
+                onClick = { vm.openEditForm(event) },
+                enabled = access.canManageEvents,
+            ) { Text("Edit") }
             if (event.status == "scheduled") {
-                TextButton(onClick = { vm.setEventStatus(event, "live") }) { Text("Mark live") }
+                TextButton(
+                    onClick = { vm.setEventStatus(event, "live") },
+                    enabled = access.canManageEvents,
+                ) { Text("Mark live") }
             }
             if (event.status in setOf("scheduled", "live")) {
-                TextButton(onClick = { vm.setEventStatus(event, "cancelled") }) {
+                TextButton(
+                    onClick = { vm.setEventStatus(event, "cancelled") },
+                    enabled = access.canManageEvents,
+                ) {
                     Text("Cancel", color = Brand.Danger)
                 }
             }
             if (event.sold == 0) {
-                TextButton(onClick = { vm.openConfirmDelete(event) }) {
+                TextButton(
+                    onClick = { vm.openConfirmDelete(event) },
+                    enabled = access.canManageEvents,
+                ) {
                     Text("Delete", color = Brand.Danger)
                 }
             }
         }
+        Text(
+            "New tickets are disabled until POS payment, invoice, shift, and GST " +
+                "reconciliation are connected.",
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
+        )
     }
 }
 
@@ -284,7 +329,11 @@ private fun statusColor(status: String): Color = when (status) {
 // PENDING CHANGES
 // ============================================================================
 @Composable
-private fun PendingEventChangesPanel(state: EventsUiState, vm: EventsViewModel) {
+private fun PendingEventChangesPanel(
+    state: EventsUiState,
+    vm: EventsViewModel,
+    access: EventsAccess,
+) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
@@ -296,7 +345,9 @@ private fun PendingEventChangesPanel(state: EventsUiState, vm: EventsViewModel) 
                 text = "${row.qty} ticket(s) for ${row.eventName} — ${row.customerName}",
                 rejected = row.rejected,
                 error = row.error,
-                onRetry = { vm.retryTicketSale(row.localId) },
+                actionLabel = if (row.rejected) "Remove" else null,
+                actionEnabled = access.canCheckInTickets,
+                onAction = { vm.discardRejectedTicketSale(row.localId) },
             )
         }
         state.pendingCheckIns.forEach { row ->
@@ -304,20 +355,31 @@ private fun PendingEventChangesPanel(state: EventsUiState, vm: EventsViewModel) 
                 text = "Check-in — ${row.eventName}",
                 rejected = row.rejected,
                 error = row.error,
-                onRetry = { vm.retryCheckIn(row.localId) },
+                actionLabel = if (row.rejected) "Retry" else null,
+                actionEnabled = access.canCheckInTickets,
+                onAction = { vm.retryCheckIn(row.localId) },
             )
         }
     }
 }
 
 @Composable
-private fun EventPendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
+private fun EventPendingRow(
+    text: String,
+    rejected: Boolean,
+    error: String?,
+    actionLabel: String?,
+    actionEnabled: Boolean,
+    onAction: () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+            if (actionLabel != null) {
+                TextButton(onClick = onAction, enabled = actionEnabled) { Text(actionLabel) }
+            }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
@@ -381,7 +443,7 @@ private fun EventFormDialog(editing: Event?, state: EventsUiState, vm: EventsVie
     var startsAtText by remember { mutableStateOf(editing?.startsAt?.take(16) ?: "") }
     var capacityText by remember { mutableStateOf(editing?.capacity?.toString() ?: "") }
     var priceRupees by remember {
-        mutableStateOf(editing?.let { (it.baseTicketPriceMinor / 100.0).toPlainString() } ?: "")
+        mutableStateOf(editing?.let { minorToRupeesInput(it.baseTicketPriceMinor) } ?: "")
     }
     var posterUrl by remember { mutableStateOf(editing?.posterUrl.orEmpty()) }
     var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id) }
@@ -395,13 +457,14 @@ private fun EventFormDialog(editing: Event?, state: EventsUiState, vm: EventsVie
         onDismiss = vm::closeDialog,
         onConfirm = {
             val capacity = capacityText.toIntOrNull()
-            val priceMinor = priceRupees.toRupeesMinor()
+            val priceMinor = parseRupeesToMinor(priceRupees)
             val startsAtIso = startsAtText.toIsoOrNull()
             when {
                 name.isBlank() -> localError = "Enter a name for this event."
                 startsAtIso == null -> localError = "Pick a valid start date/time."
                 capacity == null || capacity <= 0 -> localError = "Capacity must be a whole number greater than 0."
-                priceMinor < 0 -> localError = "Ticket price cannot be negative."
+                priceMinor == null ->
+                    localError = "Ticket price must be rupees with no more than 2 decimal places."
                 else -> {
                     localError = null
                     val priceChanged = editing == null || priceMinor != editing.baseTicketPriceMinor
@@ -531,7 +594,12 @@ private fun SellTicketsDialog(event: Event, state: EventsUiState, vm: EventsView
 // TICKETS LIST / CHECK-IN DIALOG
 // ============================================================================
 @Composable
-private fun TicketsDialog(event: Event, state: EventsUiState, vm: EventsViewModel) {
+private fun TicketsDialog(
+    event: Event,
+    state: EventsUiState,
+    vm: EventsViewModel,
+    canCheckIn: Boolean,
+) {
     AlertDialog(
         containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
@@ -547,7 +615,7 @@ private fun TicketsDialog(event: Event, state: EventsUiState, vm: EventsViewMode
                     modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    state.tickets.forEach { ticket -> TicketRow(event, ticket, state, vm) }
+                    state.tickets.forEach { ticket -> TicketRow(event, ticket, state, vm, canCheckIn) }
                 }
             }
         },
@@ -556,7 +624,13 @@ private fun TicketsDialog(event: Event, state: EventsUiState, vm: EventsViewMode
 }
 
 @Composable
-private fun TicketRow(event: Event, ticket: EventTicket, state: EventsUiState, vm: EventsViewModel) {
+private fun TicketRow(
+    event: Event,
+    ticket: EventTicket,
+    state: EventsUiState,
+    vm: EventsViewModel,
+    canCheckIn: Boolean,
+) {
     val pendingCheckIn = state.pendingCheckIns.any { it.ticketId == ticket.id }
     Row(
         Modifier.fillMaxWidth().clip(Radius.shapeSm).background(Brand.SurfaceRaised).padding(10.dp),
@@ -578,7 +652,10 @@ private fun TicketRow(event: Event, ticket: EventTicket, state: EventsUiState, v
         Text(ticket.pricePaidMinor.asRupees(), style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
         Spacer(Modifier.width(8.dp))
         if (ticket.status == "sold" && !pendingCheckIn) {
-            TextButton(onClick = { vm.checkIn(event.id, ticket) }) { Text("Check in") }
+            TextButton(
+                onClick = { vm.checkIn(event.id, ticket) },
+                enabled = canCheckIn,
+            ) { Text("Check in") }
         }
     }
 }
@@ -726,13 +803,6 @@ private fun filterDecimal(raw: String): String {
     }
     return sb.toString()
 }
-
-/** Rupees typed by a human -> whole paise, rounded not truncated (the same
- * IEEE-754 edge case Menu/Inventory/Finance's own equivalents guard against). */
-private fun String.toRupeesMinor(): Long = ((toDoubleOrNull() ?: 0.0) * 100).roundToLong()
-
-private fun Double.toPlainString(): String =
-    if (this == this.toLong().toDouble()) this.toLong().toString() else this.toString()
 
 /** "2026-08-22T20:00" (from an HTML-datetime-local-style input) -> a full
  * ISO instant string the backend's `datetime` field will parse. Assumes the

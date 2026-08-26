@@ -103,6 +103,26 @@ interface FinanceDao {
         deleteCapitalEntryCacheNotIn(partnerId, rows.map { it.id }.ifEmpty { listOf("") })
     }
 
+    @Query("DELETE FROM expense_cache")
+    suspend fun clearExpenseCache()
+
+    @Query("DELETE FROM asset_cache")
+    suspend fun clearAssetCache()
+
+    @Query("DELETE FROM capital_entry_cache")
+    suspend fun clearCapitalEntryCache()
+
+    /** Read caches have no tenant columns. Clear them atomically before a
+     * different company/branch scope is allowed to observe this shared Room
+     * database; local outboxes are intentionally left untouched and remain
+     * protected by OutboxSafetyGate. */
+    @Transaction
+    suspend fun clearReadCachesForScopeChange() {
+        clearExpenseCache()
+        clearAssetCache()
+        clearCapitalEntryCache()
+    }
+
     // ------------------------------------------------------ local capital entries
     @Insert
     suspend fun insertLocalCapitalEntry(row: LocalCapitalEntryEntity)

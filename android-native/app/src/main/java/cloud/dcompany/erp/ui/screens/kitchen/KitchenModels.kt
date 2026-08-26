@@ -12,6 +12,8 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class KitchenLine(
+    val id: String = "",
+    @SerialName("client_line_id") val clientLineId: String? = null,
     @SerialName("menu_item_id") val menuItemId: String,
     val name: String,
     /** food / drink / dessert — the backend filters everything else out. */
@@ -23,6 +25,24 @@ data class KitchenLine(
      */
     val qty: Double = 0.0,
     val notes: String? = null,
+    @SerialName("released_at") val releasedAt: String = "",
+    @SerialName("round_no") val roundNo: Int = 1,
+)
+
+@Serializable
+data class KitchenCancellation(
+    @SerialName("line_id") val lineId: String,
+    @SerialName("client_line_id") val clientLineId: String? = null,
+    @SerialName("menu_item_id") val menuItemId: String,
+    val name: String,
+    val type: String,
+    val qty: Double,
+    val notes: String? = null,
+    @SerialName("released_at") val releasedAt: String,
+    @SerialName("round_no") val roundNo: Int,
+    @SerialName("voided_at") val voidedAt: String,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    val reason: String,
 )
 
 @Serializable
@@ -36,6 +56,8 @@ data class KitchenOrder(
     @SerialName("kitchen_state") val kitchenState: String,
     @SerialName("minutes_waiting") val minutesWaiting: Int = 0,
     val lines: List<KitchenLine> = emptyList(),
+    @SerialName("pending_cancellations")
+    val pendingCancellations: List<KitchenCancellation> = emptyList(),
 ) {
     /** What the cook calls this ticket. Table number first — that is how food is walked out. */
     val ticketLabel: String
@@ -55,6 +77,14 @@ data class KitchenOrder(
 /** Request body for PATCH /kitchen/orders/{id}/state (StateUpdate on the server). */
 @Serializable
 data class KitchenStateUpdate(val state: String)
+
+@Serializable
+data class KitchenCancellationAck(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("line_id") val lineId: String,
+    @SerialName("acknowledged_at") val acknowledgedAt: String,
+    @SerialName("acknowledged_by") val acknowledgedBy: String,
+)
 
 /**
  * The server enforces this ladder strictly: it refuses a jump (received →

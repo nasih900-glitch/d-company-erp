@@ -37,14 +37,20 @@ object Brand {
     val SurfaceOverlay = Color(0xFF201810)
     val Gold = Color(0xFFD2B36D)
     val GoldBright = Color(0xFFEACB93)
-    val GoldMuted = Color(0xFF8A7645)
+    // Status/help copy uses this token on cards and dialogs, not just the base
+    // background. Keep it muted relative to Gold while meeting 4.5:1 on the
+    // darkest raised surface.
+    val GoldMuted = Color(0xFF97814D)
     val Foreground = Color(0xFFF5EFE4)
     val ForegroundMuted = Color(0xFF9C9184)
     // A third text tier for genuinely tertiary labels (timestamps, hints) —
     // ForegroundMuted was doing double duty as both "secondary" and "barely
     // visible," which flattened the hierarchy on text-dense screens.
-    val ForegroundFaint = Color(0xFF6C6355)
-    val Danger = Color(0xFFE5484D)
+    // Still visibly tertiary, but no longer below WCAG AA: #8C8170 remains
+    // at least 4.58:1 even on SurfaceOverlay, where timestamps and recovery
+    // hints are commonly rendered at 11sp.
+    val ForegroundFaint = Color(0xFF8C8170)
+    val Danger = Color(0xFFE74A4F)
     val DangerMuted = Color(0xFF5C2A2C)
     val Good = Color(0xFF46A758)
     val GoodMuted = Color(0xFF1F3D26)

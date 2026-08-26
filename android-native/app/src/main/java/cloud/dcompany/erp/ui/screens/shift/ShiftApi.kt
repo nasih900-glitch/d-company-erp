@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -25,6 +26,20 @@ data class ShiftDetail(
     @SerialName("expected_minor") val expectedMinor: Long? = null,
     @SerialName("counted_minor") val countedMinor: Long? = null,
     @SerialName("variance_minor") val varianceMinor: Long? = null,
+    @SerialName("pos_sales_minor") val posSalesMinor: Long = 0,
+    // Added after the original ShiftRead contract. Absence means the server
+    // cannot provide an audited breakdown; it must never be shown as zero.
+    @SerialName("membership_sales_minor") val membershipSalesMinor: Long? = null,
+    @SerialName("gross_collections_minor") val grossCollectionsMinor: Long? = null,
+    @SerialName("settled_pos_refunds_minor") val settledPosRefundsMinor: Long? = null,
+    @SerialName("settled_membership_refunds_minor") val settledMembershipRefundsMinor: Long? = null,
+    @SerialName("total_refunds_minor") val totalRefundsMinor: Long? = null,
+    @SerialName("net_collections_minor") val netCollectionsMinor: Long? = null,
+    /** Backward-compatible alias; display as gross collections, not net sales. */
+    @SerialName("total_sales_minor") val totalSalesMinor: Long = 0,
+    @SerialName("opened_by") val openedByUserId: String? = null,
+    @SerialName("opened_by_name") val openedByName: String? = null,
+    @SerialName("opened_by_email") val openedByEmail: String? = null,
 )
 
 @Serializable
@@ -41,7 +56,11 @@ data class ShiftOpenBody(@SerialName("opening_float_minor") val openingFloatMino
 data class ShiftOpenResult(val id: String, val status: String)
 
 @Serializable
-data class ShiftCloseBody(@SerialName("counted_minor") val countedMinor: Long)
+data class ShiftCloseBody(@SerialName("counted_minor") val countedMinor: Long) {
+    init {
+        require(countedMinor >= 0L) { "A shift drawer count cannot be negative." }
+    }
+}
 
 @Serializable
 data class ShiftCloseResult(
@@ -53,12 +72,16 @@ data class ShiftCloseResult(
 interface ShiftApi {
 
     @GET("pos/shifts")
-    suspend fun shifts(@Query("only_open") onlyOpen: Boolean): List<ShiftDetail>
+    suspend fun shifts(
+        @Query("only_open") onlyOpen: Boolean,
+        @Query("limit") limit: Int = 200,
+    ): List<ShiftDetail>
 
     @POST("pos/shifts/open")
     suspend fun open(
         @Body body: ShiftOpenBody,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): ShiftOpenResult
 
     @POST("pos/shifts/{id}/close")
@@ -66,5 +89,6 @@ interface ShiftApi {
         @Path("id") id: String,
         @Body body: ShiftCloseBody,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): ShiftCloseResult
 }

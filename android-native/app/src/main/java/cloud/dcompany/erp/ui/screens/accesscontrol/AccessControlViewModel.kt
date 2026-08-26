@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,16 +71,22 @@ class AccessControlViewModel : ViewModel() {
             try {
                 val dto = api.get()
                 _state.value = _state.value.copy(
-                    loading = false,
                     roles = dto.roles,
                     modules = dto.modules,
                     cells = dto.cells,
                 )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: ApiException) {
                 _state.value = _state.value.copy(
-                    loading = false,
                     error = e.message ?: "Could not load access control.",
                 )
+            } catch (_: Exception) {
+                _state.value = _state.value.copy(
+                    error = "Could not load access control. Check the connection and try again.",
+                )
+            } finally {
+                _state.value = _state.value.copy(loading = false)
             }
         }
     }
@@ -98,16 +105,22 @@ class AccessControlViewModel : ViewModel() {
             try {
                 val updated = api.update(AccessControlUpdateBody(roleCode, module, allowed))
                 _state.value = _state.value.copy(
-                    busyKeys = _state.value.busyKeys - key,
                     cells = _state.value.cells.map {
                         if (it.roleCode == roleCode && it.module == module) updated else it
                     },
                 )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: ApiException) {
                 _state.value = _state.value.copy(
-                    busyKeys = _state.value.busyKeys - key,
                     actionError = e.message ?: "Could not update this permission.",
                 )
+            } catch (_: Exception) {
+                _state.value = _state.value.copy(
+                    actionError = "Could not update this permission. Check the connection and try again.",
+                )
+            } finally {
+                _state.value = _state.value.copy(busyKeys = _state.value.busyKeys - key)
             }
         }
     }

@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,9 +50,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.CustomersAccess
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -64,12 +67,19 @@ import java.time.ZoneOffset
  * details the till could not capture while a queue was waiting.
  */
 @Composable
-fun CustomersScreen() {
+fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     val vm: CustomersViewModel = viewModel()
     val state by vm.state.collectAsState()
+    SideEffect { vm.updateAccess(access) }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Header(state, onRefresh = vm::retry, onAdd = vm::startCreate)
+        Header(
+            state,
+            canWrite = access.canManageCustomers,
+            onRefresh = vm::retry,
+            onAdd = vm::startCreate,
+        )
+        if (!access.canManageCustomers) ViewOnlyNotice()
         Spacer(Modifier.height(14.dp))
         Totals(state)
         Spacer(Modifier.height(14.dp))
@@ -122,7 +132,10 @@ fun CustomersScreen() {
                                 "customer, add them with their phone number.",
                             color = Brand.ForegroundMuted,
                         )
-                        Button(onClick = vm::startCreate) { Text("Add customer") }
+                        Button(
+                            onClick = vm::startCreate,
+                            enabled = access.canManageCustomers,
+                        ) { Text("Add customer") }
                     } else {
                         Text(
                             "No customers yet",
@@ -134,7 +147,10 @@ fun CustomersScreen() {
                                 "with a phone number. You can also add one here.",
                             color = Brand.ForegroundMuted,
                         )
-                        Button(onClick = vm::startCreate) { Text("Add customer") }
+                        Button(
+                            onClick = vm::startCreate,
+                            enabled = access.canManageCustomers,
+                        ) { Text("Add customer") }
                     }
                 }
 
@@ -149,6 +165,7 @@ fun CustomersScreen() {
                         } else {
                             DetailPane(
                                 selected,
+                                canWrite = access.canManageCustomers,
                                 onEdit = { vm.startEdit(selected) },
                                 onBack = null,
                                 onRetrySync = { vm.retrySync(selected) },
@@ -159,6 +176,7 @@ fun CustomersScreen() {
 
                 selected != null -> DetailPane(
                     customer = selected,
+                    canWrite = access.canManageCustomers,
                     onEdit = { vm.startEdit(selected) },
                     onBack = vm::clearSelection,
                     onRetrySync = { vm.retrySync(selected) },
@@ -171,7 +189,7 @@ fun CustomersScreen() {
         }
     }
 
-    state.editor?.let { editor ->
+    state.editor?.takeIf { access.canManageCustomers }?.let { editor ->
         EditorDialog(
             editor = editor,
             saving = state.saving,
@@ -186,7 +204,12 @@ fun CustomersScreen() {
 // ------------------------------------------------------------------ header
 
 @Composable
-private fun Header(state: CustomersUiState, onRefresh: () -> Unit, onAdd: () -> Unit) {
+private fun Header(
+    state: CustomersUiState,
+    canWrite: Boolean,
+    onRefresh: () -> Unit,
+    onAdd: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -207,7 +230,7 @@ private fun Header(state: CustomersUiState, onRefresh: () -> Unit, onAdd: () -> 
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onRefresh, enabled = !state.loading) { Text("Refresh") }
-            Button(onClick = onAdd) { Text("Add customer") }
+            Button(onClick = onAdd, enabled = canWrite) { Text("Add customer") }
         }
     }
 }
@@ -291,7 +314,7 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun SyncFailedNotice(error: String?, onRetry: () -> Unit) {
+private fun SyncFailedNotice(error: String?, canRetry: Boolean, onRetry: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -307,7 +330,7 @@ private fun SyncFailedNotice(error: String?, onRetry: () -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             color = Brand.ForegroundMuted,
         )
-        OutlinedButton(onClick = onRetry) { Text("Retry") }
+        OutlinedButton(onClick = onRetry, enabled = canRetry) { Text("Retry") }
     }
 }
 
@@ -457,6 +480,7 @@ private fun DetailPlaceholder() {
 @Composable
 private fun DetailPane(
     customer: Customer,
+    canWrite: Boolean,
     onEdit: () -> Unit,
     onBack: (() -> Unit)?,
     onRetrySync: () -> Unit,
@@ -487,7 +511,7 @@ private fun DetailPane(
         )
 
         if (customer.isRejected) {
-            SyncFailedNotice(customer.rejectedError, onRetrySync)
+            SyncFailedNotice(customer.rejectedError, canWrite, onRetrySync)
         } else if (customer.isPendingSync) {
             Text(
                 "Not synced yet — will save the next time this tablet is online.",
@@ -518,7 +542,11 @@ private fun DetailPane(
         DetailLine("Notes", customer.notes?.takeIf { it.isNotBlank() } ?: "—")
 
         Spacer(Modifier.height(4.dp))
-        Button(onClick = onEdit, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+        Button(
+            onClick = onEdit,
+            enabled = canWrite,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+        ) {
             Text("Edit customer")
         }
     }

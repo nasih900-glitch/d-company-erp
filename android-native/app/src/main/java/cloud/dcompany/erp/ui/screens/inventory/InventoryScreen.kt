@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,12 +48,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.InventoryAccess
 import cloud.dcompany.erp.core.db.BatchCacheEntity
+import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import kotlin.math.abs
-import kotlin.math.roundToLong
 
 private val UNITS = listOf(
     "g" to "g (grams)",
@@ -61,11 +64,13 @@ private val UNITS = listOf(
 )
 
 @Composable
-fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
+fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryViewModel = viewModel()) {
     val state by vm.state.collectAsState()
+    SideEffect { vm.updateAccess(access) }
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Header(state, vm)
+        Header(state, access.canManageInventory, vm)
+        if (!access.canManageInventory) ViewOnlyNotice()
 
         when {
             state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -90,7 +95,8 @@ fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
                         color = Brand.Foreground,
                     )
                     Text(
-                        "No inventory cached on this tablet yet, and there's no connection right now to fetch it.",
+                        state.refreshError
+                            ?: "No inventory is cached on this tablet yet. Check the connection and try again.",
                         color = Brand.ForegroundMuted,
                     )
                     Button(onClick = vm::retry) { Text("Retry") }
@@ -98,12 +104,16 @@ fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
             }
 
             else -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                listOfNotNull(state.refreshError, state.branchesError).distinct().forEach { error ->
+                    RefreshErrorBanner(error, vm::retry)
+                    Spacer(Modifier.height(10.dp))
+                }
                 state.notice?.let {
                     NoticeBanner(it, vm::dismissNotice)
                     Spacer(Modifier.height(10.dp))
                 }
                 if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
-                    PendingStockChangesPanel(state, vm)
+                    PendingStockChangesPanel(state, access.canManageInventory, vm)
                     Spacer(Modifier.height(12.dp))
                 }
                 StatRow(state)
@@ -115,14 +125,14 @@ fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
                 TabBar(state, vm)
                 Spacer(Modifier.height(12.dp))
                 when (state.tab) {
-                    InventoryTab.INGREDIENTS -> IngredientsPane(state, vm)
-                    InventoryTab.SUPPLIERS -> SuppliersPane(state, vm)
+                    InventoryTab.INGREDIENTS -> IngredientsPane(state, access.canManageInventory, vm)
+                    InventoryTab.SUPPLIERS -> SuppliersPane(state, access.canManageInventory, vm)
                 }
             }
         }
     }
 
-    when (val d = state.dialog) {
+    when (val d = state.dialog.takeIf { access.canManageInventory }) {
         is InventoryDialog.IngredientForm -> IngredientDialog(d.editing, state, vm)
         is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm)
         is InventoryDialog.Grn -> GrnDialog(state, vm)
@@ -155,7 +165,7 @@ fun InventoryScreen(vm: InventoryViewModel = viewModel()) {
 // ------------------------------------------------------------------- chrome
 
 @Composable
-private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
+private fun Header(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
     Row(
         Modifier.fillMaxWidth().padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -174,16 +184,21 @@ private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = vm::retry, enabled = !state.syncing) { Text("Refresh") }
-            if (state.tab == InventoryTab.INGREDIENTS) {
+            if (canWrite && state.tab == InventoryTab.INGREDIENTS) {
                 OutlinedButton(
                     onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
+                    enabled = state.ingredientsLoaded,
                 ) { Text("New ingredient") }
                 Button(
                     onClick = { vm.openDialog(InventoryDialog.Grn) },
-                    enabled = state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
+                    enabled = state.branchId != null &&
+                        state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
                 ) { Text("Receive stock (GRN)") }
-            } else {
-                Button(onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) }) {
+            } else if (canWrite) {
+                Button(
+                    onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
+                    enabled = state.suppliersLoaded,
+                ) {
                     Text("New supplier")
                 }
             }
@@ -193,7 +208,11 @@ private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
 
 /** Pending/rejected GRN and adjustment writes — the "Sync issues" surface for events with no natural list row of their own. */
 @Composable
-private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewModel) {
+private fun PendingStockChangesPanel(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
             .background(Brand.Surface).padding(12.dp),
@@ -205,6 +224,7 @@ private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewM
                 text = "Stock receipt from ${grn.supplierName}",
                 rejected = grn.rejected,
                 error = grn.error,
+                canRetry = canWrite,
                 onRetry = { vm.retryGrn(grn.localId) },
             )
         }
@@ -214,6 +234,7 @@ private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewM
                 text = "${abs(adj.qtyDelta).asQty()} ${adj.unit} $direction ${adj.ingredientName}",
                 rejected = adj.rejected,
                 error = adj.error,
+                canRetry = canWrite,
                 onRetry = { vm.retryAdjustment(adj.localId) },
             )
         }
@@ -221,7 +242,13 @@ private fun PendingStockChangesPanel(state: InventoryUiState, vm: InventoryViewM
 }
 
 @Composable
-private fun PendingRow(text: String, rejected: Boolean, error: String?, onRetry: () -> Unit) {
+private fun PendingRow(
+    text: String,
+    rejected: Boolean,
+    error: String?,
+    canRetry: Boolean,
+    onRetry: () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
@@ -230,7 +257,7 @@ private fun PendingRow(text: String, rejected: Boolean, error: String?, onRetry:
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+            if (rejected) TextButton(onClick = onRetry, enabled = canRetry) { Text("Retry") }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
@@ -251,6 +278,21 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     ) {
         Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
         TextButton(onClick = onDismiss) { Text("Dismiss") }
+    }
+}
+
+@Composable
+private fun RefreshErrorBanner(message: String, onRetry: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.Danger, Radius.shapeSm)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(message, color = Brand.Danger, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRetry) { Text("Retry") }
     }
 }
 
@@ -363,13 +405,25 @@ private fun TabButton(label: String, active: Boolean, onClick: () -> Unit) {
 // -------------------------------------------------------------- ingredients
 
 @Composable
-private fun IngredientsPane(state: InventoryUiState, vm: InventoryViewModel) {
+private fun IngredientsPane(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+    if (state.ingredientsUnavailable) {
+        EmptyState(
+            title = "Ingredients unavailable",
+            body = state.refreshError
+                ?: "This tablet has not successfully downloaded ingredients yet.",
+            actionLabel = "Retry",
+            actionEnabled = !state.syncing,
+            onAction = vm::retry,
+        )
+        return
+    }
     if (state.ingredients.isEmpty()) {
         EmptyState(
             title = "No ingredients yet",
             body = "Add what the kitchen and bar actually consume — milk, beans, cups — " +
                 "then record a stock receipt so each one has a costed batch to draw from.",
             actionLabel = "New ingredient",
+            actionEnabled = canWrite,
             onAction = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
         )
         return
@@ -385,6 +439,7 @@ private fun IngredientsPane(state: InventoryUiState, vm: InventoryViewModel) {
                 IngredientRowCard(
                     ingredient = ingredient,
                     selected = ingredient.sku == state.selectedSku,
+                    canWrite = canWrite,
                     onClick = { vm.select(ingredient) },
                     onAdjust = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
                     onEdit = { vm.openDialog(InventoryDialog.IngredientForm(ingredient)) },
@@ -394,7 +449,7 @@ private fun IngredientsPane(state: InventoryUiState, vm: InventoryViewModel) {
                 )
             }
         }
-        DetailPanel(state, vm)
+        DetailPanel(state, canWrite, vm)
     }
 }
 
@@ -402,6 +457,7 @@ private fun IngredientsPane(state: InventoryUiState, vm: InventoryViewModel) {
 private fun IngredientRowCard(
     ingredient: IngredientRow,
     selected: Boolean,
+    canWrite: Boolean,
     onClick: () -> Unit,
     onAdjust: () -> Unit,
     onEdit: () -> Unit,
@@ -444,7 +500,7 @@ private fun IngredientRowCard(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            if (!ingredient.pendingDelete) {
+            if (canWrite && !ingredient.pendingDelete && !ingredient.createConfirmationPending) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (!ingredient.isUnsyncedDraft) SmallAction("Adjust", onAdjust)
                     SmallAction("Edit", onEdit)
@@ -465,15 +521,21 @@ private fun IngredientRowCard(
                 style = MaterialTheme.typography.labelSmall,
             )
         }
-        if (ingredient.pendingDelete) {
+        if (ingredient.createConfirmationPending) {
+            Text(
+                "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
+                color = Brand.GoldMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        } else if (ingredient.pendingDelete) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Pending removal — will sync when back online",
+                    "Removal pending sync",
                     color = Brand.GoldMuted,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onCancelRemoval) { Text("Cancel") }
+                TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel") }
             }
         } else if (ingredient.pendingLocalId != null) {
             Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
@@ -485,9 +547,9 @@ private fun IngredientRowCard(
             ) {
                 Text("Could not sync: ${ingredient.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
                 Row {
-                    TextButton(onClick = onRetrySync) { Text("Retry") }
+                    TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
                     if (ingredient.hasQueuedDelete) {
-                        TextButton(onClick = onCancelRemoval) { Text("Cancel removal") }
+                        TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel removal") }
                     }
                 }
             }
@@ -518,6 +580,7 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
         color = tint,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier
+            .heightIn(min = 48.dp)
             .clip(Radius.shapeSm)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -526,7 +589,7 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
 
 /** FIFO batches for the selected ingredient — what the deduction engine eats first. */
 @Composable
-private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
+private fun DetailPanel(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
     val ingredient = state.selected
     Column(
         Modifier.width(360.dp).fillMaxSize().clip(Radius.shapeLg)
@@ -558,6 +621,7 @@ private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
         } else {
             Button(
                 onClick = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
+                enabled = canWrite,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Adjust stock") }
         }
@@ -567,12 +631,46 @@ private fun DetailPanel(state: InventoryUiState, vm: InventoryViewModel) {
             style = MaterialTheme.typography.labelLarge,
             color = Brand.Foreground,
         )
+        if (state.batchesLoading) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    color = Brand.Gold,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.width(20.dp).height(20.dp),
+                )
+                Text("Refreshing batches…", color = Brand.ForegroundMuted)
+            }
+        }
+        state.batchesError?.let { message ->
+            Column(
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                    .background(Brand.SurfaceRaised)
+                    .border(1.dp, Brand.Danger, Radius.shapeSm)
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(message, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                if (state.batches.isNotEmpty()) {
+                    Text(
+                        "Saved batch quantities are shown below and may be out of date.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                TextButton(onClick = vm::retryBatches) { Text("Retry batch refresh") }
+            }
+        }
         when {
             ingredient.isUnsyncedDraft -> Text(
                 "No batches yet — this ingredient hasn't synced.",
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            state.batches.isEmpty() && state.batchesLoading -> Unit
+            state.batches.isEmpty() && state.batchesError != null -> Unit
             state.batches.isEmpty() -> Text(
                 "No open batches. Record a stock receipt (GRN) — a positive adjustment " +
                     "needs an existing batch to attach to.",
@@ -624,13 +722,25 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String) {
 // ---------------------------------------------------------------- suppliers
 
 @Composable
-private fun SuppliersPane(state: InventoryUiState, vm: InventoryViewModel) {
+private fun SuppliersPane(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+    if (state.suppliersUnavailable) {
+        EmptyState(
+            title = "Suppliers unavailable",
+            body = state.refreshError
+                ?: "This tablet has not successfully downloaded suppliers yet.",
+            actionLabel = "Retry",
+            actionEnabled = !state.syncing,
+            onAction = vm::retry,
+        )
+        return
+    }
     if (state.suppliers.isEmpty()) {
         EmptyState(
             title = "No suppliers yet",
             body = "A stock receipt has to be attributed to a supplier, so add the shops " +
                 "and distributors you buy from before recording a GRN.",
             actionLabel = "New supplier",
+            actionEnabled = canWrite,
             onAction = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
         )
         return
@@ -639,6 +749,7 @@ private fun SuppliersPane(state: InventoryUiState, vm: InventoryViewModel) {
         items(state.suppliers, key = { it.localWriteId ?: it.id }) { supplier ->
             SupplierRowCard(
                 supplier = supplier,
+                canWrite = canWrite,
                 onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
                 onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
                 onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
@@ -651,6 +762,7 @@ private fun SuppliersPane(state: InventoryUiState, vm: InventoryViewModel) {
 @Composable
 private fun SupplierRowCard(
     supplier: SupplierRow,
+    canWrite: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onCancelRemoval: () -> Unit,
@@ -682,20 +794,26 @@ private fun SupplierRowCard(
                 Text("Terms", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
                 Text(supplier.paymentTerms ?: "—", color = Brand.Foreground)
             }
-            if (!supplier.pendingDelete) {
+            if (canWrite && !supplier.pendingDelete && !supplier.createConfirmationPending) {
                 SmallAction("Edit", onEdit)
                 SmallAction("Delete", onDelete, Brand.Danger)
             }
         }
-        if (supplier.pendingDelete) {
+        if (supplier.createConfirmationPending) {
+            Text(
+                "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
+                color = Brand.GoldMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        } else if (supplier.pendingDelete) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Pending removal — will sync when back online",
+                    "Removal pending sync",
                     color = Brand.GoldMuted,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onCancelRemoval) { Text("Cancel") }
+                TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel") }
             }
         } else if (supplier.pendingLocalId != null) {
             Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
@@ -707,9 +825,9 @@ private fun SupplierRowCard(
             ) {
                 Text("Could not sync: ${supplier.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
                 Row {
-                    TextButton(onClick = onRetrySync) { Text("Retry") }
+                    TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
                     if (supplier.hasQueuedDelete) {
-                        TextButton(onClick = onCancelRemoval) { Text("Cancel removal") }
+                        TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel removal") }
                     }
                 }
             }
@@ -718,7 +836,13 @@ private fun SupplierRowCard(
 }
 
 @Composable
-private fun EmptyState(title: String, body: String, actionLabel: String, onAction: () -> Unit) {
+private fun EmptyState(
+    title: String,
+    body: String,
+    actionLabel: String,
+    actionEnabled: Boolean,
+    onAction: () -> Unit,
+) {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -727,7 +851,7 @@ private fun EmptyState(title: String, body: String, actionLabel: String, onActio
         ) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
             Text(body, color = Brand.ForegroundMuted)
-            Button(onClick = onAction) { Text(actionLabel) }
+            Button(onClick = onAction, enabled = actionEnabled) { Text(actionLabel) }
         }
     }
 }
@@ -885,7 +1009,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
     // here is the number the purchase order will actually carry.
     val totalMinor = lines.sumOf { line ->
         val qty = line.qty.toDoubleOrNull() ?: 0.0
-        val cost = line.unitCostRupees.toRupeesMinor()
+        val cost = parseRupeesToMinor(line.unitCostRupees) ?: 0L
         (qty * cost).toLong()
     }
 
@@ -897,15 +1021,14 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         wide = true,
         onDismiss = vm::closeDialog,
         onConfirm = {
+            val lineError = lines.mapIndexedNotNull { index, line ->
+                line.validationError(index + 1)
+            }.firstOrNull()
             val ready = lines.mapNotNull { it.toBody() }
             when {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
                 supplierId.isBlank() -> vm.showFormError("Select a supplier.")
-                ready.size != lines.count { it.ingredientId.isNotBlank() || it.qty.isNotBlank() } ->
-                    vm.showFormError(
-                        "Every line needs an ingredient and a quantity above zero, and any " +
-                            "expiry must be written as YYYY-MM-DD.",
-                    )
+                lineError != null -> vm.showFormError(lineError)
                 ready.isEmpty() -> vm.showFormError("Add at least one line.")
                 else -> vm.postGrn(supplierId, branchId, invoiceNo, notes, ready)
             }
@@ -1014,9 +1137,9 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                         modifier = Modifier.weight(1f),
                     )
                 }
-                val unitCost = line.unitCostRupees.toRupeesMinor()
+                val unitCost = parseRupeesToMinor(line.unitCostRupees)
                 val qty = line.qty.toDoubleOrNull() ?: 0.0
-                if (qty > 0 && unitCost > 0) {
+                if (qty > 0 && unitCost != null) {
                     Text(
                         "Line total ${(qty * unitCost).toLong().asRupees()}",
                         color = Brand.ForegroundMuted,
@@ -1315,21 +1438,35 @@ private fun filterDecimal(raw: String, allowNegative: Boolean): String {
 
 // ------------------------------------------------------------------ helpers
 
-/** Rupees typed by a human -> whole paise. Money never stays a Double. */
-private fun String.toRupeesMinor(): Long = ((toDoubleOrNull() ?: 0.0) * 100).roundToLong()
-
 private fun Double.asQtyInput(): String = if (this == 0.0) "" else asQty().replace(",", "")
+
+private fun GrnLineDraft.validationError(lineNumber: Int): String? {
+    if (ingredientId.isBlank()) return "Line $lineNumber: select an ingredient."
+    val quantity = qty.toDoubleOrNull()
+    if (quantity == null || !quantity.isFinite() || quantity <= 0.0) {
+        return "Line $lineNumber: quantity must be greater than 0."
+    }
+    if (parseRupeesToMinor(unitCostRupees) == null) {
+        return "Line $lineNumber: unit cost must be rupees with no more than 2 decimal places."
+    }
+    val expiry = expiresAt.trim()
+    if (expiry.isNotEmpty() && !Regex("""\d{4}-\d{2}-\d{2}""").matches(expiry)) {
+        return "Line $lineNumber: expiry must be written as YYYY-MM-DD."
+    }
+    return null
+}
 
 private fun GrnLineDraft.toBody(): GrnLineBody? {
     if (ingredientId.isBlank()) return null
     val quantity = qty.toDoubleOrNull() ?: return null
-    if (quantity <= 0) return null
+    if (!quantity.isFinite() || quantity <= 0) return null
+    val unitCostMinor = parseRupeesToMinor(unitCostRupees) ?: return null
     val expiry = expiresAt.trim()
     if (expiry.isNotEmpty() && !Regex("""\d{4}-\d{2}-\d{2}""").matches(expiry)) return null
     return GrnLineBody(
         ingredientId = ingredientId,
         qty = quantity,
-        unitCostMinor = unitCostRupees.toRupeesMinor(),
+        unitCostMinor = unitCostMinor,
         // The backend field is a datetime; a bare date would not parse.
         expiresAt = expiry.ifEmpty { null }?.let { "${it}T00:00:00Z" },
         lotCode = lotCode.trim().ifBlank { null },

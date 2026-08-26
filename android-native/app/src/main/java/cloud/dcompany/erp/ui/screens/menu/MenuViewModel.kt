@@ -3,12 +3,17 @@ package cloud.dcompany.erp.ui.screens.menu
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.MenuAccess
+import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
+import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.db.LocalMenuCategoryEntity
 import cloud.dcompany.erp.core.db.LocalMenuItemEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.MenuWriteState
+import cloud.dcompany.erp.core.money.minorToRupeesInput
+import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import kotlinx.coroutines.CancellationException
@@ -16,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -80,15 +86,12 @@ data class ItemPricingEditor(
     val hsnCode: String,
     val priceIncludesTax: Boolean,
 ) {
-    // Math.round, not .toLong() — truncating a Double toward zero silently
-    // drops a paisa on roughly 1 in 15 real values (e.g. displaying an
-    // already-stored ₹266.96 back through this same formula can reparse as
-    // 26695, not 26696, purely from float round-trip error). This is money;
-    // round to the nearest paisa instead of whichever way truncation falls.
-    val basePriceMinor: Long? get() = basePriceRupees.trim().toDoubleOrNull()?.let { Math.round(it * 100) }
+    val basePriceMinor: Long? get() = parseRupeesToMinor(basePriceRupees)
     val taxRateFraction: Double? get() = taxRatePercent.trim().toDoubleOrNull()?.div(100.0)
+    val taxRateValid: Boolean get() = taxRatePercent.isBlank() ||
+        (taxRateFraction != null && taxRateFraction!! in 0.0..1.0)
     val valid: Boolean get() = basePriceMinor != null && basePriceMinor!! >= 0 &&
-        (taxRatePercent.isBlank() || (taxRateFraction != null && taxRateFraction!! in 0.0..1.0))
+        taxRateValid
 }
 
 /** A brand-new item — always online-only (price is required, and pricing can only unlock online). */
@@ -103,12 +106,13 @@ data class ItemCreateEditor(
     val priceIncludesTax: Boolean = true,
     val description: String = "",
 ) {
-    // Math.round, not .toLong() — see ItemPricingEditor.basePriceMinor's
-    // identical comment; same formula, same float round-trip risk.
-    val basePriceMinor: Long? get() = basePriceRupees.trim().toDoubleOrNull()?.let { Math.round(it * 100) }
+    val basePriceMinor: Long? get() = parseRupeesToMinor(basePriceRupees)
     val taxRateFraction: Double get() = taxRatePercent.trim().toDoubleOrNull()?.div(100.0) ?: 0.0
+    val taxRateValid: Boolean get() = taxRatePercent.isBlank() ||
+        (taxRatePercent.trim().toDoubleOrNull()?.div(100.0)?.let { it in 0.0..1.0 } == true)
     val valid: Boolean get() = sku.isNotBlank() && name.isNotBlank() &&
-        basePriceMinor != null && basePriceMinor!! >= 0 && !categoryId.startsWith("local:")
+        basePriceMinor != null && basePriceMinor!! >= 0 && taxRateValid &&
+        !categoryId.startsWith("local:")
 }
 
 /**
@@ -138,6 +142,7 @@ private data class EditingState(
     val showPricingUnlock: Boolean = false,
     /** What to do once PricingUnlockDialog reports success. */
     val pendingAfterUnlock: (() -> Unit)? = null,
+    val loadError: String? = null,
     val notice: String? = null,
 )
 
@@ -160,6 +165,7 @@ data class MenuUiState(
     val itemCreateSaving: Boolean = false,
     val itemCreateSaveError: String? = null,
     val showPricingUnlock: Boolean = false,
+    val loadError: String? = null,
     val notice: String? = null,
 ) {
     val selectedCategory: CategoryRow? get() = categories.firstOrNull { it.name == selectedCategoryName }
@@ -188,6 +194,7 @@ class MenuViewModel : ViewModel() {
 
     private val editing = MutableStateFlow(EditingState())
     private val pullingMenu = MutableStateFlow(false)
+    @Volatile private var access = MenuAccess()
 
     val state: StateFlow<MenuUiState> = combine(
         combine(db.menuDao().observeCategories(), db.menuWriteDao().observeLocalCategories(), ::Pair),
@@ -216,6 +223,7 @@ class MenuViewModel : ViewModel() {
             itemCreateSaving = ed.itemCreateSaving,
             itemCreateSaveError = ed.itemCreateSaveError,
             showPricingUnlock = ed.showPricingUnlock,
+            loadError = ed.loadError,
             notice = ed.notice,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MenuUiState())
@@ -225,11 +233,22 @@ class MenuViewModel : ViewModel() {
     }
 
     fun retry() {
-        appCtx.sync.requestSync()
+        editing.update { it.copy(loadError = null) }
         pullingMenu.value = true
         viewModelScope.launch {
             try {
-                appCtx.sync.sync()
+                // This screen needs one resource, not the entire outbox
+                // pipeline. An unrelated shift/refund/settings failure must
+                // never prevent staff from downloading a valid menu.
+                appCtx.sync.refresh("menu")
+                if (db.syncMetaDao().observe("menu").first() == null) {
+                    editing.update {
+                        it.copy(
+                            loadError = appCtx.sync.lastError.value
+                                ?: "The menu could not be downloaded. Check the connection and try again.",
+                        )
+                    }
+                }
             } finally {
                 pullingMenu.value = false
             }
@@ -244,13 +263,23 @@ class MenuViewModel : ViewModel() {
         editing.update { it.copy(notice = null) }
     }
 
+    fun updateAccess(next: MenuAccess) {
+        access = next
+    }
+
+    private fun requireWrite(): Boolean = authorizeAction(access.canManageMenu) {
+        editing.update { it.copy(notice = VIEW_ONLY_MESSAGE) }
+    }
+
     // ------------------------------------------------------------ category
 
     fun startCreateCategory() {
+        if (!requireWrite()) return
         editing.update { it.copy(categoryEditor = CategoryEditor(), categorySaveError = null) }
     }
 
     fun startEditCategory(row: CategoryRow) {
+        if (!requireWrite()) return
         editing.update {
             it.copy(
                 categoryEditor = CategoryEditor(id = row.id, name = row.name, sortOrder = row.sortOrder),
@@ -268,64 +297,76 @@ class MenuViewModel : ViewModel() {
     }
 
     fun saveCategory() {
+        if (!requireWrite()) return
         val ed = editing.value.categoryEditor ?: return
         if (editing.value.categorySaving || !ed.valid) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(categorySaving = true, categorySaveError = null) }
         viewModelScope.launch {
             try {
                 val dao = db.menuWriteDao()
                 val now = System.currentTimeMillis()
-                val savedName = when {
-                    ed.isNew -> {
-                        val local = LocalMenuCategoryEntity(
-                            localId = UUID.randomUUID().toString(),
-                            serverId = null,
-                            name = ed.name.trim(),
-                            sortOrder = ed.sortOrder,
-                            createdAtMillis = now,
-                        )
-                        dao.upsertLocalCategory(local)
-                        local.name
-                    }
-                    ed.id!!.startsWith(LOCAL_PREFIX) -> {
-                        val localId = ed.id.removePrefix(LOCAL_PREFIX)
-                        val existing = dao.getLocalCategory(localId)
-                        if (existing == null) {
-                            editing.update {
-                                it.copy(
-                                    categorySaving = false,
-                                    categorySaveError = "This category's local draft is gone — try again.",
+                var savedName: String? = null
+                var missingDraft = false
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        savedName = when {
+                            ed.isNew -> {
+                                val local = LocalMenuCategoryEntity(
+                                    localId = UUID.randomUUID().toString(),
+                                    serverId = null,
+                                    name = ed.name.trim(),
+                                    sortOrder = ed.sortOrder,
+                                    createdAtMillis = now,
                                 )
+                                dao.upsertLocalCategory(local)
+                                local.name
                             }
-                            return@launch
+                            ed.id!!.startsWith(LOCAL_PREFIX) -> {
+                                val localId = ed.id.removePrefix(LOCAL_PREFIX)
+                                val existing = dao.getLocalCategory(localId)
+                                if (existing == null) {
+                                    missingDraft = true
+                                    null
+                                } else {
+                                    val amended = existing.copy(
+                                        name = ed.name.trim(),
+                                        sortOrder = ed.sortOrder,
+                                        state = MenuWriteState.PENDING,
+                                        lastError = null,
+                                        version = existing.version + 1,
+                                    )
+                                    dao.upsertLocalCategory(amended)
+                                    amended.name
+                                }
+                            }
+                            else -> {
+                                val serverId = ed.id
+                                val existingPending = dao.pendingCategoryForServerId(serverId)
+                                val local = (existingPending ?: LocalMenuCategoryEntity(
+                                    localId = UUID.randomUUID().toString(),
+                                    serverId = serverId,
+                                    createdAtMillis = now,
+                                )).copy(
+                                    name = ed.name.trim(),
+                                    sortOrder = ed.sortOrder,
+                                    state = MenuWriteState.PENDING,
+                                    lastError = null,
+                                    version = (existingPending?.version ?: -1) + 1,
+                                )
+                                dao.upsertLocalCategory(local)
+                                local.name
+                            }
                         }
-                        val amended = existing.copy(
-                            name = ed.name.trim(),
-                            sortOrder = ed.sortOrder,
-                            state = MenuWriteState.PENDING,
-                            lastError = null,
-                            version = existing.version + 1,
-                        )
-                        dao.upsertLocalCategory(amended)
-                        amended.name
                     }
-                    else -> {
-                        val serverId = ed.id
-                        val existingPending = dao.pendingCategoryForServerId(serverId)
-                        val local = (existingPending ?: LocalMenuCategoryEntity(
-                            localId = UUID.randomUUID().toString(),
-                            serverId = serverId,
-                            createdAtMillis = now,
-                        )).copy(
-                            name = ed.name.trim(),
-                            sortOrder = ed.sortOrder,
-                            state = MenuWriteState.PENDING,
-                            lastError = null,
-                            version = (existingPending?.version ?: -1) + 1,
+                ) return@launch
+                if (missingDraft) {
+                    editing.update {
+                        it.copy(
+                            categorySaving = false,
+                            categorySaveError = "This category's local draft is gone — try again.",
                         )
-                        dao.upsertLocalCategory(local)
-                        local.name
                     }
+                    return@launch
                 }
                 editing.update {
                     it.copy(
@@ -350,20 +391,28 @@ class MenuViewModel : ViewModel() {
     }
 
     fun retryCategorySync(row: CategoryRow) {
+        if (!requireWrite()) return
         val localId = row.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.menuWriteDao().getLocalCategory(localId)?.let {
-                db.menuWriteDao().upsertLocalCategory(
-                    it.copy(state = MenuWriteState.PENDING, lastError = null, version = it.version + 1),
-                )
-                appCtx.sync.requestSync()
-            }
+            var queued = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.menuWriteDao().getLocalCategory(localId)?.let {
+                        db.menuWriteDao().upsertLocalCategory(
+                            it.copy(state = MenuWriteState.PENDING, lastError = null, version = it.version + 1),
+                        )
+                        queued = true
+                    }
+                }
+            ) return@launch
+            if (queued) appCtx.sync.requestSync()
         }
     }
 
     // ----------------------------------------------------------- item details
 
     fun startEditItemDetails(row: ItemRow) {
+        if (!requireWrite()) return
         editing.update {
             it.copy(
                 itemDetailsEditor = ItemDetailsEditor(
@@ -387,27 +436,32 @@ class MenuViewModel : ViewModel() {
     }
 
     fun saveItemDetails() {
+        if (!requireWrite()) return
         val ed = editing.value.itemDetailsEditor ?: return
         if (editing.value.itemDetailsSaving || !ed.valid) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(itemDetailsSaving = true, itemDetailsSaveError = null) }
         viewModelScope.launch {
             try {
                 val dao = db.menuWriteDao()
-                val existingPending = dao.pendingItemForServerId(ed.id)
-                val local = (existingPending ?: LocalMenuItemEntity(
-                    localId = UUID.randomUUID().toString(),
-                    serverId = ed.id,
-                    createdAtMillis = System.currentTimeMillis(),
-                )).copy(
-                    categoryId = ed.categoryId,
-                    name = ed.name.trim(),
-                    description = ed.description.trim().ifBlank { null },
-                    isAvailable = ed.isAvailable,
-                    state = MenuWriteState.PENDING,
-                    lastError = null,
-                    version = (existingPending?.version ?: -1) + 1,
-                )
-                dao.upsertLocalItem(local)
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val existingPending = dao.pendingItemForServerId(ed.id)
+                        val local = (existingPending ?: LocalMenuItemEntity(
+                            localId = UUID.randomUUID().toString(),
+                            serverId = ed.id,
+                            createdAtMillis = System.currentTimeMillis(),
+                        )).copy(
+                            categoryId = ed.categoryId,
+                            name = ed.name.trim(),
+                            description = ed.description.trim().ifBlank { null },
+                            isAvailable = ed.isAvailable,
+                            state = MenuWriteState.PENDING,
+                            lastError = null,
+                            version = (existingPending?.version ?: -1) + 1,
+                        )
+                        dao.upsertLocalItem(local)
+                    }
+                ) return@launch
                 editing.update {
                     it.copy(
                         itemDetailsEditor = null,
@@ -430,14 +484,21 @@ class MenuViewModel : ViewModel() {
     }
 
     fun retryItemDetailsSync(row: ItemRow) {
+        if (!requireWrite()) return
         val localId = row.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.menuWriteDao().getLocalItem(localId)?.let {
-                db.menuWriteDao().upsertLocalItem(
-                    it.copy(state = MenuWriteState.PENDING, lastError = null, version = it.version + 1),
-                )
-                appCtx.sync.requestSync()
-            }
+            var queued = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.menuWriteDao().getLocalItem(localId)?.let {
+                        db.menuWriteDao().upsertLocalItem(
+                            it.copy(state = MenuWriteState.PENDING, lastError = null, version = it.version + 1),
+                        )
+                        queued = true
+                    }
+                }
+            ) return@launch
+            if (queued) appCtx.sync.requestSync()
         }
     }
 
@@ -446,12 +507,13 @@ class MenuViewModel : ViewModel() {
     /** Always online-only — see the class doc comment. Shows the unlock
      * dialog first if pricing isn't already unlocked. */
     fun startEditItemPricing(row: ItemRow) {
+        if (!requireWrite()) return
         val open: () -> Unit = {
             editing.update {
                 it.copy(
                     itemPricingEditor = ItemPricingEditor(
                         id = row.id,
-                        basePriceRupees = formatMinorAsRupees(row.basePriceMinor),
+                        basePriceRupees = minorToRupeesInput(row.basePriceMinor),
                         taxRatePercent = formatFractionAsPercent(row.taxRate),
                         hsnCode = row.hsnCode.orEmpty(),
                         priceIncludesTax = row.priceIncludesTax,
@@ -460,7 +522,7 @@ class MenuViewModel : ViewModel() {
                 )
             }
         }
-        if (PricingLock.currentToken() != null) {
+        if (PricingLock.currentToken(appCtx.tokens.currentPricingSession()) != null) {
             open()
         } else {
             editing.update { it.copy(pendingAfterUnlock = open, showPricingUnlock = true) }
@@ -476,6 +538,7 @@ class MenuViewModel : ViewModel() {
     }
 
     fun saveItemPricing() {
+        if (!requireWrite()) return
         val ed = editing.value.itemPricingEditor ?: return
         if (editing.value.itemPricingSaving || !ed.valid) return
         editing.update { it.copy(itemPricingSaving = true, itemPricingSaveError = null) }
@@ -511,12 +574,13 @@ class MenuViewModel : ViewModel() {
 
     /** Always online-only — see the class doc comment. */
     fun startCreateItem(categoryId: String) {
+        if (!requireWrite()) return
         val open: () -> Unit = {
             editing.update {
                 it.copy(itemCreateEditor = ItemCreateEditor(categoryId = categoryId), itemCreateSaveError = null)
             }
         }
-        if (PricingLock.currentToken() != null) {
+        if (PricingLock.currentToken(appCtx.tokens.currentPricingSession()) != null) {
             open()
         } else {
             editing.update { it.copy(pendingAfterUnlock = open, showPricingUnlock = true) }
@@ -532,6 +596,7 @@ class MenuViewModel : ViewModel() {
     }
 
     fun saveItemCreate() {
+        if (!requireWrite()) return
         val ed = editing.value.itemCreateEditor ?: return
         if (editing.value.itemCreateSaving || !ed.valid) return
         editing.update { it.copy(itemCreateSaving = true, itemCreateSaveError = null) }
@@ -575,17 +640,11 @@ class MenuViewModel : ViewModel() {
     }
 
     fun pricingUnlocked() {
+        if (!requireWrite()) return
         val action = editing.value.pendingAfterUnlock
         editing.update { it.copy(showPricingUnlock = false, pendingAfterUnlock = null) }
         action?.invoke()
     }
-}
-
-/** Exact — minor is already an integer count of paise, so this is plain integer arithmetic, never floating point. */
-private fun formatMinorAsRupees(minor: Long): String {
-    val whole = minor / 100
-    val paise = minor % 100
-    return if (paise == 0L) whole.toString() else "$whole.${paise.toString().padStart(2, '0')}"
 }
 
 /**

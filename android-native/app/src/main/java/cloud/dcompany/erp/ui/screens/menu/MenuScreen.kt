@@ -35,6 +35,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,15 +47,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.MenuAccess
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
-fun MenuScreen() {
+fun MenuScreen(access: MenuAccess = MenuAccess()) {
     val vm: MenuViewModel = viewModel()
     val state by vm.state.collectAsState()
+    SideEffect { vm.updateAccess(access) }
 
     Row(Modifier.fillMaxSize().background(Brand.Background)) {
         Column(
@@ -69,7 +73,12 @@ fun MenuScreen() {
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.ForegroundMuted,
             )
-            Button(onClick = vm::startCreateCategory, modifier = Modifier.fillMaxWidth()) {
+            if (!access.canManageMenu) ViewOnlyNotice()
+            Button(
+                onClick = vm::startCreateCategory,
+                enabled = access.canManageMenu,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text("Add category")
             }
 
@@ -77,6 +86,12 @@ fun MenuScreen() {
                 state.loading -> CircularProgressIndicator(color = Brand.Gold)
                 state.couldNotLoad -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Could not load the menu", color = Brand.Foreground)
+                    Text(
+                        state.loadError
+                            ?: "The tablet has not downloaded the menu yet. Check the connection and retry.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     OutlinedButton(onClick = vm::retry) { Text("Retry") }
                 }
                 else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -84,6 +99,7 @@ fun MenuScreen() {
                         CategoryRowItem(
                             cat = cat,
                             selected = cat.name == state.selectedCategoryName,
+                            canWrite = access.canManageMenu,
                             onClick = { vm.selectCategory(cat.name) },
                             onEdit = { vm.startEditCategory(cat) },
                             onRetrySync = { vm.retryCategorySync(cat) },
@@ -112,7 +128,10 @@ fun MenuScreen() {
                 // server id yet) has nothing an item could be assigned to —
                 // the button reappears the moment this category syncs.
                 if (selectedCategory != null && !selectedCategory.id.startsWith("local:")) {
-                    Button(onClick = { vm.startCreateItem(selectedCategory.id) }) { Text("Add item") }
+                    Button(
+                        onClick = { vm.startCreateItem(selectedCategory.id) },
+                        enabled = access.canManageMenu,
+                    ) { Text("Add item") }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -149,6 +168,7 @@ fun MenuScreen() {
                     items(state.visibleItems, key = { it.id }) { item ->
                         ItemRowCard(
                             item = item,
+                            canWrite = access.canManageMenu,
                             onEditDetails = { vm.startEditItemDetails(item) },
                             onEditPricing = { vm.startEditItemPricing(item) },
                             onRetrySync = { vm.retryItemDetailsSync(item) },
@@ -159,7 +179,7 @@ fun MenuScreen() {
         }
     }
 
-    state.categoryEditor?.let { ed ->
+    state.categoryEditor?.takeIf { access.canManageMenu }?.let { ed ->
         CategoryEditorDialog(
             editor = ed,
             saving = state.categorySaving,
@@ -169,7 +189,7 @@ fun MenuScreen() {
             onSave = vm::saveCategory,
         )
     }
-    state.itemDetailsEditor?.let { ed ->
+    state.itemDetailsEditor?.takeIf { access.canManageMenu }?.let { ed ->
         ItemDetailsDialog(
             editor = ed,
             // A still-unsynced category (a pending create, no real server id
@@ -184,7 +204,7 @@ fun MenuScreen() {
             onSave = vm::saveItemDetails,
         )
     }
-    state.itemPricingEditor?.let { ed ->
+    state.itemPricingEditor?.takeIf { access.canManageMenu }?.let { ed ->
         ItemPricingDialog(
             editor = ed,
             saving = state.itemPricingSaving,
@@ -194,7 +214,7 @@ fun MenuScreen() {
             onSave = vm::saveItemPricing,
         )
     }
-    state.itemCreateEditor?.let { ed ->
+    state.itemCreateEditor?.takeIf { access.canManageMenu }?.let { ed ->
         ItemCreateDialog(
             editor = ed,
             // Same reasoning as the details dialog above — a brand-new item
@@ -208,7 +228,7 @@ fun MenuScreen() {
             onSave = vm::saveItemCreate,
         )
     }
-    if (state.showPricingUnlock) {
+    if (state.showPricingUnlock && access.canManageMenu) {
         PricingUnlockDialog(onDismiss = vm::dismissPricingUnlock, onUnlocked = vm::pricingUnlocked)
     }
 }
@@ -219,6 +239,7 @@ fun MenuScreen() {
 private fun CategoryRowItem(
     cat: CategoryRow,
     selected: Boolean,
+    canWrite: Boolean,
     onClick: () -> Unit,
     onEdit: () -> Unit,
     onRetrySync: () -> Unit,
@@ -234,11 +255,11 @@ private fun CategoryRowItem(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(cat.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onEdit) { Text("Edit") }
+            TextButton(onClick = onEdit, enabled = canWrite) { Text("Edit") }
         }
         if (cat.rejectedError != null) {
             Text("Sync failed: ${cat.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
-            TextButton(onClick = onRetrySync) { Text("Retry") }
+            TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
         } else if (cat.pendingLocalId != null) {
             Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
         }
@@ -248,6 +269,7 @@ private fun CategoryRowItem(
 @Composable
 private fun ItemRowCard(
     item: ItemRow,
+    canWrite: Boolean,
     onEditDetails: () -> Unit,
     onEditPricing: () -> Unit,
     onRetrySync: () -> Unit,
@@ -277,13 +299,13 @@ private fun ItemRowCard(
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onEditPricing) { Text("Price") }
-                TextButton(onClick = onEditDetails) { Text("Details") }
+                TextButton(onClick = onEditPricing, enabled = canWrite) { Text("Price") }
+                TextButton(onClick = onEditDetails, enabled = canWrite) { Text("Details") }
             }
         }
         if (item.detailsRejected != null) {
             Text("Sync failed: ${item.detailsRejected}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
-            TextButton(onClick = onRetrySync) { Text("Retry") }
+            TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
         } else if (item.detailsPending && item.localWriteId != null) {
             Text("Details not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
         }
@@ -437,6 +459,10 @@ private fun ItemPricingDialog(
                     onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
                     label = { Text("Price (₹)") },
                     singleLine = true,
+                    isError = editor.basePriceMinor == null,
+                    supportingText = if (editor.basePriceMinor == null) {
+                        { Text("Enter rupees with no more than 2 decimal places.") }
+                    } else null,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -444,6 +470,10 @@ private fun ItemPricingDialog(
                     onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
                     label = { Text("GST rate (%)") },
                     singleLine = true,
+                    isError = !editor.taxRateValid,
+                    supportingText = if (!editor.taxRateValid) {
+                        { Text("GST rate must be between 0 and 100.") }
+                    } else null,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -520,6 +550,10 @@ private fun ItemCreateDialog(
                     onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
                     label = { Text("Price (₹)") },
                     singleLine = true,
+                    isError = editor.basePriceMinor == null,
+                    supportingText = if (editor.basePriceMinor == null) {
+                        { Text("Enter rupees with no more than 2 decimal places.") }
+                    } else null,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -527,6 +561,10 @@ private fun ItemCreateDialog(
                     onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
                     label = { Text("GST rate (%, optional)") },
                     singleLine = true,
+                    isError = !editor.taxRateValid,
+                    supportingText = if (!editor.taxRateValid) {
+                        { Text("GST rate must be between 0 and 100.") }
+                    } else null,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(

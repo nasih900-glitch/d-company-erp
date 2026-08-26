@@ -2,6 +2,7 @@
 // extension shadows the `java.*` package, so `java.util.Properties` fails to
 // resolve without these.
 import java.io.FileInputStream
+import java.net.URI
 import java.util.Properties
 
 plugins {
@@ -23,6 +24,26 @@ if (hasReleaseKeystore) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+val productionApiBaseUrl = "https://dcompany.duckdns.org/api/v1/"
+val debugApiBaseUrl = providers.gradleProperty("dcompany.debugApiBaseUrl")
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?: productionApiBaseUrl
+val debugApiUri = runCatching { URI(debugApiBaseUrl) }.getOrNull()
+require(debugApiBaseUrl.endsWith("/")) {
+    "dcompany.debugApiBaseUrl must end with '/'."
+}
+require(
+    debugApiUri?.scheme == "https" ||
+        (debugApiUri?.scheme == "http" && debugApiUri.host in setOf("127.0.0.1", "localhost", "10.0.2.2")),
+) {
+    "dcompany.debugApiBaseUrl must use HTTPS, or HTTP on a local emulator-test host."
+}
+
+fun buildConfigString(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "cloud.dcompany.erp"
     compileSdk = 35
@@ -31,12 +52,12 @@ android {
         applicationId = "cloud.dcompany.erp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "3.0"
+        versionCode = 2
+        versionName = "3.0.1"
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
-        buildConfigField("String", "API_BASE_URL", "\"https://dcompany.duckdns.org/api/v1/\"")
+        buildConfigField("String", "API_BASE_URL", buildConfigString(productionApiBaseUrl))
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -53,6 +74,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Debug-only escape hatch for isolated emulator acceptance tests.
+            // Release builds remain pinned to the production HTTPS endpoint.
+            buildConfigField("String", "API_BASE_URL", buildConfigString(debugApiBaseUrl))
+        }
         release {
             isMinifyEnabled = false
             if (hasReleaseKeystore) {
@@ -112,7 +138,6 @@ dependencies {
 
     // Token persistence.
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Offline store. Room is the local source of truth the UI reads from; the
     // network only fills it and drains the outbox.
@@ -124,6 +149,7 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

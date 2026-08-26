@@ -88,17 +88,42 @@ fun ReportsScreen() {
 
         Box(Modifier.fillMaxSize()) {
             val report = state.report
-            when {
-                // A cached report for the current key takes priority over
-                // both the error and loading states — it's never mislabeled
-                // (the cache key already encodes this exact period), so
-                // there's no reason to hide it behind a spinner or an error
-                // banner while a refresh is in flight or has just failed.
-                report != null && report.hasNothing ->
-                    EmptyPanel(state.period, report.label, state.loading, state.fetchedAtMillis)
-                report != null -> ReportBody(report, state.period, state.loading, state.fetchedAtMillis)
-                state.error != null -> ErrorPanel(state.error!!, vm::retry)
-                else -> LoadingPanel()
+            when (reportPresentation(state)) {
+                ReportPresentation.INITIAL_LOADING -> LoadingPanel()
+                ReportPresentation.BLOCKING_ERROR -> ErrorPanel(state.error!!, vm::retry)
+                ReportPresentation.FRESH_EMPTY -> EmptyPanel(
+                    state.period,
+                    report!!.label,
+                    state.loading,
+                    state.fetchedAtMillis,
+                )
+                ReportPresentation.FRESH_CONTENT -> ReportBody(
+                    report!!,
+                    state.period,
+                    state.loading,
+                    state.fetchedAtMillis,
+                )
+                ReportPresentation.STALE_EMPTY,
+                ReportPresentation.STALE_CONTENT -> Column(Modifier.fillMaxSize()) {
+                    StaleReportBanner(state.error!!, vm::retry)
+                    Box(Modifier.weight(1f)) {
+                        if (report!!.hasNothing) {
+                            EmptyPanel(
+                                state.period,
+                                report.label,
+                                state.loading,
+                                state.fetchedAtMillis,
+                            )
+                        } else {
+                            ReportBody(
+                                report,
+                                state.period,
+                                state.loading,
+                                state.fetchedAtMillis,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -113,7 +138,7 @@ private fun Header() {
             color = Brand.Foreground,
         )
         Text(
-            "Profit & loss · Indian financial year · Kerala GST",
+            "Management P&L · operational receipt basis · not statutory accounts",
             style = MaterialTheme.typography.bodyMedium,
             color = Brand.ForegroundMuted,
         )
@@ -205,6 +230,7 @@ private fun PeriodSelector(
                     val q = index + 1
                     FilterChip(
                         selected = state.quarter == q,
+                        enabled = canSelectFiscalQuarter(state.fiscalYear, q),
                         onClick = { onPickQuarter(q) },
                         label = { Text(label) },
                         colors = FilterChipDefaults.filterChipColors(
@@ -358,6 +384,31 @@ private fun ErrorPanel(message: String, onRetry: () -> Unit) {
         )
         Spacer(Modifier.height(16.dp))
         Button(onClick = onRetry) { Text("Try again") }
+    }
+}
+
+@Composable
+private fun StaleReportBanner(message: String, onRetry: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 6.dp)
+            .clip(Radius.shapeMd)
+            .background(Brand.SurfaceRaised)
+            .border(BorderStroke(1.dp, Brand.Danger), Radius.shapeMd)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Saved report — refresh failed", color = Brand.Danger, fontWeight = FontWeight.Bold)
+            Text(
+                "$message The figures below may be out of date.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        OutlinedButton(onClick = onRetry) { Text("Retry") }
     }
 }
 
@@ -619,6 +670,7 @@ private fun RevenueCard(report: ReportData) {
         MoneyRow("Gaming", r.gamingMinor)
         if (r.hookahMinor > 0) MoneyRow("Hookah", r.hookahMinor)
         MoneyRow("Event tickets", r.eventTicketsMinor)
+        if (r.membershipsMinor > 0) MoneyRow("Memberships", r.membershipsMinor)
         MoneyRow(
             "Delivery (Zomato/Swiggy §9(5))",
             r.deliveryAggregatorMinor,
@@ -635,6 +687,12 @@ private fun RevenueCard(report: ReportData) {
         if (r.discountsAndPointsRedeemedMinor > 0) {
             MoneyRow("Less: discounts & points redeemed", -r.discountsAndPointsRedeemedMinor)
         }
+        if (r.roundingIncomeMinor > 0) {
+            MoneyRow("Invoice round-up", r.roundingIncomeMinor)
+        }
+        if (r.roundingExpenseMinor > 0) {
+            MoneyRow("Less: invoice round-down", -r.roundingExpenseMinor)
+        }
         Divider()
         MoneyRow(
             "Gross revenue",
@@ -644,6 +702,13 @@ private fun RevenueCard(report: ReportData) {
         )
         if (report.refundsIssuedMinor > 0) {
             MoneyRow("Less: refunds", -report.refundsIssuedMinor)
+        }
+        if (report.refundedTipsMinor > 0) {
+            MoneyRow(
+                "Add back: refunded tips",
+                report.refundedTipsMinor,
+                sub = "tips were a staff liability, not cafe revenue",
+            )
         }
         MoneyRow(
             "Less: GST collected",
@@ -707,8 +772,28 @@ private fun PaymentsCard(report: ReportData) {
         if (p.otherMinor > 0) MoneyRow("Other", p.otherMinor)
         Divider()
         MoneyRow("Gross payments collected", p.totalMinor)
-        if (report.refundsIssuedMinor > 0) {
-            MoneyRow("Less: refunds issued", -report.refundsIssuedMinor)
+        if (report.tipsCollectedMinor > 0) {
+            MoneyRow(
+                "Of which: tips held for staff",
+                report.tipsCollectedMinor,
+                sub = "included in payments, excluded from revenue",
+            )
+        }
+        if (report.settledRefundsIssuedMinor > 0) {
+            MoneyRow(
+                "Less: cash/payment refunds",
+                -report.settledRefundsIssuedMinor,
+                sub = report.membershipRefundsIssuedMinor.takeIf { it > 0 }?.let {
+                    "includes ${it.asRupees()} in settled membership reversals"
+                },
+            )
+        }
+        val storeCreditRefunds = report.refundsIssuedMinor - report.settledRefundsIssuedMinor
+        if (storeCreditRefunds > 0) {
+            MoneyRow(
+                "Store-credit refunds (no cash movement)",
+                storeCreditRefunds,
+            )
         }
         Divider()
         MoneyRow(
@@ -906,7 +991,7 @@ private fun Divider() {
 private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(44.dp)
+            .size(48.dp)
             .clip(Radius.shapeMd)
             .background(if (enabled) Brand.SurfaceRaised else Brand.Surface)
             .clickable(enabled = enabled, onClick = onClick),

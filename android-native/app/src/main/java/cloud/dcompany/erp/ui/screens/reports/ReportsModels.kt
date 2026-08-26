@@ -21,11 +21,15 @@ data class ReportRevenue(
     @SerialName("gaming_minor") val gamingMinor: Long = 0,
     @SerialName("hookah_minor") val hookahMinor: Long = 0,
     @SerialName("event_tickets_minor") val eventTicketsMinor: Long = 0,
+    @SerialName("memberships_minor") val membershipsMinor: Long = 0,
     @SerialName("delivery_aggregator_minor") val deliveryAggregatorMinor: Long = 0,
     @SerialName("other_minor") val otherMinor: Long = 0,
     @SerialName("manual_collections_minor") val manualCollectionsMinor: Long = 0,
     @SerialName("discounts_and_points_redeemed_minor")
     val discountsAndPointsRedeemedMinor: Long = 0,
+    @SerialName("rounding_income_minor") val roundingIncomeMinor: Long = 0,
+    @SerialName("rounding_expense_minor") val roundingExpenseMinor: Long = 0,
+    @SerialName("round_off_minor") val roundOffMinor: Long = 0,
     @SerialName("total_minor") val totalMinor: Long = 0,
 )
 
@@ -58,6 +62,7 @@ data class ReportExpenseLine(
 
 @Serializable
 data class ReportData(
+    @SerialName("accounting_basis") val accountingBasis: String = "operational_receipt",
     val period: String = "",
     val label: String = "",
     @SerialName("period_start") val periodStart: String = "",
@@ -72,7 +77,12 @@ data class ReportData(
     @SerialName("tax_collected") val taxCollected: ReportTax = ReportTax(),
     @SerialName("payments_received") val paymentsReceived: ReportPayments = ReportPayments(),
     @SerialName("manual_collections_minor") val manualCollectionsMinor: Long = 0,
+    @SerialName("tips_collected_minor") val tipsCollectedMinor: Long = 0,
     @SerialName("refunds_issued_minor") val refundsIssuedMinor: Long = 0,
+    @SerialName("settled_refunds_issued_minor") val settledRefundsIssuedMinor: Long = 0,
+    @SerialName("membership_refunds_issued_minor")
+    val membershipRefundsIssuedMinor: Long = 0,
+    @SerialName("refunded_tips_minor") val refundedTipsMinor: Long = 0,
     @SerialName("net_payments_received_minor") val netPaymentsReceivedMinor: Long = 0,
     val expenses: List<ReportExpenseLine> = emptyList(),
     @SerialName("expense_total_minor") val expenseTotalMinor: Long = 0,

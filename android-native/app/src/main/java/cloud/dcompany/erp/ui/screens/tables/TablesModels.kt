@@ -72,12 +72,22 @@ data class OpenShift(
  */
 @Serializable
 data class TableOrderLine(
+    val id: String = "",
+    @SerialName("client_line_id") val clientLineId: String? = null,
     @SerialName("menu_item_id") val menuItemId: String? = null,
     val name: String = "",
     val qty: Double = 0.0,
     @SerialName("unit_price_minor") val unitPriceMinor: Long = 0,
     @SerialName("line_total_minor") val lineTotalMinor: Long = 0,
     val note: String? = null,
+    @SerialName("kitchen_status") val kitchenStatus: String = "queued",
+    @SerialName("kitchen_released_at") val kitchenReleasedAt: String? = null,
+    @SerialName("kitchen_round_no") val kitchenRoundNo: Int? = null,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("kitchen_void_acknowledged_at")
+    val kitchenVoidAcknowledgedAt: String? = null,
 ) {
     /** "2" rather than "2.0"; a half portion still reads as "0.5". */
     val qtyLabel: String
@@ -91,10 +101,15 @@ data class TableOrder(
     val type: String = "dine_in",
     @SerialName("table_id") val tableId: String? = null,
     @SerialName("invoice_no") val invoiceNo: String? = null,
+    @SerialName("source_label") val sourceLabel: String? = null,
     @SerialName("subtotal_minor") val subtotalMinor: Long = 0,
     @SerialName("tax_minor") val taxMinor: Long = 0,
     @SerialName("total_minor") val totalMinor: Long = 0,
+    @SerialName("opened_at") val openedAt: String = "",
+    @SerialName("held_at") val heldAt: String? = null,
+    @SerialName("checkout_version") val checkoutVersion: Long = 1,
     val lines: List<TableOrderLine> = emptyList(),
+    @SerialName("voided_lines") val voidedLines: List<TableOrderLine> = emptyList(),
 )
 
 /** OrderListItem — the slim row returned by GET /pos/orders. */
@@ -109,6 +124,7 @@ data class TableOrderSummary(
 
 @Serializable
 data class OrderLineBody(
+    @SerialName("client_line_id") val clientLineId: String,
     @SerialName("menu_item_id") val menuItemId: String,
     val qty: Int,
     val note: String? = null,
@@ -123,7 +139,18 @@ data class TableOrderCreateBody(
 )
 
 @Serializable
-data class OrderLinesAppendBody(val lines: List<OrderLineBody>)
+data class OrderLinesAppendBody(
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    val lines: List<OrderLineBody>,
+)
 
 @Serializable
-data class VoidOrderBody(val reason: String)
+data class SendToPosBody(
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
+data class VoidOrderLineBody(
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    val reason: String,
+)

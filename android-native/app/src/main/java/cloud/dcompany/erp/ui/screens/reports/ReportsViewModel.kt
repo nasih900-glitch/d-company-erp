@@ -3,10 +3,12 @@ package cloud.dcompany.erp.ui.screens.reports
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
 import cloud.dcompany.erp.core.db.cached
 import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +43,27 @@ internal fun fiscalQuarterFor(date: LocalDate): Int = ((date.monthValue - 4 + 12
 internal fun fiscalStartYear(fy: String): Int =
     fy.take(4).toIntOrNull() ?: fiscalYearFor(businessToday()).take(4).toInt()
 
+internal fun fiscalQuarterOrdinal(fiscalYear: String, quarter: Int): Long =
+    fiscalStartYear(fiscalYear).toLong() * 4L + (quarter.coerceIn(1, 4) - 1)
+
+internal fun shiftFiscalQuarter(
+    fiscalYear: String,
+    quarter: Int,
+    delta: Int,
+): Pair<String, Int> {
+    val shifted = fiscalQuarterOrdinal(fiscalYear, quarter) + delta
+    val startYear = Math.floorDiv(shifted, 4L).toInt()
+    val shiftedQuarter = Math.floorMod(shifted, 4L).toInt() + 1
+    return fiscalYearOf(startYear) to shiftedQuarter
+}
+
+internal fun canSelectFiscalQuarter(
+    fiscalYear: String,
+    quarter: Int,
+    today: LocalDate = businessToday(),
+): Boolean = fiscalQuarterOrdinal(fiscalYear, quarter) <=
+    fiscalQuarterOrdinal(fiscalYearFor(today), fiscalQuarterFor(today))
+
 data class ReportsUiState(
     val period: ReportPeriod = ReportPeriod.DAILY,
     val onDate: LocalDate,
@@ -63,10 +86,37 @@ data class ReportsUiState(
             return when (period) {
                 ReportPeriod.DAILY -> onDate.isBefore(today)
                 ReportPeriod.MONTHLY -> month.isBefore(YearMonth.from(today))
-                ReportPeriod.QUARTERLY, ReportPeriod.YEARLY ->
+                ReportPeriod.QUARTERLY -> fiscalQuarterOrdinal(fiscalYear, quarter) <
+                    fiscalQuarterOrdinal(fiscalYearFor(today), fiscalQuarterFor(today))
+                ReportPeriod.YEARLY ->
                     fiscalStartYear(fiscalYear) < fiscalStartYear(fiscalYearFor(today))
             }
         }
+}
+
+internal enum class ReportPresentation {
+    INITIAL_LOADING,
+    BLOCKING_ERROR,
+    FRESH_EMPTY,
+    STALE_EMPTY,
+    FRESH_CONTENT,
+    STALE_CONTENT,
+}
+
+/** Pure render policy: a failed refresh can never masquerade as a confirmed
+ * empty period merely because an older empty snapshot exists. */
+internal fun reportPresentation(state: ReportsUiState): ReportPresentation = when {
+    state.report == null && state.error != null -> ReportPresentation.BLOCKING_ERROR
+    state.report == null -> ReportPresentation.INITIAL_LOADING
+    state.report.hasNothing && state.error != null -> ReportPresentation.STALE_EMPTY
+    state.report.hasNothing -> ReportPresentation.FRESH_EMPTY
+    state.error != null -> ReportPresentation.STALE_CONTENT
+    else -> ReportPresentation.FRESH_CONTENT
+}
+
+internal fun reportLoadError(error: Throwable): String = when (error) {
+    is ApiException -> error.message?.takeIf(String::isNotBlank) ?: "Could not load the report."
+    else -> "Could not refresh the report. Check the connection and try again."
 }
 
 /** The exact key this selection is cached under — see core/db/ReportSnapshots.kt. */
@@ -92,6 +142,7 @@ class ReportsViewModel : ViewModel() {
 
     private val api = ApiClient.create<ReportsApi>()
     private val db = DCompanyApp.instance.db
+    private val cacheIsolation = DCompanyApp.instance.cacheIsolation
 
     private val _state = MutableStateFlow(
         businessToday().let { today ->
@@ -112,6 +163,7 @@ class ReportsViewModel : ViewModel() {
      * as the right one.
      */
     private var inFlight: Job? = null
+    private var requestSerial: Long = 0
 
     init { load() }
 
@@ -138,7 +190,11 @@ class ReportsViewModel : ViewModel() {
     }
 
     fun setQuarter(quarter: Int) {
-        if (quarter !in 1..4 || _state.value.quarter == quarter) return
+        if (
+            quarter !in 1..4 ||
+            _state.value.quarter == quarter ||
+            !canSelectFiscalQuarter(_state.value.fiscalYear, quarter)
+        ) return
         _state.value = _state.value.copy(quarter = quarter)
         load()
     }
@@ -150,7 +206,13 @@ class ReportsViewModel : ViewModel() {
         when (s.period) {
             ReportPeriod.DAILY -> setDate(s.onDate.plusDays(delta.toLong()))
             ReportPeriod.MONTHLY -> setMonth(s.month.plusMonths(delta.toLong()))
-            ReportPeriod.QUARTERLY, ReportPeriod.YEARLY -> {
+            ReportPeriod.QUARTERLY -> {
+                val (fy, quarter) = shiftFiscalQuarter(s.fiscalYear, s.quarter, delta)
+                if (!canSelectFiscalQuarter(fy, quarter)) return
+                _state.value = s.copy(fiscalYear = fy, quarter = quarter)
+                load()
+            }
+            ReportPeriod.YEARLY -> {
                 val fy = fiscalYearOf(fiscalStartYear(s.fiscalYear) + delta)
                 _state.value = s.copy(fiscalYear = fy)
                 load()
@@ -172,6 +234,7 @@ class ReportsViewModel : ViewModel() {
     fun retry() = load()
 
     private fun load() {
+        val requestId = ++requestSerial
         inFlight?.cancel()
         val s = _state.value
         val key = cacheKey(s)
@@ -181,32 +244,47 @@ class ReportsViewModel : ViewModel() {
         // save.
         _state.value = s.copy(loading = true, error = null, report = null, fetchedAtMillis = null)
         inFlight = viewModelScope.launch {
-            db.reportSnapshotDao().cached<ReportData>(key)?.let { (cachedReport, fetchedAt) ->
-                _state.value = _state.value.copy(report = cachedReport, fetchedAtMillis = fetchedAt)
-            }
             try {
-                val report = when (s.period) {
-                    ReportPeriod.DAILY -> api.daily(s.onDate.toString())
-                    // YearMonth.toString() is exactly the "2026-08" the
-                    // backend validates yyyy_mm against.
-                    ReportPeriod.MONTHLY -> api.monthly(s.month.toString())
-                    ReportPeriod.QUARTERLY -> api.quarterly(s.fiscalYear, s.quarter)
-                    ReportPeriod.YEARLY -> api.yearly(s.fiscalYear)
+                db.reportSnapshotDao().cached<ReportData>(key)?.let { (cachedReport, fetchedAt) ->
+                    if (requestId == requestSerial) {
+                        _state.value = _state.value.copy(
+                            report = cachedReport,
+                            fetchedAtMillis = fetchedAt,
+                        )
+                    }
                 }
+                lateinit var report: ReportData
+                val committed = cacheIsolation.fetchAndCommitScoped(
+                    fetch = {
+                        when (s.period) {
+                            ReportPeriod.DAILY -> api.daily(s.onDate.toString())
+                            // YearMonth.toString() is exactly the "2026-08" the
+                            // backend validates yyyy_mm against.
+                            ReportPeriod.MONTHLY -> api.monthly(s.month.toString())
+                            ReportPeriod.QUARTERLY -> api.quarterly(s.fiscalYear, s.quarter)
+                            ReportPeriod.YEARLY -> api.yearly(s.fiscalYear)
+                        }
+                    },
+                    store = {
+                        report = it
+                        db.reportSnapshotDao().store(key, it)
+                    },
+                )
+                if (!committed || requestId != requestSerial) return@launch
                 val now = System.currentTimeMillis()
-                db.reportSnapshotDao().store(key, report)
                 _state.value = _state.value.copy(
-                    loading = false, report = report, fetchedAtMillis = now, error = null,
+                    report = report, fetchedAtMillis = now, error = null,
                 )
-            } catch (e: ApiException) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    // A cached report for this exact key is never mislabeled —
-                    // it stays on screen instead of being replaced by an
-                    // error banner. Only a period with no cache at all falls
-                    // back to the old error state.
-                    error = if (_state.value.report == null) (e.message ?: "Could not load the report.") else null,
-                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (requestId == requestSerial) {
+                    _state.value = _state.value.copy(error = reportLoadError(error))
+                }
+            } finally {
+                if (requestId == requestSerial) {
+                    _state.value = _state.value.copy(loading = false)
+                }
             }
         }
     }

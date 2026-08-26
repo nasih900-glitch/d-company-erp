@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.customers
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.CustomersAccess
+import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
+import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.CustomerWriteState
 import cloud.dcompany.erp.core.db.LocalCustomerEntity
@@ -122,6 +125,7 @@ class CustomersViewModel : ViewModel() {
      * genuinely in progress. This flag tracks only the customers pull itself.
      */
     private val pullingCustomers = MutableStateFlow(false)
+    @Volatile private var access = CustomersAccess()
 
     val state: StateFlow<CustomersUiState> = combine(
         combine(db.customerDao().observeCache(), db.customerDao().observeLocal(), ::Pair),
@@ -191,6 +195,14 @@ class CustomersViewModel : ViewModel() {
         notice.value = null
     }
 
+    fun updateAccess(next: CustomersAccess) {
+        access = next
+    }
+
+    private fun requireWrite(): Boolean = authorizeAction(access.canManageCustomers) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
     /**
      * A rejected write is parked, not retried automatically (see
      * SyncEngine.pushable — only `state = pending` rows are drained). Flip
@@ -204,20 +216,32 @@ class CustomersViewModel : ViewModel() {
      * to this function a silent no-op.
      */
     fun retrySync(customer: Customer) {
+        if (!requireWrite()) return
         val localId = customer.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.customerDao().getLocal(localId)?.let { row ->
-                db.customerDao().upsertLocal(
-                    row.copy(state = CustomerWriteState.PENDING, lastError = null, version = row.version + 1),
-                )
-                appCtx.sync.requestSync()
-            }
+            var queued = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.customerDao().getLocal(localId)?.let { row ->
+                        db.customerDao().upsertLocal(
+                            row.copy(
+                                state = CustomerWriteState.PENDING,
+                                lastError = null,
+                                version = row.version + 1,
+                            ),
+                        )
+                        queued = true
+                    }
+                }
+            ) return@launch
+            if (queued) appCtx.sync.requestSync()
         }
     }
 
     // --------------------------------------------------------------- editor
 
     fun startCreate() {
+        if (!requireWrite()) return
         editor.value = CustomerEditor(
             // A search for a phone number that found nothing is almost
             // always about to become that customer, so seed the form.
@@ -228,6 +252,7 @@ class CustomersViewModel : ViewModel() {
     }
 
     fun startEdit(customer: Customer) {
+        if (!requireWrite()) return
         editor.value = CustomerEditor(
             id = customer.id,
             originalPhone = customer.phone,
@@ -257,8 +282,10 @@ class CustomersViewModel : ViewModel() {
      * whether that's now or the next time this tablet comes back online.
      */
     fun save() {
+        if (!requireWrite()) return
         val ed = editor.value ?: return
         if (saving.value || !ed.phoneValid) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         saving.value = true
         saveError.value = null
 
@@ -266,76 +293,76 @@ class CustomersViewModel : ViewModel() {
             try {
                 val dao = db.customerDao()
                 val now = System.currentTimeMillis()
-                when {
-                    ed.isNew -> {
-                        val local = LocalCustomerEntity(
-                            localId = UUID.randomUUID().toString(),
-                            serverId = null,
-                            phone = ed.phone.trim(),
-                            name = ed.name.trim().ifBlank { null },
-                            email = ed.email.trim().ifBlank { null },
-                            birthday = ed.birthday?.asUtcInstantString(),
-                            notes = ed.notes.trim().ifBlank { null },
-                            createdAtMillis = now,
-                        )
-                        dao.upsertLocal(local)
-                        selectedPhone.value = local.phone
-                    }
-                    ed.id!!.startsWith(LOCAL_PREFIX) -> {
-                        // Still-unsynced create, being edited again before it
-                        // ever reached the server — amend the same row rather
-                        // than queueing a second create for the same draft.
-                        val localId = ed.id.removePrefix(LOCAL_PREFIX)
-                        val existing = dao.getLocal(localId)
-                        if (existing == null) {
-                            saveError.value = "This customer's local draft is gone — try again."
-                            saving.value = false
-                            return@launch
+                var selectedAfterSave: String? = null
+                var missingDraft = false
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        when {
+                            ed.isNew -> {
+                                val local = LocalCustomerEntity(
+                                    localId = UUID.randomUUID().toString(),
+                                    serverId = null,
+                                    phone = ed.phone.trim(),
+                                    name = ed.name.trim().ifBlank { null },
+                                    email = ed.email.trim().ifBlank { null },
+                                    birthday = ed.birthday?.asUtcInstantString(),
+                                    notes = ed.notes.trim().ifBlank { null },
+                                    createdAtMillis = now,
+                                )
+                                dao.upsertLocal(local)
+                                selectedAfterSave = local.phone
+                            }
+                            ed.id!!.startsWith(LOCAL_PREFIX) -> {
+                                val localId = ed.id.removePrefix(LOCAL_PREFIX)
+                                val existing = dao.getLocal(localId)
+                                if (existing == null) {
+                                    missingDraft = true
+                                } else {
+                                    val amended = existing.copy(
+                                        phone = ed.phone.trim(),
+                                        name = ed.name.trim().ifBlank { null },
+                                        email = ed.email.trim().ifBlank { null },
+                                        birthday = ed.birthday?.asUtcInstantString(),
+                                        notes = ed.notes.trim().ifBlank { null },
+                                        state = CustomerWriteState.PENDING,
+                                        lastError = null,
+                                        version = existing.version + 1,
+                                    )
+                                    dao.upsertLocal(amended)
+                                    selectedAfterSave = amended.phone
+                                }
+                            }
+                            else -> {
+                                val serverId = ed.id
+                                val existingPending = dao.pendingLocalForServerId(serverId)
+                                val phoneToSend = ed.phone.trim().takeIf {
+                                    ed.phoneUnlocked && it.isNotBlank() && it != ed.originalPhone
+                                }
+                                val local = (existingPending ?: LocalCustomerEntity(
+                                    localId = UUID.randomUUID().toString(),
+                                    serverId = serverId,
+                                    createdAtMillis = now,
+                                )).copy(
+                                    phone = phoneToSend ?: existingPending?.phone,
+                                    name = ed.name.trim().ifBlank { null },
+                                    email = ed.email.trim().ifBlank { null },
+                                    birthday = ed.birthday?.asUtcInstantString(),
+                                    notes = ed.notes.trim().ifBlank { null },
+                                    state = CustomerWriteState.PENDING,
+                                    lastError = null,
+                                    version = (existingPending?.version ?: -1) + 1,
+                                )
+                                dao.upsertLocal(local)
+                                selectedAfterSave = phoneToSend ?: ed.originalPhone
+                            }
                         }
-                        val amended = existing.copy(
-                            phone = ed.phone.trim(),
-                            name = ed.name.trim().ifBlank { null },
-                            email = ed.email.trim().ifBlank { null },
-                            birthday = ed.birthday?.asUtcInstantString(),
-                            notes = ed.notes.trim().ifBlank { null },
-                            state = CustomerWriteState.PENDING,
-                            lastError = null,
-                            // Bumped so a push already mid-flight for the OLD
-                            // snapshot of this row can tell, when it
-                            // completes, that it must not mark this newer
-                            // content synced — see LocalCustomerEntity's doc
-                            // comment and SyncEngine.pushCustomerOne.
-                            version = existing.version + 1,
-                        )
-                        dao.upsertLocal(amended)
-                        selectedPhone.value = amended.phone
                     }
-                    else -> {
-                        // Editing an already-synced customer — collapses into
-                        // any edit already queued against the same server id
-                        // rather than stacking a second PATCH behind it.
-                        val serverId = ed.id
-                        val existingPending = dao.pendingLocalForServerId(serverId)
-                        val phoneToSend = ed.phone.trim()
-                            .takeIf { ed.phoneUnlocked && it.isNotBlank() && it != ed.originalPhone }
-                        val local = (existingPending ?: LocalCustomerEntity(
-                            localId = UUID.randomUUID().toString(),
-                            serverId = serverId,
-                            createdAtMillis = now,
-                        )).copy(
-                            phone = phoneToSend ?: existingPending?.phone,
-                            name = ed.name.trim().ifBlank { null },
-                            email = ed.email.trim().ifBlank { null },
-                            birthday = ed.birthday?.asUtcInstantString(),
-                            notes = ed.notes.trim().ifBlank { null },
-                            state = CustomerWriteState.PENDING,
-                            lastError = null,
-                            version = (existingPending?.version ?: -1) + 1,
-                        )
-                        dao.upsertLocal(local)
-                        selectedPhone.value = phoneToSend ?: ed.originalPhone
-                    }
+                ) return@launch
+                if (missingDraft) {
+                    saveError.value = "This customer's local draft is gone — try again."
+                    saving.value = false
+                    return@launch
                 }
+                selectedPhone.value = selectedAfterSave
                 editor.value = null
                 saving.value = false
                 // Deliberately not "was already on file" feedback like the

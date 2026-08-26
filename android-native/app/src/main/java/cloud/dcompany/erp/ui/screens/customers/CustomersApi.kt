@@ -2,6 +2,7 @@ package cloud.dcompany.erp.ui.screens.customers
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -26,11 +27,15 @@ interface CustomersApi {
     ): List<Customer>
 
     @POST("customers")
-    suspend fun upsert(@Body body: CustomerUpsertBody): Customer
+    suspend fun upsert(
+        @Body body: CustomerUpsertBody,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Customer
 
     @PATCH("customers/{id}")
     suspend fun update(
         @Path("id") id: String,
         @Body body: CustomerUpdateBody,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Customer
 }

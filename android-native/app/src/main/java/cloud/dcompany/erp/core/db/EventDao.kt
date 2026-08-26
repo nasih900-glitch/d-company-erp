@@ -65,6 +65,10 @@ interface EventDao {
     @Query("UPDATE local_ticket_sales SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
     suspend fun retryTicketSale(localId: String)
 
+    /** Safe only after a definitive server rejection: no ticket was issued. */
+    @Query("DELETE FROM local_ticket_sales WHERE localId = :localId AND syncState = 'rejected'")
+    suspend fun discardRejectedTicketSale(localId: String)
+
     // ----------------------------------------------------------------- check-ins
     @Insert
     suspend fun insertLocalCheckIn(row: LocalCheckInEntity)

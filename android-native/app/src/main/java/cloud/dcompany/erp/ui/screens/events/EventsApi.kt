@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -35,6 +36,7 @@ interface EventsApi {
     suspend fun createEvent(
         @Body body: EventCreate,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Event
 
     @PATCH("events/{id}")
@@ -48,6 +50,7 @@ interface EventsApi {
         @Path("event_id") eventId: String,
         @Body body: TicketSell,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): List<EventTicket>
 
     @GET("events/{event_id}/tickets")
@@ -57,9 +60,10 @@ interface EventsApi {
     suspend fun checkIn(
         @Path("event_id") eventId: String,
         @Path("ticket_id") ticketId: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): EventTicket
 
     /** Both create and edit need a branch picker. */
-    @GET("settings/branches")
+    @GET("events/branches")
     suspend fun branches(): List<Branch>
 }

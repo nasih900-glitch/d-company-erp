@@ -60,10 +60,33 @@ interface TablesDao {
     )
     suspend fun markOrderRejected(localId: String, error: String)
 
+    /**
+     * Human-requested replay after the refusal has been corrected.
+     *
+     * Updating the captured row in place preserves both `localId` (the create
+     * idempotency identity) and any already-created `orderId` (so a send-leg
+     * refusal cannot create a second server order). The state predicate makes
+     * rapid/stale taps a no-op rather than another enqueue.
+     */
+    @Query(
+        "UPDATE local_table_orders SET state = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND state = 'rejected'",
+    )
+    suspend fun retryRejectedOrder(localId: String): Int
+
     @Query("SELECT COUNT(*) FROM local_table_orders WHERE state = 'rejected'")
     fun observeRejectedCount(): Flow<Int>
 
     /** For a "sending…" indicator on the table that's mid-flight — see TablesViewModel. */
+    @Query(
+        "SELECT * FROM local_table_orders WHERE state IN ('pending', 'rejected') " +
+            "ORDER BY createdAtMillis DESC",
+    )
+    fun observeUnresolvedOrders(): Flow<List<LocalTableOrderEntity>>
+
+    @Query("SELECT * FROM local_table_orders WHERE localId = :localId")
+    fun observeLocalOrderById(localId: String): Flow<LocalTableOrderEntity?>
+
     @Query("SELECT * FROM local_table_orders WHERE state = 'pending'")
     fun observePendingOrders(): Flow<List<LocalTableOrderEntity>>
 }

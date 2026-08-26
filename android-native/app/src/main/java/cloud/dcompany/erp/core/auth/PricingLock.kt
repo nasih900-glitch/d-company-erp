@@ -17,7 +17,14 @@ import kotlinx.coroutines.flow.asStateFlow
  * unlock after a restart is the safer default for a shared café tablet.
  */
 object PricingLock {
-    private data class Held(val token: String, val expiresAtMillis: Long)
+    private class Held(
+        val token: String,
+        val expiresAtMillis: Long,
+        val lineage: Any,
+        val owner: OutboxOwnerIdentity,
+    )
+
+    private val mutationLock = Any()
 
     private val held = MutableStateFlow<Held?>(null)
 
@@ -25,14 +32,25 @@ object PricingLock {
     /** For a small "Pricing unlocked" indicator, if a screen wants one. */
     val unlocked: StateFlow<Boolean> = _unlocked.asStateFlow()
 
-    fun unlock(token: String, expiresInSeconds: Int) {
-        held.value = Held(token, System.currentTimeMillis() + expiresInSeconds * 1000L)
-        _unlocked.value = true
+    internal fun unlock(token: String, expiresInSeconds: Int, session: PricingSessionLease) {
+        require(token.isNotBlank()) { "Pricing token cannot be blank" }
+        require(expiresInSeconds > 0) { "Pricing unlock must have a positive lifetime" }
+        synchronized(mutationLock) {
+            held.value = Held(
+                token = token,
+                expiresAtMillis = System.currentTimeMillis() + expiresInSeconds * 1000L,
+                lineage = session.lineage,
+                owner = session.owner,
+            )
+            _unlocked.value = true
+        }
     }
 
     fun lock() {
-        held.value = null
-        _unlocked.value = false
+        synchronized(mutationLock) {
+            held.value = null
+            _unlocked.value = false
+        }
     }
 
     /**
@@ -40,12 +58,18 @@ object PricingLock {
      * asks, same as the web app's own interceptor proactively clearing an
      * expired token rather than sending it and waiting for a 401.
      */
-    fun currentToken(): String? {
-        val h = held.value ?: return null
-        if (System.currentTimeMillis() >= h.expiresAtMillis) {
-            lock()
-            return null
+    internal fun currentToken(session: PricingSessionLease?): String? = synchronized(mutationLock) {
+        val h = held.value ?: return@synchronized null
+        if (
+            session == null ||
+            h.lineage !== session.lineage ||
+            h.owner != session.owner ||
+            System.currentTimeMillis() >= h.expiresAtMillis
+        ) {
+            held.value = null
+            _unlocked.value = false
+            return@synchronized null
         }
-        return h.token
+        h.token
     }
 }

@@ -2,6 +2,7 @@ package cloud.dcompany.erp.core.sync
 
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.auth.TokenStore
+import cloud.dcompany.erp.core.net.ClientIdentityInterceptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -61,6 +62,7 @@ class RealtimeClient(
         // Liveness is judged by the silence watchdog below, never a socket
         // timeout closing it out from under us.
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .addInterceptor(ClientIdentityInterceptor())
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }

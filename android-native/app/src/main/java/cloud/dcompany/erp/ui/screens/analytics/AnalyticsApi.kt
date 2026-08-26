@@ -12,6 +12,7 @@ data class DashboardKpis(
     @SerialName("revenue_gaming_minor") val revenueGamingMinor: Long = 0,
     @SerialName("revenue_hookah_minor") val revenueHookahMinor: Long = 0,
     @SerialName("revenue_events_minor") val revenueEventsMinor: Long = 0,
+    @SerialName("revenue_memberships_minor") val revenueMembershipsMinor: Long = 0,
     @SerialName("revenue_manual_collections_minor") val revenueManualCollectionsMinor: Long = 0,
     @SerialName("discounts_and_points_redeemed_minor") val discountsAndPointsRedeemedMinor: Long = 0,
     @SerialName("revenue_total_minor") val revenueTotalMinor: Long = 0,
@@ -32,6 +33,7 @@ data class DashboardKpis(
             "Gaming" to revenueGamingMinor,
             "Hookah" to revenueHookahMinor,
             "Events" to revenueEventsMinor,
+            "Memberships" to revenueMembershipsMinor,
             "Manual" to revenueManualCollectionsMinor,
         ).filter { it.second > 0 }.sortedByDescending { it.second }
 }
@@ -42,6 +44,7 @@ data class GrowthPeriod(
     @SerialName("revenue_minor") val revenueMinor: Long = 0,
     @SerialName("refunds_minor") val refundsMinor: Long = 0,
     @SerialName("manual_collections_minor") val manualCollectionsMinor: Long = 0,
+    @SerialName("memberships_minor") val membershipsMinor: Long = 0,
     @SerialName("orders_count") val ordersCount: Int = 0,
     @SerialName("avg_ticket_minor") val avgTicketMinor: Long = 0,
 )

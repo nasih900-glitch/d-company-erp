@@ -6,6 +6,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -64,18 +65,21 @@ interface MenuApi {
     suspend fun createCategory(
         @Body body: CategoryCreateBody,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): MenuCategory
 
     @PATCH("menu/categories/{id}")
     suspend fun updateCategory(
         @Path("id") id: String,
         @Body body: CategoryUpdateBody,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): MenuCategory
 
     @PATCH("menu/items/{id}")
     suspend fun updateItemDetails(
         @Path("id") id: String,
         @Body body: ItemDetailsUpdateBody,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): MenuItem
 
     /** Requires a live X-Pricing-Token — attached automatically by

@@ -39,11 +39,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +59,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -188,6 +198,7 @@ fun NoticeBanner(message: String, onDismiss: () -> Unit, modifier: Modifier = Mo
     AnimatedVisibility(visible = true, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         Row(
             modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+                .semantics { liveRegion = LiveRegionMode.Polite }
                 .padding(horizontal = Spacing.md, vertical = Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -203,6 +214,9 @@ fun NoticeBanner(message: String, onDismiss: () -> Unit, modifier: Modifier = Mo
 fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .semantics {
+                liveRegion = if (rejected) LiveRegionMode.Assertive else LiveRegionMode.Polite
+            }
             .padding(horizontal = Spacing.md, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -283,6 +297,11 @@ fun PickerField(
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
                     .background(Brand.SurfaceRaised)
+                    .semantics {
+                        role = Role.DropdownList
+                        contentDescription = "$label, $selectedLabel"
+                        stateDescription = if (open) "Expanded" else "Collapsed"
+                    }
                     .clickable(enabled = options.isNotEmpty()) { open = true }
                     .padding(horizontal = Spacing.md, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -294,7 +313,12 @@ fun PickerField(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                Text("▾", color = Brand.Gold, modifier = Modifier.graphicsLayer { rotationZ = rotation })
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Brand.Gold,
+                    modifier = Modifier.graphicsLayer { rotationZ = rotation },
+                )
             }
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                 options.forEach { (id, text) ->

@@ -3,7 +3,11 @@ package cloud.dcompany.erp.ui.screens.events
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.EventsAccess
 import cloud.dcompany.erp.core.auth.PricingLock
+import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
+import cloud.dcompany.erp.core.auth.authorizeAction
+import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
 import cloud.dcompany.erp.core.db.EventCacheEntity
 import cloud.dcompany.erp.core.db.EventTicketCacheEntity
 import cloud.dcompany.erp.core.db.LocalCheckInEntity
@@ -88,6 +92,7 @@ class EventsViewModel : ViewModel() {
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
     private val api = ApiClient.create<EventsApi>()
+    @Volatile private var access = EventsAccess()
 
     private val pulling = MutableStateFlow(false)
     private val loadError = MutableStateFlow<String?>(null)
@@ -180,9 +185,16 @@ class EventsViewModel : ViewModel() {
                 branchesFlow.value = cached
             }
             try {
-                val fresh = api.branches()
+                lateinit var fresh: List<Branch>
+                val committed = appCtx.cacheIsolation.fetchAndCommitScoped(
+                    fetch = { api.branches() },
+                    store = {
+                        fresh = it
+                        db.reportSnapshotDao().store(BRANCHES_CACHE_KEY, it)
+                    },
+                )
+                if (!committed) return@launch
                 branchesFlow.value = fresh
-                db.reportSnapshotDao().store(BRANCHES_CACHE_KEY, fresh)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -200,12 +212,25 @@ class EventsViewModel : ViewModel() {
 
     // -------------------------------------------------------------- dialogs
 
+    fun updateAccess(next: EventsAccess) {
+        access = next
+    }
+
+    private fun requireManage(): Boolean = authorizeAction(access.canManageEvents) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
+    private fun requireCheckIn(): Boolean = authorizeAction(access.canCheckInTickets) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
     /** Always online-only — see the class doc comment. Shows the unlock
      * dialog first if pricing isn't already unlocked (create always needs
      * it, since base_ticket_price_minor is a required create field). */
     fun openCreateForm() {
+        if (!requireManage()) return
         val open: () -> Unit = { dialog.value = EventsDialog.EventForm(editing = null) }
-        if (PricingLock.currentToken() != null) {
+        if (PricingLock.currentToken(appCtx.tokens.currentPricingSession()) != null) {
             open()
         } else {
             pendingAfterUnlock = open
@@ -216,10 +241,12 @@ class EventsViewModel : ViewModel() {
     /** Editing doesn't require an unlock up front — only submitting an
      * actual price change does (checked in saveEvent). */
     fun openEditForm(event: Event) {
+        if (!requireManage()) return
         dialog.value = EventsDialog.EventForm(editing = event)
     }
 
     fun openSellTickets(event: Event) {
+        if (!requireCheckIn()) return
         dialog.value = EventsDialog.SellTickets(event)
     }
 
@@ -229,6 +256,7 @@ class EventsViewModel : ViewModel() {
     }
 
     fun openConfirmDelete(event: Event) {
+        if (!requireManage()) return
         dialog.value = EventsDialog.ConfirmDelete(event)
     }
 
@@ -247,6 +275,11 @@ class EventsViewModel : ViewModel() {
     }
 
     fun pricingUnlocked() {
+        if (!requireManage()) {
+            showPricingUnlock.value = false
+            pendingAfterUnlock = null
+            return
+        }
         val action = pendingAfterUnlock
         showPricingUnlock.value = false
         pendingAfterUnlock = null
@@ -276,7 +309,9 @@ class EventsViewModel : ViewModel() {
         branchId: String?,
         priceChanged: Boolean,
     ) {
-        val run: () -> Unit = {
+        if (!requireManage()) return
+        val run: () -> Unit = run@{
+            if (!requireManage()) return@run
             if (!busy.value) {
                 busy.value = true
                 formError.value = null
@@ -330,7 +365,7 @@ class EventsViewModel : ViewModel() {
             }
         }
         val needsUnlock = editingId == null || priceChanged
-        if (!needsUnlock || PricingLock.currentToken() != null) {
+        if (!needsUnlock || PricingLock.currentToken(appCtx.tokens.currentPricingSession()) != null) {
             run()
         } else {
             pendingAfterUnlock = run
@@ -341,6 +376,7 @@ class EventsViewModel : ViewModel() {
     /** Status-only transition (Mark live / Cancel event) — never touches
      * price, so never needs a pricing unlock. */
     fun setEventStatus(event: Event, status: String) {
+        if (!requireManage()) return
         if (busy.value) return
         busy.value = true
         viewModelScope.launch {
@@ -359,6 +395,7 @@ class EventsViewModel : ViewModel() {
     }
 
     fun deleteEvent(event: Event) {
+        if (!requireManage()) return
         if (busy.value) return
         busy.value = true
         formError.value = null
@@ -387,53 +424,75 @@ class EventsViewModel : ViewModel() {
         seat: String,
         qty: Int,
         note: String,
-    ) = localMutate {
-        db.eventDao().insertLocalTicketSale(
-            LocalTicketSaleEntity(
-                localId = UUID.randomUUID().toString(),
-                eventId = eventId,
-                customerName = customerName.trim(),
-                customerPhone = customerPhone.trim().ifBlank { null },
-                seat = seat.trim().ifBlank { null },
-                qty = qty,
-                note = note.trim().ifBlank { null },
-                createdAtMillis = System.currentTimeMillis(),
-            ),
-        )
-        "Tickets queued — will sync when back online."
+    ) {
+        if (!requireCheckIn()) return
+        formError.value =
+            "Ticket issuing is temporarily disabled until payment, invoice, shift, " +
+                "and GST are recorded through POS. No ticket was created."
     }
 
     fun retryTicketSale(localId: String) {
+        if (!requireCheckIn()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.eventDao().retryTicketSale(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.eventDao().retryTicketSale(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
+        }
+    }
+
+    fun discardRejectedTicketSale(localId: String) {
+        if (!requireCheckIn()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.eventDao().discardRejectedTicketSale(localId)
+                }
+            ) return@launch
+            notice.value = "Rejected ticket draft removed. No server ticket was issued."
         }
     }
 
     // -------------------------------------------------------------- check-in
 
     fun checkIn(eventId: String, ticket: EventTicket) {
+        if (!requireCheckIn()) return
         if (busy.value) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            if (db.eventDao().pendingCheckInForTicket(ticket.id) != null) return@launch
             busy.value = true
-            db.eventDao().insertLocalCheckIn(
-                LocalCheckInEntity(
-                    localId = UUID.randomUUID().toString(),
-                    eventId = eventId,
-                    ticketId = ticket.id,
-                    createdAtMillis = System.currentTimeMillis(),
-                ),
-            )
+            var inserted = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (db.eventDao().pendingCheckInForTicket(ticket.id) == null) {
+                        db.eventDao().insertLocalCheckIn(
+                            LocalCheckInEntity(
+                                localId = UUID.randomUUID().toString(),
+                                eventId = eventId,
+                                ticketId = ticket.id,
+                                createdAtMillis = System.currentTimeMillis(),
+                            ),
+                        )
+                        inserted = true
+                    }
+                }
+            ) return@launch
             busy.value = false
+            if (!inserted) return@launch
             notice.value = "Check-in queued — will sync when back online."
             appCtx.sync.requestSync()
         }
     }
 
     fun retryCheckIn(localId: String) {
+        if (!requireCheckIn()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.eventDao().retryCheckIn(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.eventDao().retryCheckIn(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
         }
     }
@@ -445,11 +504,16 @@ class EventsViewModel : ViewModel() {
      * Same shape as InventoryViewModel.localMutate. */
     private fun localMutate(block: suspend () -> String) {
         if (busy.value) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
         viewModelScope.launch {
             try {
-                val message = block()
+                var message = ""
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        message = block()
+                    }
+                ) return@launch
                 busy.value = false
                 dialog.value = null
                 formError.value = null

@@ -79,6 +79,19 @@ interface OrderDao {
     @Query("SELECT * FROM local_orders ORDER BY createdAtMillis DESC LIMIT 100")
     fun observeRecent(): Flow<List<LocalOrderEntity>>
 
+    /**
+     * Definitive server refusals are deliberately excluded from the automatic
+     * outbox drain. Keep the complete list observable so the till can show the
+     * exact captured payment that needs a human decision instead of reducing
+     * it to an anonymous counter.
+     */
+    @Query("SELECT * FROM local_orders WHERE syncState = 'rejected' ORDER BY createdAtMillis DESC")
+    fun observeRejected(): Flow<List<LocalOrderEntity>>
+
+    /** Observe one captured sale until the server either confirms or refuses it. */
+    @Query("SELECT * FROM local_orders WHERE localId = :localId LIMIT 1")
+    fun observeByLocalId(localId: String): Flow<LocalOrderEntity?>
+
     @Query("SELECT COUNT(*) FROM local_orders WHERE syncState = 'pending'")
     fun observePendingCount(): Flow<Int>
 
@@ -105,6 +118,20 @@ interface OrderDao {
         error: String,
         state: String = SyncState.REJECTED,
     )
+
+    /**
+     * Human-authorised replay after the refusal's cause has been fixed.
+     *
+     * This mutates the original row rather than cloning it: [localId] is also
+     * the stable order/payment idempotency identity used by SyncEngine. The
+     * state guard makes double taps and stale UI actions no-ops.
+     */
+    @Query(
+        """UPDATE local_orders
+           SET syncState = 'pending', lastError = NULL
+           WHERE localId = :localId AND syncState = 'rejected'""",
+    )
+    suspend fun retryRejected(localId: String): Int
 }
 
 @Dao
@@ -162,19 +189,39 @@ interface SyncMetaDao {
         LocalCheckInEntity::class,
         MembershipTierCacheEntity::class,
         CustomerMembershipCacheEntity::class,
+        CustomerMembershipHistoryCacheEntity::class,
         LocalSubscriptionEntity::class,
         LocalMembershipCancellationEntity::class,
+        LocalMembershipRefundEntity::class,
+        MembershipPaymentTaskCacheEntity::class,
+        LocalMembershipPaymentActionEntity::class,
+        MembershipRefundTaskCacheEntity::class,
+        LocalMembershipRefundActionEntity::class,
+        MembershipRefundAttemptCacheEntity::class,
         CompanyCacheEntity::class,
         LocalCompanyEditEntity::class,
         BranchCacheEntity::class,
         LocalBranchEntity::class,
         TerminalCacheEntity::class,
         LocalTerminalEntity::class,
+        HeldOrderCacheEntity::class,
+        LocalHeldOrderPaymentEntity::class,
+        ServerOpenShiftEntity::class,
+        ShiftHistoryCacheEntity::class,
+        CafeBillCacheEntity::class,
+        LocalCafeBillEntity::class,
+        LocalCafeActionEntity::class,
+        LocalKitchenCancellationAckEntity::class,
     ],
-    version = 13,
+    version = 26,
     exportSchema = true,
 )
-@TypeConverters(KitchenLineListConverter::class, TableOrderLineListConverter::class)
+@TypeConverters(
+    KitchenLineListConverter::class,
+    KitchenCancellationListConverter::class,
+    TableOrderLineListConverter::class,
+    CafeOrderConverters::class,
+)
 abstract class ErpDatabase : RoomDatabase() {
     abstract fun menuDao(): MenuDao
     abstract fun menuWriteDao(): MenuWriteDao
@@ -184,6 +231,7 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun gamingDao(): GamingDao
     abstract fun kitchenDao(): KitchenDao
     abstract fun tablesDao(): TablesDao
+    abstract fun cafeOrderDao(): CafeOrderDao
     abstract fun refundDao(): RefundDao
     abstract fun reportSnapshotDao(): ReportSnapshotDao
     abstract fun customerDao(): CustomerDao
@@ -193,5 +241,11 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun financeDao(): FinanceDao
     abstract fun eventDao(): EventDao
     abstract fun membershipDao(): MembershipDao
+    abstract fun membershipPaymentDao(): MembershipPaymentDao
+    abstract fun membershipRefundMoneyDao(): MembershipRefundMoneyDao
     abstract fun settingsDao(): SettingsDao
+    abstract fun heldOrderDao(): HeldOrderDao
+    abstract fun outboxSafetyDao(): OutboxSafetyDao
+    abstract fun shiftCloseSafetyDao(): ShiftCloseSafetyDao
+    abstract fun cacheIsolationDao(): CacheIsolationDao
 }

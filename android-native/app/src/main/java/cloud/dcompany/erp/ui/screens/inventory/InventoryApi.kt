@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -13,11 +14,9 @@ import retrofit2.http.Query
  * Inventory endpoints, declared here rather than in the shared ErpApi so this
  * feature cannot collide with anyone else's.
  *
- * GRN and adjustments carry an Idempotency-Key because both move money: a GRN
- * creates costed batches and rewrites the ingredient's average cost, and an
- * adjustment writes off stock at batch cost. A receipt posted twice because a
- * tablet lost the reply mid-request would inflate both stock and purchase spend
- * with no trace that it was the same delivery.
+ * Every offline create carries a stable Idempotency-Key. Ingredient and supplier
+ * creates need it to recover an accepted POST whose response was lost; GRN and
+ * adjustment keys additionally protect stock and money from being applied twice.
  */
 interface InventoryApi {
 
@@ -25,49 +24,67 @@ interface InventoryApi {
     suspend fun ingredients(): List<Ingredient>
 
     @POST("inventory/ingredients")
-    suspend fun createIngredient(@Body body: IngredientCreate): Ingredient
+    suspend fun createIngredient(
+        @Body body: IngredientCreate,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Ingredient
 
     @PATCH("inventory/ingredients/{id}")
     suspend fun updateIngredient(
         @Path("id") id: String,
         @Body body: IngredientUpdate,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Ingredient
 
     /** Soft delete — existing batches stay in the audit trail. */
     @DELETE("inventory/ingredients/{id}")
-    suspend fun deleteIngredient(@Path("id") id: String)
+    suspend fun deleteIngredient(
+        @Path("id") id: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    )
 
     @GET("inventory/suppliers")
     suspend fun suppliers(): List<Supplier>
 
     @POST("inventory/suppliers")
-    suspend fun createSupplier(@Body body: SupplierBody): Supplier
+    suspend fun createSupplier(
+        @Body body: SupplierBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Supplier
 
     @PATCH("inventory/suppliers/{id}")
     suspend fun updateSupplier(
         @Path("id") id: String,
         @Body body: SupplierBody,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Supplier
 
     @DELETE("inventory/suppliers/{id}")
-    suspend fun deleteSupplier(@Path("id") id: String)
+    suspend fun deleteSupplier(
+        @Path("id") id: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    )
 
     @POST("inventory/grn")
     suspend fun postGrn(
         @Body body: GrnBody,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): GrnResult
 
     @POST("inventory/adjustments")
     suspend fun postAdjustment(
         @Body body: AdjustmentBody,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): AdjustmentResult
 
     @GET("inventory/batches")
     suspend fun batches(@Query("ingredient_id") ingredientId: String? = null): List<Batch>
 
     /** Both GRN and adjustments are branch-scoped, so the picker needs this. */
-    @GET("settings/branches")
+    @GET("inventory/branches")
     suspend fun branches(): List<Branch>
 }

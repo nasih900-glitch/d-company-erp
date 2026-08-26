@@ -4,7 +4,9 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
+import androidx.room.ColumnInfo
 import cloud.dcompany.erp.ui.screens.kitchen.KitchenLine
+import cloud.dcompany.erp.ui.screens.kitchen.KitchenCancellation
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -25,6 +27,16 @@ class KitchenLineListConverter {
         runCatching { kitchenJson.decodeFromString<List<KitchenLine>>(json) }.getOrDefault(emptyList())
 }
 
+class KitchenCancellationListConverter {
+    @TypeConverter
+    fun toJson(rows: List<KitchenCancellation>): String = kitchenJson.encodeToString(rows)
+
+    @TypeConverter
+    fun fromJson(json: String): List<KitchenCancellation> =
+        runCatching { kitchenJson.decodeFromString<List<KitchenCancellation>>(json) }
+            .getOrDefault(emptyList())
+}
+
 /** The active board — wholesale-replaced on every pull, exactly like the menu cache. */
 @Entity(tableName = "kitchen_order_cache")
 data class KitchenOrderCacheEntity(
@@ -37,6 +49,8 @@ data class KitchenOrderCacheEntity(
     val kitchenState: String,
     val minutesWaiting: Int = 0,
     val lines: List<KitchenLine> = emptyList(),
+    @ColumnInfo(defaultValue = "'[]'")
+    val pendingCancellations: List<KitchenCancellation> = emptyList(),
 )
 
 object KitchenAdvanceState {
@@ -62,5 +76,26 @@ data class LocalKitchenAdvanceEntity(
     val targetState: String,
     val requestedAtMillis: Long,
     val state: String = KitchenAdvanceState.PENDING,
+    val lastError: String? = null,
+)
+
+object KitchenCancellationAckState {
+    const val PENDING = "pending"
+    const val REJECTED = "rejected"
+}
+
+@Entity(
+    tableName = "local_kitchen_cancellation_acks",
+    indices = [
+        Index(value = ["orderId", "lineId"], unique = true),
+        Index(value = ["state"]),
+    ],
+)
+data class LocalKitchenCancellationAckEntity(
+    @PrimaryKey val localId: String,
+    val orderId: String,
+    val lineId: String,
+    val requestedAtMillis: Long,
+    val state: String = KitchenCancellationAckState.PENDING,
     val lastError: String? = null,
 )

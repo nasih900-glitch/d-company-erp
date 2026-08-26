@@ -38,8 +38,8 @@ data class MenuCategoryEntity(
  * whole design constraint: a GST invoice number comes from a single atomic
  * per-branch counter in Postgres (OrderPricingService.allocate), so a tablet
  * that mints its own would eventually collide with another terminal and put
- * two different sales under one tax invoice number. Offline therefore produces
- * a *provisional receipt*, and the tax invoice number is assigned on sync.
+     * two different sales under one tax invoice number. Offline therefore produces
+     * a *provisional sale record*, and the tax invoice number is assigned on sync.
  */
 @Entity(
     tableName = "local_orders",
@@ -75,6 +75,8 @@ object SyncState {
      * The server refused it for a business reason (closed shift, deleted item,
      * price change). Needs a human, never an automatic retry — retrying a
      * deterministic refusal forever is how a queue silently stops working.
+     * Once the cause is fixed, a human may explicitly move this same row back
+     * to pending; its unchanged localId keeps the replay idempotent.
      */
     const val REJECTED = "rejected"
 }

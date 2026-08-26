@@ -13,6 +13,7 @@ import cloud.dcompany.erp.core.db.TerminalCacheEntity
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +59,7 @@ data class SettingsUiState(
 
     // -- company (cache + Shape C pending edit) ------------------------------
     val companyLoading: Boolean = true,
+    val companyRefreshing: Boolean = false,
     val companyError: String? = null,
     val company: CompanyDto? = null,
     val companyForm: CompanyForm = CompanyForm(),
@@ -65,10 +67,12 @@ data class SettingsUiState(
     val companyFormError: String? = null,
     val companyNotice: String? = null,
     val companyPending: Boolean = false,
+    val companyPendingLocalId: String? = null,
     val companyRejectedError: String? = null,
 
     // -- branches (cache + Shape D create-only outbox) -----------------------
     val branchesLoading: Boolean = true,
+    val branchesRefreshing: Boolean = false,
     val branchesError: String? = null,
     val branches: List<BranchDto> = emptyList(),
     val pendingBranches: List<PendingBranchRow> = emptyList(),
@@ -79,6 +83,7 @@ data class SettingsUiState(
 
     // -- terminals (cache + Shape D create-only outbox) -----------------------
     val terminalsLoading: Boolean = false,
+    val terminalsError: String? = null,
     val allTerminals: List<TerminalDto> = emptyList(),
     val pendingTerminals: List<PendingTerminalRow> = emptyList(),
     val selectedBranchId: String? = null,
@@ -86,6 +91,7 @@ data class SettingsUiState(
     val terminalName: String = "",
     val terminalDeviceId: String = "",
     val terminalFormError: String? = null,
+    val terminalActionError: String? = null,
     val terminalNotice: String? = null,
 ) {
     val companyDirty: Boolean
@@ -99,6 +105,37 @@ data class SettingsUiState(
      * pattern as Memberships' customer_cache-only picker). */
     val terminals: List<TerminalDto>
         get() = allTerminals.filter { it.branchId == selectedBranchId }
+
+    val branchFormDirty: Boolean
+        get() {
+            val form = branchForm ?: return false
+            val original = form.id
+                ?.let { id -> branches.firstOrNull { it.id == id }?.toForm() }
+                ?: BranchForm()
+            return form != original
+        }
+}
+
+internal enum class SettingsReadPresentation {
+    INITIAL_LOADING,
+    BLOCKING_ERROR,
+    FRESH,
+    REFRESHING,
+    STALE,
+}
+
+internal fun settingsReadPresentation(
+    hasData: Boolean,
+    loading: Boolean,
+    error: String?,
+    emptyIsValid: Boolean = false,
+): SettingsReadPresentation = when {
+    !hasData && loading -> SettingsReadPresentation.INITIAL_LOADING
+    !hasData && error != null -> SettingsReadPresentation.BLOCKING_ERROR
+    !hasData && !emptyIsValid -> SettingsReadPresentation.INITIAL_LOADING
+    error != null -> SettingsReadPresentation.STALE
+    loading -> SettingsReadPresentation.REFRESHING
+    else -> SettingsReadPresentation.FRESH
 }
 
 /**
@@ -113,15 +150,13 @@ class SettingsViewModel : ViewModel() {
     private val db = appCtx.db
     private val api = ApiClient.create<SettingsApi>()
     private val keys = IdempotencyKeys()
+    private val cacheIsolation = appCtx.cacheIsolation
 
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     init {
         loadMe()
-        loadCompany()
-        loadBranches()
-        loadTerminalsCache()
         observeCompanyCache()
         observeBranchesCache()
         observeTerminalsCache()
@@ -129,6 +164,15 @@ class SettingsViewModel : ViewModel() {
 
     fun selectTab(tab: SettingsTab) {
         _state.value = _state.value.copy(tab = tab)
+        when (tab) {
+            SettingsTab.Account -> Unit
+            SettingsTab.Company -> loadCompany()
+            SettingsTab.Branches -> loadBranches()
+            SettingsTab.Terminals -> {
+                loadBranches()
+                loadTerminalsCache()
+            }
+        }
     }
 
     // ================================================================ account
@@ -142,17 +186,23 @@ class SettingsViewModel : ViewModel() {
             try {
                 val me = ApiClient.api.me()
                 _state.value = _state.value.copy(
-                    meLoading = false,
                     me = me,
                     selectedBranchId = _state.value.selectedBranchId ?: me.branchId,
                 )
-            } catch (e: ApiException) {
-                _state.value = _state.value.copy(meLoading = false, meError = e.readable())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    meError = error.settingsReadable("Could not refresh your account."),
+                )
+            } finally {
+                _state.value = _state.value.copy(meLoading = false)
             }
         }
     }
 
     fun requestPasswordCode() {
+        if (_state.value.accountBusy) return
         val email = _state.value.me?.email
         if (email.isNullOrBlank()) {
             _state.value = _state.value.copy(
@@ -164,14 +214,21 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val challenge = api.requestPasswordReset(PasswordResetRequestBody(email))
-                _state.value = _state.value.copy(accountBusy = false, challenge = challenge)
-            } catch (e: ApiException) {
-                _state.value = _state.value.copy(accountBusy = false, accountError = e.readable())
+                _state.value = _state.value.copy(challenge = challenge)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    accountError = error.settingsReadable("Could not send the approval code."),
+                )
+            } finally {
+                _state.value = _state.value.copy(accountBusy = false)
             }
         }
     }
 
     fun confirmPasswordChange(code: String, newPassword: String, confirmPassword: String) {
+        if (_state.value.accountBusy) return
         val challenge = _state.value.challenge ?: return
         if (newPassword.length < 10) {
             _state.value = _state.value.copy(
@@ -198,12 +255,17 @@ class SettingsViewModel : ViewModel() {
                     ),
                 )
                 _state.value = _state.value.copy(
-                    accountBusy = false,
                     challenge = null,
                     accountNotice = result.message.ifBlank { "Password updated." },
                 )
-            } catch (e: ApiException) {
-                _state.value = _state.value.copy(accountBusy = false, accountError = e.readable())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    accountError = error.settingsReadable("Could not change the password."),
+                )
+            } finally {
+                _state.value = _state.value.copy(accountBusy = false)
             }
         }
     }
@@ -232,6 +294,9 @@ class SettingsViewModel : ViewModel() {
                     company = effective ?: _state.value.company,
                     companyForm = if (seedForm) effective!!.toForm() else _state.value.companyForm,
                     companyPending = pending != null && pending.syncState != SettingsWriteState.SYNCED,
+                    companyPendingLocalId = pending
+                        ?.takeIf { it.syncState != SettingsWriteState.SYNCED }
+                        ?.localId,
                     companyRejectedError = pending
                         ?.takeIf { it.syncState == SettingsWriteState.REJECTED }?.lastError,
                 )
@@ -240,13 +305,25 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun loadCompany() {
+        _state.value = _state.value.copy(
+            companyLoading = _state.value.company == null,
+            companyRefreshing = _state.value.company != null,
+            companyError = null,
+        )
         viewModelScope.launch {
             try {
-                appCtx.sync.refresh("settings")
-            } catch (e: ApiException) {
-                if (_state.value.company == null) {
-                    _state.value = _state.value.copy(companyLoading = false, companyError = e.readable())
-                }
+                refreshCompanyCache()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    companyError = error.settingsReadable("Could not refresh company settings."),
+                )
+            } finally {
+                _state.value = _state.value.copy(
+                    companyLoading = false,
+                    companyRefreshing = false,
+                )
             }
         }
     }
@@ -274,44 +351,125 @@ class SettingsViewModel : ViewModel() {
      * cancel. A fresh edit before the last one syncs replaces it rather than
      * queueing a second (see SettingsDao.replacePendingCompanyEdit). */
     fun saveCompany() {
+        if (_state.value.companySaving) return
         val form = _state.value.companyForm
         form.validate()?.let { message ->
             _state.value = _state.value.copy(companyFormError = message)
             return
         }
+        val scopeLease = cacheIsolation.currentLease() ?: return
         _state.value = _state.value.copy(
             companySaving = true, companyFormError = null, companyNotice = null,
         )
         viewModelScope.launch {
-            db.settingsDao().replacePendingCompanyEdit(
-                LocalCompanyEditEntity(
-                    localId = UUID.randomUUID().toString(),
-                    name = form.name.trim(),
-                    legalName = form.legalName.trim().ifBlank { null },
-                    timezone = form.timezone.trim(),
-                    gstin = form.gstin.trim().uppercase().ifBlank { null },
-                    pan = form.pan.trim().uppercase().ifBlank { null },
-                    gstRegistrationType = form.gstRegistrationType,
-                    isComposition = form.isComposition,
-                    eInvoicingEnabled = form.eInvoicingEnabled,
-                    upiVpa = form.upiVpa.trim(),
-                    createdAtMillis = System.currentTimeMillis(),
-                ),
-            )
-            _state.value = _state.value.copy(
-                companySaving = false,
-                companyNotice = "Change queued — will sync when back online.",
-            )
-            clearNoticeLater { it.copy(companyNotice = null) }
-            appCtx.sync.requestSync()
+            try {
+                if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.settingsDao().replacePendingCompanyEdit(
+                            LocalCompanyEditEntity(
+                                localId = UUID.randomUUID().toString(),
+                                name = form.name.trim(),
+                                legalName = form.legalName.trim().ifBlank { null },
+                                timezone = form.timezone.trim(),
+                                gstin = form.gstin.trim().uppercase().ifBlank { null },
+                                pan = form.pan.trim().uppercase().ifBlank { null },
+                                gstRegistrationType = form.gstRegistrationType,
+                                isComposition = form.isComposition,
+                                eInvoicingEnabled = form.eInvoicingEnabled,
+                                upiVpa = form.upiVpa.trim(),
+                                createdAtMillis = System.currentTimeMillis(),
+                            ),
+                        )
+                    }
+                ) return@launch
+                _state.value = _state.value.copy(
+                    companyNotice = "Change queued — will sync when back online.",
+                )
+                clearNoticeLater { it.copy(companyNotice = null) }
+                appCtx.sync.requestSync()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    companyFormError = error.settingsReadable(
+                        "Could not save this company change on the tablet.",
+                    ),
+                )
+            } finally {
+                _state.value = _state.value.copy(companySaving = false)
+            }
         }
     }
 
     fun retryCompanyEdit() {
+        val localId = _state.value.companyPendingLocalId ?: return
+        val scopeLease = cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.settingsDao().pushableCompanyEdit()
-            appCtx.sync.requestSync()
+            var queued = false
+            if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                    queued = db.settingsDao().retryCompanyEdit(localId) == 1
+                }
+            ) return@launch
+            _state.value = _state.value.copy(
+                companyNotice = if (queued) {
+                    "Retry queued for the same company change. It will sync when online."
+                } else {
+                    "That company change is no longer rejected. Its current status is shown above."
+                },
+            )
+            if (queued) appCtx.sync.requestSync()
         }
+    }
+
+    fun discardRejectedCompanyEdit() {
+        val localId = _state.value.companyPendingLocalId ?: return
+        val scopeLease = cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            try {
+                var discarded = false
+                var cached: CompanyDto? = null
+                if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                        discarded = db.settingsDao().discardRejectedCompanyEdit(localId) == 1
+                        if (discarded) cached = db.settingsDao().company()?.toDto()
+                    }
+                ) return@launch
+                if (!discarded) {
+                    _state.value = _state.value.copy(
+                        companyNotice =
+                            "That company change is no longer rejected, so it was not discarded.",
+                    )
+                    return@launch
+                }
+                _state.value = _state.value.copy(
+                    company = cached,
+                    companyForm = cached?.toForm() ?: CompanyForm(),
+                    companyNotice =
+                        "Failed local company change discarded. Settings will refresh from the server when online.",
+                )
+                try {
+                    refreshCompanyCache()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    _state.value = _state.value.copy(
+                        companyError = error.settingsReadable(
+                            "The failed local change was discarded, but current company settings could not be refreshed.",
+                        ),
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    companyNotice = error.settingsReadable(
+                        "Could not discard the failed company change from this tablet.",
+                    ),
+                )
+            }
+        }
+    }
+
+    fun dismissCompanyNotice() {
+        _state.value = _state.value.copy(companyNotice = null)
     }
 
     // =============================================================== branches
@@ -336,13 +494,25 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun loadBranches() {
+        _state.value = _state.value.copy(
+            branchesLoading = _state.value.branches.isEmpty(),
+            branchesRefreshing = _state.value.branches.isNotEmpty(),
+            branchesError = null,
+        )
         viewModelScope.launch {
             try {
-                appCtx.sync.refresh("settings")
-            } catch (e: ApiException) {
-                if (_state.value.branches.isEmpty()) {
-                    _state.value = _state.value.copy(branchesLoading = false, branchesError = e.readable())
-                }
+                refreshBranchesCache()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    branchesError = error.settingsReadable("Could not refresh branches."),
+                )
+            } finally {
+                _state.value = _state.value.copy(
+                    branchesLoading = false,
+                    branchesRefreshing = false,
+                )
             }
         }
     }
@@ -373,6 +543,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun saveBranch() {
+        if (_state.value.branchSaving) return
         val form = _state.value.branchForm ?: return
         form.validate()?.let { message ->
             _state.value = _state.value.copy(branchFormError = message)
@@ -380,30 +551,48 @@ class SettingsViewModel : ViewModel() {
         }
         _state.value = _state.value.copy(branchSaving = true, branchFormError = null)
         if (form.isNew) {
+            val scopeLease = cacheIsolation.currentLease() ?: run {
+                _state.value = _state.value.copy(branchSaving = false)
+                return
+            }
             viewModelScope.launch {
-                db.settingsDao().insertLocalBranch(
-                    LocalBranchEntity(
-                        localId = UUID.randomUUID().toString(),
-                        name = form.name.trim(),
-                        code = form.code.trim().uppercase().ifBlank { null },
-                        address = form.address.trim().ifBlank { null },
-                        timezone = form.timezone.trim().ifBlank { null },
-                        opensAt = form.opensAt.trim().ifBlank { null },
-                        closesAt = form.closesAt.trim().ifBlank { null },
-                        stateCode = form.stateCode.trim().ifBlank { null },
-                        fssaiLicenseNo = form.fssaiLicenseNo.trim().ifBlank { null },
-                        tradeLicenseNo = form.tradeLicenseNo.trim().ifBlank { null },
-                        branchGstin = form.branchGstin.trim().uppercase().ifBlank { null },
-                        createdAtMillis = System.currentTimeMillis(),
-                    ),
-                )
-                _state.value = _state.value.copy(
-                    branchSaving = false,
-                    branchForm = null,
-                    branchNotice = "Branch \"${form.name.trim()}\" queued — will sync when back online.",
-                )
-                clearNoticeLater { it.copy(branchNotice = null) }
-                appCtx.sync.requestSync()
+                try {
+                    if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                            db.settingsDao().insertLocalBranch(
+                                LocalBranchEntity(
+                                    localId = UUID.randomUUID().toString(),
+                                    name = form.name.trim(),
+                                    code = form.code.trim().uppercase().ifBlank { null },
+                                    address = form.address.trim().ifBlank { null },
+                                    timezone = form.timezone.trim().ifBlank { null },
+                                    opensAt = form.opensAt.trim().ifBlank { null },
+                                    closesAt = form.closesAt.trim().ifBlank { null },
+                                    stateCode = form.stateCode.trim().ifBlank { null },
+                                    fssaiLicenseNo = form.fssaiLicenseNo.trim().ifBlank { null },
+                                    tradeLicenseNo = form.tradeLicenseNo.trim().ifBlank { null },
+                                    branchGstin = form.branchGstin.trim().uppercase().ifBlank { null },
+                                    createdAtMillis = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                    ) return@launch
+                    _state.value = _state.value.copy(
+                        branchForm = null,
+                        branchNotice = "Branch \"${form.name.trim()}\" queued — will sync when back online.",
+                    )
+                    clearNoticeLater { it.copy(branchNotice = null) }
+                    appCtx.sync.requestSync()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    _state.value = _state.value.copy(
+                        branchFormError = error.settingsReadable(
+                            "Could not save this branch on the tablet.",
+                        ),
+                    )
+                } finally {
+                    _state.value = _state.value.copy(branchSaving = false)
+                }
             }
             return
         }
@@ -416,24 +605,78 @@ class SettingsViewModel : ViewModel() {
                 val saved = api.updateBranch(form.id!!, body, key)
                 keys.done(operation)
                 _state.value = _state.value.copy(
-                    branchSaving = false,
                     branchForm = null,
                     branchNotice = "Branch \"${saved.name}\" saved.",
                 )
                 loadBranches()
                 clearNoticeLater { it.copy(branchNotice = null) }
-            } catch (e: ApiException) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchSaving = false, branchFormError = e.readable(),
+                    branchFormError = error.settingsReadable("Could not save this branch."),
                 )
+            } finally {
+                _state.value = _state.value.copy(branchSaving = false)
             }
         }
     }
 
     fun retryBranch(localId: String) {
+        val scopeLease = cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.settingsDao().retryBranch(localId)
-            appCtx.sync.requestSync()
+            var queued = false
+            if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                    queued = db.settingsDao().retryBranch(localId) == 1
+                }
+            ) return@launch
+            _state.value = _state.value.copy(
+                branchNotice = if (queued) {
+                    "Retry queued for the same branch. It will sync when online."
+                } else {
+                    "That branch is no longer rejected. Its current status is shown above."
+                },
+            )
+            if (queued) appCtx.sync.requestSync()
+        }
+    }
+
+    fun discardRejectedBranch(localId: String) {
+        val scopeLease = cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            try {
+                var discarded = false
+                if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                        discarded = db.settingsDao().discardRejectedBranch(localId) == 1
+                    }
+                ) return@launch
+                _state.value = _state.value.copy(
+                    branchNotice = if (discarded) {
+                        "Failed local branch discarded. Settings will refresh from the server when online."
+                    } else {
+                        "That branch is no longer rejected, so it was not discarded."
+                    },
+                )
+                if (discarded) {
+                    try {
+                        refreshBranchesCache()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        _state.value = _state.value.copy(
+                            branchesError = error.settingsReadable(
+                                "The failed local branch was discarded, but branches could not be refreshed.",
+                            ),
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    branchNotice = error.settingsReadable("Could not discard the failed branch."),
+                )
+            }
         }
     }
 
@@ -460,12 +703,16 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun loadTerminalsCache() {
-        _state.value = _state.value.copy(terminalsLoading = true)
+        _state.value = _state.value.copy(terminalsLoading = true, terminalsError = null)
         viewModelScope.launch {
             try {
-                appCtx.sync.refresh("settings")
-            } catch (e: ApiException) {
-                // Cached terminals (if any) stay showing.
+                refreshTerminalsCache()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    terminalsError = error.settingsReadable("Could not refresh terminals."),
+                )
             } finally {
                 _state.value = _state.value.copy(terminalsLoading = false)
             }
@@ -485,7 +732,13 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun addTerminal() {
-        val branchId = _state.value.selectedBranchId ?: return
+        if (_state.value.terminalBusy) return
+        val branchId = _state.value.selectedBranchId ?: run {
+            _state.value = _state.value.copy(
+                terminalFormError = "Select or create a branch before adding a terminal.",
+            )
+            return
+        }
         val name = _state.value.terminalName.trim()
         if (name.isEmpty()) {
             _state.value = _state.value.copy(terminalFormError = "Give the till a name.")
@@ -497,67 +750,171 @@ class SettingsViewModel : ViewModel() {
             )
             return
         }
-        _state.value = _state.value.copy(terminalBusy = true, terminalFormError = null)
-        viewModelScope.launch {
-            db.settingsDao().insertLocalTerminal(
-                LocalTerminalEntity(
-                    localId = UUID.randomUUID().toString(),
-                    branchId = branchId,
-                    name = name,
-                    deviceId = _state.value.terminalDeviceId.trim().ifBlank { null },
-                    createdAtMillis = System.currentTimeMillis(),
-                ),
-            )
+        val deviceId = _state.value.terminalDeviceId.trim().ifBlank { null }
+        val deviceIdError = terminalDeviceIdError(_state.value.terminalDeviceId)
+        if (deviceIdError != null) {
             _state.value = _state.value.copy(
-                terminalBusy = false,
-                terminalName = "",
-                terminalDeviceId = "",
-                terminalNotice = "Till \"$name\" queued — will sync when back online.",
+                terminalFormError = deviceIdError,
             )
-            clearNoticeLater { it.copy(terminalNotice = null) }
-            appCtx.sync.requestSync()
+            return
+        }
+        val scopeLease = cacheIsolation.currentLease() ?: return
+        _state.value = _state.value.copy(
+            terminalBusy = true,
+            terminalFormError = null,
+            terminalActionError = null,
+        )
+        viewModelScope.launch {
+            try {
+                if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.settingsDao().insertLocalTerminal(
+                            LocalTerminalEntity(
+                                localId = UUID.randomUUID().toString(),
+                                branchId = branchId,
+                                name = name,
+                                deviceId = deviceId,
+                                createdAtMillis = System.currentTimeMillis(),
+                            ),
+                        )
+                    }
+                ) return@launch
+                _state.value = _state.value.copy(
+                    terminalName = "",
+                    terminalDeviceId = "",
+                    terminalNotice = "Till \"$name\" queued — will sync when back online.",
+                )
+                clearNoticeLater { it.copy(terminalNotice = null) }
+                appCtx.sync.requestSync()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    terminalFormError = error.settingsReadable(
+                        "Could not save this terminal on the tablet.",
+                    ),
+                )
+            } finally {
+                _state.value = _state.value.copy(terminalBusy = false)
+            }
         }
     }
 
     fun retryTerminal(localId: String) {
+        val scopeLease = cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.settingsDao().retryTerminal(localId)
-            appCtx.sync.requestSync()
+            var queued = false
+            if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                    queued = db.settingsDao().retryTerminal(localId) == 1
+                }
+            ) return@launch
+            _state.value = _state.value.copy(
+                terminalNotice = if (queued) {
+                    "Retry queued for the same terminal. It will sync when online."
+                } else {
+                    "That terminal is no longer rejected. Its current status is shown above."
+                },
+            )
+            if (queued) appCtx.sync.requestSync()
+        }
+    }
+
+    fun discardRejectedTerminal(localId: String) {
+        val scopeLease = cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            try {
+                var discarded = false
+                if (!cacheIsolation.commitIfCurrent(scopeLease) {
+                        discarded = db.settingsDao().discardRejectedTerminal(localId) == 1
+                    }
+                ) return@launch
+                _state.value = _state.value.copy(
+                    terminalNotice = if (discarded) {
+                        "Failed local terminal discarded. Settings will refresh from the server when online."
+                    } else {
+                        "That terminal is no longer rejected, so it was not discarded."
+                    },
+                )
+                if (discarded) {
+                    try {
+                        refreshTerminalsCache()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        _state.value = _state.value.copy(
+                            terminalsError = error.settingsReadable(
+                                "The failed local terminal was discarded, but terminals could not be refreshed.",
+                            ),
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    terminalNotice = error.settingsReadable("Could not discard the failed terminal."),
+                )
+            }
         }
     }
 
     /** Deleting a terminal stays online-only (see SettingsApi's class doc)
      * — unchanged from before this phase. */
     fun deleteTerminal(terminal: TerminalDto) {
+        if (_state.value.terminalBusy) return
         val operation = "terminal:delete:${terminal.id}"
         val key = keys.keyFor(operation, terminal.id)
-        _state.value = _state.value.copy(terminalBusy = true, terminalFormError = null)
+        _state.value = _state.value.copy(
+            terminalBusy = true,
+            terminalActionError = null,
+        )
         viewModelScope.launch {
             try {
                 api.deleteTerminal(terminal.id, key)
                 keys.done(operation)
                 _state.value = _state.value.copy(
-                    terminalBusy = false,
                     terminalNotice = "Till \"${terminal.name}\" removed.",
                 )
                 loadTerminalsCache()
                 clearNoticeLater { it.copy(terminalNotice = null) }
-            } catch (e: ApiException) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 // 409 here is the useful case: the backend refuses to delete a
                 // till that shifts or orders point at, because that history is
                 // what a GST audit reads.
                 _state.value = _state.value.copy(
-                    terminalBusy = false, terminalFormError = e.readable(),
+                    terminalActionError = error.settingsReadable("Could not delete this terminal."),
                 )
+            } finally {
+                _state.value = _state.value.copy(terminalBusy = false)
             }
         }
     }
 
     fun dismissTerminalFeedback() {
-        _state.value = _state.value.copy(terminalFormError = null, terminalNotice = null)
+        _state.value = _state.value.copy(
+            terminalFormError = null,
+            terminalActionError = null,
+            terminalNotice = null,
+        )
     }
 
     // ================================================================ helpers
+
+    /** Settings needs the outcome, unlike the broad background refresh API
+     * which deliberately absorbs expected offline failures. These narrow
+     * pulls retain the same cache-scope lease before committing Room rows. */
+    private suspend fun refreshCompanyCache() {
+        appCtx.sync.refreshSettingsCompany()
+    }
+
+    private suspend fun refreshBranchesCache() {
+        appCtx.sync.refreshSettingsBranches()
+    }
+
+    private suspend fun refreshTerminalsCache() {
+        appCtx.sync.refreshSettingsTerminals()
+    }
 
     private fun clearNoticeLater(block: (SettingsUiState) -> SettingsUiState) {
         viewModelScope.launch {
@@ -648,6 +1005,10 @@ private fun ApiException.readable(): String {
         else -> server
     }
 }
+
+internal fun Throwable.settingsReadable(fallback: String): String =
+    (this as? ApiException)?.readable()
+        ?: fallback
 
 /**
  * One key per logical attempt, reused across retries of that same attempt.

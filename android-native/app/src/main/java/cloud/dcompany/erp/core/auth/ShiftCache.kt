@@ -4,33 +4,44 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import cloud.dcompany.erp.core.net.MeResponse
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
 
 private val Context.shiftDataStore by preferencesDataStore(name = "dcompany_shift")
 
 /**
- * The last known open shift for this terminal.
+ * Signed-in-user data cached outside Room, so it's available before the
+ * database has anything to say.
  *
- * Shift membership is server state, but the till has to keep billing through a
- * dropped link, and a sale must be attached to a shift for the cash drawer to
- * reconcile. Caching the id is what makes an offline sale possible at all.
- *
- * It is intentionally *not* treated as proof the shift is still open: the
- * server rechecks on sync, and a sale against a closed shift is refused and
- * queued for an owner rather than silently accepted.
+ * The shift itself is not cached here — every screen that needs "is a shift
+ * open" reads Room's `local_shifts` table directly (the same table
+ * ShiftViewModel writes), which is both the durable offline record and the
+ * single source of truth. An earlier version of this class duplicated that
+ * id into a separate DataStore key for screens that couldn't easily observe
+ * Room; that duplication was itself a bug — the two writes (Room's insert
+ * and this cache's write) weren't atomic, so a process death between them
+ * left Room correctly showing an open shift while this cache silently
+ * stayed empty, and every screen still reading from here saw "no shift
+ * open" forever, with no way to recover short of closing and reopening.
  */
 class ShiftCache(private val context: Context) {
 
-    private val key = stringPreferencesKey("open_shift_id")
     private val profileKey = stringPreferencesKey("me_profile_json")
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    @Volatile private var cachedProfileJson: String? = null
+    private val _profile = MutableStateFlow<MeResponse?>(null)
+    /** Current signed-in profile for opener/protected-access UI policy. */
+    val profile: StateFlow<MeResponse?> = _profile.asStateFlow()
 
-    suspend fun cachedShiftId(): String? =
-        context.shiftDataStore.data.first()[key]
-
-    suspend fun remember(shiftId: String?) {
-        context.shiftDataStore.edit {
-            if (shiftId == null) it.remove(key) else it[key] = shiftId
-        }
+    /** Loaded once before Room/UI construction, like tokens and terminal id. */
+    suspend fun loadProfile() {
+        val raw = context.shiftDataStore.data.first()[profileKey]
+        cachedProfileJson = raw
+        _profile.value = raw?.let(::decodeProfile)
     }
 
     /**
@@ -46,12 +57,17 @@ class ShiftCache(private val context: Context) {
      * the server for any request to succeed, and a genuine 401/403 still signs
      * the user out. It only avoids blocking local work on a network round trip.
      */
-    suspend fun cachedProfile(): String? =
-        context.shiftDataStore.data.first()[profileKey]
+    suspend fun cachedProfile(): String? = cachedProfileJson
 
-    suspend fun rememberProfile(json: String?) {
+    suspend fun rememberProfile(profileJson: String?) {
         context.shiftDataStore.edit {
-            if (json == null) it.remove(profileKey) else it[profileKey] = json
+            if (profileJson == null) it.remove(profileKey) else it[profileKey] = profileJson
         }
+        cachedProfileJson = profileJson
+        _profile.value = profileJson?.let(::decodeProfile)
     }
+
+    private fun decodeProfile(raw: String): MeResponse? = runCatching {
+        json.decodeFromString(MeResponse.serializer(), raw)
+    }.getOrNull()
 }

@@ -140,9 +140,11 @@ data class CapitalEntryCreate(
  */
 @Serializable
 data class ProfitAndLoss(
+    @SerialName("accounting_basis") val accountingBasis: String = "operational_receipt",
     @SerialName("period_start") val periodStart: String,
     @SerialName("period_end") val periodEnd: String,
     @SerialName("revenue_minor") val revenueMinor: Long,
+    @SerialName("memberships_minor") val membershipsMinor: Long = 0,
     @SerialName("cogs_minor") val cogsMinor: Long,
     @SerialName("gross_profit_minor") val grossProfitMinor: Long,
     @SerialName("expenses_minor") val expensesMinor: Long,

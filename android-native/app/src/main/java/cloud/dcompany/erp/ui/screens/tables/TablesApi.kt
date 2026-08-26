@@ -1,10 +1,9 @@
 package cloud.dcompany.erp.ui.screens.tables
 
-import cloud.dcompany.erp.core.net.CreateOrderRequest
-import cloud.dcompany.erp.core.net.Order
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -18,16 +17,45 @@ interface TablesApi {
     suspend fun tables(): List<CafeTable>
 
     /**
-     * Opens a bill against a table. Reuses the shared CreateOrderRequest so the
-     * table order and the POS order stay one contract — a second, slightly
-     * different order payload is how the two drift apart.
+     * Opens the first table round. Stable client line IDs are required for
+     * crash-safe replay and for matching a later cancellation to the exact
+     * kitchen line the waiter saw.
      */
     @POST("pos/orders")
     suspend fun createOrder(
-        @Body body: CreateOrderRequest,
+        @Body body: TableOrderCreateBody,
         @Header("Idempotency-Key") key: String,
-    ): Order
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): TableOrder
+
+    @POST("pos/orders/{id}/lines")
+    suspend fun appendRound(
+        @Path("id") id: String,
+        @Body body: OrderLinesAppendBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): TableOrder
+
+    @POST("pos/orders/{orderId}/lines/{lineId}/void")
+    suspend fun voidLine(
+        @Path("orderId") orderId: String,
+        @Path("lineId") lineId: String,
+        @Body body: VoidOrderLineBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): TableOrder
 
     @PATCH("pos/orders/{id}/send-to-pos")
-    suspend fun sendToPos(@Path("id") id: String): Order
+    suspend fun sendToPos(
+        @Path("id") id: String,
+        @Body body: SendToPosBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): TableOrder
+
+    @GET("pos/table-orders/active")
+    suspend fun activeOrders(): List<TableOrder>
+
+    @GET("pos/orders/{id}")
+    suspend fun order(@Path("id") id: String): TableOrder
 }

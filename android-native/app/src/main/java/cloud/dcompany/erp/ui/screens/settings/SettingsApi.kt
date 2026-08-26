@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -41,6 +42,7 @@ interface SettingsApi {
     suspend fun updateCompany(
         @Body body: CompanyUpdateBody,
         @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): CompanyDto
 
     @GET("settings/branches")
@@ -54,6 +56,7 @@ interface SettingsApi {
     suspend fun createBranch(
         @Body body: BranchWriteBody,
         @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): BranchDto
 
     @PATCH("settings/branches/{id}")
@@ -61,6 +64,7 @@ interface SettingsApi {
         @Path("id") id: String,
         @Body body: BranchWriteBody,
         @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): BranchDto
 
     @GET("settings/terminals")
@@ -70,6 +74,7 @@ interface SettingsApi {
     suspend fun createTerminal(
         @Body body: TerminalCreateBody,
         @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): TerminalDto
 
     /** 204 on success; 409 when the till has shift, order or audit history. */
@@ -77,6 +82,7 @@ interface SettingsApi {
     suspend fun deleteTerminal(
         @Path("id") id: String,
         @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     )
 
     /**

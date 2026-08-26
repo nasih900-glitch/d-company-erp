@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.PricingApi
 import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.auth.PricingUnlockRequest
+import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.ui.theme.Brand
@@ -43,6 +44,7 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val api = remember { ApiClient.create<PricingApi>() }
+    val tokens = DCompanyApp.instance.tokens
 
     AlertDialog(
         onDismissRequest = { if (!loading) onDismiss() },
@@ -73,21 +75,36 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
         },
         confirmButton = {
             Button(
-                enabled = password.isNotBlank() && !loading,
+                enabled = !loading,
                 onClick = {
-                    loading = true
-                    error = null
-                    scope.launch {
-                        try {
-                            val result = api.unlock(PricingUnlockRequest(password))
-                            PricingLock.unlock(result.pricingToken, result.expiresIn)
-                            loading = false
-                            onUnlocked()
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            loading = false
-                            error = (e as? ApiException)?.message ?: "Could not unlock pricing."
+                    if (password.isBlank()) {
+                        error = "Enter your account password to continue."
+                    } else {
+                        val session = tokens.currentPricingSession()
+                        if (session == null) {
+                            error = "Your sign-in changed. Sign in again before changing prices."
+                            return@Button
+                        }
+                        loading = true
+                        error = null
+                        scope.launch {
+                            try {
+                                val result = api.unlock(PricingUnlockRequest(password))
+                                if (!tokens.isCurrent(session)) {
+                                    PricingLock.lock()
+                                    loading = false
+                                    error = "Your sign-in changed. Unlock pricing again."
+                                    return@launch
+                                }
+                                PricingLock.unlock(result.pricingToken, result.expiresIn, session)
+                                loading = false
+                                onUnlocked()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                loading = false
+                                error = (e as? ApiException)?.message ?: "Could not unlock pricing."
+                            }
                         }
                     }
                 },

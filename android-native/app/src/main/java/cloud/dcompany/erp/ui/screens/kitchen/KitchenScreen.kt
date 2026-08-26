@@ -22,10 +22,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -35,14 +35,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,6 +57,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.KitchenAccess
+import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
+import cloud.dcompany.erp.core.db.LocalKitchenCancellationAckEntity
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import kotlinx.coroutines.delay
@@ -65,26 +76,58 @@ import kotlinx.coroutines.isActive
  * merely unreachable.
  */
 @Composable
-fun KitchenScreen(vm: KitchenViewModel = viewModel()) {
+fun KitchenScreen(
+    access: KitchenAccess = KitchenAccess(),
+    onExit: () -> Unit = {},
+    vm: KitchenViewModel = viewModel(),
+) {
     val state by vm.state.collectAsState()
+    var showRecovery by remember { mutableStateOf(false) }
+    var showCancellationRecovery by remember { mutableStateOf(false) }
+    var discardCandidate by remember { mutableStateOf<LocalKitchenAdvanceEntity?>(null) }
+    SideEffect { vm.updateAccess(access) }
+    LaunchedEffect(showRecovery, state.rejectedAdvances.size) {
+        if (showRecovery && state.rejectedAdvances.isEmpty()) showRecovery = false
+    }
+    LaunchedEffect(showCancellationRecovery, state.rejectedCancellationAcks.size) {
+        if (showCancellationRecovery && state.rejectedCancellationAcks.isEmpty()) {
+            showCancellationRecovery = false
+        }
+    }
 
     KeepScreenOn()
 
-    // Polling replaces the web build's realtime subscription — this app has no
-    // socket layer yet. Tied to RESUMED so a tablet that is off or showing
-    // another screen is not hammering the server every five seconds.
+    // Realtime is the primary update path; this visible-screen poll is a
+    // safety net. The ViewModel is activity-scoped, so the loop belongs here:
+    // composition cancellation stops it immediately when staff leave KDS.
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var nextRefreshAtMillis = 0L
             while (isActive) {
-                vm.refresh()
-                delay(KITCHEN_POLL_MS)
+                val now = System.currentTimeMillis()
+                vm.tick()
+                if (now >= nextRefreshAtMillis) {
+                    vm.refresh()
+                    nextRefreshAtMillis = now + KITCHEN_POLL_MS
+                }
+                delay(1_000)
             }
         }
     }
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        KitchenHeader(state, onToggleServed = vm::setIncludeServed, onRefresh = vm::retry)
+        KitchenHeader(
+            state,
+            onToggleServed = vm::setIncludeServed,
+            onRefresh = vm::retry,
+            onExit = onExit,
+        )
+        if (!access.canAdvanceTickets) ViewOnlyNotice()
+
+        state.notice?.let { message ->
+            Banner(message, Brand.Good, "Dismiss", vm::dismissNotice)
+        }
 
         // With tickets on screen an error is a banner, never a takeover.
         state.error?.let { message ->
@@ -92,7 +135,15 @@ fun KitchenScreen(vm: KitchenViewModel = viewModel()) {
                 Banner(message, Brand.Danger, "Dismiss", vm::dismissError)
             }
         }
-        if (state.error == null && state.stale && state.orders.isNotEmpty()) {
+        state.refreshError?.let { message ->
+            if (state.orders.isNotEmpty()) {
+                Banner(message, Brand.Danger, "Retry", vm::retry)
+            }
+        }
+        if (
+            state.error == null && state.refreshError == null &&
+            state.stale && state.orders.isNotEmpty()
+        ) {
             Banner(
                 "Not updating — this board may be out of date.",
                 Brand.GoldMuted,
@@ -100,17 +151,57 @@ fun KitchenScreen(vm: KitchenViewModel = viewModel()) {
                 vm::retry,
             )
         }
+        if (state.rejectedAdvances.isNotEmpty()) {
+            val count = state.rejectedAdvances.size
+            Banner(
+                if (count == 1) {
+                    "1 kitchen update needs review before this account can sign out."
+                } else {
+                    "$count kitchen updates need review before this account can sign out."
+                },
+                Brand.Danger,
+                "Review",
+                { showRecovery = true },
+            )
+        } else if (state.pendingAdvances.isNotEmpty()) {
+            val count = state.pendingAdvances.size
+            Banner(
+                if (count == 1) {
+                    "1 kitchen update is saved and waiting for server confirmation."
+                } else {
+                    "$count kitchen updates are saved and waiting for server confirmation."
+                },
+                Brand.GoldMuted,
+                "Sync now",
+                vm::syncSavedAdvances,
+            )
+        }
+        if (state.rejectedCancellationAcks.isNotEmpty()) {
+            Banner(
+                "${state.rejectedCancellationAcks.size} cancellation acknowledgement(s) need review.",
+                Brand.Danger,
+                "Review",
+                { showCancellationRecovery = true },
+            )
+        } else if (state.pendingCancellationAcks.isNotEmpty()) {
+            Banner(
+                "${state.pendingCancellationAcks.size} cancellation acknowledgement(s) saved and syncing.",
+                Brand.GoldMuted,
+                "Sync now",
+                vm::syncSavedAdvances,
+            )
+        }
 
         when {
-            !state.everSynced && state.orders.isEmpty() && state.error == null ->
+            !state.everSynced && state.orders.isEmpty() && state.blockingLoadError == null ->
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
                     CircularProgressIndicator(color = Brand.Gold)
                 }
 
-            state.error != null && state.orders.isEmpty() ->
+            state.blockingLoadError != null && state.orders.isEmpty() ->
                 CentredMessage(
                     title = "Cannot load the kitchen queue",
-                    body = state.error!!,
+                    body = state.blockingLoadError!!,
                     actionLabel = "Retry",
                     onAction = vm::retry,
                 )
@@ -127,8 +218,57 @@ fun KitchenScreen(vm: KitchenViewModel = viewModel()) {
                 onAction = vm::retry,
             )
 
-            else -> Board(state, vm::advance)
+            else -> Board(
+                state = state,
+                canAdvance = access.canAdvanceTickets,
+                onAdvance = vm::advance,
+                onAcknowledgeCancellation = vm::acknowledgeCancellation,
+            )
         }
+    }
+
+    if (showRecovery && discardCandidate == null) {
+        KitchenAdvanceRecoveryDialog(
+            rows = state.rejectedAdvances,
+            canRetry = access.canAdvanceTickets,
+            onRetry = vm::retryRejectedAdvance,
+            onRemove = { discardCandidate = it },
+            onDismiss = { showRecovery = false },
+        )
+    }
+
+    if (showCancellationRecovery) {
+        KitchenCancellationRecoveryDialog(
+            rows = state.rejectedCancellationAcks,
+            canRetry = access.canAdvanceTickets,
+            onRetry = vm::retryRejectedCancellationAck,
+            onDismiss = { showCancellationRecovery = false },
+        )
+    }
+
+    discardCandidate?.let { row ->
+        AlertDialog(
+            onDismissRequest = { discardCandidate = null },
+            title = { Text("Remove this saved kitchen update?") },
+            text = {
+                Text(
+                    "This changes only this tablet; it does not move the server ticket. " +
+                        "Remove it only after checking the ticket is already correct, or when " +
+                        "you will advance it again from the current server state.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        discardCandidate = null
+                        vm.discardRejectedAdvance(row.localId)
+                    },
+                ) { Text("Remove saved update") }
+            },
+            dismissButton = {
+                TextButton(onClick = { discardCandidate = null }) { Text("Keep it") }
+            },
+        )
     }
 }
 
@@ -162,6 +302,7 @@ private fun KitchenHeader(
     state: KitchenUiState,
     onToggleServed: (Boolean) -> Unit,
     onRefresh: () -> Unit,
+    onExit: () -> Unit,
 ) {
     Column(
         Modifier
@@ -194,6 +335,9 @@ private fun KitchenHeader(
                 )
                 OutlinedButton(onClick = onRefresh, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Refresh")
+                }
+                Button(onClick = onExit, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Exit KDS")
                 }
             }
         }
@@ -237,7 +381,11 @@ private fun CountChip(label: String, colour: Color) {
 @Composable
 private fun Banner(message: String, colour: Color, actionLabel: String, onAction: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(colour).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier
+            .fillMaxWidth()
+            .background(colour)
+            .semantics { liveRegion = LiveRegionMode.Assertive }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -251,6 +399,119 @@ private fun Banner(message: String, colour: Color, actionLabel: String, onAction
             Text(actionLabel, color = Brand.Background, fontWeight = FontWeight.Bold)
         }
     }
+}
+
+@Composable
+private fun KitchenAdvanceRecoveryDialog(
+    rows: List<LocalKitchenAdvanceEntity>,
+    canRetry: Boolean,
+    onRetry: (String) -> Unit,
+    onRemove: (LocalKitchenAdvanceEntity) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review saved kitchen updates") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "These updates were kept because the server could not safely apply or " +
+                        "confirm them. Check each ticket before choosing an action.",
+                    color = Brand.ForegroundMuted,
+                )
+                if (!canRetry) {
+                    Text(
+                        "This account can view recovery but cannot resend a kitchen update. " +
+                            "Check the ticket, then remove only a failed local update.",
+                        color = Brand.GoldMuted,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(rows, key = { it.localId }) { row ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(Radius.shapeMd)
+                                .background(Brand.SurfaceRaised)
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            val target = KitchenState.from(row.targetState)?.label
+                                ?: row.targetState
+                            Text(
+                                "Ticket #${row.orderId.take(8)} · move to $target",
+                                color = Brand.Foreground,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                row.lastError ?: "The server did not provide a reason.",
+                                color = Brand.Danger,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(
+                                    onClick = { onRetry(row.localId) },
+                                    enabled = canRetry,
+                                ) { Text("Check again") }
+                                TextButton(onClick = { onRemove(row) }) {
+                                    Text("Remove saved update")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+@Composable
+private fun KitchenCancellationRecoveryDialog(
+    rows: List<LocalKitchenCancellationAckEntity>,
+    canRetry: Boolean,
+    onRetry: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review cancellation acknowledgements") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(rows, key = { it.localId }) { row ->
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            "Ticket #${row.orderId.take(8)} · cancelled line ${row.lineId.take(8)}",
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            row.lastError ?: "The server did not provide a reason.",
+                            color = Brand.Danger,
+                        )
+                        TextButton(
+                            onClick = { onRetry(row.localId) },
+                            enabled = canRetry,
+                        ) { Text("Refresh and retry acknowledgement") }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 @Composable
@@ -287,13 +548,13 @@ private fun CentredMessage(
  * pointing at a ticket is a gloved finger and not a mouse.
  */
 @Composable
-private fun Board(state: KitchenUiState, onAdvance: (KitchenOrder) -> Unit) {
-    val lanes = buildList {
-        add(KitchenState.RECEIVED)
-        add(KitchenState.PREPARING)
-        add(KitchenState.READY)
-        if (state.includeServed) add(KitchenState.SERVED)
-    }
+private fun Board(
+    state: KitchenUiState,
+    canAdvance: Boolean,
+    onAdvance: (KitchenOrder) -> Unit,
+    onAcknowledgeCancellation: (String, String) -> Unit,
+) {
+    val sections = buildKitchenBoardSections(state)
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 700.dp
@@ -302,38 +563,78 @@ private fun Board(state: KitchenUiState, onAdvance: (KitchenOrder) -> Unit) {
                 Modifier.fillMaxSize().padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                lanes.forEach { lane ->
+                sections.forEach { section ->
                     Lane(
-                        title = lane.label,
-                        orders = state.lane(lane),
+                        title = section.title,
+                        orders = section.orders,
                         state = state,
+                        canAdvance = canAdvance,
                         onAdvance = onAdvance,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                if (state.unknownState.isNotEmpty()) {
-                    Lane(
-                        title = "Other",
-                        orders = state.unknownState,
-                        state = state,
-                        onAdvance = onAdvance,
+                        onAcknowledgeCancellation = onAcknowledgeCancellation,
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
         } else {
-            val ordered = lanes.flatMap { state.lane(it) } + state.unknownState
+            val ordered = sections.flatMap(KitchenBoardSection::orders)
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(ordered, key = { it.id }) { order ->
-                    TicketCard(order, state, showStateTag = true, onAdvance = onAdvance)
+                    TicketCard(
+                        order,
+                        state,
+                        canAdvance,
+                        showStateTag = true,
+                        onAdvance = onAdvance,
+                        onAcknowledgeCancellation = onAcknowledgeCancellation,
+                    )
                 }
             }
         }
     }
+}
+
+/**
+ * Produces the single section assignment used by both board layouts. A ticket
+ * can match more than one derived group (for example, an unknown-state ticket
+ * whose only remaining work is a cancellation), but it must render only once:
+ * duplicate cards are confusing and duplicate Lazy keys crash compact KDS.
+ */
+internal data class KitchenBoardSection(
+    val title: String,
+    val orders: List<KitchenOrder>,
+)
+
+internal fun buildKitchenBoardSections(state: KitchenUiState): List<KitchenBoardSection> {
+    val seenOrderIds = mutableSetOf<String>()
+    val sections = mutableListOf<KitchenBoardSection>()
+
+    fun addSection(title: String, candidates: List<KitchenOrder>, keepWhenEmpty: Boolean) {
+        val uniqueOrders = candidates.filter { seenOrderIds.add(it.id) }
+        if (keepWhenEmpty || uniqueOrders.isNotEmpty()) {
+            sections += KitchenBoardSection(title, uniqueOrders)
+        }
+    }
+
+    if (!state.includeServed) {
+        addSection("Cancellations", state.cancellationOnly, keepWhenEmpty = false)
+    }
+
+    val lanes = buildList {
+        add(KitchenState.RECEIVED)
+        add(KitchenState.PREPARING)
+        add(KitchenState.READY)
+        if (state.includeServed) add(KitchenState.SERVED)
+    }
+    lanes.forEach { lane ->
+        addSection(lane.label, state.lane(lane), keepWhenEmpty = true)
+    }
+    addSection("Other", state.unknownState, keepWhenEmpty = false)
+
+    return sections
 }
 
 @Composable
@@ -341,7 +642,9 @@ private fun Lane(
     title: String,
     orders: List<KitchenOrder>,
     state: KitchenUiState,
+    canAdvance: Boolean,
     onAdvance: (KitchenOrder) -> Unit,
+    onAcknowledgeCancellation: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize()) {
@@ -372,7 +675,14 @@ private fun Lane(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(orders, key = { it.id }) { order ->
-                    TicketCard(order, state, showStateTag = false, onAdvance = onAdvance)
+                    TicketCard(
+                        order,
+                        state,
+                        canAdvance,
+                        showStateTag = false,
+                        onAdvance = onAdvance,
+                        onAcknowledgeCancellation = onAcknowledgeCancellation,
+                    )
                 }
             }
         }
@@ -383,8 +693,10 @@ private fun Lane(
 private fun TicketCard(
     order: KitchenOrder,
     state: KitchenUiState,
+    canAdvance: Boolean,
     showStateTag: Boolean,
     onAdvance: (KitchenOrder) -> Unit,
+    onAcknowledgeCancellation: (String, String) -> Unit,
 ) {
     val ticketState = KitchenState.from(order.kitchenState)
     val accent = accentFor(ticketState)
@@ -430,6 +742,45 @@ private fun TicketCard(
             }
         }
 
+        order.pendingCancellations.forEach { cancellation ->
+            val saved = cancellation.lineId in state.acknowledgingLineIds
+            Column(
+                Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                    .background(Brand.DangerMuted).border(2.dp, Brand.Danger, Radius.shapeMd)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    "CANCEL ${cancellation.qty.asQtyPrefix()}× ${cancellation.name}",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Brand.Danger,
+                )
+                Text(
+                    "Round ${cancellation.roundNo} · ${cancellation.reason}",
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                cancellation.notes?.takeIf(String::isNotBlank)?.let { note ->
+                    Text("Original request: $note", color = Brand.ForegroundMuted)
+                }
+                Button(
+                    onClick = { onAcknowledgeCancellation(order.id, cancellation.lineId) },
+                    enabled = canAdvance && !saved,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Brand.Danger,
+                        contentColor = Brand.Background,
+                    ),
+                ) {
+                    Text(
+                        if (saved) "Acknowledgement saved…" else "Acknowledge cancellation",
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+
         order.lines.forEach { line ->
             Column {
                 Row(verticalAlignment = Alignment.Top) {
@@ -441,7 +792,7 @@ private fun TicketCard(
                         modifier = Modifier.width(48.dp),
                     )
                     Text(
-                        line.name,
+                        "${line.name} · R${line.roundNo}",
                         fontSize = 18.sp,
                         color = Brand.Foreground,
                         modifier = Modifier.weight(1f),
@@ -465,7 +816,7 @@ private fun TicketCard(
         if (advanceLabel != null) {
             Button(
                 onClick = { onAdvance(order) },
-                enabled = !state.tapsLocked,
+                enabled = canAdvance && !state.tapsLocked,
                 modifier = Modifier.fillMaxWidth().height(64.dp),
                 shape = Radius.shapeMd,
                 colors = ButtonDefaults.buttonColors(

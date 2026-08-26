@@ -30,6 +30,9 @@ interface GamingDao {
     @Query("SELECT * FROM gaming_session_cache ORDER BY startAtMillis DESC")
     fun observeSessionCache(): Flow<List<GamingSessionCacheEntity>>
 
+    @Query("SELECT * FROM gaming_session_cache WHERE status = 'active'")
+    suspend fun activeSessionCacheForAlarms(): List<GamingSessionCacheEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSessionCache(rows: List<GamingSessionCacheEntity>)
 
@@ -44,12 +47,34 @@ interface GamingDao {
     @Transaction
     suspend fun replaceSessionCache(rows: List<GamingSessionCacheEntity>) {
         upsertSessionCache(rows)
+        reconcileLocalSessions(rows)
         deleteSessionCacheNotIn(rows.map { it.id }.ifEmpty { listOf("") })
+    }
+
+    /** Applies one authoritative mutation response without replacing the full cache. */
+    @Transaction
+    suspend fun upsertAuthoritativeSession(row: GamingSessionCacheEntity) {
+        upsertSessionCache(listOf(row))
+        reconcileLocalSessions(listOf(row))
     }
 
     // --------------------------------------------------------- local sessions
     @Insert
     suspend fun insertLocalSession(session: LocalGamingSessionEntity)
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_sessions WHERE stationId = :stationId " +
+            "AND state NOT IN ('sent', 'cancelled')",
+    )
+    suspend fun unresolvedLocalSessionCount(stationId: String): Int
+
+    /** Prevents a rapid second Start from creating two local lifecycle rows. */
+    @Transaction
+    suspend fun insertStartIfStationAvailable(session: LocalGamingSessionEntity): Boolean {
+        if (unresolvedLocalSessionCount(session.stationId) > 0) return false
+        insertLocalSession(session)
+        return true
+    }
 
     @Query("SELECT * FROM local_gaming_sessions WHERE localId = :localId")
     suspend fun localSessionById(localId: String): LocalGamingSessionEntity?
@@ -63,27 +88,103 @@ interface GamingDao {
     @Query("SELECT * FROM local_gaming_sessions WHERE localId = :id OR serverId = :id LIMIT 1")
     suspend fun localSessionByEitherId(id: String): LocalGamingSessionEntity?
 
-    /** Every local session not yet stopped/rejected — merged with the cache at read time. */
-    @Query("SELECT * FROM local_gaming_sessions WHERE state != 'stopped' AND state != 'rejected'")
+    /** Local lifecycle overlays, including ended sessions still waiting for POS. */
+    @Query("SELECT * FROM local_gaming_sessions WHERE state NOT IN ('sent', 'cancelled')")
     fun observeActiveLocalSessions(): Flow<List<LocalGamingSessionEntity>>
 
-    @Query("SELECT COUNT(*) FROM local_gaming_sessions WHERE state = 'rejected'")
-    fun observeRejectedCount(): Flow<Int>
+    /**
+     * Includes pending/rejected stops as overlays because the server session
+     * remains active and billable until stop is confirmed; the alarm policy
+     * therefore keeps their existing deadline armed.
+     */
+    @Query("SELECT * FROM local_gaming_sessions WHERE state NOT IN ('sent', 'cancelled')")
+    suspend fun localSessionOverlaysForAlarms(): List<LocalGamingSessionEntity>
 
     @Query(
-        "SELECT * FROM local_gaming_sessions WHERE state = 'start_pending' OR state = 'stop_pending' " +
+        "SELECT * FROM local_gaming_sessions WHERE serverId IS NOT NULL " +
+            "AND state NOT IN ('sent', 'cancelled')",
+    )
+    suspend fun localSessionsForServerReconciliation(): List<LocalGamingSessionEntity>
+
+    @Query(
+        "UPDATE local_gaming_sessions SET state = :state, status = :status, " +
+            "endAtMillis = :endAtMillis, billableMinutes = :billableMinutes, " +
+            "amountMinor = :amountMinor, orderId = :orderId, lastError = NULL " +
+            "WHERE localId = :localId",
+    )
+    suspend fun applyServerReconciliation(
+        localId: String,
+        state: String,
+        status: String,
+        endAtMillis: Long?,
+        billableMinutes: Int?,
+        amountMinor: Long?,
+        orderId: String?,
+    )
+
+    /**
+     * A stop/cancel/send completed on another terminal (or its response was
+     * lost locally). Let that terminal server outcome replace the stale local
+     * overlay so the station and its AlarmManager deadline recover together.
+     */
+    suspend fun reconcileLocalSessions(rows: List<GamingSessionCacheEntity>) {
+        val localByServerId = localSessionsForServerReconciliation()
+            .mapNotNull { local -> local.serverId?.let { it to local } }
+            .toMap()
+        rows.forEach { server ->
+            val local = localByServerId[server.id] ?: return@forEach
+            val state = when (
+                gamingServerReconciliation(local.state, server.status, server.orderId)
+            ) {
+                GamingServerReconciliation.NONE -> return@forEach
+                GamingServerReconciliation.START_SYNCED -> GamingSessionState.START_SYNCED
+                GamingServerReconciliation.ENDED_UNBILLED -> GamingSessionState.ENDED_UNBILLED
+                GamingServerReconciliation.SENT -> GamingSessionState.SENT
+                GamingServerReconciliation.CANCELLED -> GamingSessionState.CANCELLED
+            }
+            applyServerReconciliation(
+                localId = local.localId,
+                state = state,
+                status = server.status,
+                endAtMillis = server.endAtMillis,
+                billableMinutes = server.billableMinutes,
+                amountMinor = server.amountMinor,
+                orderId = server.orderId,
+            )
+        }
+    }
+
+    @Query("SELECT * FROM gaming_stations")
+    suspend fun stationsForAlarms(): List<GamingStationEntity>
+
+    @Query("SELECT COUNT(*) FROM local_gaming_sessions WHERE state LIKE '%_rejected'")
+    fun observeRejectedCount(): Flow<Int>
+
+    /**
+     * Runtime safety net for a restored/pre-release database already marked
+     * as the current Room version. Normal upgrades are repaired by
+     * MIGRATION_16_17; this keeps an imported backup from remaining stranded.
+     */
+    @Query(RECOVER_LEGACY_GAMING_REJECTIONS_SQL)
+    suspend fun recoverLegacyRejectedSessions(): Int
+
+    @Query(
+        "SELECT * FROM local_gaming_sessions WHERE state IN ('start_pending', 'stop_pending', 'send_pending') " +
             "ORDER BY startedAtMillis ASC",
     )
     suspend fun pushableSessions(): List<LocalGamingSessionEntity>
 
     @Query(
         "UPDATE local_gaming_sessions SET serverId = :serverId, status = :status, " +
-            "timerEndsAtMillis = :timerEndsAtMillis WHERE localId = :localId",
+            "startedAtMillis = :startedAtMillis, timerEndsAtMillis = :timerEndsAtMillis, " +
+            "state = CASE WHEN state = 'start_pending' THEN 'start_synced' ELSE state END, " +
+            "lastError = NULL WHERE localId = :localId",
     )
     suspend fun setSessionStarted(
         localId: String,
         serverId: String,
         status: String,
+        startedAtMillis: Long,
         timerEndsAtMillis: Long?,
     )
 
@@ -92,11 +193,14 @@ interface GamingDao {
     )
     suspend fun transitionSessionState(localId: String, fromState: String, toState: String)
 
-    @Query("UPDATE local_gaming_sessions SET state = 'stop_pending' WHERE localId = :localId")
-    suspend fun requestSessionStop(localId: String)
+    @Query(
+        "UPDATE local_gaming_sessions SET state = 'stop_pending', status = 'stopping', lastError = NULL " +
+            "WHERE localId = :localId AND state IN ('start_synced', 'stop_rejected')",
+    )
+    suspend fun requestSessionStop(localId: String): Int
 
     @Query(
-        "UPDATE local_gaming_sessions SET state = 'stopped', status = :status, " +
+        "UPDATE local_gaming_sessions SET state = 'ended_unbilled', status = :status, " +
             "endAtMillis = :endAtMillis, billableMinutes = :billableMinutes, amountMinor = :amountMinor " +
             "WHERE localId = :localId",
     )
@@ -108,6 +212,33 @@ interface GamingDao {
         amountMinor: Long?,
     )
 
-    @Query("UPDATE local_gaming_sessions SET state = 'rejected', lastError = :error WHERE localId = :localId")
-    suspend fun markSessionRejected(localId: String, error: String)
+    @Query(
+        "UPDATE local_gaming_sessions SET state = 'send_pending', lastError = NULL " +
+            "WHERE localId = :localId AND state IN ('ended_unbilled', 'send_rejected')",
+    )
+    suspend fun requestSessionSend(localId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_sessions SET state = 'sent', orderId = :orderId, " +
+            "amountMinor = :amountMinor, lastError = NULL WHERE localId = :localId",
+    )
+    suspend fun markSessionSent(localId: String, orderId: String, amountMinor: Long)
+
+    @Query(
+        "UPDATE local_gaming_sessions SET state = :state, lastError = :error, " +
+            "status = CASE " +
+            "WHEN :state = 'start_rejected' THEN 'start_failed' " +
+            "WHEN :state = 'stop_rejected' THEN 'active' " +
+            "ELSE status END WHERE localId = :localId",
+    )
+    suspend fun markSessionRejected(localId: String, state: String, error: String)
+
+    @Query(
+        "UPDATE local_gaming_sessions SET state = 'start_pending', status = 'starting', lastError = NULL " +
+            "WHERE localId = :localId AND state = 'start_rejected'",
+    )
+    suspend fun retryRejectedStart(localId: String): Int
+
+    @Query("DELETE FROM local_gaming_sessions WHERE localId = :localId AND state = 'start_rejected'")
+    suspend fun discardRejectedStart(localId: String): Int
 }

@@ -18,9 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Assessment
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CardMembership
 import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.People
@@ -37,20 +39,17 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.TableRestaurant
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.ui.theme.Brand
@@ -78,7 +77,8 @@ enum class Destination(val label: String, val icon: ImageVector) {
     Finance("Finance", Icons.Filled.AttachMoney),
     Events("Events", Icons.Filled.Celebration),
     Memberships("Memberships", Icons.Filled.CardMembership),
-    Refunds("Refunds", Icons.Filled.Undo),
+    Refunds("Refunds", Icons.AutoMirrored.Filled.Undo),
+    AuditLog("Audit Log", Icons.Filled.History),
     AccessControl("Access Control", Icons.Filled.AdminPanelSettings),
     Settings("Settings", Icons.Filled.Settings),
 }
@@ -89,18 +89,20 @@ fun WorkspaceScaffold(
     // Defaults to every destination — callers that need to hide one (e.g.
     // Access Control from anyone without audit access) pass a filtered list.
     destinations: List<Destination> = Destination.entries,
-    content: @Composable (Destination) -> Unit,
+    currentDestination: Destination,
+    onDestinationChanged: (Destination) -> Unit = {},
+    content: @Composable (Destination, navigateTo: (Destination) -> Unit) -> Unit,
 ) {
-    // Saveable so the selected tab survives a process death, not just a
-    // recomposition — staff should come back to where they were.
-    var current by rememberSaveable { mutableStateOf(Destination.Pos) }
     // `destinations` is a real access boundary (Access Control disappears
     // the moment auditAccess is false), not just a display preference — a
     // `current` restored from saved state, or left over from before this
     // account's access changed mid-session, must not go on rendering a
     // destination the rail no longer shows.
-    if (current !in destinations) {
-        current = destinations.firstOrNull() ?: Destination.Pos
+    val current = currentDestination.takeIf { it in destinations }
+        ?: destinations.firstOrNull()
+        ?: Destination.Pos
+    LaunchedEffect(currentDestination, current) {
+        if (currentDestination != current) onDestinationChanged(current)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -113,7 +115,7 @@ fun WorkspaceScaffold(
                 verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
                 destinations.forEach { dest ->
-                    NavRailItem(dest, selected = dest == current) { current = dest }
+                    NavRailItem(dest, selected = dest == current) { onDestinationChanged(dest) }
                 }
             }
             Box(Modifier.fillMaxSize()) {
@@ -128,7 +130,11 @@ fun WorkspaceScaffold(
                             .togetherWith(fadeOut(tween(Motion.fast)))
                     },
                     label = "destinationCrossfade",
-                ) { dest -> content(dest) }
+                ) { dest ->
+                    content(dest) { target ->
+                        if (target in destinations) onDestinationChanged(target)
+                    }
+                }
             }
         }
     }
@@ -144,14 +150,22 @@ private fun NavRailItem(dest: Destination, selected: Boolean, onClick: () -> Uni
         Modifier.fillMaxWidth()
             .clip(Radius.shapeMd)
             .background(background)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .selectable(
+                selected = selected,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Tab,
+                onClick = onClick,
+            )
             .padding(vertical = 12.dp, horizontal = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Icon(
             dest.icon,
-            contentDescription = dest.label,
+            // The adjacent text supplies the tab label. Repeating it on the
+            // decorative icon makes TalkBack announce each destination twice.
+            contentDescription = null,
             tint = if (selected) Brand.Background else Brand.ForegroundMuted,
             modifier = Modifier.size(22.dp),
         )

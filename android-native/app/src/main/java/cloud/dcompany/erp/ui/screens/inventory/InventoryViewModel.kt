@@ -3,6 +3,10 @@ package cloud.dcompany.erp.ui.screens.inventory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.InventoryAccess
+import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
+import cloud.dcompany.erp.core.auth.authorizeAction
+import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.db.IngredientCacheEntity
 import cloud.dcompany.erp.core.db.IngredientWriteState
@@ -17,9 +21,10 @@ import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.db.cached
 import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
-import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +40,8 @@ import kotlin.math.roundToLong
 
 private const val LOCAL_PREFIX = "local:"
 private const val BRANCHES_CACHE_KEY = "inventory_branches"
+
+private class CreateConfirmationPending(message: String) : Exception(message)
 
 enum class InventoryTab { INGREDIENTS, SUPPLIERS }
 
@@ -63,6 +70,7 @@ data class IngredientRow(
     val pendingDelete: Boolean = false,
     val hasQueuedDelete: Boolean = false,
     val localWriteId: String? = null,
+    val createConfirmationPending: Boolean = false,
 ) {
     val isLow: Boolean get() = currentQty < reorderThreshold
     val stockValueMinor: Long get() = (currentQty * avgCostMinor).roundToLong()
@@ -82,6 +90,7 @@ data class SupplierRow(
     val pendingDelete: Boolean = false,
     val hasQueuedDelete: Boolean = false,
     val localWriteId: String? = null,
+    val createConfirmationPending: Boolean = false,
 ) {
     val isUnsyncedDraft: Boolean get() = id.startsWith(LOCAL_PREFIX)
 }
@@ -113,15 +122,21 @@ data class PendingAdjustmentRow(
 
 data class InventoryUiState(
     val everSynced: Boolean = false,
+    val ingredientsLoaded: Boolean = false,
+    val suppliersLoaded: Boolean = false,
     val syncing: Boolean = false,
+    val refreshError: String? = null,
     val ingredients: List<IngredientRow> = emptyList(),
     val suppliers: List<SupplierRow> = emptyList(),
     val branches: List<Branch> = emptyList(),
+    val branchesLoaded: Boolean = false,
+    val branchesError: String? = null,
     val branchId: String? = null,
     val tab: InventoryTab = InventoryTab.INGREDIENTS,
     val selectedSku: String? = null,
     val batches: List<BatchCacheEntity> = emptyList(),
     val batchesLoading: Boolean = false,
+    val batchesError: String? = null,
     val pendingGrns: List<PendingGrnRow> = emptyList(),
     val pendingAdjustments: List<PendingAdjustmentRow> = emptyList(),
     val busy: Boolean = false,
@@ -130,8 +145,16 @@ data class InventoryUiState(
     val formError: String? = null,
     val notice: String? = null,
 ) {
-    val loading: Boolean get() = !everSynced && ingredients.isEmpty() && syncing
-    val couldNotLoad: Boolean get() = !everSynced && ingredients.isEmpty() && !syncing
+    val loading: Boolean
+        get() = !ingredientsLoaded && !suppliersLoaded &&
+            ingredients.isEmpty() && suppliers.isEmpty() && syncing
+    val couldNotLoad: Boolean
+        get() = !ingredientsLoaded && !suppliersLoaded &&
+            ingredients.isEmpty() && suppliers.isEmpty() && !syncing
+    val ingredientsUnavailable: Boolean
+        get() = !ingredientsLoaded && ingredients.isEmpty() && !syncing
+    val suppliersUnavailable: Boolean
+        get() = !suppliersLoaded && suppliers.isEmpty() && !syncing
 
     /** Lowest stock relative to its reorder line first — the order to act in. */
     val sortedIngredients: List<IngredientRow>
@@ -176,6 +199,8 @@ class InventoryViewModel : ViewModel() {
 
     private val pulling = MutableStateFlow(false)
     private val branchesFlow = MutableStateFlow<List<Branch>>(emptyList())
+    private val branchesLoaded = MutableStateFlow(false)
+    private val branchesError = MutableStateFlow<String?>(null)
     private val myProfile = MutableStateFlow<MeResponse?>(null)
     private val tab = MutableStateFlow(InventoryTab.INGREDIENTS)
     private val selectedSku = MutableStateFlow<String?>(null)
@@ -184,6 +209,15 @@ class InventoryViewModel : ViewModel() {
     private val busy = MutableStateFlow(false)
     private val formError = MutableStateFlow<String?>(null)
     private val notice = MutableStateFlow<String?>(null)
+    private val batchesLoading = MutableStateFlow(false)
+    private val batchesError = MutableStateFlow<String?>(null)
+    private val inventoryRefreshError = appCtx.sync.resourceRefreshErrors
+        .map { it["inventory"] }
+        .distinctUntilChanged()
+    private val batchRequests = BatchSelectionRequestGuard()
+    private var batchLoadJob: Job? = null
+    private var batchTargetId: String? = null
+    @Volatile private var access = InventoryAccess()
 
     val state: StateFlow<InventoryUiState> = combine(
         combine(
@@ -196,8 +230,19 @@ class InventoryViewModel : ViewModel() {
             db.syncMetaDao().observe("ingredients"),
             db.syncMetaDao().observe("suppliers"),
             pulling,
-        ) { ingMeta, supMeta, syncing -> Triple(ingMeta, supMeta, syncing) },
-        combine(branchesFlow, branchId, myProfile) { b, bid, p -> Triple(b, bid, p) },
+            inventoryRefreshError,
+        ) { ingMeta, supMeta, syncing, refreshError ->
+            InventoryLoadState(
+                ingredientsLoaded = ingMeta != null,
+                suppliersLoaded = supMeta != null,
+                syncing = syncing,
+                refreshError = refreshError,
+            )
+        },
+        combine(branchesFlow, branchesLoaded, branchesError, branchId, myProfile) {
+                branches, loaded, error, selectedBranchId, profile ->
+            BranchState(branches, loaded, error, selectedBranchId, profile)
+        },
         combine(
             db.inventoryDao().observeLocalGrns(),
             db.inventoryDao().observeLocalAdjustments(),
@@ -211,8 +256,7 @@ class InventoryViewModel : ViewModel() {
             combine(busy, formError, notice) { b, fe, n -> Triple(b, fe, n) },
         ) { t, sku, d, action -> EditingState(t, sku, d, action.first, action.second, action.third) },
     ) { data, metaAndSyncing, branchInfo, pendingWrites, ed ->
-        val (ingMeta, supMeta, isSyncing) = metaAndSyncing
-        val (branches, myBranchId, profile) = branchInfo
+        val branches = branchInfo.branches
         val (grns, adjustments) = pendingWrites
         val ingredientRows = mergeIngredients(data.ingredientCache, data.localIngredients)
         val supplierRows = mergeSuppliers(data.supplierCache, data.localSuppliers)
@@ -222,12 +266,18 @@ class InventoryViewModel : ViewModel() {
             // connection drops mid-refresh, since pullInventoryOnDemand()
             // runs them sequentially) must not show a false "No suppliers
             // yet" on an empty cache that was simply never fetched.
-            everSynced = ingMeta != null && supMeta != null,
-            syncing = isSyncing,
+            everSynced = metaAndSyncing.ingredientsLoaded && metaAndSyncing.suppliersLoaded,
+            ingredientsLoaded = metaAndSyncing.ingredientsLoaded,
+            suppliersLoaded = metaAndSyncing.suppliersLoaded,
+            syncing = metaAndSyncing.syncing,
+            refreshError = metaAndSyncing.refreshError,
             ingredients = ingredientRows,
             suppliers = supplierRows,
             branches = branches,
-            branchId = myBranchId ?: resolveDefaultBranch(branches, profile),
+            branchesLoaded = branchInfo.loaded,
+            branchesError = branchInfo.error,
+            branchId = branchInfo.selectedBranchId
+                ?: resolveDefaultBranch(branches, branchInfo.profile),
             tab = ed.tab,
             selectedSku = ed.selectedSku,
             batches = emptyList(), // attached by the second combine stage below
@@ -257,7 +307,13 @@ class InventoryViewModel : ViewModel() {
         val batchesFlow = selectedIngredientId.flatMapLatest { id ->
             if (id == null) flowOf(emptyList()) else db.inventoryDao().observeBatchesFor(id)
         }
-        combine(base, batchesFlow) { s, batches -> s.copy(batches = batches) }
+        combine(base, batchesFlow, batchesLoading, batchesError) { s, batches, loading, error ->
+            s.copy(
+                batches = batches,
+                batchesLoading = loading,
+                batchesError = error,
+            )
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InventoryUiState())
 
     private data class IngredientsAndSuppliers(
@@ -265,6 +321,21 @@ class InventoryViewModel : ViewModel() {
         val localIngredients: List<LocalIngredientEntity>,
         val supplierCache: List<SupplierCacheEntity>,
         val localSuppliers: List<LocalSupplierEntity>,
+    )
+
+    private data class InventoryLoadState(
+        val ingredientsLoaded: Boolean,
+        val suppliersLoaded: Boolean,
+        val syncing: Boolean,
+        val refreshError: String?,
+    )
+
+    private data class BranchState(
+        val branches: List<Branch>,
+        val loaded: Boolean,
+        val error: String?,
+        val selectedBranchId: String?,
+        val profile: MeResponse?,
     )
 
     private data class EditingState(
@@ -278,8 +349,12 @@ class InventoryViewModel : ViewModel() {
 
     init {
         loadProfile()
-        loadBranches()
         retry()
+        viewModelScope.launch {
+            state.map { it.selected?.takeIf { row -> !row.isUnsyncedDraft }?.id }
+                .distinctUntilChanged()
+                .collect { updateBatchTarget(it) }
+        }
     }
 
     private fun loadProfile() {
@@ -294,15 +369,31 @@ class InventoryViewModel : ViewModel() {
         viewModelScope.launch {
             db.reportSnapshotDao().cached<List<Branch>>(BRANCHES_CACHE_KEY)?.let { (cached, _) ->
                 branchesFlow.value = cached
+                branchesLoaded.value = true
             }
             try {
-                val fresh = api.branches()
+                lateinit var fresh: List<Branch>
+                val committed = appCtx.cacheIsolation.fetchAndCommitScoped(
+                    fetch = { api.branches() },
+                    store = {
+                        fresh = it
+                        db.reportSnapshotDao().store(BRANCHES_CACHE_KEY, it)
+                    },
+                )
+                if (!committed) return@launch
                 branchesFlow.value = fresh
-                db.reportSnapshotDao().store(BRANCHES_CACHE_KEY, fresh)
+                branchesLoaded.value = true
+                branchesError.value = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Cached branches (if any) stay showing.
+                // Cached branches (if any) stay showing, but a first-load empty
+                // picker must never masquerade as a real empty branch list.
+                branchesError.value = if (branchesLoaded.value) {
+                    "Could not refresh branches. Saved branches are still shown; try Refresh again."
+                } else {
+                    "Could not load branches. Stock receipts and adjustments need a branch; check the connection and try Refresh again."
+                }
             }
         }
     }
@@ -315,6 +406,7 @@ class InventoryViewModel : ViewModel() {
     // -------------------------------------------------------------- loading
 
     fun retry() {
+        loadBranches()
         appCtx.sync.requestSync()
         pulling.value = true
         viewModelScope.launch {
@@ -332,13 +424,79 @@ class InventoryViewModel : ViewModel() {
 
     fun select(row: IngredientRow?) {
         selectedSku.value = row?.sku
-        val realId = row?.takeIf { !it.isUnsyncedDraft }?.id
-        if (realId != null) {
-            viewModelScope.launch { appCtx.sync.pullBatchesFor(realId) }
+        updateBatchTarget(row?.takeIf { !it.isUnsyncedDraft }?.id)
+    }
+
+    fun retryBatches() {
+        val id = state.value.selected?.takeIf { !it.isUnsyncedDraft }?.id ?: return
+        updateBatchTarget(id, force = true)
+    }
+
+    private fun updateBatchTarget(ingredientId: String?, force: Boolean = false) {
+        if (!force && ingredientId == batchTargetId) return
+        val previousTarget = batchTargetId
+        batchTargetId = ingredientId
+        batchLoadJob?.cancel()
+        if (previousTarget != null && previousTarget != ingredientId) {
+            appCtx.sync.clearActiveBatchTarget(previousTarget)
+        }
+        val request = batchRequests.begin(ingredientId)
+        batchesError.value = null
+        if (ingredientId == null) {
+            batchesLoading.value = false
+            return
+        }
+
+        batchesLoading.value = true
+        batchLoadJob = viewModelScope.launch {
+            try {
+                val result = appCtx.sync.pullBatchesFor(ingredientId)
+                if (!batchRequests.isCurrent(request)) return@launch
+                batchesError.value = when (result) {
+                    is ResourceRefreshResult.Failed -> result.userMessage
+                    is ResourceRefreshResult.Skipped ->
+                        "Batches are unavailable for this account. Ask a manager to check Inventory access."
+                    is ResourceRefreshResult.Refreshed -> null
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } finally {
+                if (batchRequests.isCurrent(request)) batchesLoading.value = false
+            }
         }
     }
 
-    fun openDialog(d: InventoryDialog) { dialog.value = d; formError.value = null }
+    override fun onCleared() {
+        batchLoadJob?.cancel()
+        appCtx.sync.clearActiveBatchTarget(batchTargetId)
+        super.onCleared()
+    }
+
+    fun updateAccess(next: InventoryAccess) {
+        access = next
+    }
+
+    private fun requireWrite(): Boolean = authorizeAction(access.canManageInventory) {
+        notice.value = VIEW_ONLY_MESSAGE
+    }
+
+    fun openDialog(d: InventoryDialog) {
+        if (!requireWrite()) return
+        when {
+            d is InventoryDialog.IngredientForm && d.editing == null && !state.value.ingredientsLoaded -> {
+                notice.value =
+                    "Ingredients have not loaded yet. Refresh before creating one so an existing ingredient is not duplicated."
+                return
+            }
+            d is InventoryDialog.SupplierForm && d.editing == null && !state.value.suppliersLoaded -> {
+                notice.value =
+                    "Suppliers have not loaded yet. Refresh before creating one so an existing supplier is not duplicated."
+                return
+            }
+        }
+        dialog.value = d
+        formError.value = null
+    }
 
     fun closeDialog() { dialog.value = null; formError.value = null }
 
@@ -367,22 +525,38 @@ class InventoryViewModel : ViewModel() {
                     createdAtMillis = System.currentTimeMillis(),
                 ),
             )
-            "$name added — will sync when back online."
+            queuedNotice("$name added")
+        } else if (editing.isUnsyncedDraft) {
+            val localId = editing.localWriteId
+                ?: throw CreateConfirmationPending("This ingredient draft is no longer available. Refresh and try again.")
+            val existing = dao.getLocalIngredient(localId)
+                ?: throw CreateConfirmationPending("This ingredient draft changed. Refresh and try again.")
+            val changed = dao.updateMutableIngredientCreate(
+                localId = localId,
+                expectedVersion = existing.version,
+                sku = sku.trim(),
+                name = name.trim(),
+                baseUnit = baseUnit,
+                reorderThreshold = reorderThreshold,
+                reorderQty = reorderQty,
+            )
+            if (changed == 0) {
+                throw CreateConfirmationPending(
+                    "This ingredient may already have reached the server. Its original details are locked until confirmation to prevent a duplicate; refresh and try again.",
+                )
+            }
+            queuedNotice("$name saved")
         } else {
-            val serverId = editing.id.takeIf { !editing.isUnsyncedDraft }
+            val serverId = editing.id
             val existingPending = editing.localWriteId?.let { dao.getLocalIngredient(it) }
             val local = (existingPending ?: LocalIngredientEntity(
                 localId = editing.localWriteId ?: UUID.randomUUID().toString(),
                 serverId = serverId,
                 createdAtMillis = System.currentTimeMillis(),
             )).copy(
-                // Only a still-unsynced draft's SKU is actually editable
-                // (the dialog only unlocks the field in that case — see
-                // IngredientDialog) — an already-synced ingredient's SKU
-                // stays whatever the pending row already had (null, since
-                // an edit row never carries one; the backend's own
-                // IngredientUpdate has no sku field at all).
-                sku = if (editing.isUnsyncedDraft) sku.trim() else null,
+                // IngredientUpdate has no SKU field; server-backed edits keep
+                // the immutable SKU only in the read cache.
+                sku = null,
                 name = name.trim(), baseUnit = baseUnit,
                 reorderThreshold = reorderThreshold, reorderQty = reorderQty,
                 // The only way to reach this dialog for a row that already
@@ -400,15 +574,20 @@ class InventoryViewModel : ViewModel() {
                 version = (existingPending?.version ?: -1) + 1,
             )
             dao.upsertLocalIngredient(local)
-            "$name saved — will sync when back online."
+            queuedNotice("$name saved")
         }
     }
 
     fun deleteIngredient(ingredient: IngredientRow) = localMutate {
         val dao = db.inventoryDao()
         if (ingredient.isUnsyncedDraft) {
-            // Never left this device — nothing to queue, just drop the draft.
-            ingredient.localWriteId?.let { dao.deleteLocalIngredient(it) }
+            val localId = ingredient.localWriteId
+                ?: throw CreateConfirmationPending("This ingredient draft is no longer available. Refresh and try again.")
+            if (dao.deleteMutableIngredientCreate(localId) == 0) {
+                throw CreateConfirmationPending(
+                    "This ingredient may already have reached the server. It cannot be removed until confirmation, which prevents it from reappearing or being created twice.",
+                )
+            }
         } else {
             val existingPending = ingredient.localWriteId?.let { dao.getLocalIngredient(it) }
             val local = (existingPending ?: LocalIngredientEntity(
@@ -422,45 +601,56 @@ class InventoryViewModel : ViewModel() {
             dao.upsertLocalIngredient(local)
         }
         if (selectedSku.value == ingredient.sku) selectedSku.value = null
-        "${ingredient.name} will be removed when back online. Its batches stay in the audit trail."
+        queuedNotice(
+            "${ingredient.name} removal saved",
+            "Its batches stay in the audit trail.",
+        )
     }
 
     /** Abandons a queued delete, whether still pending or already rejected — mirrors StaffViewModel.cancelPendingRemoval. */
     fun cancelIngredientRemoval(ingredient: IngredientRow) {
+        if (!requireWrite()) return
         val localId = ingredient.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            val dao = db.inventoryDao()
-            val existing = dao.getLocalIngredient(localId) ?: return@launch
-            val hasFieldEdits = existing.name != null || existing.baseUnit != null ||
-                existing.reorderThreshold != null || existing.reorderQty != null
-            if (hasFieldEdits) {
-                dao.upsertLocalIngredient(
-                    existing.copy(
-                        pendingDelete = false, state = IngredientWriteState.PENDING,
-                        lastError = null, version = existing.version + 1,
-                    ),
-                )
-            } else {
-                dao.deleteLocalIngredient(localId)
-            }
+            var changed = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val dao = db.inventoryDao()
+                    val existing = dao.getLocalIngredient(localId)
+                    if (existing != null) {
+                        val hasFieldEdits = existing.name != null || existing.baseUnit != null ||
+                            existing.reorderThreshold != null || existing.reorderQty != null
+                        if (hasFieldEdits) {
+                            dao.upsertLocalIngredient(
+                                existing.copy(
+                                    pendingDelete = false, state = IngredientWriteState.PENDING,
+                                    lastError = null, version = existing.version + 1,
+                                ),
+                            )
+                        } else {
+                            dao.deleteLocalIngredient(localId)
+                        }
+                        changed = true
+                    }
+                }
+            ) return@launch
+            if (!changed) return@launch
             notice.value = "Removal cancelled."
             appCtx.sync.requestSync()
         }
     }
 
     fun retryIngredientSync(ingredient: IngredientRow) {
+        if (!requireWrite()) return
         val localId = ingredient.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            val dao = db.inventoryDao()
-            dao.getLocalIngredient(localId)?.let { existing ->
-                dao.upsertLocalIngredient(
-                    existing.copy(
-                        state = IngredientWriteState.PENDING, lastError = null,
-                        version = existing.version + 1,
-                    ),
-                )
-                appCtx.sync.requestSync()
-            }
+            var queued = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    queued = db.inventoryDao().retryRejectedIngredient(localId) > 0
+                }
+            ) return@launch
+            if (queued) appCtx.sync.requestSync()
         }
     }
 
@@ -485,9 +675,28 @@ class InventoryViewModel : ViewModel() {
                     createdAtMillis = System.currentTimeMillis(),
                 ),
             )
-            "$name added — will sync when back online."
+            queuedNotice("$name added")
+        } else if (editing.isUnsyncedDraft) {
+            val localId = editing.localWriteId
+                ?: throw CreateConfirmationPending("This supplier draft is no longer available. Refresh and try again.")
+            val existing = dao.getLocalSupplier(localId)
+                ?: throw CreateConfirmationPending("This supplier draft changed. Refresh and try again.")
+            val changed = dao.updateMutableSupplierCreate(
+                localId = localId,
+                expectedVersion = existing.version,
+                name = name.trim(),
+                contact = trimmedContact,
+                gstin = trimmedGstin,
+                paymentTerms = trimmedTerms,
+            )
+            if (changed == 0) {
+                throw CreateConfirmationPending(
+                    "This supplier may already have reached the server. Its original details are locked until confirmation to prevent a duplicate; refresh and try again.",
+                )
+            }
+            queuedNotice("$name saved")
         } else {
-            val serverId = editing.id.takeIf { !editing.isUnsyncedDraft }
+            val serverId = editing.id
             val existingPending = editing.localWriteId?.let { dao.getLocalSupplier(it) }
             val local = (existingPending ?: LocalSupplierEntity(
                 localId = editing.localWriteId ?: UUID.randomUUID().toString(),
@@ -504,14 +713,20 @@ class InventoryViewModel : ViewModel() {
                 version = (existingPending?.version ?: -1) + 1,
             )
             dao.upsertLocalSupplier(local)
-            "$name saved — will sync when back online."
+            queuedNotice("$name saved")
         }
     }
 
     fun deleteSupplier(supplier: SupplierRow) = localMutate {
         val dao = db.inventoryDao()
         if (supplier.isUnsyncedDraft) {
-            supplier.localWriteId?.let { dao.deleteLocalSupplier(it) }
+            val localId = supplier.localWriteId
+                ?: throw CreateConfirmationPending("This supplier draft is no longer available. Refresh and try again.")
+            if (dao.deleteMutableSupplierCreate(localId) == 0) {
+                throw CreateConfirmationPending(
+                    "This supplier may already have reached the server. It cannot be removed until confirmation, which prevents it from reappearing or being created twice.",
+                )
+            }
         } else {
             val existingPending = supplier.localWriteId?.let { dao.getLocalSupplier(it) }
             val local = (existingPending ?: LocalSupplierEntity(
@@ -524,44 +739,52 @@ class InventoryViewModel : ViewModel() {
             )
             dao.upsertLocalSupplier(local)
         }
-        "${supplier.name} will be removed when back online."
+        queuedNotice("${supplier.name} removal saved")
     }
 
     fun cancelSupplierRemoval(supplier: SupplierRow) {
+        if (!requireWrite()) return
         val localId = supplier.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            val dao = db.inventoryDao()
-            val existing = dao.getLocalSupplier(localId) ?: return@launch
-            val hasFieldEdits = existing.name != null || existing.contact != null ||
-                existing.gstin != null || existing.paymentTerms != null
-            if (hasFieldEdits) {
-                dao.upsertLocalSupplier(
-                    existing.copy(
-                        pendingDelete = false, state = SupplierWriteState.PENDING,
-                        lastError = null, version = existing.version + 1,
-                    ),
-                )
-            } else {
-                dao.deleteLocalSupplier(localId)
-            }
+            var changed = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val dao = db.inventoryDao()
+                    val existing = dao.getLocalSupplier(localId)
+                    if (existing != null) {
+                        val hasFieldEdits = existing.name != null || existing.contact != null ||
+                            existing.gstin != null || existing.paymentTerms != null
+                        if (hasFieldEdits) {
+                            dao.upsertLocalSupplier(
+                                existing.copy(
+                                    pendingDelete = false, state = SupplierWriteState.PENDING,
+                                    lastError = null, version = existing.version + 1,
+                                ),
+                            )
+                        } else {
+                            dao.deleteLocalSupplier(localId)
+                        }
+                        changed = true
+                    }
+                }
+            ) return@launch
+            if (!changed) return@launch
             notice.value = "Removal cancelled."
             appCtx.sync.requestSync()
         }
     }
 
     fun retrySupplierSync(supplier: SupplierRow) {
+        if (!requireWrite()) return
         val localId = supplier.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            val dao = db.inventoryDao()
-            dao.getLocalSupplier(localId)?.let { existing ->
-                dao.upsertLocalSupplier(
-                    existing.copy(
-                        state = SupplierWriteState.PENDING, lastError = null,
-                        version = existing.version + 1,
-                    ),
-                )
-                appCtx.sync.requestSync()
-            }
+            var queued = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    queued = db.inventoryDao().retryRejectedSupplier(localId) > 0
+                }
+            ) return@launch
+            if (queued) appCtx.sync.requestSync()
         }
     }
 
@@ -589,12 +812,17 @@ class InventoryViewModel : ViewModel() {
                 )
             },
         )
-        "Receipt queued — will sync when back online."
+        queuedNotice("Stock receipt saved")
     }
 
     fun retryGrn(localId: String) {
+        if (!requireWrite()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.inventoryDao().retryGrn(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.inventoryDao().retryGrn(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
         }
     }
@@ -622,12 +850,17 @@ class InventoryViewModel : ViewModel() {
                 createdAtMillis = System.currentTimeMillis(),
             ),
         )
-        "Adjustment queued — will sync when back online."
+        queuedNotice("Stock adjustment saved")
     }
 
     fun retryAdjustment(localId: String) {
+        if (!requireWrite()) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.inventoryDao().retryAdjustment(localId)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.inventoryDao().retryAdjustment(localId)
+                }
+            ) return@launch
             appCtx.sync.requestSync()
         }
     }
@@ -643,23 +876,48 @@ class InventoryViewModel : ViewModel() {
      * relying solely on the UI disabling a button.
      */
     private fun localMutate(block: suspend () -> String) {
+        if (!requireWrite()) return
         if (busy.value) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
         viewModelScope.launch {
             try {
-                val message = block()
+                var message = ""
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        message = block()
+                    }
+                ) return@launch
                 busy.value = false
                 dialog.value = null
                 formError.value = null
                 notice.value = message
+                appCtx.sync.requestSync()
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: CreateConfirmationPending) {
+                busy.value = false
+                formError.value = e.message
             } catch (e: Exception) {
                 busy.value = false
                 formError.value = "Could not save this locally: ${e.message}"
             }
         }
+    }
+
+    /**
+     * Local-first writes are safe both online and offline, but the feedback
+     * must not tell an online cashier to wait for a connection they already
+     * have. The authoritative outcome is still shown by the pending/rejected
+     * row after SyncEngine processes the outbox.
+     */
+    private fun queuedNotice(action: String, detail: String? = null): String {
+        val delivery = if (appCtx.connectivity.online.value) {
+            "Confirming with the server now."
+        } else {
+            "Saved on this tablet. It will sync when the connection returns."
+        }
+        return listOfNotNull("$action.", detail, delivery).joinToString(" ")
     }
 }
 
@@ -689,6 +947,8 @@ private fun mergeIngredients(
             pendingDelete = if (row.state != IngredientWriteState.REJECTED) row.pendingDelete else false,
             hasQueuedDelete = row.pendingDelete,
             localWriteId = row.localId,
+            createConfirmationPending =
+                row.serverId == null && row.state == IngredientWriteState.CREATE_ATTEMPTED,
         )
     }
     for (c in cache) {
@@ -722,6 +982,8 @@ private fun mergeSuppliers(
             pendingDelete = if (row.state != SupplierWriteState.REJECTED) row.pendingDelete else false,
             hasQueuedDelete = row.pendingDelete,
             localWriteId = row.localId,
+            createConfirmationPending =
+                row.serverId == null && row.state == SupplierWriteState.CREATE_ATTEMPTED,
         )
     }
     for (c in cache) {

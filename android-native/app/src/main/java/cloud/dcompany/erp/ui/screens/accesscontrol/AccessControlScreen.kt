@@ -1,8 +1,8 @@
 package cloud.dcompany.erp.ui.screens.accesscontrol
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +36,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -127,6 +131,8 @@ private fun AccessGrid(state: AccessControlUiState, vm: AccessControlViewModel) 
                             if (cell != null) {
                                 AccessCellToggle(
                                     cell = cell,
+                                    roleLabel = label,
+                                    moduleLabel = MODULE_LABELS[module] ?: module,
                                     busy = "$roleCode:$module" in state.busyKeys,
                                     onToggle = { vm.toggle(cell) },
                                     onReset = { vm.resetToDefault(cell) },
@@ -143,15 +149,30 @@ private fun AccessGrid(state: AccessControlUiState, vm: AccessControlViewModel) 
 @Composable
 private fun AccessCellToggle(
     cell: AccessCell,
+    roleLabel: String,
+    moduleLabel: String,
     busy: Boolean,
     onToggle: () -> Unit,
     onReset: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         Box(
-            Modifier.size(34.dp).clip(CircleShape)
+            Modifier.size(48.dp).clip(CircleShape)
                 .background(if (cell.allowed) Brand.Good else Brand.Danger)
-                .clickable(enabled = !busy, onClick = onToggle),
+                .semantics {
+                    contentDescription = "$roleLabel, $moduleLabel access"
+                    stateDescription = when {
+                        busy -> "Updating"
+                        cell.allowed -> "Allowed"
+                        else -> "Blocked"
+                    }
+                }
+                .toggleable(
+                    value = cell.allowed,
+                    enabled = !busy,
+                    role = Role.Switch,
+                    onValueChange = { onToggle() },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (busy) {
@@ -159,7 +180,7 @@ private fun AccessCellToggle(
             } else {
                 Icon(
                     if (cell.allowed) Icons.Filled.Check else Icons.Filled.Close,
-                    contentDescription = if (cell.allowed) "Allowed" else "Blocked",
+                    contentDescription = null,
                     tint = Brand.Background,
                     modifier = Modifier.size(18.dp),
                 )
@@ -169,7 +190,7 @@ private fun AccessCellToggle(
         // unmodified cell is just following the role's static default and
         // has nothing to reset.
         if (cell.override != null) {
-            IconButton(onClick = onReset, enabled = !busy, modifier = Modifier.size(24.dp)) {
+            IconButton(onClick = onReset, enabled = !busy, modifier = Modifier.size(48.dp)) {
                 Icon(
                     Icons.Filled.Refresh,
                     contentDescription = "Reset to default (${if (cell.defaultAllowed) "allowed" else "blocked"})",

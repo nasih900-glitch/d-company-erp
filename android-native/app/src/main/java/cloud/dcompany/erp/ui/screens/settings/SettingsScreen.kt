@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -28,6 +29,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,20 +39,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
+fun SettingsScreen(
+    canManageSystem: Boolean,
+    vm: SettingsViewModel = viewModel(),
+) {
     val state by vm.state.collectAsState()
+    val visibleTabs = if (canManageSystem) SettingsTab.entries else listOf(SettingsTab.Account)
+    val activeTab = state.tab.takeIf { it in visibleTabs } ?: SettingsTab.Account
+    LaunchedEffect(activeTab) {
+        if (state.tab != activeTab) vm.selectTab(activeTab)
+    }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SettingsTab.entries.forEach { tab ->
+            visibleTabs.forEach { tab ->
                 FilterChip(
-                    selected = state.tab == tab,
+                    selected = activeTab == tab,
                     onClick = { vm.selectTab(tab) },
                     label = { Text(tab.label) },
                     colors = FilterChipDefaults.filterChipColors(
@@ -61,7 +73,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             }
         }
         Spacer(Modifier.height(16.dp))
-        when (state.tab) {
+        when (activeTab) {
             SettingsTab.Account -> AccountTab(state, vm)
             SettingsTab.Company -> CompanyTab(state, vm)
             SettingsTab.Branches -> BranchesTab(state, vm)
@@ -99,18 +111,48 @@ private fun Field(
 }
 
 @Composable
+private fun NewPasswordField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
 private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
     var code by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
 
-    when {
-        state.meLoading -> Loading()
-        state.me == null -> Retry(state.meError ?: "Could not load your account.", vm::loadMe)
-        else -> Column(
+    when (settingsReadPresentation(state.me != null, state.meLoading, state.meError)) {
+        SettingsReadPresentation.INITIAL_LOADING -> Loading()
+        SettingsReadPresentation.BLOCKING_ERROR ->
+            Retry(state.meError ?: "Could not load your account.", vm::loadMe)
+        SettingsReadPresentation.FRESH,
+        SettingsReadPresentation.REFRESHING,
+        SettingsReadPresentation.STALE -> Column(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (state.meError != null) {
+                RefreshStatusBanner(
+                    title = "Saved account details",
+                    message = state.meError,
+                    refreshing = state.meLoading,
+                    onRetry = vm::loadMe,
+                )
+            } else if (state.meLoading) {
+                RefreshingRow("Refreshing account details…")
+            }
             Card {
                 Text("Signed in", color = Brand.ForegroundMuted)
                 Text(state.me!!.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
@@ -123,16 +165,30 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
                 Text("Change password", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
                 if (state.challenge == null) {
                     Text(
-                        "A one-time code is sent to your email before the password can be changed.",
+                        "A one-time approval code is sent to the business security contact before " +
+                            "the password can be changed.",
                         color = Brand.ForegroundMuted,
                     )
                     Button(onClick = vm::requestPasswordCode, enabled = !state.accountBusy) {
-                        Text("Send me a code")
+                        Text(if (state.accountBusy) "Sending…" else "Send approval code")
                     }
                 } else {
-                    Field("Code from email", code) { code = it }
-                    Field("New password", pwd) { pwd = it }
-                    Field("Confirm new password", confirm) { confirm = it }
+                    val destination = state.challenge.destination.ifBlank {
+                        "the business security contact"
+                    }
+                    val expiryMinutes = state.challenge.expiresIn.coerceAtLeast(0) / 60
+                    val expiryText = if (expiryMinutes > 0) {
+                        "$expiryMinutes minute${if (expiryMinutes == 1) "" else "s"}"
+                    } else {
+                        "less than a minute"
+                    }
+                    Text(
+                        "Code sent to $destination. It expires in $expiryText.",
+                        color = Brand.ForegroundMuted,
+                    )
+                    Field("6-digit approval code", code) { code = it.filter(Char::isDigit).take(6) }
+                    NewPasswordField("New password", pwd) { pwd = it }
+                    NewPasswordField("Confirm new password", confirm) { confirm = it }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(onClick = {
                             vm.cancelPasswordChange(); code = ""; pwd = ""; confirm = ""
@@ -140,7 +196,7 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
                         Button(
                             enabled = !state.accountBusy,
                             onClick = { vm.confirmPasswordChange(code, pwd, confirm) },
-                        ) { Text("Change password") }
+                        ) { Text(if (state.accountBusy) "Changing…" else "Change password") }
                     }
                 }
                 state.accountError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -153,13 +209,33 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
 
 @Composable
 private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
-    when {
-        state.companyLoading -> Loading()
-        state.company == null -> Retry(state.companyError ?: "Could not load company settings.", vm::loadCompany)
-        else -> Column(
+    var confirmDiscard by remember { mutableStateOf(false) }
+    when (
+        settingsReadPresentation(
+            state.company != null,
+            state.companyLoading || state.companyRefreshing,
+            state.companyError,
+        )
+    ) {
+        SettingsReadPresentation.INITIAL_LOADING -> Loading()
+        SettingsReadPresentation.BLOCKING_ERROR ->
+            Retry(state.companyError ?: "Could not load company settings.", vm::loadCompany)
+        SettingsReadPresentation.FRESH,
+        SettingsReadPresentation.REFRESHING,
+        SettingsReadPresentation.STALE -> Column(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (state.companyError != null) {
+                RefreshStatusBanner(
+                    title = "Saved company settings",
+                    message = state.companyError,
+                    refreshing = state.companyRefreshing,
+                    onRetry = vm::loadCompany,
+                )
+            } else if (state.companyRefreshing) {
+                RefreshingRow("Refreshing company settings…")
+            }
             if (state.companyPending) {
                 PendingBanner(
                     text = if (state.companyRejectedError != null) {
@@ -169,6 +245,8 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
                     },
                     rejected = state.companyRejectedError != null,
                     onRetry = vm::retryCompanyEdit,
+                    onDiscard = vm::discardRejectedCompanyEdit,
+                    discardSubject = "failed company change",
                 )
             }
             Card {
@@ -196,7 +274,7 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
                 state.companyFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
-                        onClick = vm::resetCompanyEdits,
+                        onClick = { confirmDiscard = true },
                         enabled = state.companyDirty && !state.companySaving,
                     ) { Text("Discard") }
                     Button(
@@ -207,11 +285,29 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
-    Feedback(state.companyNotice, vm::dismissAccountFeedback)
+    if (confirmDiscard) {
+        DestructiveConfirmationDialog(
+            confirmation = settingsConfirmation(DestructiveSettingsAction.DiscardCompanyEdits),
+            busy = state.companySaving,
+            onConfirm = {
+                confirmDiscard = false
+                vm.resetCompanyEdits()
+            },
+            onDismiss = { confirmDiscard = false },
+        )
+    }
+    Feedback(state.companyNotice, vm::dismissCompanyNotice)
 }
 
 @Composable
-private fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit) {
+private fun PendingBanner(
+    text: String,
+    rejected: Boolean,
+    onRetry: () -> Unit,
+    onDiscard: (() -> Unit)? = null,
+    discardSubject: String = "failed local change",
+) {
+    var confirmDiscard by remember(text) { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
@@ -219,17 +315,70 @@ private fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit) 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text, color = if (rejected) Brand.Danger else Brand.GoldMuted, modifier = Modifier.weight(1f))
-        if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
+        if (rejected) {
+            Row {
+                TextButton(onClick = onRetry) { Text("Retry") }
+                onDiscard?.let {
+                    TextButton(onClick = { confirmDiscard = true }) {
+                        Text("Discard", color = Brand.Danger)
+                    }
+                }
+            }
+        }
+    }
+    if (confirmDiscard && onDiscard != null) {
+        AlertDialog(
+            containerColor = Brand.SurfaceOverlay,
+            shape = Radius.shapeLg,
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard failed change?") },
+            text = {
+                Text(
+                    "This removes the saved $discardSubject retry and cannot be undone. It does not undo " +
+                        "anything already accepted by the server; Settings will refresh when online.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDiscard = false
+                        onDiscard()
+                    },
+                ) { Text("Discard failed change") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Keep it") }
+            },
+        )
     }
 }
 
 @Composable
 private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
-    when {
-        state.branchesLoading -> Loading()
-        state.branchesError != null && state.branches.isEmpty() ->
-            Retry(state.branchesError!!, vm::loadBranches)
-        else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val hasBranchData = state.branches.isNotEmpty() || state.pendingBranches.isNotEmpty()
+    when (
+        settingsReadPresentation(
+            hasBranchData,
+            state.branchesLoading || state.branchesRefreshing,
+            state.branchesError,
+            emptyIsValid = true,
+        )
+    ) {
+        SettingsReadPresentation.INITIAL_LOADING -> Loading()
+        SettingsReadPresentation.BLOCKING_ERROR -> Retry(state.branchesError!!, vm::loadBranches)
+        SettingsReadPresentation.FRESH,
+        SettingsReadPresentation.REFRESHING,
+        SettingsReadPresentation.STALE -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (state.branchesError != null) {
+                RefreshStatusBanner(
+                    title = "Saved branches",
+                    message = state.branchesError,
+                    refreshing = state.branchesRefreshing,
+                    onRetry = vm::loadBranches,
+                )
+            } else if (state.branchesRefreshing) {
+                RefreshingRow("Refreshing branches…")
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -249,6 +398,8 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
                             },
                             rejected = row.rejected,
                             onRetry = { vm.retryBranch(row.localId) },
+                            onDiscard = { vm.discardRejectedBranch(row.localId) },
+                            discardSubject = "failed branch \"${row.name}\"",
                         )
                     }
                 }
@@ -280,10 +431,14 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
 
 @Composable
 private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: SettingsViewModel) {
+    var confirmDiscard by remember(form.id, form.isNew) { mutableStateOf(false) }
+    val requestDismiss = {
+        if (state.branchFormDirty) confirmDiscard = true else vm.closeBranchForm()
+    }
     AlertDialog(
         containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!state.branchSaving) vm.closeBranchForm() },
+        onDismissRequest = { if (!state.branchSaving) requestDismiss() },
         modifier = Modifier.width(480.dp),
         title = { Text(if (form.isNew) "Add branch" else "Edit ${form.name}") },
         text = {
@@ -333,13 +488,27 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
             }
         },
         dismissButton = {
-            TextButton(onClick = vm::closeBranchForm, enabled = !state.branchSaving) { Text("Cancel") }
+            TextButton(onClick = requestDismiss, enabled = !state.branchSaving) { Text("Cancel") }
         },
     )
+    if (confirmDiscard) {
+        DestructiveConfirmationDialog(
+            confirmation = settingsConfirmation(
+                DestructiveSettingsAction.DiscardBranchForm(form.name, form.isNew),
+            ),
+            busy = state.branchSaving,
+            onConfirm = {
+                confirmDiscard = false
+                vm.closeBranchForm()
+            },
+            onDismiss = { confirmDiscard = false },
+        )
+    }
 }
 
 @Composable
 private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
+    var terminalToDelete by remember { mutableStateOf<TerminalDto?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Terminals", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
         Text(
@@ -347,6 +516,19 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 "was taken on, which is what makes a drawer reconcilable.",
             color = Brand.ForegroundMuted,
         )
+        if (state.branchesError != null) {
+            RefreshStatusBanner(
+                title = "Saved branch list",
+                message = state.branchesError,
+                refreshing = state.branchesRefreshing,
+                onRetry = vm::loadBranches,
+            )
+        } else if (state.branchesRefreshing) {
+            RefreshingRow("Refreshing branches…")
+        }
+        state.terminalActionError?.let { message ->
+            ActionErrorBanner(message, vm::dismissTerminalFeedback)
+        }
         if (state.branches.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.branches.forEach { b ->
@@ -363,65 +545,111 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
         val pendingForBranch = state.pendingTerminals.filter { it.branchId == state.selectedBranchId }
-        if (state.terminalsLoading) {
-            Loading()
-        } else {
-            if (pendingForBranch.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    pendingForBranch.forEach { row ->
-                        PendingBanner(
-                            text = if (row.rejected) {
-                                "\"${row.name}\" could not sync: ${row.error ?: "unknown error"}"
-                            } else {
-                                "\"${row.name}\" queued — not synced yet."
-                            },
-                            rejected = row.rejected,
-                            onRetry = { vm.retryTerminal(row.localId) },
-                        )
-                    }
+        when (
+            settingsReadPresentation(
+                state.terminals.isNotEmpty() || pendingForBranch.isNotEmpty(),
+                state.terminalsLoading,
+                state.terminalsError,
+                emptyIsValid = true,
+            )
+        ) {
+            SettingsReadPresentation.INITIAL_LOADING -> Loading()
+            SettingsReadPresentation.BLOCKING_ERROR -> Retry(
+                state.terminalsError!!,
+                vm::loadTerminalsCache,
+            )
+            SettingsReadPresentation.FRESH,
+            SettingsReadPresentation.REFRESHING,
+            SettingsReadPresentation.STALE -> {
+                if (state.terminalsError != null) {
+                    RefreshStatusBanner(
+                        title = "Saved terminals",
+                        message = state.terminalsError,
+                        refreshing = state.terminalsLoading,
+                        onRetry = vm::loadTerminalsCache,
+                    )
+                } else if (state.terminalsLoading) {
+                    RefreshingRow("Refreshing terminals…")
                 }
-            }
-            LazyColumn(
-                modifier = Modifier.weight(1f, fill = false),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(state.terminals, key = { it.id }) { t ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised).padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text(t.name, color = Brand.Foreground)
-                            Text(
-                                t.deviceId ?: "no device id",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Brand.ForegroundMuted,
+                if (pendingForBranch.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        pendingForBranch.forEach { row ->
+                            PendingBanner(
+                                text = if (row.rejected) {
+                                    "\"${row.name}\" could not sync: ${row.error ?: "unknown error"}"
+                                } else {
+                                    "\"${row.name}\" queued — not synced yet."
+                                },
+                                rejected = row.rejected,
+                                onRetry = { vm.retryTerminal(row.localId) },
+                                onDiscard = { vm.discardRejectedTerminal(row.localId) },
+                                discardSubject = "failed terminal \"${row.name}\"",
                             )
                         }
-                        TextButton(
-                            onClick = { vm.deleteTerminal(t) },
-                            enabled = !state.terminalBusy,
-                        ) { Text("Delete", color = Brand.Danger) }
                     }
                 }
-            }
-            Card {
-                Text("Add a terminal", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Queued and synced when back online.",
-                    style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
-                )
-                Field("Name", state.terminalName, onChange = vm::setTerminalName)
-                Field("Device id", state.terminalDeviceId, onChange = vm::setTerminalDeviceId)
-                state.terminalFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(
-                    onClick = vm::addTerminal,
-                    enabled = !state.terminalBusy && state.selectedBranchId != null,
-                ) { Text("Add terminal") }
+                LazyColumn(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.terminals, key = { it.id }) { t ->
+                        Row(
+                            Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                                .background(Brand.SurfaceRaised).padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(t.name, color = Brand.Foreground)
+                                Text(
+                                    t.deviceId ?: "no device id",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.ForegroundMuted,
+                                )
+                            }
+                            TextButton(
+                                onClick = { terminalToDelete = t },
+                                enabled = !state.terminalBusy,
+                            ) { Text("Delete", color = Brand.Danger) }
+                        }
+                    }
+                }
+                Card {
+                    Text("Add a terminal", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Queued and synced when back online.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.ForegroundMuted,
+                    )
+                    Field("Name", state.terminalName, onChange = vm::setTerminalName)
+                    Field("Tablet device ID (optional)", state.terminalDeviceId, onChange = vm::setTerminalDeviceId)
+                    Text(
+                        "Use a stable identifier such as the tablet asset tag. It helps owners " +
+                            "trace which physical device used this till.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.ForegroundMuted,
+                    )
+                    state.terminalFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Button(
+                        onClick = vm::addTerminal,
+                        enabled = !state.terminalBusy && state.selectedBranchId != null,
+                    ) { Text(if (state.terminalBusy) "Saving…" else "Add terminal") }
+                }
             }
         }
+    }
+    terminalToDelete?.let { terminal ->
+        DestructiveConfirmationDialog(
+            confirmation = settingsConfirmation(
+                DestructiveSettingsAction.DeleteTerminal(terminal.name),
+            ),
+            busy = state.terminalBusy,
+            onConfirm = {
+                terminalToDelete = null
+                vm.deleteTerminal(terminal)
+            },
+            onDismiss = { terminalToDelete = null },
+        )
     }
     Feedback(state.terminalNotice, vm::dismissTerminalFeedback)
 }
@@ -442,6 +670,80 @@ private fun Retry(message: String, onRetry: () -> Unit) =
             Button(onClick = onRetry) { Text("Try again") }
         }
     }
+
+@Composable
+private fun RefreshingRow(message: String) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CircularProgressIndicator(Modifier.width(18.dp).height(18.dp), color = Brand.Gold, strokeWidth = 2.dp)
+        Text(message, color = Brand.ForegroundMuted)
+    }
+}
+
+@Composable
+private fun RefreshStatusBanner(
+    title: String,
+    message: String,
+    refreshing: Boolean,
+    onRetry: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("$title may be out of date", color = Brand.Danger, fontWeight = FontWeight.Bold)
+            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        Button(onClick = onRetry, enabled = !refreshing) {
+            Text(if (refreshing) "Retrying…" else "Retry")
+        }
+    }
+}
+
+@Composable
+private fun ActionErrorBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Terminal was not deleted", color = Brand.Danger, fontWeight = FontWeight.Bold)
+            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        TextButton(onClick = onDismiss) { Text("Dismiss") }
+    }
+}
+
+@Composable
+private fun DestructiveConfirmationDialog(
+    confirmation: SettingsConfirmation,
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(confirmation.title) },
+        text = { Text(confirmation.body) },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !busy) { Text(confirmation.confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep it") }
+        },
+    )
+}
 
 @Composable
 private fun Feedback(notice: String?, onDismiss: () -> Unit) {

@@ -14,6 +14,9 @@ interface SettingsDao {
     @Query("SELECT * FROM company_cache LIMIT 1")
     fun observeCompany(): Flow<CompanyCacheEntity?>
 
+    @Query("SELECT * FROM company_cache LIMIT 1")
+    suspend fun company(): CompanyCacheEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCompany(row: CompanyCacheEntity)
 
@@ -43,8 +46,21 @@ interface SettingsDao {
     @Query("UPDATE local_company_edits SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markCompanyEditRejected(localId: String, error: String)
 
-    @Query("UPDATE local_company_edits SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
-    suspend fun retryCompanyEdit(localId: String)
+    /** A stale/rapid second tap must not move an already-pending or synced
+     * write backwards. The returned row count lets the UI report the race
+     * truthfully instead of pretending another retry was queued. */
+    @Query(
+        "UPDATE local_company_edits SET syncState = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND syncState = 'rejected'",
+    )
+    suspend fun retryCompanyEdit(localId: String): Int
+
+    /** Settings writes are configuration, not financial evidence. A human
+     * may explicitly discard only an already parked row so an invalid
+     * setting cannot permanently lock account switching. Pending/ambiguous
+     * work is deliberately protected from deletion. */
+    @Query("DELETE FROM local_company_edits WHERE localId = :localId AND syncState = 'rejected'")
+    suspend fun discardRejectedCompanyEdit(localId: String): Int
 
     @Query("SELECT COUNT(*) FROM local_company_edits WHERE syncState = 'rejected'")
     fun observeRejectedCompanyEditCount(): Flow<Int>
@@ -83,8 +99,14 @@ interface SettingsDao {
     @Query("UPDATE local_branches SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markBranchRejected(localId: String, error: String)
 
-    @Query("UPDATE local_branches SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
-    suspend fun retryBranch(localId: String)
+    @Query(
+        "UPDATE local_branches SET syncState = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND syncState = 'rejected'",
+    )
+    suspend fun retryBranch(localId: String): Int
+
+    @Query("DELETE FROM local_branches WHERE localId = :localId AND syncState = 'rejected'")
+    suspend fun discardRejectedBranch(localId: String): Int
 
     // ------------------------------------------------------------- terminals
     @Query("SELECT * FROM terminal_cache ORDER BY name ASC")
@@ -120,6 +142,12 @@ interface SettingsDao {
     @Query("UPDATE local_terminals SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markTerminalRejected(localId: String, error: String)
 
-    @Query("UPDATE local_terminals SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
-    suspend fun retryTerminal(localId: String)
+    @Query(
+        "UPDATE local_terminals SET syncState = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND syncState = 'rejected'",
+    )
+    suspend fun retryTerminal(localId: String): Int
+
+    @Query("DELETE FROM local_terminals WHERE localId = :localId AND syncState = 'rejected'")
+    suspend fun discardRejectedTerminal(localId: String): Int
 }

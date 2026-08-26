@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.staff
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.StaffAccess
+import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
+import cloud.dcompany.erp.core.auth.loadPlan
 import cloud.dcompany.erp.core.db.LocalStaffEntity
 import cloud.dcompany.erp.core.db.StaffCacheEntity
 import cloud.dcompany.erp.core.db.StaffWriteState
@@ -120,6 +123,9 @@ private data class EditingState(
 )
 
 data class StaffUiState(
+    val canReadDirectory: Boolean = false,
+    val canManageDirectory: Boolean = false,
+    val canUseAttendance: Boolean = false,
     val everSynced: Boolean = false,
     val syncing: Boolean = false,
     val rows: List<StaffRow> = emptyList(),
@@ -150,8 +156,10 @@ data class StaffUiState(
 
     val notice: String? = null,
 ) {
-    val loading: Boolean get() = !everSynced && rows.isEmpty() && syncing
-    val couldNotLoad: Boolean get() = !everSynced && rows.isEmpty() && !syncing
+    val loading: Boolean
+        get() = canReadDirectory && !everSynced && rows.isEmpty() && syncing
+    val couldNotLoad: Boolean
+        get() = canReadDirectory && !everSynced && rows.isEmpty() && !syncing
     val clockedIn: Boolean get() = myUserId != null && onShift.any { it.userId == myUserId }
 }
 
@@ -167,15 +175,19 @@ data class StaffUiState(
  * edit via `pendingDelete`, not a second table — see that entity's doc
  * comment).
  */
-class StaffViewModel : ViewModel() {
+class StaffViewModel(
+    profile: MeResponse,
+    private val access: StaffAccess,
+) : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
     private val api = ApiClient.create<StaffApi>()
+    private val loadPlan = access.loadPlan()
 
     private val pulling = MutableStateFlow(false)
     private val rolesFlow = MutableStateFlow<List<StaffRole>>(emptyList())
-    private val myProfile = MutableStateFlow<MeResponse?>(null)
+    private val myProfile = MutableStateFlow<MeResponse?>(profile)
     private val editing = MutableStateFlow(EditingState())
 
     val state: StateFlow<StaffUiState> = combine(
@@ -188,11 +200,20 @@ class StaffViewModel : ViewModel() {
         val (cache, local, profile) = cacheLocalProfile
         val (meta, isSyncing) = metaAndSyncing
         StaffUiState(
-            everSynced = meta != null,
+            canReadDirectory = access.canReadDirectory,
+            canManageDirectory = access.canManageDirectory,
+            canUseAttendance = access.canUseAttendance,
+            everSynced = !access.canReadDirectory || meta != null,
             syncing = isSyncing,
-            rows = mergeStaff(cache, local, profile?.userId),
-            roles = roles,
-            onShift = onShift.map {
+            rows = if (access.canReadDirectory) {
+                mergeStaff(cache, local, profile?.userId)
+            } else {
+                emptyList()
+            },
+            roles = if (access.canReadDirectory) roles else emptyList(),
+            onShift = if (access.canReadDirectory || access.canUseAttendance) onShift
+                .filter { profile?.branchId == null || it.branchId == profile.branchId }
+                .map {
                 OnShiftRow(
                     id = it.attendanceId,
                     userId = it.userId,
@@ -202,6 +223,8 @@ class StaffViewModel : ViewModel() {
                     branchName = it.branchName,
                     clockInAt = it.clockInAt,
                 )
+            } else {
+                emptyList()
             },
             myUserId = profile?.userId,
             myBranchId = profile?.branchId,
@@ -223,21 +246,19 @@ class StaffViewModel : ViewModel() {
             attendanceError = ed.attendanceError,
             notice = ed.notice,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StaffUiState())
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        StaffUiState(
+            canReadDirectory = access.canReadDirectory,
+            canManageDirectory = access.canManageDirectory,
+            canUseAttendance = access.canUseAttendance,
+        ),
+    )
 
     init {
-        loadProfile()
-        loadRoles()
+        if (loadPlan.loadRoles) loadRoles()
         retry()
-    }
-
-    private fun loadProfile() {
-        viewModelScope.launch {
-            val cached = appCtx.shiftCache.cachedProfile()?.let {
-                runCatching { ApiClient.json.decodeFromString(MeResponse.serializer(), it) }.getOrNull()
-            }
-            myProfile.value = cached
-        }
     }
 
     private fun loadRoles() {
@@ -246,9 +267,16 @@ class StaffViewModel : ViewModel() {
                 rolesFlow.value = cached
             }
             try {
-                val fresh = api.roles()
+                lateinit var fresh: List<StaffRole>
+                val committed = appCtx.cacheIsolation.fetchAndCommitScoped(
+                    fetch = { api.roles() },
+                    store = {
+                        fresh = it
+                        db.reportSnapshotDao().store(ROLES_CACHE_KEY, it)
+                    },
+                )
+                if (!committed) return@launch
                 rolesFlow.value = fresh
-                db.reportSnapshotDao().store(ROLES_CACHE_KEY, fresh)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -260,12 +288,12 @@ class StaffViewModel : ViewModel() {
     // -------------------------------------------------------------- loading
 
     fun retry() {
-        appCtx.sync.requestSync()
+        if (loadPlan.pushManagementOutbox) appCtx.sync.requestSync()
         pulling.value = true
         viewModelScope.launch {
             try {
-                appCtx.sync.refresh("staff")
-                appCtx.sync.refresh("attendance")
+                if (loadPlan.pullDirectory) appCtx.sync.refresh("staff")
+                if (loadPlan.pullAttendance) appCtx.sync.refresh("attendance")
             } finally {
                 pulling.value = false
             }
@@ -278,20 +306,32 @@ class StaffViewModel : ViewModel() {
 
     /** Same reasoning as CustomersViewModel.retrySync — a rejected row is parked, not auto-retried. */
     fun retrySync(row: StaffRow) {
+        if (!access.canManageDirectory) return
         val localId = row.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            db.staffDao().getLocal(localId)?.let { existing ->
-                db.staffDao().upsertLocal(
-                    existing.copy(state = StaffWriteState.PENDING, lastError = null, version = existing.version + 1),
-                )
-                appCtx.sync.requestSync()
-            }
+            var queued = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.staffDao().getLocal(localId)?.let { existing ->
+                        db.staffDao().upsertLocal(
+                            existing.copy(
+                                state = StaffWriteState.PENDING,
+                                lastError = null,
+                                version = existing.version + 1,
+                            ),
+                        )
+                        queued = true
+                    }
+                }
+            ) return@launch
+            if (queued) appCtx.sync.requestSync()
         }
     }
 
     // --------------------------------------------------------------- editor
 
     fun startEdit(row: StaffRow) {
+        if (!access.canManageDirectory) return
         val currentRole = row.roles.firstOrNull().orEmpty()
         editing.update {
             it.copy(
@@ -336,29 +376,32 @@ class StaffViewModel : ViewModel() {
      * about intent, not just harmless.
      */
     fun saveEdit() {
+        if (!access.canManageDirectory) return
         val ed = editing.value.editor ?: return
         if (editing.value.savingEdit || !ed.valid) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(savingEdit = true, editError = null) }
         viewModelScope.launch {
             try {
                 val dao = db.staffDao()
-                val existingPending = dao.pendingLocalForServerId(ed.id)
-                val local = (existingPending ?: LocalStaffEntity(
-                    localId = UUID.randomUUID().toString(),
-                    serverId = ed.id,
-                    createdAtMillis = System.currentTimeMillis(),
-                )).copy(
-                    name = ed.name.trim(),
-                    phone = ed.phone.trim().ifBlank { null },
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val existingPending = dao.pendingLocalForServerId(ed.id)
+                        val local = (existingPending ?: LocalStaffEntity(
+                            localId = UUID.randomUUID().toString(),
+                            serverId = ed.id,
+                            createdAtMillis = System.currentTimeMillis(),
+                        )).copy(
+                            name = ed.name.trim(),
+                            phone = ed.phone.trim().ifBlank { null },
                     // Self can't change these — never send them, so a harmless
                     // resubmit of the current value can never trip the
                     // backend's own self-edit guard (router.py's is_self check).
-                    status = if (ed.isSelf || ed.status == ed.originalStatus) null else ed.status,
-                    roleCode = if (ed.isSelf || ed.roleCode == ed.originalRoleCode) {
-                        null
-                    } else {
-                        ed.roleCode.ifBlank { null }
-                    },
+                            status = if (ed.isSelf || ed.status == ed.originalStatus) null else ed.status,
+                            roleCode = if (ed.isSelf || ed.roleCode == ed.originalRoleCode) {
+                                null
+                            } else {
+                                ed.roleCode.ifBlank { null }
+                            },
                     // Always false, not `existingPending?.pendingDelete`: the
                     // only way to reach this save with an existing local row
                     // already attached is either no pending write, or a
@@ -370,12 +413,14 @@ class StaffViewModel : ViewModel() {
                     // row silently requeuing as the same doomed delete
                     // instead of the edit just typed, behind a false "Saved"
                     // notice.
-                    pendingDelete = false,
-                    state = StaffWriteState.PENDING,
-                    lastError = null,
-                    version = (existingPending?.version ?: -1) + 1,
-                )
-                dao.upsertLocal(local)
+                            pendingDelete = false,
+                            state = StaffWriteState.PENDING,
+                            lastError = null,
+                            version = (existingPending?.version ?: -1) + 1,
+                        )
+                        dao.upsertLocal(local)
+                    }
+                ) return@launch
                 editing.update {
                     it.copy(editor = null, savingEdit = false, notice = "Saved — will sync when back online.")
                 }
@@ -393,6 +438,7 @@ class StaffViewModel : ViewModel() {
     // --------------------------------------------------------------- delete
 
     fun startDelete(row: StaffRow) {
+        if (!access.canManageDirectory) return
         editing.update { it.copy(deleteConfirmFor = row) }
     }
 
@@ -401,22 +447,27 @@ class StaffViewModel : ViewModel() {
     }
 
     fun confirmDelete() {
+        if (!access.canManageDirectory) return
         val row = editing.value.deleteConfirmFor ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(deleteConfirmFor = null) }
         viewModelScope.launch {
-            val dao = db.staffDao()
-            val existingPending = dao.pendingLocalForServerId(row.id)
-            val local = (existingPending ?: LocalStaffEntity(
-                localId = UUID.randomUUID().toString(),
-                serverId = row.id,
-                createdAtMillis = System.currentTimeMillis(),
-            )).copy(
-                pendingDelete = true,
-                state = StaffWriteState.PENDING,
-                lastError = null,
-                version = (existingPending?.version ?: -1) + 1,
-            )
-            dao.upsertLocal(local)
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val dao = db.staffDao()
+                    val existingPending = dao.pendingLocalForServerId(row.id)
+                    val local = (existingPending ?: LocalStaffEntity(
+                        localId = UUID.randomUUID().toString(),
+                        serverId = row.id,
+                        createdAtMillis = System.currentTimeMillis(),
+                    )).copy(
+                        pendingDelete = true,
+                        state = StaffWriteState.PENDING,
+                        lastError = null,
+                        version = (existingPending?.version ?: -1) + 1,
+                    )
+                    dao.upsertLocal(local)
+                }
+            ) return@launch
             editing.update { it.copy(notice = "Will remove this login when back online.") }
             appCtx.sync.requestSync()
         }
@@ -433,24 +484,34 @@ class StaffViewModel : ViewModel() {
      * keep, so it's dropped outright.
      */
     fun cancelPendingRemoval(row: StaffRow) {
+        if (!access.canManageDirectory) return
         val localId = row.localWriteId ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
-            val dao = db.staffDao()
-            val existing = dao.getLocal(localId) ?: return@launch
-            val hasFieldEdits = existing.name != null || existing.phone != null ||
-                existing.status != null || existing.roleCode != null
-            if (hasFieldEdits) {
-                dao.upsertLocal(
-                    existing.copy(
-                        pendingDelete = false,
-                        state = StaffWriteState.PENDING,
-                        lastError = null,
-                        version = existing.version + 1,
-                    ),
-                )
-            } else {
-                dao.deleteLocal(localId)
-            }
+            var changed = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val dao = db.staffDao()
+                    val existing = dao.getLocal(localId)
+                    if (existing != null) {
+                        val hasFieldEdits = existing.name != null || existing.phone != null ||
+                            existing.status != null || existing.roleCode != null
+                        if (hasFieldEdits) {
+                            dao.upsertLocal(
+                                existing.copy(
+                                    pendingDelete = false,
+                                    state = StaffWriteState.PENDING,
+                                    lastError = null,
+                                    version = existing.version + 1,
+                                ),
+                            )
+                        } else {
+                            dao.deleteLocal(localId)
+                        }
+                        changed = true
+                    }
+                }
+            ) return@launch
+            if (!changed) return@launch
             editing.update { it.copy(notice = "Removal cancelled.") }
             appCtx.sync.requestSync()
         }
@@ -459,6 +520,7 @@ class StaffViewModel : ViewModel() {
     // ---------------------------------------------------------- create login
 
     fun startCreateLogin() {
+        if (!access.canManageDirectory) return
         editing.update {
             it.copy(createDraft = CreateLoginDraft(), createChallenge = null, createCode = "", createError = null)
         }
@@ -476,6 +538,7 @@ class StaffViewModel : ViewModel() {
 
     /** Online-only, direct call — see StaffApi.kt and LocalStaffEntity's doc comments on why this can't be queued. */
     fun requestCreateLogin() {
+        if (!access.canManageDirectory) return
         val draft = editing.value.createDraft ?: return
         if (editing.value.creating || !draft.requestValid) return
         editing.update { it.copy(creating = true, createError = null) }
@@ -515,6 +578,7 @@ class StaffViewModel : ViewModel() {
      * inventing an id-lookup round trip the backend doesn't support.
      */
     fun confirmCreateLogin() {
+        if (!access.canManageDirectory) return
         val challenge = editing.value.createChallenge ?: return
         val code = editing.value.createCode
         if (editing.value.creating || code.length != 6) return
@@ -542,6 +606,7 @@ class StaffViewModel : ViewModel() {
     // ------------------------------------------------------- password reset
 
     fun startPasswordReset(row: StaffRow) {
+        if (!access.canManageDirectory) return
         editing.update {
             it.copy(
                 passwordReset = PasswordResetDraft(forUserId = row.id, forName = row.name, email = row.email),
@@ -566,6 +631,7 @@ class StaffViewModel : ViewModel() {
     }
 
     fun requestPasswordReset() {
+        if (!access.canManageDirectory) return
         val draft = editing.value.passwordReset ?: return
         if (editing.value.resettingPassword) return
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
@@ -593,6 +659,7 @@ class StaffViewModel : ViewModel() {
     }
 
     fun confirmPasswordReset() {
+        if (!access.canManageDirectory) return
         val challenge = editing.value.passwordResetChallenge ?: return
         val draft = editing.value.passwordReset ?: return
         val code = editing.value.passwordResetCode
@@ -629,6 +696,7 @@ class StaffViewModel : ViewModel() {
      * than assumed from the write's own response.
      */
     fun clockIn() {
+        if (!access.canUseAttendance) return
         if (editing.value.clockingInOut) return
         val branchId = myProfile.value?.branchId
         if (branchId == null) {
@@ -655,6 +723,7 @@ class StaffViewModel : ViewModel() {
     }
 
     fun clockOut() {
+        if (!access.canUseAttendance) return
         if (editing.value.clockingInOut) return
         editing.update { it.copy(clockingInOut = true, attendanceError = null) }
         viewModelScope.launch {

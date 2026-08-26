@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.screens.finance
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -37,7 +38,9 @@ interface FinanceApi {
     @GET("finance/pnl")
     suspend fun profitAndLoss(): ProfitAndLoss
 
-    /** AOV, MRR/ARR, LTV, CAC and burn rate for the current period. */
+    /** AOV, active paid terms, LTV, CAC and burn rate for the current period.
+     * MRR/ARR remain in the wire contract for future recurring billing but
+     * are deliberately not presented while every manual term is prepaid. */
     @GET("finance/metrics")
     suspend fun metrics(): BusinessMetrics
 
@@ -54,6 +57,7 @@ interface FinanceApi {
     suspend fun createExpense(
         @Body body: ExpenseCreate,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Expense
 
     @GET("finance/partners")
@@ -69,6 +73,7 @@ interface FinanceApi {
     suspend fun createCapitalEntry(
         @Body body: CapitalEntryCreate,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): CapitalEntry
 
     @GET("finance/assets")
@@ -78,13 +83,14 @@ interface FinanceApi {
     suspend fun createAsset(
         @Body body: AssetCreate,
         @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Asset
 
     /** Only used to put a name on each expense's category_id. */
     @GET("settings/expense-categories")
     suspend fun expenseCategories(): List<ExpenseCategory>
 
-    /** Both expense and asset create need a branch picker. */
-    @GET("settings/branches")
+    /** Both expense and asset create need a least-privilege branch picker. */
+    @GET("finance/branches")
     suspend fun branches(): List<Branch>
 }

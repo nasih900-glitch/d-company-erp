@@ -58,9 +58,25 @@ data class CreateOrderRequest(
 data class PaymentRequest(
     val method: String,
     @SerialName("amount_minor") val amountMinor: Long,
-    @SerialName("expected_total_minor") val expectedTotalMinor: Long,
+    @SerialName("tendered_minor") val tenderedMinor: Long? = null,
+    @SerialName("expected_order_total_minor") val expectedTotalMinor: Long,
     @SerialName("expected_due_minor") val expectedDueMinor: Long,
     @SerialName("tip_minor") val tipMinor: Long = 0,
+)
+
+@Serializable
+data class CheckoutClaimResult(
+    @SerialName("claim_id") val claimId: String,
+    @SerialName("order_id") val orderId: String,
+    @SerialName("claim_token") val claimToken: String,
+    @SerialName("expires_at") val expiresAt: String,
+    @SerialName("order_total_minor") val orderTotalMinor: Long,
+    @SerialName("paid_minor") val paidMinor: Long,
+    @SerialName("due_minor") val dueMinor: Long,
+    @SerialName("order_version") val orderVersion: Long,
+    @SerialName("claimant_user_id") val claimantUserId: String,
+    @SerialName("terminal_id") val terminalId: String,
+    val reused: Boolean = false,
 )
 
 /**
@@ -107,6 +123,28 @@ data class Order(
     val lines: List<OrderLine> = emptyList(),
 )
 
+/** Slim row from `GET /pos/orders` — the held-orders queue and Refunds' lookup both use this. */
+@Serializable
+data class OrderListItem(
+    val id: String,
+    @SerialName("invoice_no") val invoiceNo: String? = null,
+    val type: String = "",
+    val status: String = "",
+    @SerialName("table_id") val tableId: String? = null,
+    // "Table 4", a gaming station name, or null — pre-formatted server-side,
+    // see backend's _source_label, so this client never needs the join.
+    @SerialName("source_label") val sourceLabel: String? = null,
+    @SerialName("total_minor") val totalMinor: Long = 0,
+    @SerialName("paid_minor") val paidMinor: Long = 0,
+    @SerialName("items_count") val itemsCount: Int = 0,
+    @SerialName("customer_name") val customerName: String? = null,
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("held_at") val heldAt: String? = null,
+    @SerialName("checkout_version") val checkoutVersion: Long = 1,
+) {
+    val dueMinor: Long get() = (totalMinor - paidMinor).coerceAtLeast(0)
+}
+
 /** ₹ formatting for paise, grouped Indian-style (1,23,456.78). */
 fun Long.asRupees(): String {
     val negative = this < 0
@@ -147,6 +185,17 @@ data class PaymentResult(
     @SerialName("amount_minor") val amountMinor: Long = 0,
     @SerialName("tip_minor") val tipMinor: Long = 0,
     @SerialName("order_status") val orderStatus: String? = null,
+    @SerialName("invoice_no") val invoiceNo: String? = null,
+    @SerialName("fiscal_year") val fiscalYear: String? = null,
+    @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
+)
+
+/** Response from POST /pos/orders/{id}/finalize-zero. */
+@Serializable
+data class ZeroTotalFinalizationResult(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("amount_minor") val amountMinor: Long = 0,
+    @SerialName("order_status") val orderStatus: String,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     @SerialName("fiscal_year") val fiscalYear: String? = null,
     @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,

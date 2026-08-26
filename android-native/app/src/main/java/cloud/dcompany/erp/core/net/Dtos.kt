@@ -29,6 +29,30 @@ data class RefreshRequest(
 )
 
 @Serializable
+data class PasswordResetRequest(
+    val email: String,
+)
+
+@Serializable
+data class PasswordResetConfirmRequest(
+    @SerialName("challenge_id") val challengeId: String,
+    val code: String,
+    @SerialName("new_password") val newPassword: String,
+)
+
+@Serializable
+data class PasswordResetChallenge(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("expires_in") val expiresIn: Int,
+    val destination: String,
+)
+
+@Serializable
+data class AccountActionResponse(
+    val message: String,
+)
+
+@Serializable
 data class MeResponse(
     @SerialName("user_id") val userId: String,
     val email: String,
@@ -39,7 +63,25 @@ data class MeResponse(
     @SerialName("company_id") val companyId: String,
     // Genuinely nullable in the backend schema (`str | None`).
     @SerialName("branch_id") val branchId: String? = null,
-    @SerialName("accessible_modules") val accessibleModules: List<String> = emptyList(),
+    // Optional for compatibility with cached profiles and older servers.
+    // This is display metadata only; branchId remains the scope authority.
+    @SerialName("branch_name") val branchName: String? = null,
+    // Nullable distinguishes an old cached/server payload that predates this
+    // field from an authoritative response that intentionally grants no modules.
+    @SerialName("accessible_modules") val accessibleModules: List<String>? = null,
+    @SerialName("effective_permissions") val effectivePermissions: List<String>? = null,
+)
+
+@Serializable
+data class ClientCompatibilityResponse(
+    val platform: String,
+    @SerialName("current_version_code") val currentVersionCode: Int,
+    @SerialName("minimum_supported_version_code") val minimumSupportedVersionCode: Int,
+    @SerialName("latest_version_code") val latestVersionCode: Int,
+    val status: String,
+    @SerialName("update_url") val updateUrl: String? = null,
+    val message: String,
+    @SerialName("checked_at") val checkedAt: String,
 )
 
 /**
@@ -55,4 +97,19 @@ data class ApiErrorEnvelope(val error: ApiErrorBody? = null)
 data class ApiErrorBody(
     val code: String? = null,
     val message: String? = null,
+    val details: ClientCompatibilityErrorDetails? = null,
+)
+
+/**
+ * Compatibility middleware is the only error producer whose details Android
+ * needs to act on centrally. All fields are optional so unrelated error
+ * detail objects continue to decode under the shared envelope.
+ */
+@Serializable
+data class ClientCompatibilityErrorDetails(
+    val platform: String? = null,
+    @SerialName("current_version_code") val currentVersionCode: Int? = null,
+    @SerialName("minimum_supported_version_code") val minimumSupportedVersionCode: Int? = null,
+    @SerialName("latest_version_code") val latestVersionCode: Int? = null,
+    @SerialName("update_url") val updateUrl: String? = null,
 )

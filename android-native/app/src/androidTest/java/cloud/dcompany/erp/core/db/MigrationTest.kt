@@ -1,10 +1,13 @@
 package cloud.dcompany.erp.core.db
 
+import android.database.sqlite.SQLiteConstraintException
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
 
 /**
@@ -544,6 +547,1001 @@ class MigrationTest {
                 cursor.moveToFirst()
                 assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
             }
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate13To14_preservesExistingDataAndAddsHeldOrderTables() {
+        // Same "oldest table survives" canary — a v1 menu_items row plus a
+        // Phase 13 table (local_branches) — to prove this migration disturbs
+        // neither the original table nor the immediately-preceding phase's.
+        helper.createDatabase(dbName, 13).apply {
+            execSQL(
+                "INSERT INTO menu_items " +
+                    "(id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable, type, hsnCode, priceIncludesTax, description) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1, 'drink', NULL, 1, NULL)",
+            )
+            execSQL(
+                "INSERT INTO local_branches " +
+                    "(localId, name, code, address, timezone, opensAt, closesAt, stateCode, " +
+                    "fssaiLicenseNo, tradeLicenseNo, branchGstin, createdAtMillis, syncState, lastError) " +
+                    "VALUES ('branch-1', 'Airport', NULL, NULL, NULL, NULL, NULL, NULL, " +
+                    "NULL, NULL, NULL, 1000, 'synced', NULL)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, startedAtMillis, state, status) " +
+                    "VALUES ('gaming-1', 'server-gaming-1', 'station-1', 1000, 'stopped', 'ended')",
+            )
+            close()
+        }
+
+        // MIGRATION_13_14 adds held_order_cache and local_held_order_payments
+        // — validated against the real, Room-generated v14 schema.
+        val migrated = helper.runMigrationsAndValidate(dbName, 14, true, MIGRATION_13_14)
+
+        migrated.query("SELECT name FROM menu_items WHERE id = 'item-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "menu_items row lost across the migration" }
+            assert(cursor.getString(0) == "Cold Coffee")
+        }
+        migrated.query("SELECT localId, name, syncState FROM local_branches WHERE localId = 'branch-1'").use { cursor ->
+            assert(cursor.moveToFirst()) { "local_branches row lost across the migration" }
+            assert(cursor.getString(1) == "Airport")
+            assert(cursor.getString(2) == "synced")
+        }
+        migrated.query("SELECT state, orderId FROM local_gaming_sessions WHERE localId = 'gaming-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("ended_unbilled", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+        }
+        for (table in listOf("held_order_cache", "local_held_order_payments")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assert(cursor.getInt(0) == 0) { "$table should exist and start empty" }
+            }
+        }
+        migrated.execSQL(
+            "INSERT INTO held_order_cache " +
+                "(id, invoiceNo, type, sourceLabel, totalMinor, paidMinor, itemsCount, customerName, createdAt, heldAt) " +
+                "VALUES ('order-1', NULL, 'dine_in', 'Table 4', 10000, 0, 2, NULL, " +
+                "'2026-08-25T10:00:00Z', '2026-08-25T10:10:00Z')",
+        )
+        migrated.execSQL(
+            "INSERT INTO local_held_order_payments " +
+                "(localId, targetOrderId, method, amountMinor, tenderedMinor, expectedTotalMinor, " +
+                "expectedDueMinor, createdAtMillis, syncState, lastError) " +
+                "VALUES ('payment-1', 'order-1', 'cash', 10000, 20000, 10000, 10000, 1000, 'pending', NULL)",
+        )
+        migrated.query("SELECT amountMinor, tenderedMinor FROM local_held_order_payments").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(10000L, cursor.getLong(0))
+            assertEquals(20000L, cursor.getLong(1))
+        }
+        val duplicateRejected = try {
+            migrated.execSQL(
+                "INSERT INTO local_held_order_payments " +
+                    "(localId, targetOrderId, method, amountMinor, tenderedMinor, expectedTotalMinor, " +
+                    "expectedDueMinor, createdAtMillis, syncState, lastError) " +
+                    "VALUES ('payment-2', 'order-1', 'cash', 10000, 10000, 10000, 10000, 1001, 'pending', NULL)",
+            )
+            false
+        } catch (_: SQLiteConstraintException) {
+            true
+        }
+        assertTrue("one held order must not accept two local payments", duplicateRejected)
+        migrated.close()
+    }
+
+    @Test
+    fun migrate14To15_preservesConfirmedPaymentsAndAddsCheckoutClaims() {
+        helper.createDatabase(dbName, 14).apply {
+            execSQL(
+                "INSERT INTO menu_items " +
+                    "(id, categoryId, sku, name, basePriceMinor, taxRate, isAvailable, type, " +
+                    "hsnCode, priceIncludesTax, description) " +
+                    "VALUES ('item-1', 'cat-1', 'SKU1', 'Cold Coffee', 12000, 0.05, 1, " +
+                    "'drink', NULL, 1, NULL)",
+            )
+            execSQL(
+                "INSERT INTO held_order_cache " +
+                    "(id, invoiceNo, type, sourceLabel, totalMinor, paidMinor, itemsCount, " +
+                    "customerName, createdAt, heldAt) VALUES ('order-1', NULL, 'dine_in', " +
+                    "'Table 4', 10000, 0, 2, NULL, '2026-08-25T10:00:00Z', " +
+                    "'2026-08-25T10:10:00Z')",
+            )
+            // This row represents money staff already confirmed in v14. The
+            // upgrade must retain it even though old builds had no claim.
+            execSQL(
+                "INSERT INTO local_held_order_payments " +
+                    "(localId, targetOrderId, method, amountMinor, tenderedMinor, " +
+                    "expectedTotalMinor, expectedDueMinor, createdAtMillis, syncState, lastError) " +
+                    "VALUES ('payment-1', 'order-1', 'cash', 10000, 20000, 10000, 10000, " +
+                    "1000, 'pending', NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 15, true, MIGRATION_14_15)
+
+        migrated.query(
+            "SELECT totalMinor, checkoutVersion FROM held_order_cache WHERE id = 'order-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(10000L, cursor.getLong(0))
+            assertEquals(1L, cursor.getLong(1))
+        }
+        migrated.query(
+            "SELECT amountMinor, claimToken, claimExpiresAtMillis, claimOrderVersion " +
+                "FROM local_held_order_payments WHERE localId = 'payment-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(10000L, cursor.getLong(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+        }
+        migrated.execSQL(
+            "UPDATE local_held_order_payments SET claimToken = 'opaque-token', " +
+                "claimExpiresAtMillis = 2000, claimOrderVersion = 7 " +
+                "WHERE localId = 'payment-1'",
+        )
+        migrated.query(
+            "SELECT claimToken, claimExpiresAtMillis, claimOrderVersion " +
+                "FROM local_held_order_payments WHERE localId = 'payment-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("opaque-token", cursor.getString(0))
+            assertEquals(2000L, cursor.getLong(1))
+            assertEquals(7L, cursor.getLong(2))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate15To16_preservesShiftOutboxAndAddsTerminalServerCache() {
+        helper.createDatabase(dbName, 15).apply {
+            execSQL(
+                "INSERT INTO local_shifts " +
+                    "(localId, serverShiftId, openingFloatMinor, openedAtMillis, state, " +
+                    "countedMinor, closedAtMillis, varianceMinor, lastError) VALUES " +
+                    "('open-pending', NULL, 5000, 1000, 'open_pending', NULL, NULL, NULL, NULL), " +
+                    "('close-pending', 'server-close', 5000, 1100, 'close_pending', 6000, 1200, NULL, NULL), " +
+                    "('old-open-rejected', NULL, 5000, 900, 'rejected', NULL, NULL, NULL, 'open failed'), " +
+                    "('old-close-rejected', 'server-rejected', 5000, 800, 'rejected', 5000, 1300, NULL, 'close failed')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 16, true, MIGRATION_15_16)
+
+        migrated.query(
+            "SELECT state, serverShiftId, terminalId, branchId, openedByUserId, " +
+                "openedByName, openedByEmail FROM local_shifts WHERE localId = 'open-pending'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("open_pending", cursor.getString(0))
+            for (column in 1..6) assertTrue(cursor.isNull(column))
+        }
+        migrated.query(
+            "SELECT state, serverShiftId, countedMinor, closedAtMillis " +
+                "FROM local_shifts WHERE localId = 'close-pending'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("close_pending", cursor.getString(0))
+            assertEquals("server-close", cursor.getString(1))
+            assertEquals(6000L, cursor.getLong(2))
+            assertEquals(1200L, cursor.getLong(3))
+        }
+        migrated.query(
+            "SELECT localId, state FROM local_shifts " +
+                "WHERE localId IN ('old-open-rejected', 'old-close-rejected') ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("old-close-rejected", cursor.getString(0))
+            assertEquals("close_rejected", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("old-open-rejected", cursor.getString(0))
+            assertEquals("open_rejected", cursor.getString(1))
+        }
+        migrated.execSQL(
+            "INSERT INTO server_open_shift_cache " +
+                "(terminalId, serverShiftId, branchId, status, openingFloatMinor, expectedMinor, " +
+                "openedAtMillis, openedByUserId, openedByName, openedByEmail, verifiedAtMillis) " +
+                "VALUES ('terminal-1', 'server-1', 'branch-1', 'open', 5000, 7500, 1000, " +
+                "'user-1', 'Rafi', 'rafi@example.com', 2000)",
+        )
+        migrated.query(
+            "SELECT openedByName, openedByEmail, expectedMinor FROM server_open_shift_cache " +
+                "WHERE terminalId = 'terminal-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Rafi", cursor.getString(0))
+            assertEquals("rafi@example.com", cursor.getString(1))
+            assertEquals(7500L, cursor.getLong(2))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate13To17_recoversLegacyGamingStartStopAndStoppedRows() {
+        helper.createDatabase(dbName, 13).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, startedAtMillis, state, status, " +
+                    "endAtMillis, billableMinutes, amountMinor, lastError) VALUES " +
+                    "('legacy-start', NULL, 'ps5-1', 'shift-1', 1000, 'rejected', 'active', " +
+                    "NULL, NULL, NULL, 'start refused'), " +
+                    "('legacy-stop', 'session-stop', 'vr-1', NULL, 1100, 'rejected', 'active', " +
+                    "NULL, NULL, NULL, 'stop refused'), " +
+                    "('legacy-stopped', 'session-ended', 'sim-1', NULL, 1200, 'stopped', 'ended', " +
+                    "1800, 10, 25000, NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            dbName,
+            17,
+            true,
+            MIGRATION_13_14,
+            MIGRATION_14_15,
+            MIGRATION_15_16,
+            MIGRATION_16_17,
+        )
+
+        migrated.query(
+            "SELECT localId, state, status, serverId, amountMinor, orderId, lastError " +
+                "FROM local_gaming_sessions ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("legacy-start", cursor.getString(0))
+            assertEquals("start_rejected", cursor.getString(1))
+            assertEquals("start_failed", cursor.getString(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertTrue(cursor.isNull(5))
+            assertEquals("start refused", cursor.getString(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("legacy-stop", cursor.getString(0))
+            assertEquals("stop_rejected", cursor.getString(1))
+            assertEquals("active", cursor.getString(2))
+            assertEquals("session-stop", cursor.getString(3))
+            assertEquals("stop refused", cursor.getString(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("legacy-stopped", cursor.getString(0))
+            assertEquals("ended_unbilled", cursor.getString(1))
+            assertEquals("ended", cursor.getString(2))
+            assertEquals(25000L, cursor.getLong(4))
+            assertTrue(cursor.isNull(5))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate16To17_classifiesEveryLegacyGamingFailureWithoutReplayingIt() {
+        helper.createDatabase(dbName, 16).apply {
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, startedAtMillis, state, status, " +
+                    "endAtMillis, billableMinutes, amountMinor, orderId, lastError) VALUES " +
+                    "('start', NULL, 'ps5-1', 'shift-1', 1000, 'rejected', 'starting', " +
+                    "NULL, NULL, NULL, NULL, 'start failed'), " +
+                    "('stop', 'session-2', 'vr-1', NULL, 1100, 'rejected', 'stopping', " +
+                    "NULL, NULL, NULL, NULL, 'stop failed'), " +
+                    "('send', 'session-3', 'sim-1', NULL, 1200, 'rejected', 'ended', " +
+                    "1800, 10, 25000, NULL, 'send failed'), " +
+                    "('already-sent', 'session-4', 'stream-1', NULL, 1300, 'rejected', 'ended', " +
+                    "1900, 10, 30000, 'order-4', 'stale local state')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 17, true, MIGRATION_16_17)
+
+        migrated.query(
+            "SELECT localId, state, status, serverId, amountMinor, orderId, lastError " +
+                "FROM local_gaming_sessions ORDER BY localId",
+        ).use { cursor ->
+            val recovered = buildMap {
+                while (cursor.moveToNext()) {
+                    put(
+                        cursor.getString(0),
+                        listOf(
+                            cursor.getString(1),
+                            cursor.getString(2),
+                            cursor.getString(3),
+                            if (cursor.isNull(4)) null else cursor.getLong(4).toString(),
+                            cursor.getString(5),
+                            cursor.getString(6),
+                        ),
+                    )
+                }
+            }
+            assertEquals("sent", recovered.getValue("already-sent")[0])
+            assertEquals("order-4", recovered.getValue("already-sent")[4])
+            assertEquals("send_rejected", recovered.getValue("send")[0])
+            assertEquals("ended", recovered.getValue("send")[1])
+            assertEquals("25000", recovered.getValue("send")[3])
+            assertEquals("send failed", recovered.getValue("send")[5])
+            assertEquals("start_rejected", recovered.getValue("start")[0])
+            assertEquals("start_failed", recovered.getValue("start")[1])
+            assertTrue(recovered.getValue("start")[2] == null)
+            assertEquals("stop_rejected", recovered.getValue("stop")[0])
+            assertEquals("active", recovered.getValue("stop")[1])
+            assertEquals("session-2", recovered.getValue("stop")[2])
+        }
+
+        // Idempotency matters because SyncEngine and GamingViewModel also run
+        // the same safety net for imported backups already stamped as v17.
+        migrated.execSQL(RECOVER_LEGACY_GAMING_REJECTIONS_SQL)
+        migrated.query("SELECT COUNT(*) FROM local_gaming_sessions WHERE state = 'rejected'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate17To18_preservesQueuedMembershipAndAddsOnlyHistoricalShiftBinding() {
+        helper.createDatabase(dbName, 17).apply {
+            execSQL(
+                "INSERT INTO local_subscriptions " +
+                    "(localId, customerId, tierId, billingCycle, paidVia, createdAtMillis, " +
+                    "syncState, lastError) VALUES " +
+                    "('legacy-sub', 'customer-1', 'gold', 'monthly', 'cash', 1000, " +
+                    "'rejected', 'old build could not post')",
+            )
+            execSQL(
+                "INSERT INTO customer_membership_cache " +
+                    "(id, customerId, tierId, tierCode, tierName, billingCycle, startsAt, " +
+                    "expiresAt, cancelledAt, autoRenew, amountPaidMinor, isActive) VALUES " +
+                    "('membership-1', 'customer-1', 'gold', 'gold', 'Gold', 'monthly', " +
+                    "'2026-08-01T00:00:00Z', '2026-08-31T00:00:00Z', NULL, 0, 199900, 1)",
+            )
+            close()
+        }
+
+        // v18's exported schema contains only shiftId. New price/payment facts
+        // belong to 18->19; changing this historical boundary makes Room reject
+        // a legitimate v17 installation during upgrade.
+        val migrated = helper.runMigrationsAndValidate(dbName, 18, true, MIGRATION_17_18)
+
+        migrated.query(
+            "SELECT customerId, tierId, paidVia, syncState, lastError, shiftId " +
+                "FROM local_subscriptions WHERE localId = 'legacy-sub'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("customer-1", cursor.getString(0))
+            assertEquals("gold", cursor.getString(1))
+            assertEquals("cash", cursor.getString(2))
+            assertEquals("rejected", cursor.getString(3))
+            assertEquals("old build could not post", cursor.getString(4))
+            assertTrue(cursor.isNull(5)) // never guess which drawer owned it
+        }
+        migrated.query(
+            "SELECT amountPaidMinor, isActive FROM customer_membership_cache " +
+                "WHERE id = 'membership-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(199900L, cursor.getLong(0))
+            assertEquals(1, cursor.getInt(1))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate18To19_quarantinesLegacyPriceAndAddsMembershipReceiptRecoveryTables() {
+        helper.createDatabase(dbName, 18).apply {
+            execSQL(
+                "INSERT INTO local_subscriptions " +
+                    "(localId, customerId, tierId, shiftId, billingCycle, paidVia, " +
+                    "createdAtMillis, syncState, lastError) VALUES " +
+                    "('legacy-sub', 'customer-1', 'gold', 'shift-1', 'monthly', 'upi', " +
+                    "1000, 'rejected', 'price not snapshotted')",
+            )
+            execSQL(
+                "INSERT INTO customer_membership_cache " +
+                    "(id, customerId, tierId, tierCode, tierName, billingCycle, startsAt, " +
+                    "expiresAt, cancelledAt, autoRenew, amountPaidMinor, isActive) VALUES " +
+                    "('membership-1', 'customer-1', 'gold', 'gold', 'Gold', 'monthly', " +
+                    "'2026-08-01T00:00:00Z', '2026-08-31T00:00:00Z', NULL, 0, 199900, 1)",
+            )
+            execSQL(
+                "INSERT INTO server_open_shift_cache " +
+                    "(terminalId, serverShiftId, branchId, status, openingFloatMinor, " +
+                    "expectedMinor, openedAtMillis, openedByUserId, openedByName, " +
+                    "openedByEmail, verifiedAtMillis) VALUES " +
+                    "('terminal-1', 'shift-1', 'branch-1', 'open', 5000, 7500, 1000, " +
+                    "'owner-1', 'Owner', 'owner@example.com', 2000)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 19, true, MIGRATION_18_19)
+
+        migrated.query(
+            "SELECT shiftId, expectedAmountMinor, syncState, lastError " +
+                "FROM local_subscriptions WHERE localId = 'legacy-sub'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("shift-1", cursor.getString(0))
+            assertTrue(cursor.isNull(1)) // no price inference from current tier
+            assertEquals("rejected", cursor.getString(2))
+            assertEquals("price not snapshotted", cursor.getString(3))
+        }
+        migrated.query(
+            "SELECT amountPaidMinor, revokedAt, paymentId, paymentReceiptNo, refundId " +
+                "FROM customer_membership_cache WHERE id = 'membership-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(199900L, cursor.getLong(0))
+            for (column in 1..4) assertTrue(cursor.isNull(column))
+        }
+        migrated.query(
+            "SELECT expectedMinor, posCollectionsMinor, membershipCollectionsMinor, " +
+                "grossCollectionsMinor, settledMembershipRefundsMinor " +
+                "FROM server_open_shift_cache WHERE terminalId = 'terminal-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(7500L, cursor.getLong(0))
+            for (column in 1..4) assertTrue(cursor.isNull(column))
+        }
+        for (table in listOf("customer_membership_history_cache", "local_membership_refunds")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+        migrated.execSQL(
+            "INSERT INTO local_membership_refunds " +
+                "(localId, customerId, subscriptionId, shiftId, expectedAmountMinor, " +
+                "method, reason, externalReference, settledAtMillis, serverRefundId, " +
+                "receiptNo, withdrawalReason, withdrawalAtMillis, createdAtMillis, " +
+                "syncState, lastError) VALUES " +
+                "('refund-1', 'customer-1', 'membership-1', 'shift-1', 199900, " +
+                "'cash', 'Customer requested refund', NULL, NULL, NULL, NULL, NULL, " +
+                "NULL, 3000, 'request_pending', NULL)",
+        )
+        migrated.query(
+            "SELECT shiftId, expectedAmountMinor, syncState FROM local_membership_refunds " +
+                "WHERE localId = 'refund-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("shift-1", cursor.getString(0))
+            assertEquals(199900L, cursor.getLong(1))
+            assertEquals("request_pending", cursor.getString(2))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate19To20_quarantinesAmbiguousRefundsAndAddsExactSettlementProvenance() {
+        helper.createDatabase(dbName, 19).apply {
+            execSQL(
+                "INSERT INTO local_refunds " +
+                    "(localId, orderId, invoiceNo, reasonCode, amountMinor, note, " +
+                    "createdAtMillis, state, settlementMethod, lastError) VALUES " +
+                    "('accepted-old', 'order-1', 'INV-1', 'billing_error', 5000, NULL, " +
+                    "1000, 'accepted_cash_due', 'cash', NULL), " +
+                    "('pending-old', 'order-2', 'INV-2', 'other', 3000, NULL, " +
+                    "1100, 'request_pending', NULL, 'connection lost'), " +
+                    "('settled-old', 'order-3', 'INV-3', 'other', 2000, NULL, " +
+                    "1200, 'synced', 'cash', NULL)",
+            )
+            execSQL(
+                "INSERT INTO server_open_shift_cache " +
+                    "(terminalId, serverShiftId, branchId, status, openingFloatMinor, expectedMinor, " +
+                    "posCollectionsMinor, membershipCollectionsMinor, grossCollectionsMinor, " +
+                    "settledMembershipRefundsMinor, openedAtMillis, openedByUserId, openedByName, " +
+                    "openedByEmail, verifiedAtMillis) VALUES " +
+                    "('terminal-1', 'shift-1', 'branch-1', 'open', 10000, 15000, " +
+                    "5000, 0, 5000, 0, 900, 'owner-1', 'Owner', 'owner@example.com', 1300)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 20, true, MIGRATION_19_20)
+
+        migrated.query(
+            "SELECT localId, state, clientActionId, shiftId, serverRequestId, lastError " +
+                "FROM local_refunds ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("accepted-old", cursor.getString(0))
+            assertEquals(RefundState.LEGACY_RECONCILIATION_REQUIRED, cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertTrue(cursor.getString(5).contains("do not pay again", ignoreCase = true))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("pending-old", cursor.getString(0))
+            assertEquals(RefundState.LEGACY_RECONCILIATION_REQUIRED, cursor.getString(1))
+            assertTrue(cursor.getString(5).contains("connection lost"))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("settled-old", cursor.getString(0))
+            assertEquals(RefundState.LEGACY_SETTLED, cursor.getString(1))
+        }
+        migrated.query(
+            "SELECT settledPosRefundsMinor, totalRefundsMinor, netCollectionsMinor " +
+                "FROM server_open_shift_cache WHERE terminalId = 'terminal-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+        }
+        migrated.query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (" +
+                "'index_local_refunds_shiftId', 'index_local_refunds_clientActionId', " +
+                "'index_local_refunds_serverRequestId')",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(3, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate20To21_preservesAndClassifiesLegacyMembershipPaymentsAndAddsShiftHistory() {
+        helper.createDatabase(dbName, 20).apply {
+            execSQL(
+                "INSERT INTO local_subscriptions " +
+                    "(localId, customerId, tierId, shiftId, expectedAmountMinor, billingCycle, " +
+                    "paidVia, createdAtMillis, syncState, lastError) VALUES " +
+                    "('known', 'customer-1', 'tier-1', 'shift-1', 19900, 'monthly', " +
+                    "'upi', 1000, 'pending', 'response lost'), " +
+                    "('unknown', 'customer-2', 'tier-2', NULL, NULL, 'monthly', " +
+                    "'cash', 2000, 'rejected', 'old row'), " +
+                    "('done', 'customer-3', 'tier-3', 'shift-3', 9900, 'monthly', " +
+                    "'cash', 3000, 'synced', NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 21, true, MIGRATION_20_21)
+
+        migrated.query(
+            "SELECT sourceLegacyLocalId, rootClientActionId, kind, shiftId, " +
+                "expectedAmountMinor, state, lastError " +
+                "FROM local_membership_payment_actions ORDER BY sourceLegacyLocalId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("known", cursor.getString(0))
+            assertEquals("membership-subscribe:known", cursor.getString(1))
+            assertEquals(MembershipPaymentActionKind.LEGACY_PROBE, cursor.getString(2))
+            assertEquals("shift-1", cursor.getString(3))
+            assertEquals(19900L, cursor.getLong(4))
+            assertEquals(MembershipMoneyActionState.PENDING, cursor.getString(5))
+            assertEquals("response lost", cursor.getString(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("unknown", cursor.getString(0))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertEquals(MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING, cursor.getString(5))
+            assertTrue(cursor.getString(6).contains("Do not collect", ignoreCase = true))
+            assertTrue(!cursor.moveToNext()) // synced source rows are not copied
+        }
+        migrated.query(
+            "SELECT localId, syncState FROM local_subscriptions ORDER BY localId",
+        ).use { cursor ->
+            val states = mutableMapOf<String, String>()
+            while (cursor.moveToNext()) states[cursor.getString(0)] = cursor.getString(1)
+            assertEquals("synced", states["done"])
+            assertEquals("migrated_v21", states["known"])
+            assertEquals("migrated_v21", states["unknown"])
+        }
+        for (table in listOf("membership_payment_task_cache", "shift_history_cache")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+        migrated.query(
+            "SELECT name, dflt_value FROM pragma_table_info('customer_membership_cache') " +
+                "WHERE name IN ('paymentEvidenceTimeUntrusted', " +
+                "'paymentProviderEvidenceReconciled') ORDER BY name",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("paymentEvidenceTimeUntrusted", cursor.getString(0))
+            assertEquals("0", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("paymentProviderEvidenceReconciled", cursor.getString(0))
+            assertEquals("1", cursor.getString(1))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate21To22_preservesLegacyRefundEvidenceAndNeverReplaysItAsFreshMoney() {
+        helper.createDatabase(dbName, 21).apply {
+            execSQL(
+                "INSERT INTO customer_membership_history_cache " +
+                    "(id, customerId, tierId, tierCode, tierName, billingCycle, startsAt, " +
+                    "expiresAt, autoRenew, amountPaidMinor, paymentId, paymentMethod, " +
+                    "paymentEvidenceTimeUntrusted, paymentProviderEvidenceReconciled, isActive) VALUES " +
+                    "('membership-1', 'customer-1', 'tier-1', 'gold', 'Gold', 'monthly', " +
+                    "'2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', 0, 19900, " +
+                    "'payment-1', 'cash', 0, 1, 0), " +
+                    "('membership-2', 'customer-2', 'tier-2', 'silver', 'Silver', 'monthly', " +
+                    "'2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', 0, 9900, " +
+                    "'payment-2', 'upi', 0, 1, 0)",
+            )
+            execSQL(
+                "INSERT INTO local_membership_refunds " +
+                    "(localId, customerId, subscriptionId, shiftId, expectedAmountMinor, method, " +
+                    "reason, externalReference, settledAtMillis, serverRefundId, createdAtMillis, " +
+                    "syncState, lastError) VALUES " +
+                    "('server-known', 'customer-1', 'membership-1', 'shift-1', 19900, 'cash', " +
+                    "'Customer request', NULL, 1200, 'refund-server-1', 1000, " +
+                    "'cash_settle_pending', 'response lost'), " +
+                    "('register-provider', 'customer-2', 'membership-2', 'shift-2', 9900, 'upi', " +
+                    "'Customer request', 'provider-ref-1', 2200, NULL, 2000, " +
+                    "'request_rejected', 'acceptance lost'), " +
+                    "('missing-payment', 'customer-3', 'membership-3', 'shift-3', 4900, 'cash', " +
+                    "'Customer request', NULL, NULL, NULL, 3000, 'request_pending', NULL), " +
+                    "('done', 'customer-4', 'membership-4', 'shift-4', 3900, 'cash', " +
+                    "'Customer request', NULL, 4000, 'refund-4', 3900, 'synced', NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 22, true, MIGRATION_21_22)
+
+        migrated.query(
+            "SELECT sourceLegacyLocalId, rootClientActionId, serverRefundId, kind, paymentId, " +
+                "cashHandoverConfirmed, state, lastError FROM local_membership_refund_actions " +
+                "ORDER BY sourceLegacyLocalId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("missing-payment", cursor.getString(0))
+            assertEquals(MembershipRefundActionKind.LEGACY_REGISTER, cursor.getString(3))
+            assertTrue(cursor.isNull(4))
+            assertEquals(MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING, cursor.getString(6))
+            assertTrue(cursor.getString(7).contains("no verified payment", ignoreCase = true))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("register-provider", cursor.getString(0))
+            assertEquals("membership-refund:register-provider", cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+            assertEquals(MembershipRefundActionKind.LEGACY_REGISTER, cursor.getString(3))
+            assertEquals("payment-2", cursor.getString(4))
+            assertEquals(MembershipMoneyActionState.PENDING, cursor.getString(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("server-known", cursor.getString(0))
+            assertEquals("refund-server-1", cursor.getString(2))
+            assertEquals(MembershipRefundActionKind.LEGACY_RECONCILE_SERVER, cursor.getString(3))
+            assertEquals("payment-1", cursor.getString(4))
+            assertEquals(1, cursor.getInt(5))
+            assertEquals(MembershipMoneyActionState.PENDING, cursor.getString(6))
+            assertTrue(!cursor.moveToNext())
+        }
+        migrated.query(
+            "SELECT localId, syncState FROM local_membership_refunds ORDER BY localId",
+        ).use { cursor ->
+            val states = mutableMapOf<String, String>()
+            while (cursor.moveToNext()) states[cursor.getString(0)] = cursor.getString(1)
+            assertEquals("synced", states["done"])
+            assertEquals("migrated_v22", states["missing-payment"])
+            assertEquals("migrated_v22", states["register-provider"])
+            assertEquals("migrated_v22", states["server-known"])
+        }
+        for (table in listOf("membership_refund_task_cache", "membership_refund_attempt_cache")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+        migrated.query(
+            "SELECT name, dflt_value FROM pragma_table_info('customer_membership_history_cache') " +
+                "WHERE name IN ('refundEvidenceTimeUntrusted', 'refundProviderEvidenceReconciled', " +
+                "'refundCustomerSpendReconciled') ORDER BY name",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("refundCustomerSpendReconciled", cursor.getString(0))
+            assertEquals("1", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("refundEvidenceTimeUntrusted", cursor.getString(0))
+            assertEquals("0", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("refundProviderEvidenceReconciled", cursor.getString(0))
+            assertEquals("1", cursor.getString(1))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate22To23_preservesHeldPaymentsAndInstallsAtomicShiftCloseGuards() {
+        helper.createDatabase(dbName, 22).apply {
+            execSQL(
+                "INSERT INTO local_held_order_payments " +
+                    "(localId, targetOrderId, method, amountMinor, tenderedMinor, " +
+                    "expectedTotalMinor, expectedDueMinor, claimToken, claimExpiresAtMillis, " +
+                    "claimOrderVersion, createdAtMillis, syncState, lastError) VALUES " +
+                    "('legacy-payment', 'order-1', 'upi', 1500, NULL, 1500, 1500, " +
+                    "'claim-1', 9000, 3, 1000, 'pending', 'response unknown')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 23, true, MIGRATION_22_23)
+
+        migrated.query(
+            "SELECT localId, shiftId, terminalId, syncState, lastError " +
+                "FROM local_held_order_payments WHERE localId = 'legacy-payment'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("legacy-payment", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertEquals(HeldOrderPaymentState.PENDING, cursor.getString(3))
+            assertEquals("response unknown", cursor.getString(4))
+        }
+        migrated.query(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN " +
+                "('index_local_held_order_payments_shiftId', " +
+                "'index_local_held_order_payments_terminalId') ORDER BY name",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("index_local_held_order_payments_shiftId", cursor.getString(0))
+            assertTrue(cursor.moveToNext())
+            assertEquals("index_local_held_order_payments_terminalId", cursor.getString(0))
+            assertTrue(!cursor.moveToNext())
+        }
+        migrated.query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' " +
+                "AND name LIKE 'guard_%_while_shift_closing'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(18, cursor.getInt(0))
+        }
+
+        migrated.execSQL(
+            "INSERT INTO local_shifts " +
+                "(localId, serverShiftId, terminalId, branchId, openingFloatMinor, " +
+                "openedAtMillis, state) VALUES " +
+                "('shift-closing', 'server-shift', 'terminal-1', 'branch-1', 5000, 1000, " +
+                "'close_pending')",
+        )
+        var lateSaleBlocked = false
+        try {
+            migrated.execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, estimateMinor, paymentMethod, tenderedMinor, " +
+                    "tipMinor, createdAtMillis, syncState) VALUES " +
+                    "('late-sale', 'shift-closing', 'dine_in', 1000, 'cash', 1000, 0, 2000, 'pending')",
+            )
+        } catch (e: SQLiteConstraintException) {
+            lateSaleBlocked = e.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD)
+        }
+        assertTrue(lateSaleBlocked)
+
+        // An already-pending sync may finish while the close intent exists,
+        // but a stale screen cannot create a new stop leg on that lifecycle.
+        migrated.execSQL(
+            "INSERT INTO local_gaming_sessions " +
+                "(localId, serverId, stationId, shiftId, startedAtMillis, state, status) VALUES " +
+                "('gaming-1', 'server-gaming-1', 'station-1', 'shift-closing', 1000, " +
+                "'start_synced', 'active')",
+        )
+        var lateStopBlocked = false
+        try {
+            migrated.execSQL(
+                "UPDATE local_gaming_sessions SET state = 'stop_pending' WHERE localId = 'gaming-1'",
+            )
+        } catch (e: SQLiteConstraintException) {
+            lateStopBlocked = e.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD)
+        }
+        assertTrue(lateStopBlocked)
+        migrated.close()
+    }
+
+    @Test
+    fun migrate23To24PreservesCafeIntentAndAddsDurableRoundsAndCancellationAcks() {
+        helper.createDatabase(dbName, 23).apply {
+            execSQL(
+                "INSERT INTO kitchen_order_cache " +
+                    "(id, type, kitchenState, minutesWaiting, lines) VALUES " +
+                    "('kitchen-1', 'dine_in', 'served', 4, '[]')",
+            )
+            execSQL(
+                "INSERT INTO local_table_orders " +
+                    "(localId, orderId, tableId, tableCode, shiftId, lines, createdAtMillis, state, lastError) " +
+                    "VALUES " +
+                    "('legacy-pending', NULL, 'table-1', 'T1', 'shift-1', " +
+                    "'[{' || char(34) || 'menu_item_id' || char(34) || ':' || char(34) || " +
+                    "'menu-1' || char(34) || ',' || char(34) || 'qty' || char(34) || ':2}]', " +
+                    "1000, 'pending', 'response unknown'), " +
+                    "('legacy-rejected', 'server-order-2', 'table-2', 'T2', 'shift-1', " +
+                    "'[{' || char(34) || 'menu_item_id' || char(34) || ':' || char(34) || " +
+                    "'menu-2' || char(34) || ',' || char(34) || 'qty' || char(34) || ':1}]', " +
+                    "2000, 'rejected', 'shift closed')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 24, true, MIGRATION_23_24)
+
+        migrated.query(
+            "SELECT pendingCancellations FROM kitchen_order_cache WHERE id = 'kitchen-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("[]", cursor.getString(0))
+        }
+        migrated.query(
+            "SELECT localBillId, serverOrderId, tableId, tableCode, shiftId, localStatus " +
+                "FROM local_cafe_bills ORDER BY localBillId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("legacy-pending", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals("table-1", cursor.getString(2))
+            assertEquals("T1", cursor.getString(3))
+            assertEquals("shift-1", cursor.getString(4))
+            assertEquals(LocalCafeBillState.OPEN, cursor.getString(5))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("legacy-rejected", cursor.getString(0))
+            assertEquals("server-order-2", cursor.getString(1))
+            assertTrue(!cursor.moveToNext())
+        }
+        migrated.query(
+            "SELECT actionId, localBillId, sequence, kind, payload, dedupeKey, state, lastError " +
+                "FROM local_cafe_actions ORDER BY actionId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("legacy-pending", cursor.getString(0))
+            assertEquals("legacy-pending", cursor.getString(1))
+            assertEquals(1L, cursor.getLong(2))
+            assertEquals(CafeActionKind.LEGACY_CREATE_AND_SEND, cursor.getString(3))
+            assertTrue(cursor.getString(4).contains("\"menu_item_id\":\"menu-1\""))
+            assertEquals("legacy:legacy-pending", cursor.getString(5))
+            assertEquals(CafeActionState.PENDING, cursor.getString(6))
+            assertEquals("response unknown", cursor.getString(7))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals("legacy-rejected", cursor.getString(0))
+            assertEquals(CafeActionState.REJECTED, cursor.getString(6))
+            assertEquals("shift closed", cursor.getString(7))
+            assertTrue(!cursor.moveToNext())
+        }
+        migrated.query(
+            "SELECT COUNT(*) FROM local_table_orders WHERE state IN ('pending', 'rejected')",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        for (table in listOf("cafe_bill_cache", "local_kitchen_cancellation_acks")) {
+            migrated.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+
+        // The v23 close guard remains, and v24 adds the same atomic refusal
+        // for a late table action whose shift is carried by its bill header.
+        migrated.execSQL(
+            "INSERT INTO local_shifts " +
+                "(localId, serverShiftId, terminalId, branchId, openingFloatMinor, " +
+                "openedAtMillis, state) VALUES " +
+                "('shift-closing-v24', 'server-shift-v24', 'terminal-1', 'branch-1', " +
+                "5000, 1000, 'close_pending')",
+        )
+        migrated.execSQL(
+            "INSERT INTO local_cafe_bills " +
+                "(localBillId, tableId, tableCode, shiftId, localStatus, createdAtMillis) " +
+                "VALUES ('late-bill', 'table-3', 'T3', 'shift-closing-v24', 'open', 3000)",
+        )
+        var lateRoundBlocked = false
+        try {
+            migrated.execSQL(
+                "INSERT INTO local_cafe_actions " +
+                    "(actionId, localBillId, sequence, kind, payload, dedupeKey, " +
+                    "createdAtMillis, state) VALUES " +
+                    "('late-round', 'late-bill', 1, 'create_round', '{}', " +
+                    "'late-round-key', 3000, 'pending')",
+            )
+        } catch (e: SQLiteConstraintException) {
+            lateRoundBlocked = e.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD)
+        }
+        assertTrue(lateRoundBlocked)
+        migrated.close()
+    }
+
+    @Test
+    fun migrate24To25_preservesCoreShiftHistoryAndInvalidatesUnprovenBreakdown() {
+        helper.createDatabase(dbName, 24).apply {
+            // These non-zero v24 values could be authoritative, but v24 also
+            // wrote DTO defaults for legacy responses. The migration cannot
+            // distinguish provenance, so only the stable core is preserved.
+            execSQL(
+                "INSERT INTO shift_history_cache (" +
+                    "id, branchId, terminalId, status, openedAtMillis, closedAtMillis, " +
+                    "openingFloatMinor, expectedMinor, countedMinor, varianceMinor, " +
+                    "posSalesMinor, membershipSalesMinor, grossCollectionsMinor, " +
+                    "settledPosRefundsMinor, settledMembershipRefundsMinor, " +
+                    "totalRefundsMinor, netCollectionsMinor, openedByUserId, " +
+                    "openedByName, openedByEmail, fetchedAtMillis) VALUES (" +
+                    "'shift-1', 'branch-1', 'terminal-1', 'closed', 1000, 2000, " +
+                    "50000, 90000, 90000, 0, 83600, 10000, 93600, 3600, 1000, 4600, " +
+                    "89000, 'user-1', 'Rafi', 'rafi@example.com', 3000)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 25, true, MIGRATION_24_25)
+
+        migrated.query(
+            "SELECT id, branchId, terminalId, status, openedAtMillis, closedAtMillis, " +
+                "openingFloatMinor, expectedMinor, countedMinor, varianceMinor, posSalesMinor, " +
+                "openedByUserId, openedByName, openedByEmail, fetchedAtMillis " +
+                "FROM shift_history_cache WHERE id = 'shift-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("shift-1", cursor.getString(0))
+            assertEquals("branch-1", cursor.getString(1))
+            assertEquals("terminal-1", cursor.getString(2))
+            assertEquals("closed", cursor.getString(3))
+            assertEquals(1000L, cursor.getLong(4))
+            assertEquals(2000L, cursor.getLong(5))
+            assertEquals(50000L, cursor.getLong(6))
+            assertEquals(90000L, cursor.getLong(7))
+            assertEquals(90000L, cursor.getLong(8))
+            assertEquals(0L, cursor.getLong(9))
+            assertEquals(83600L, cursor.getLong(10))
+            assertEquals("user-1", cursor.getString(11))
+            assertEquals("Rafi", cursor.getString(12))
+            assertEquals("rafi@example.com", cursor.getString(13))
+            assertEquals(3000L, cursor.getLong(14))
+        }
+        migrated.query(
+            "SELECT membershipSalesMinor, grossCollectionsMinor, settledPosRefundsMinor, " +
+                "settledMembershipRefundsMinor, totalRefundsMinor, netCollectionsMinor " +
+                "FROM shift_history_cache WHERE id = 'shift-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            for (column in 0..5) assertTrue(cursor.isNull(column))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate25To26_suppressesHistoricalCloseAndPreservesUnresolvedCloseReceipt() {
+        helper.createDatabase(dbName, 25).apply {
+            execSQL(
+                "INSERT INTO local_shifts " +
+                    "(localId, serverShiftId, terminalId, branchId, openingFloatMinor, " +
+                    "openedAtMillis, state, countedMinor, closedAtMillis, varianceMinor, lastError) VALUES " +
+                    "('historical', 'server-old', 'terminal-1', 'branch-1', 5000, " +
+                    "1000, 'closed', 5000, 2000, 0, NULL), " +
+                    "('pending-close', 'server-pending', 'terminal-1', 'branch-1', 5000, " +
+                    "3000, 'close_pending', 5000, 4000, NULL, NULL), " +
+                    "('rejected-close', 'server-rejected', 'terminal-1', 'branch-1', 5000, " +
+                    "5000, 'close_rejected', 5000, 6000, NULL, 'unfinished work')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 26, true, MIGRATION_25_26)
+
+        migrated.query(
+            "SELECT localId, closeResultPending FROM local_shifts ORDER BY openedAtMillis",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("historical", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("pending-close", cursor.getString(0))
+            assertEquals(1, cursor.getInt(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("rejected-close", cursor.getString(0))
+            assertEquals(1, cursor.getInt(1))
         }
         migrated.close()
     }

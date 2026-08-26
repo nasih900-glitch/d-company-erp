@@ -20,6 +20,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +35,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.theme.Brand
 
 @Composable
@@ -41,11 +44,19 @@ fun LoginScreen(
     error: String?,
     onSignIn: (String, String) -> Unit,
 ) {
+    val recovery: PasswordRecoveryViewModel = viewModel()
+    val recoveryState by recovery.state.collectAsState()
     // rememberSaveable so a keyboard-driven config change does not wipe a
     // half-typed email.
     var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    // Passwords must never enter saved-instance state. A rotation or process
+    // recreation may keep the email, but always requires the secret again.
+    var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+
+    LaunchedEffect(recoveryState.successfulEmail) {
+        recoveryState.successfulEmail?.let { email = it }
+    }
 
     val canSubmit = email.isNotBlank() && password.isNotBlank() && !signingIn
     fun submit() = if (canSubmit) onSignIn(email, password) else Unit
@@ -105,6 +116,27 @@ fun LoginScreen(
                 Text(if (showPassword) "Hide password" else "Show password")
             }
 
+            TextButton(
+                onClick = {
+                    password = ""
+                    showPassword = false
+                    recovery.open(email)
+                },
+                enabled = !signingIn,
+            ) {
+                Text("Forgot password?")
+            }
+
+            if (recoveryState.successNotice != null) {
+                Text(
+                    recoveryState.successNotice.orEmpty(),
+                    color = Brand.Good,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+                TextButton(onClick = recovery::dismissSuccess) { Text("Dismiss") }
+            }
+
             if (error != null) {
                 Text(
                     error,
@@ -131,4 +163,16 @@ fun LoginScreen(
             }
         }
     }
+
+    PasswordRecoveryDialog(
+        state = recoveryState,
+        onEmailChanged = recovery::emailChanged,
+        onCodeChanged = recovery::codeChanged,
+        onNewPasswordChanged = recovery::newPasswordChanged,
+        onConfirmPasswordChanged = recovery::confirmPasswordChanged,
+        onRequestCode = recovery::requestCode,
+        onConfirm = recovery::confirm,
+        onUseDifferentEmail = recovery::useDifferentEmail,
+        onCancel = recovery::cancel,
+    )
 }

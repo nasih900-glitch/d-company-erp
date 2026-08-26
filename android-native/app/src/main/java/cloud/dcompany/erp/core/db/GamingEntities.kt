@@ -47,11 +47,78 @@ object GamingSessionState {
     const val START_SYNCED = "start_synced"
     /** Stop requested — regardless of whether the start leg has synced yet. */
     const val STOP_PENDING = "stop_pending"
-    /** Both legs confirmed by the server. */
-    const val STOPPED = "stopped"
-    /** The server gave a definitive refusal on either leg. Needs a human. */
-    const val REJECTED = "rejected"
+    /** Stop confirmed; amount is known, but no POS order exists yet. */
+    const val ENDED_UNBILLED = "ended_unbilled"
+    /** User explicitly asked to create the held POS order. */
+    const val SEND_PENDING = "send_pending"
+    /** Held POS order confirmed and stored in [LocalGamingSessionEntity.orderId]. */
+    const val SENT = "sent"
+    /** Server-confirmed void with an auditable reason; no POS order may exist. */
+    const val CANCELLED = "cancelled"
+    /** Leg-specific refusals keep the recovery action honest. */
+    const val START_REJECTED = "start_rejected"
+    const val STOP_REJECTED = "stop_rejected"
+    const val SEND_REJECTED = "send_rejected"
 }
+
+/** Terminal server outcomes that can safely supersede a stale local overlay. */
+internal enum class GamingServerReconciliation {
+    NONE,
+    START_SYNCED,
+    ENDED_UNBILLED,
+    SENT,
+    CANCELLED,
+}
+
+/**
+ * Decides whether a pulled server row proves that this tablet's older local
+ * lifecycle has already advanced elsewhere. Pending/rejected send legs remain
+ * local unless the server supplies an order id; an ordinary ended snapshot is
+ * not enough to claim that a handoff succeeded.
+ */
+internal fun gamingServerReconciliation(
+    localState: String,
+    serverStatus: String,
+    serverOrderId: String?,
+): GamingServerReconciliation = when {
+    serverOrderId != null -> GamingServerReconciliation.SENT
+    serverStatus == "cancelled" -> GamingServerReconciliation.CANCELLED
+    serverStatus == "ended" && localState in setOf(
+        GamingSessionState.START_PENDING,
+        GamingSessionState.START_SYNCED,
+        GamingSessionState.STOP_PENDING,
+        GamingSessionState.STOP_REJECTED,
+    ) -> GamingServerReconciliation.ENDED_UNBILLED
+    serverStatus in setOf("active", "paused") &&
+        localState == GamingSessionState.START_PENDING -> GamingServerReconciliation.START_SYNCED
+    else -> GamingServerReconciliation.NONE
+}
+
+/**
+ * Versions through database 13 used one generic `rejected` state for every
+ * gaming outbox failure. Once start, stop and Send-to-POS gained different
+ * recovery actions, leaving that value in place made the row disappear from
+ * both the rejected counter and every retry query.
+ *
+ * The surviving columns identify the failed leg without replaying anything:
+ * no server id means start never completed; an ended/billed snapshot means
+ * stop completed and the POS handoff failed; otherwise the server id proves
+ * this is a failed stop. An order id is stronger evidence than the stale
+ * state and means the handoff already completed. The statement is deliberately
+ * idempotent so both the Room migration and the runtime safety net can use it.
+ */
+const val RECOVER_LEGACY_GAMING_REJECTIONS_SQL =
+    "UPDATE `local_gaming_sessions` SET `state` = CASE " +
+        "WHEN `orderId` IS NOT NULL THEN 'sent' " +
+        "WHEN `serverId` IS NULL THEN 'start_rejected' " +
+        "WHEN `status` = 'ended' OR `endAtMillis` IS NOT NULL " +
+        "OR `billableMinutes` IS NOT NULL OR `amountMinor` IS NOT NULL THEN 'send_rejected' " +
+        "ELSE 'stop_rejected' END, `status` = CASE " +
+        "WHEN `orderId` IS NOT NULL THEN 'ended' " +
+        "WHEN `serverId` IS NULL THEN 'start_failed' " +
+        "WHEN `status` = 'ended' OR `endAtMillis` IS NOT NULL " +
+        "OR `billableMinutes` IS NOT NULL OR `amountMinor` IS NOT NULL THEN 'ended' " +
+        "ELSE 'active' END WHERE `state` = 'rejected'"
 
 /**
  * A gaming session action captured on this tablet — either the whole
@@ -90,5 +157,6 @@ data class LocalGamingSessionEntity(
     val timerEndsAtMillis: Long? = null,
     val billableMinutes: Int? = null,
     val amountMinor: Long? = null,
+    val orderId: String? = null,
     val lastError: String? = null,
 )

@@ -1,18 +1,20 @@
 package cloud.dcompany.erp
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -23,19 +25,33 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.AuthState
 import cloud.dcompany.erp.ui.SessionViewModel
+import cloud.dcompany.erp.ui.TerminalChangeUiState
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.allowedDestinations
+import cloud.dcompany.erp.ui.canManageMemberships
+import cloud.dcompany.erp.ui.workspaceLocationLabel
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
+import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.events.EventsScreen
@@ -54,58 +70,132 @@ import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
 import cloud.dcompany.erp.ui.screens.PosScreen
 import cloud.dcompany.erp.ui.screens.PosViewModel
+import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.core.net.ClientCompatibilityState
+import cloud.dcompany.erp.core.net.ClientUpdateNotice
+import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.safeHttpsUpdateUrl
+import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.alarm.OperationalNotificationDestination
+import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
+import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
+import cloud.dcompany.erp.core.alarm.operationalRouteDecision
+import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
+import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
+import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
 
 class MainActivity : ComponentActivity() {
-
-    private val notificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DCompanyApp.instance.notificationRoutes.accept(intent)
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        askForNotificationsOnce()
         setContent {
             DCompanyTheme {
                 Surface(Modifier.fillMaxSize(), color = Brand.Background) {
-                    AppRoot()
+                    AppRoot(onOpenUpdate = ::openSecureUpdate)
                 }
             }
         }
     }
 
-    /**
-     * On Android 13+ notifications are opt-in, and without this the overtime
-     * alarms post silently into nothing. Asked once at launch rather than from
-     * a single screen, because a cashier who only ever opens POS would
-     * otherwise never be prompted.
-     */
-    private fun askForNotificationsOnce() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val granted = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.POST_NOTIFICATIONS,
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!granted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        DCompanyApp.instance.notificationRoutes.accept(intent)
+    }
+
+    private fun openSecureUpdate(rawUrl: String) {
+        val safeUrl = safeHttpsUpdateUrl(rawUrl)
+        if (safeUrl == null) {
+            Toast.makeText(this, "No safe HTTPS update link is available. Ask an owner for the current app.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        runCatching { startActivity(intent) }.onFailure {
+            Toast.makeText(this, "Could not open the update link. Ask an owner for the current app.", Toast.LENGTH_LONG).show()
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AppRoot(session: SessionViewModel = viewModel()) {
+private fun AppRoot(
+    onOpenUpdate: (String) -> Unit,
+    session: SessionViewModel = viewModel(),
+) {
+    val compatibility = DCompanyApp.instance.clientCompatibility
+    val compatibilityState by compatibility.state.collectAsState()
+    val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsState()
+    val backendReachability by ApiClient.backendReachability.state.collectAsState()
+    val syncAvailability = syncAvailabilityProblem(networkValidated, backendReachability)
     val state by session.state.collectAsState()
     val signingIn by session.signingIn.collectAsState()
     val loginError by session.loginError.collectAsState()
+    val accountSafetyNotice by session.accountSafetyNotice.collectAsState()
+    val accessChangeNotice by session.accessChangeNotice.collectAsState()
+    val terminalChange by session.terminalChange.collectAsState()
+    val activeTerminal by DCompanyApp.instance.terminalStore.activeValidatedTerminal.collectAsState()
+    val pendingNotificationTarget by DCompanyApp.instance.notificationRoutes.pending.collectAsState()
+    val rejectedNotificationOpenNotice by
+        DCompanyApp.instance.notificationRoutes.rejectedOpenNotice.collectAsState()
+    var notificationRouteNotice by rememberSaveable { mutableStateOf<String?>(null) }
+
+    when (val update = compatibilityState) {
+        ClientCompatibilityState.Checking -> {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    CircularProgressIndicator(color = Brand.Gold)
+                    Text("Checking app compatibility…", color = Brand.ForegroundMuted)
+                }
+            }
+            return
+        }
+
+        is ClientCompatibilityState.UpdateRequired -> {
+            RequiredUpdateScreen(update.notice, onOpenUpdate)
+            return
+        }
+
+        is ClientCompatibilityState.UpdateAvailable,
+        ClientCompatibilityState.Supported -> Unit
+    }
 
     when (val s = state) {
         is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             CircularProgressIndicator(color = Brand.Gold)
         }
 
-        is AuthState.SignedOut -> LoginScreen(
-            signingIn = signingIn,
-            error = loginError,
-            onSignIn = session::signIn,
+        is AuthState.SignedOut -> PreLoginViewModelScope {
+            Box(Modifier.fillMaxSize()) {
+                LoginScreen(
+                    signingIn = signingIn,
+                    error = loginError,
+                    onSignIn = session::signIn,
+                )
+                if (pendingNotificationTarget != null) {
+                    PendingNotificationSignInBanner(pendingNotificationTarget!!)
+                }
+            }
+        }
+
+        is AuthState.SelectTerminal -> TerminalSelectionScreen(
+            employeeName = s.me.name,
+            terminals = s.terminals,
+            choosing = s.choosing,
+            error = s.error,
+            isReassignment = s.reassigning,
+            previousTerminalName = s.previousTerminalName,
+            onConfirm = session::selectTerminal,
+            onRefresh = session::refreshTerminalChoices,
+            onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
         )
 
         // Credentials are intact — this is a connectivity problem, so the fix
@@ -124,64 +214,474 @@ private fun AppRoot(session: SessionViewModel = viewModel()) {
             }
         }
 
+        is AuthState.Blocked -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(24.dp),
+            ) {
+                Text("Cannot open this workspace", style = MaterialTheme.typography.titleLarge)
+                Text(s.message, color = Brand.ForegroundMuted)
+                Button(onClick = session::restore) { Text("Verify again") }
+                TextButton(onClick = session::signOut) { Text("Sign in as someone else") }
+            }
+        }
+
         is AuthState.SignedIn -> {
-            val pos: PosViewModel = viewModel()
-            val posState by pos.state.collectAsState()
-            Scaffold(
+            // Authority is part of the workspace lifetime. If an owner revokes
+            // a module, dispose every feature ViewModel from the old profile
+            // so its polling/queued actions cannot continue behind a removed tab.
+            SessionViewModelScope(s.me) {
+                val permissions = remember(s.me) { EffectivePermissions.from(s.me) }
+                val destinations = remember(s.me) { allowedDestinations(s.me) }
+                var confirmSignOut by remember(s.me.userId) { mutableStateOf(false) }
+                var currentDestination by rememberSaveable(s.me.userId) {
+                    mutableStateOf(destinations.firstOrNull() ?: Destination.Settings)
+                }
+                var operationalFocus by remember(s.me.userId) {
+                    mutableStateOf<OperationalNotificationTarget?>(null)
+                }
+                LaunchedEffect(pendingNotificationTarget, destinations, s.me.userId) {
+                    val target = pendingNotificationTarget ?: return@LaunchedEffect
+                    val destination = when (target.destination) {
+                        OperationalNotificationDestination.POS -> Destination.Pos
+                        OperationalNotificationDestination.GAMING -> Destination.Gaming
+                    }
+                    when (
+                        operationalRouteDecision(
+                            signedIn = true,
+                            destinationAllowed = destination in destinations,
+                        )
+                    ) {
+                        OperationalRouteDecision.WAIT_FOR_SIGN_IN -> Unit
+                        OperationalRouteDecision.ACCESS_DENIED -> {
+                            notificationRouteNotice =
+                                "This account cannot access ${destination.label}. Ask a manager or " +
+                                    "sign in with an authorised account. No order or session was changed."
+                            DCompanyApp.instance.notificationRoutes.consume(target)
+                        }
+                        OperationalRouteDecision.NAVIGATE -> {
+                            val resource = if (destination == Destination.Pos) "orders" else "gaming"
+                            DCompanyApp.instance.sync.refresh(resource)
+                            val exists = operationalTargetExistsInCurrentScope(
+                                context = DCompanyApp.instance,
+                                target = target,
+                            )
+                            if (exists) {
+                                operationalFocus = target
+                                currentDestination = destination
+                            } else {
+                                notificationRouteNotice = if (
+                                    DCompanyApp.instance.connectivity.online.value
+                                ) {
+                                    when (target) {
+                                        is OperationalNotificationTarget.HeldOrder ->
+                                            "This order is no longer waiting. It may have been billed or voided on another till."
+                                        is OperationalNotificationTarget.GamingSession ->
+                                            "This gaming session is no longer active. It may have been stopped on another tablet."
+                                    }
+                                } else {
+                                    "This tablet cannot verify the alert while offline. Reconnect, then refresh ${destination.label}."
+                                }
+                            }
+                            DCompanyApp.instance.notificationRoutes.consume(target)
+                        }
+                    }
+                }
+                val visibleDestination = currentDestination.takeIf { it in destinations }
+                    ?: destinations.firstOrNull()
+                    ?: Destination.Settings
+                val requiresTill = permissions.has(ErpPermission.PosRead)
+                val locationLabel = workspaceLocationLabel(
+                    branchId = s.me.branchId,
+                    branchName = s.me.branchName,
+                    requiresTill = requiresTill,
+                    activeTerminal = activeTerminal,
+                )
+                Scaffold(
                 containerColor = Brand.Background,
                 topBar = {
                     TopAppBar(
-                        title = { Text("POS · ${s.me.name}") },
-                        actions = { TextButton(onClick = session::signOut) { Text("Sign out") } },
+                        title = {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    "${visibleDestination.label} · ${s.me.name}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    locationLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.ForegroundMuted,
+                                    maxLines = 1,
+                                )
+                            }
+                        },
+                        actions = {
+                            if (s.me.protectedAccess && requiresTill) {
+                                TextButton(onClick = session::requestTerminalReassignment) {
+                                    Text("Change till")
+                                }
+                            }
+                            TextButton(onClick = { confirmSignOut = true }) { Text("Sign out") }
+                        },
                         colors = TopAppBarDefaults.topAppBarColors(
                             containerColor = Brand.Surface,
                             titleContentColor = Brand.Foreground,
                         ),
                     )
                 },
-            ) { padding ->
-                Box(Modifier.padding(padding)) {
-                    // Access Control is gated on audit_access specifically, not
-                    // protected_access — a co-owner has protected_access=true but
-                    // must not see this, matching the web app's own gate exactly
-                    // (audit_access is effectively super-owner-only server-side).
-                    val destinations = Destination.entries.filter {
-                        (it != Destination.AccessControl || s.me.auditAccess) &&
-                            (it != Destination.Analytics || s.me.accessibleModules.contains("insights_reports")) &&
-                            (it != Destination.Menu || s.me.accessibleModules.contains("menu")) &&
-                            (it != Destination.Staff || s.me.accessibleModules.contains("staff"))
-                    }
-                    WorkspaceScaffold(header = {}, destinations = destinations) { destination ->
-                        when (destination) {
-                            Destination.Pos -> PosScreen(
-                                state = posState,
-                                onAdd = pos::add,
-                                onRemove = pos::remove,
-                                onSelectCategory = pos::selectCategory,
-                                onClearCart = pos::clearCart,
-                                onRefresh = pos::refresh,
-                                onCapture = pos::captureSale,
-                                onDismissNotice = pos::dismissNotice,
+                ) { padding ->
+                    Box(Modifier.padding(padding)) {
+                        WorkspaceScaffold(
+                            header = { SyncAvailabilityBanner(syncAvailability) },
+                            destinations = destinations,
+                            currentDestination = visibleDestination,
+                            onDestinationChanged = {
+                                currentDestination = it
+                                val focusDestination = when (operationalFocus?.destination) {
+                                    OperationalNotificationDestination.POS -> Destination.Pos
+                                    OperationalNotificationDestination.GAMING -> Destination.Gaming
+                                    null -> null
+                                }
+                                if (focusDestination != it) operationalFocus = null
+                            },
+                        ) { destination, navigateTo ->
+                            when (destination) {
+                            Destination.Pos -> {
+                                // Constructing a feature ViewModel starts its
+                                // initial API pulls. Keep it inside its allowed
+                                // destination so hidden tabs cannot generate
+                                // background 403s for low-privilege accounts.
+                                val pos: PosViewModel = viewModel()
+                                val posState by pos.state.collectAsState()
+                                val heldFocus = operationalFocus
+                                    as? OperationalNotificationTarget.HeldOrder
+                                LaunchedEffect(heldFocus?.orderId) {
+                                    heldFocus?.let { pos.focusHeldOrder(it.orderId) }
+                                }
+                                PosScreen(
+                                    state = posState,
+                                    access = permissions.posAccess(),
+                                    onAccessChanged = pos::updateAccess,
+                                    onAdd = pos::add,
+                                    onRemove = pos::remove,
+                                    onSelectCategory = pos::selectCategory,
+                                    onClearCart = pos::clearCart,
+                                    onRefresh = pos::refresh,
+                                    onCapture = pos::captureSale,
+                                    onRetryRejectedSale = pos::retryRejectedSale,
+                                    onRetryHeldPayment = pos::retryRejectedHeldPayment,
+                                    onPrepareHeldOrder = pos::prepareHeldOrderCheckout,
+                                    onConfirmHeldOrder = pos::confirmHeldOrderPayment,
+                                    onConfirmHeldOrderZero = pos::confirmHeldOrderZero,
+                                    onDismissHeldOrder = pos::dismissHeldOrderCheckout,
+                                    onDismissNotice = pos::dismissNotice,
+                                    onFocusOldestOverdue = pos::focusOldestOverdueOrder,
+                                    onSnoozeOverdue = pos::snoozeOverdueBanner,
+                                    onUnmuteOverdue = pos::unmuteOverdueBanner,
+                                    onDismissHeldFocus = {
+                                        pos.dismissHeldOrderFocus()
+                                        if (operationalFocus is OperationalNotificationTarget.HeldOrder) {
+                                            operationalFocus = null
+                                        }
+                                    },
+                                )
+                            }
+                            Destination.Gaming -> {
+                                val gamingFocus = operationalFocus
+                                    as? OperationalNotificationTarget.GamingSession
+                                GamingScreen(
+                                    access = permissions.gamingAccess(),
+                                    focusSessionId = gamingFocus?.sessionId,
+                                    focusStationId = gamingFocus?.stationId,
+                                    onDismissFocus = { operationalFocus = null },
+                                )
+                            }
+                            Destination.Tables -> TablesScreen(access = permissions.tablesAccess())
+                            Destination.Kitchen -> KitchenScreen(
+                                access = permissions.kitchenAccess(),
+                                onExit = {
+                                    // A dedicated kitchen account has no POS
+                                    // destination.  Sending it to POS used to
+                                    // be silently ignored, which made "Exit
+                                    // KDS" look broken.  Operational accounts
+                                    // return to POS; kitchen-only accounts get
+                                    // the normal, explicit sign-out warning.
+                                    if (Destination.Pos in destinations) {
+                                        navigateTo(Destination.Pos)
+                                    } else {
+                                        confirmSignOut = true
+                                    }
+                                },
                             )
-                            Destination.Gaming -> GamingScreen()
-                            Destination.Tables -> TablesScreen()
-                            Destination.Kitchen -> KitchenScreen()
-                            Destination.Shift -> ShiftScreen()
-                            Destination.Customers -> CustomersScreen()
-                            Destination.Menu -> MenuScreen()
-                            Destination.Staff -> StaffScreen()
-                            Destination.Inventory -> InventoryScreen()
+                            Destination.Shift -> ShiftScreen(access = permissions.shiftAccess())
+                            Destination.Customers -> CustomersScreen(access = permissions.customersAccess())
+                            Destination.Menu -> MenuScreen(access = permissions.menuAccess())
+                            Destination.Staff -> StaffScreen(
+                                profile = s.me,
+                                access = permissions.staffAccess(),
+                            )
+                            Destination.Inventory -> InventoryScreen(access = permissions.inventoryAccess())
                             Destination.Reports -> ReportsScreen()
                             Destination.Analytics -> AnalyticsScreen()
-                            Destination.Finance -> FinanceScreen()
-                            Destination.Events -> EventsScreen()
-                            Destination.Memberships -> MembershipsScreen()
+                            Destination.Finance -> FinanceScreen(access = permissions.financeAccess())
+                            Destination.Events -> EventsScreen(access = permissions.eventsAccess())
+                            Destination.Memberships -> MembershipsScreen(
+                                canManage = canManageMemberships(s.me),
+                            )
                             Destination.Refunds -> RefundsScreen()
+                            Destination.AuditLog -> AuditLogScreen()
                             Destination.AccessControl -> AccessControlScreen()
-                            Destination.Settings -> SettingsScreen()
+                            Destination.Settings -> SettingsScreen(
+                                canManageSystem = s.me.auditAccess,
+                            )
+                            }
                         }
                     }
                 }
+
+                if (confirmSignOut) {
+                    AlertDialog(
+                        onDismissRequest = { confirmSignOut = false },
+                        title = { Text("Sign out of this tablet?") },
+                        text = {
+                            Text(
+                                "The open shift stays open. Unsaved carts and form edits will be " +
+                                    "discarded; saved offline work remains safely on this tablet.",
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    confirmSignOut = false
+                                    session.signOut()
+                                },
+                            ) { Text("Sign out") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmSignOut = false }) {
+                                Text("Stay signed in")
+                            }
+                        },
+                    )
+                }
+
+                when (val change = terminalChange) {
+                    TerminalChangeUiState.Idle -> Unit
+                    is TerminalChangeUiState.Confirm -> AlertDialog(
+                        onDismissRequest = session::dismissTerminalChange,
+                        title = { Text("Change this tablet's till?") },
+                        text = {
+                            Text(
+                                "Current till: ${change.terminalName}. The app will first verify a live " +
+                                    "connection, a clean Sync queue, no open/closing shift, and no active " +
+                                    "or unbilled gaming work. If any check fails, this assignment stays unchanged.",
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = session::confirmTerminalReassignment) {
+                                Text("Run safety checks")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = session::dismissTerminalChange) { Text("Cancel") }
+                        },
+                    )
+                    TerminalChangeUiState.Checking -> AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("Checking this tablet") },
+                        text = {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(color = Brand.Gold)
+                                Text("Verifying the current till, Shift, Gaming and saved Sync work…")
+                            }
+                        },
+                        confirmButton = {},
+                    )
+                    is TerminalChangeUiState.Blocked -> AlertDialog(
+                        onDismissRequest = session::dismissTerminalChange,
+                        title = { Text("Till not changed") },
+                        text = { Text(change.message) },
+                        confirmButton = {
+                            TextButton(onClick = session::dismissTerminalChange) { Text("OK") }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    if (accountSafetyNotice != null) {
+        AlertDialog(
+            onDismissRequest = session::dismissAccountSafetyNotice,
+            title = { Text("Account safety lock") },
+            text = { Text(accountSafetyNotice.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = session::dismissAccountSafetyNotice) { Text("OK") }
+            },
+        )
+    } else if (accessChangeNotice != null) {
+        AlertDialog(
+            onDismissRequest = session::dismissAccessChangeNotice,
+            title = { Text("Access updated") },
+            text = { Text(accessChangeNotice.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = session::dismissAccessChangeNotice) { Text("OK") }
+            },
+        )
+    } else if (rejectedNotificationOpenNotice != null) {
+        AlertDialog(
+            onDismissRequest = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
+            title = { Text("Alert not opened") },
+            text = { Text(rejectedNotificationOpenNotice.orEmpty()) },
+            confirmButton = {
+                TextButton(
+                    onClick = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
+                ) { Text("OK") }
+            },
+        )
+    } else if (notificationRouteNotice != null) {
+        AlertDialog(
+            onDismissRequest = { notificationRouteNotice = null },
+            title = { Text("Alert could not be opened") },
+            text = { Text(notificationRouteNotice.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = { notificationRouteNotice = null }) { Text("OK") }
+            },
+        )
+    } else if (compatibilityState is ClientCompatibilityState.UpdateAvailable) {
+        val notice = (compatibilityState as ClientCompatibilityState.UpdateAvailable).notice
+        OptionalUpdateBanner(
+            notice = notice,
+            onDismiss = compatibility::dismissOptionalUpdate,
+            onOpenUpdate = onOpenUpdate,
+        )
+    }
+}
+
+@Composable
+private fun PendingNotificationSignInBanner(target: OperationalNotificationTarget) {
+    Box(
+        Modifier.fillMaxSize().padding(16.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Surface(color = Brand.SurfaceRaised, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
+            Text(
+                text = when (target) {
+                    is OperationalNotificationTarget.HeldOrder ->
+                        "Sign in to open this held-order alert. Nothing will be billed automatically."
+                    is OperationalNotificationTarget.GamingSession ->
+                        "Sign in to open this gaming-session alert. Nothing will be stopped automatically."
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+/**
+ * Feature ViewModels belong to one authenticated session, not to the whole
+ * Activity. Clearing this store on logout/account switch prevents carts,
+ * form drafts, polling jobs, and one employee's notices appearing for the
+ * next employee who uses the same cafe tablet.
+ */
+private class AuthenticatedViewModelStoreOwner : ViewModelStoreOwner {
+    override val viewModelStore = ViewModelStore()
+}
+
+/** Password-recovery secrets and challenges live only while Login is visible. */
+@Composable
+private fun PreLoginViewModelScope(content: @Composable () -> Unit) {
+    val owner = remember { AuthenticatedViewModelStoreOwner() }
+    DisposableEffect(owner) {
+        onDispose { owner.viewModelStore.clear() }
+    }
+    CompositionLocalProvider(LocalViewModelStoreOwner provides owner, content = content)
+}
+
+@Composable
+private fun SessionViewModelScope(
+    sessionKey: Any,
+    content: @Composable () -> Unit,
+) {
+    val owner = remember(sessionKey) { AuthenticatedViewModelStoreOwner() }
+    DisposableEffect(owner) {
+        onDispose { owner.viewModelStore.clear() }
+    }
+    CompositionLocalProvider(LocalViewModelStoreOwner provides owner, content = content)
+}
+
+/** A banner, not a dialog: staff can keep using the till without dismissing it. */
+@Composable
+private fun OptionalUpdateBanner(
+    notice: ClientUpdateNotice,
+    onDismiss: () -> Unit,
+    onOpenUpdate: (String) -> Unit,
+) {
+    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
+    Box(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Surface(color = Brand.SurfaceRaised, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("App update available", color = Brand.Foreground, style = MaterialTheme.typography.titleSmall)
+                    Text(notice.message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                if (safeUrl != null) {
+                    TextButton(onClick = {
+                        onDismiss()
+                        onOpenUpdate(safeUrl)
+                    }) { Text("Update securely") }
+                }
+                TextButton(onClick = onDismiss) { Text(if (safeUrl == null) "OK" else "Later") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequiredUpdateScreen(
+    notice: ClientUpdateNotice,
+    onOpenUpdate: (String) -> Unit,
+) {
+    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
+    Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("App update required", style = MaterialTheme.typography.headlineSmall, color = Brand.Foreground)
+            Text(notice.message, color = Brand.ForegroundMuted)
+            if (notice.minimumSupportedVersionCode != null) {
+                Text(
+                    "Installed build ${notice.currentVersionCode ?: BuildConfig.VERSION_CODE} · " +
+                        "minimum supported ${notice.minimumSupportedVersionCode}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            Text(
+                "Saved offline work and your signed-in account remain on this device.",
+                color = Brand.Foreground,
+            )
+            if (safeUrl != null) {
+                Button(onClick = { onOpenUpdate(safeUrl) }) { Text("Update securely") }
+            } else {
+                Text(
+                    "No verified HTTPS download link was supplied. Ask an owner to install the current D Company ERP app.",
+                    color = Brand.Danger,
+                )
             }
         }
     }
