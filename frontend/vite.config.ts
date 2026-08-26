@@ -6,9 +6,9 @@ import path from 'node:path';
 // API responses are intentionally not cached there, so business data stays live.
 
 export default defineConfig({
-  // Relative base lets the built app work when served from any subpath
-  // — local file://, a CDN subdirectory, or an Electron/Tauri/Capacitor shell.
-  base: './',
+  // Browser-history routes such as /public/menu must resolve bundles from the
+  // site root. Native hash-router packaging still needs relative file paths.
+  base: process.env.VITE_ROUTER_MODE === 'hash' ? './' : '/',
   plugins: [react()],
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
