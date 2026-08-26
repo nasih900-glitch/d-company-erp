@@ -1,5 +1,10 @@
 # Desktop builds (Tauri)
 
+> **Experimental / not distributable.** The desktop shell is not part of the
+> supported release workflow. Its package scripts and generated icon bundle are
+> intentionally not wired yet, and signing/notarization has not been proven on
+> clean machines. Use the web client or supported mobile apps for operations.
+
 Tauri wraps the same React app into native macOS and Windows apps. Smaller and faster than Electron because it uses the OS's built-in WebView instead of bundling Chromium.
 
 ## Prerequisites (developer machine)
@@ -9,7 +14,11 @@ Tauri wraps the same React app into native macOS and Windows apps. Smaller and f
 - **Windows**: Microsoft C++ Build Tools (installed via Visual Studio Installer) + WebView2 (preinstalled on Windows 10/11)
 - **Linux**: `webkit2gtk-4.1`, `libssl-dev`, `librsvg2-dev`, `libsoup-3.0-dev`, `libayatana-appindicator3-dev`
 
-## Dev (live-reload native window)
+## Planned development commands
+
+These commands document the intended interface. They will remain unavailable
+until `@tauri-apps/cli`, the package scripts, and a real icon set are added and
+tested together.
 
 ```bash
 cd frontend

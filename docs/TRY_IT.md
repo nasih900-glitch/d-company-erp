@@ -50,80 +50,47 @@ source $HOME/.cargo/env
 xcode-select --install
 ```
 
-### Build the Mac app
+### Experimental Mac wrapper (not release-supported)
 
-```bash
-cd "/path/to/d-company-erp/frontend"
-npm install
-npm run tauri:build:mac
-```
+The Tauri desktop wrapper is source-only at present. Its required CLI scripts,
+icons, signing, and installer tests are not part of the supported release
+pipeline. Do not give this build to staff or partners as a production app.
 
-When it finishes (~5 min the first time), you'll find:
-
-```
-frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/D Company ERP_*.dmg
-```
-
-**Double-click that `.dmg`** → drag the app into Applications → launch it like any other app. ✓
+The intended future command is documented in `frontend/TAURI.md`, but it is not
+currently wired. If desktop packaging is completed later, test the resulting
+installer on a clean machine before distributing it.
 
 On first launch, macOS Gatekeeper will warn that it's from an unidentified developer (because you haven't paid Apple $99/yr for a signing certificate). Right-click the app in Applications → **Open** → confirm. From then on it opens normally.
 
-### Build the Windows app (.exe) — on a Windows PC
+### Experimental Windows wrapper (not release-supported)
 
-```powershell
-# In PowerShell, one-time setup:
-winget install OpenJS.NodeJS
-winget install Rustlang.Rustup
-winget install Microsoft.VisualStudio.2022.BuildTools
-rustup default stable
-
-# Then build:
-cd "path\to\d-company-erp\frontend"
-npm install
-npm run tauri:build:win
-```
-
-Output: `frontend\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe`. Double-click to install. SmartScreen will warn → "More info" → "Run anyway".
+The intended future command is documented in `frontend/TAURI.md`, but it is not
+currently wired. Authenticode signing and clean-machine installer verification
+must be implemented first.
 
 ---
 
-## Option 3 — Real phone app (.apk for Android, App Store for iPhone)
+## Option 3 — Supported Android app
 
 ### Android (.apk)
 
 ```bash
-# One-time:
-brew install --cask android-studio   # then open Android Studio once to install SDK
-
-cd frontend
-npm install
-npx cap add android
-
-# Each build:
-npm run cap:android:build
-# APK lands at: android/app/build/outputs/apk/release/app-release.apk
+cd android-native
+./gradlew testDebugUnitTest lintDebug assembleDebug
+# Debug APK: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Copy the .apk to the phone (email it to yourself, AirDrop on Android, or USB). On the phone, tap the .apk → allow "Install unknown apps" → install. Done.
+Production APK/AAB generation is deliberately fail-closed in
+`.github/workflows/release.yml`: all Android signing secrets must exist and all
+JVM, lint, and emulator instrumentation checks must pass.
 
-### iPhone / iPad
+The debug APK is for local QA only. Staff must install a signed APK from the
+official GitHub Release, after checking `SHA256SUMS` and the release manifest.
+Do not distribute APKs through email, chat attachments, file-sharing links, or
+unofficial mirrors.
 
-iOS requires a Mac + Xcode + an Apple Developer Program account ($99/yr). Without the account, you can sideload to your own phone for 7 days at a time only. With the account:
-
-```bash
-# One-time:
-xcode-select --install        # already done if you did Option 2
-sudo gem install cocoapods
-
-cd frontend
-npm install
-npx cap add ios
-npx cap open ios              # opens Xcode
-
-# In Xcode:
-# 1. Click the project, set your Team (your Apple ID).
-# 2. Product → Archive → Distribute App → TestFlight & App Store.
-```
+iPhone and iPad are outside the current native release scope. Use the hosted
+web ERP in Safari; do not install an unofficial iOS build.
 
 ---
 
@@ -132,7 +99,9 @@ npx cap open ios              # opens Xcode
 The demo doesn't save anything because there's no backend running. To use this for real, two things have to happen:
 
 1. **Deploy the backend** (the "server" that holds the data). Cheapest path is [`docs/CLOUD_DEPLOY.md`](CLOUD_DEPLOY.md) — about $15/month on Render. Truly free path is Oracle Cloud Always Free (forever $0).
-2. **Build the installer with the cloud URL baked in.** Set `VITE_API_URL=https://api.yourdomain.com/api/v1` before `npm run tauri:build:mac` (or wherever you're building). Then every device that installs that build points at the same server.
+2. **Build the signed Android release against the production HTTPS API.** Follow
+   [`docs/DISTRIBUTION.md`](DISTRIBUTION.md); the workflow verifies the app
+   version, tests, signatures, manifest, and checksums before publishing.
 
 When you're ready, ask and I'll write the truly-free deployment guide (`FREE_DEPLOY.md`) — it'll walk you from "blank Oracle account" to "live backend with all your installers pointing at it" in about an hour.
 

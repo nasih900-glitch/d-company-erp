@@ -99,24 +99,28 @@ d-company-erp/
 
 Module deep-dives: POS pipeline (recipe deduction → journal posting → receipt rendering), gaming timer engine + tournament mode, inventory FIFO + GRN + reorder, finance reports + partner ledger, OCR worker + verification queue UI, analytics rollups + Power BI export, offline outbox replayer, role-aware UI gating.
 
-## Installer apps (Mac / Windows / Android / iOS)
+## Web and mobile apps
 
-D Company ERP ships as real installable apps, not just a website. Same React UI, four wrappers:
+D Company ERP currently has two supported clients backed by the same cloud API:
 
-- **Mac** — Tauri-wrapped native `.dmg`. macOS 11+.
-- **Windows** — Tauri-wrapped `.exe` (NSIS) and `.msi`. Windows 10+.
-- **Android** — Capacitor-wrapped `.apk` (sideload) and `.aab` (Play Store).
-- **iPhone / iPad** — Capacitor-wrapped, distributed via App Store / TestFlight.
+- **Web** — the primary production client.
+- **Android** — the native Kotlin/Compose app in `android-native`, producing a
+  signed `.apk` for direct installation and `.aab` for Play internal testing.
+The iOS project in `frontend/ios` and the Tauri macOS/Windows wrapper in
+`frontend/src-tauri` are outside the supported release scope. Do not describe
+them as distributable clients.
 
-All four are built from a single React codebase and point to one cloud API (`VITE_API_URL`).
-
-- [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — one-time signing & publishing setup (Apple Developer, Windows code-signing, Android keystore, App Store submission).
+- [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — Android signing, testing, and publishing setup.
 - [`docs/CLOUD_DEPLOY.md`](docs/CLOUD_DEPLOY.md) — backend hosting (Render / AWS / Fly.io).
 - [`frontend/TAURI.md`](frontend/TAURI.md) — desktop build commands.
 - [`frontend/CAPACITOR.md`](frontend/CAPACITOR.md) — mobile build commands.
-- [`download/index.html`](download/index.html) — auto-platform-detecting download landing page.
+- [`download/index.html`](download/index.html) — release-status landing page that
+  links only to the live web ERP and verified artifacts from the official GitHub repository.
 
-Tagging a git release (`git tag v1.2.3 && git push --follow-tags`) triggers `.github/workflows/release.yml`, which builds all four installers in parallel and attaches them to a GitHub Release.
+Tagging a release that exactly matches the Android `versionName` (currently
+`git tag v3.0.1 && git push --follow-tags`) triggers
+`.github/workflows/release.yml`. It tests and signs the native Android build,
+then attaches only the verified signed Android artifacts to the GitHub Release.
 
 ## License
 

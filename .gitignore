@@ -70,7 +70,6 @@ D_Company_Legal_Documents_Checklist*.docx
 *.pid
 *.zip
 preview-app/
-download/
 frontend/demo-dist*/
 frontend/live-dist/
 .codex-screens/
