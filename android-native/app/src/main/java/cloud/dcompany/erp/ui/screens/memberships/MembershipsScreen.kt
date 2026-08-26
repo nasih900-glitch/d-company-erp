@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,9 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,6 +28,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CardMembership
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,8 +57,21 @@ import cloud.dcompany.erp.core.db.MembershipRefundAttemptCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.LoadingSkeleton
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 
 /**
  * Memberships — greenfield screen. Tier browsing is read-only (create/edit
@@ -75,13 +91,18 @@ private fun MembershipsContent(
     vm: MembershipsViewModel,
     canManage: Boolean,
 ) {
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
         Header(canManage)
 
+        if (!canManage) {
+            ViewOnlyNotice("Membership changes are view only for this account.")
+        }
+
         if (canManage && state.notice != null) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                NoticeBanner(state.notice, vm::dismissNotice)
-            }
+            NoticeBanner(state.notice, vm::dismissNotice)
         }
         if (
             canManage && (
@@ -95,15 +116,15 @@ private fun MembershipsContent(
                     state.legacyRefundAttempts.isNotEmpty()
             )
         ) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                PendingMembershipChangesPanel(state, vm)
-            }
+            PendingMembershipChangesPanel(state, vm)
         }
 
+        MembershipSummary(state)
+
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             item { CustomerSearchPanel(state, vm) }
 
@@ -111,17 +132,7 @@ private fun MembershipsContent(
                 item { SelectedCustomerPanel(customer, state, vm, canManage) }
             }
 
-            item { SectionTitle("Tiers") }
-            if (state.tiers.isEmpty()) {
-                item {
-                    Text(
-                        "No tiers configured yet — add one from the web app's Settings → Memberships.",
-                        color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            } else {
-                items(state.tiers.sortedBy { it.sortOrder }, key = { it.id }) { tier -> TierCard(tier) }
-            }
+            item { MembershipPlansPanel(state) }
         }
 
         when (val dialog = state.dialog.takeIf { canManage }) {
@@ -190,16 +201,59 @@ private fun MembershipsContent(
 
 @Composable
 private fun Header(canManage: Boolean) {
-    Column {
-        Text(
-            "Memberships",
-            style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+    PageHeader(
+        title = "Memberships",
+        subtitle = if (canManage) {
+            "Find a customer, review membership status, and safely prepare renewals or refunds."
+        } else {
+            "Browse plans and review customer membership status."
+        },
+        eyebrow = "Retention & loyalty",
+        actions = {
+            OperationalStatusBadge(
+                label = if (canManage) "Management enabled" else "Read only",
+                tone = if (canManage) UiTone.Success else UiTone.Neutral,
+                icon = if (canManage) Icons.Default.CheckCircle else Icons.Default.CardMembership,
+            )
+        },
+    )
+}
+
+@Composable
+private fun MembershipSummary(state: MembershipsUiState) {
+    val pendingCount = state.pendingSubscriptions.size +
+        state.pendingCancellations.size +
+        state.pendingRefunds.size +
+        state.paymentTasks.size +
+        state.paymentActions.size +
+        state.refundTasks.size +
+        state.refundActions.size +
+        state.legacyRefundAttempts.size
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+        CompactStatCard(
+            label = "Available plans",
+            value = state.tiers.size.toString(),
+            detail = "Configured membership tiers",
+            icon = Icons.Default.CardMembership,
+            tone = UiTone.Brand,
+            modifier = Modifier.weight(1f),
         )
-        Text(
-            if (canManage) "Tiers · subscribe · refund · renewal" else "Tiers and customer membership status · read only",
-            style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
-            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
+        CompactStatCard(
+            label = "Search matches",
+            value = state.customers.size.toString(),
+            detail = if (state.search.isBlank()) "Enter a name or phone" else "Matching customers",
+            icon = Icons.Default.People,
+            tone = UiTone.Information,
+            modifier = Modifier.weight(1f),
+        )
+        CompactStatCard(
+            label = "Outstanding actions",
+            value = pendingCount.toString(),
+            detail = "Payment, refund or sync records",
+            icon = Icons.Default.SyncProblem,
+            tone = if (pendingCount > 0) UiTone.Warning else UiTone.Neutral,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -209,23 +263,50 @@ private fun Header(canManage: Boolean) {
 // ============================================================================
 @Composable
 private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewModel) {
-    Panel {
-        Text("Find a customer", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = state.search, onValueChange = vm::setSearch,
-            label = { Text("Name or phone") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+    SectionCard(
+        title = "Find a customer",
+        subtitle = "Membership actions always start from an existing customer profile",
+        icon = Icons.Default.Search,
+    ) {
+        ActionBar(
+            leading = {
+                SearchInput(
+                    value = state.search,
+                    onValueChange = vm::setSearch,
+                    placeholder = "Search by customer name or phone",
+                    modifier = Modifier.weight(1f),
+                )
+            },
+            trailing = if (state.search.isNotBlank()) {
+                {
+                    ErpButton(
+                        text = "Clear",
+                        onClick = { vm.setSearch("") },
+                        intent = ActionIntent.Quiet,
+                    )
+                }
+            } else null,
         )
         if (state.search.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
             if (state.customers.isEmpty()) {
-                Text("No matching customers.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+                DesignedEmptyState(
+                    title = "No matching customers",
+                    body = "Check the phone number or name. Customer profiles are created from the Customers screen or during billing.",
+                    icon = Icons.Default.People,
+                    secondaryLabel = "Clear search",
+                    onSecondary = { vm.setSearch("") },
+                )
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     state.customers.forEach { customer -> CustomerResultRow(customer, vm) }
                 }
             }
+        } else {
+            Text(
+                "Search to review a customer's current plan, payment evidence, renewal status, and receipt history.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
     }
 }
@@ -233,7 +314,7 @@ private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewMo
 @Composable
 private fun CustomerResultRow(customer: CustomerCacheEntity, vm: MembershipsViewModel) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .clickable { vm.selectCustomer(customer) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -258,12 +339,36 @@ private fun SelectedCustomerPanel(
     canManage: Boolean,
 ) {
     val membership = state.selectedMembership
-    Panel {
+    val hasPendingAction = membership?.let {
+        it.pendingRefundTaskId != null ||
+            it.pendingPaymentTaskId != null ||
+            it.pendingSubscribeLocalId != null ||
+            it.pendingCancelLocalId != null ||
+            it.pendingRefundLocalId != null
+    } == true
+    SectionCard(
+        title = "Selected customer",
+        subtitle = "Membership status and financial workflow",
+        icon = Icons.Default.People,
+        elevated = true,
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(customer.name.orEmpty().ifBlank { "(no name)" }, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
                 Text(customer.phone, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
             }
+            OperationalStatusBadge(
+                label = when {
+                    hasPendingAction -> "Action pending"
+                    membership?.subscription?.isActive == true -> "Active member"
+                    else -> "No active plan"
+                },
+                tone = when {
+                    hasPendingAction -> UiTone.Warning
+                    membership?.subscription?.isActive == true -> UiTone.Success
+                    else -> UiTone.Neutral
+                },
+            )
             TextButton(onClick = vm::clearSelection) { Text("Change") }
         }
         Spacer(Modifier.height(10.dp))
@@ -465,7 +570,7 @@ private fun SelectedCustomerPanel(
 // ============================================================================
 @Composable
 private fun TierCard(tier: MembershipTier) {
-    Panel {
+    SectionCard(elevated = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(tier.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
@@ -492,6 +597,27 @@ private fun TierCard(tier: MembershipTier) {
         }
         if (perks.isNotEmpty()) {
             Text(perks.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        }
+    }
+}
+
+@Composable
+private fun MembershipPlansPanel(state: MembershipsUiState) {
+    SectionCard(
+        title = "Membership plans",
+        subtitle = "Configured pricing and benefits available to customers",
+        icon = Icons.Default.CardMembership,
+    ) {
+        when {
+            state.loading -> LoadingSkeleton(lines = 4)
+            state.tiers.isEmpty() -> DesignedEmptyState(
+                title = "No membership plans configured",
+                body = "Create and price plans in the web app under Settings → Memberships. This tablet will show them here after synchronisation.",
+                icon = Icons.Default.CardMembership,
+            )
+            else -> state.tiers.sortedBy { it.sortOrder }.forEach { tier ->
+                TierCard(tier)
+            }
         }
     }
 }
@@ -1506,22 +1632,8 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 }
 
 // ============================================================================
-// SHARED PIECES — local copies, same shape as Inventory/Finance/Events'
-// own copies of these primitives (see EventsScreen's class doc).
+// SHARED DIALOG PIECES — business-sensitive money workflows remain local.
 // ============================================================================
-@Composable
-private fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
-        content = content,
-    )
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 2.dp))
-}
-
 @Composable
 private fun ConfirmDialog(
     title: String,

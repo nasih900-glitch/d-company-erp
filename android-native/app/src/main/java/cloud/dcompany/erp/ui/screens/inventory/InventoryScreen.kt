@@ -5,9 +5,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,7 +18,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,6 +31,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,10 +55,39 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SyncProblem
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WarningAmber
 import cloud.dcompany.erp.core.auth.InventoryAccess
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.InfoRow
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
@@ -68,12 +104,15 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
     val state by vm.state.collectAsState()
     SideEffect { vm.updateAccess(access) }
 
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Header(state, access.canManageInventory, vm)
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Header(state, vm)
         if (!access.canManageInventory) ViewOnlyNotice()
 
         when {
-            state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            state.loading -> Box(Modifier.fillMaxSize().weight(1f), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     CircularProgressIndicator(color = Brand.Gold)
                     Text("Loading inventory…", color = Brand.ForegroundMuted)
@@ -83,50 +122,49 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
             // Nothing cached and nothing coming: the screen is useless until
             // this is fixed, so it shows that plainly rather than a spinner
             // that never resolves.
-            state.couldNotLoad -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(24.dp).width(460.dp),
-                ) {
-                    Text(
-                        "Could not load inventory",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Brand.Foreground,
-                    )
-                    Text(
-                        state.refreshError
-                            ?: "No inventory is cached on this tablet yet. Check the connection and try again.",
-                        color = Brand.ForegroundMuted,
-                    )
-                    Button(onClick = vm::retry) { Text("Retry") }
-                }
+            state.couldNotLoad -> SectionCard(Modifier.weight(1f), elevated = true) {
+                DesignedEmptyState(
+                    title = "Could not load inventory",
+                    body = state.refreshError
+                        ?: "No inventory is cached on this tablet yet. Check the connection and try again.",
+                    icon = Icons.Default.CloudOff,
+                    primaryLabel = "Retry",
+                    onPrimary = vm::retry,
+                )
             }
 
-            else -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            else -> Column(
+                Modifier.fillMaxSize().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 listOfNotNull(state.refreshError, state.branchesError).distinct().forEach { error ->
                     RefreshErrorBanner(error, vm::retry)
-                    Spacer(Modifier.height(10.dp))
                 }
                 state.notice?.let {
                     NoticeBanner(it, vm::dismissNotice)
-                    Spacer(Modifier.height(10.dp))
                 }
                 if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
                     PendingStockChangesPanel(state, access.canManageInventory, vm)
-                    Spacer(Modifier.height(12.dp))
                 }
                 StatRow(state)
                 if (state.restockPriority.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
                     RestockStrip(state, vm)
                 }
-                Spacer(Modifier.height(12.dp))
                 TabBar(state, vm)
-                Spacer(Modifier.height(12.dp))
+                InventoryActionBar(state, access.canManageInventory, vm)
                 when (state.tab) {
-                    InventoryTab.INGREDIENTS -> IngredientsPane(state, access.canManageInventory, vm)
-                    InventoryTab.SUPPLIERS -> SuppliersPane(state, access.canManageInventory, vm)
+                    InventoryTab.INGREDIENTS -> IngredientsPane(
+                        state,
+                        access.canManageInventory,
+                        vm,
+                        Modifier.weight(1f),
+                    )
+                    InventoryTab.SUPPLIERS -> SuppliersPane(
+                        state,
+                        access.canManageInventory,
+                        vm,
+                        Modifier.weight(1f),
+                    )
                 }
             }
         }
@@ -165,44 +203,64 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
 // ------------------------------------------------------------------- chrome
 
 @Composable
-private fun Header(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
-    Row(
-        Modifier.fillMaxWidth().padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Inventory",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Brand.Foreground,
+private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
+    PageHeader(
+        title = "Inventory",
+        subtitle = "Ingredients, FIFO batches, supplier receipts, and low-stock control",
+        eyebrow = "Stock control",
+        actions = {
+            ErpButton(
+                text = if (state.syncing) "Refreshing" else "Refresh",
+                onClick = vm::retry,
+                enabled = !state.syncing,
+                busy = state.syncing,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.Refresh,
             )
-            Text(
-                "FIFO batches · recipe-driven deductions · low-stock alerts",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = vm::retry, enabled = !state.syncing) { Text("Refresh") }
-            if (canWrite && state.tab == InventoryTab.INGREDIENTS) {
-                OutlinedButton(
-                    onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
-                    enabled = state.ingredientsLoaded,
-                ) { Text("New ingredient") }
-                Button(
-                    onClick = { vm.openDialog(InventoryDialog.Grn) },
-                    enabled = state.branchId != null &&
-                        state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
-                ) { Text("Receive stock (GRN)") }
-            } else if (canWrite) {
-                Button(
-                    onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
-                    enabled = state.suppliersLoaded,
-                ) {
-                    Text("New supplier")
+        },
+    )
+}
+
+@Composable
+private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 700.dp
+        ActionBar(
+            leading = {
+                OperationalStatusBadge(
+                    label = if (canWrite) "Stock controls enabled" else "View only",
+                    tone = if (canWrite) UiTone.Success else UiTone.Neutral,
+                    icon = if (canWrite) Icons.Default.CheckCircle else Icons.Default.Inventory2,
+                )
+            },
+            trailing = if (!canWrite) null else {
+                {
+                    if (state.tab == InventoryTab.INGREDIENTS) {
+                        ErpButton(
+                            text = if (compact) "Ingredient" else "New ingredient",
+                            onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
+                            enabled = state.ingredientsLoaded,
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = Icons.Default.Add,
+                        )
+                        ErpButton(
+                            text = if (compact) "Receive" else "Receive stock",
+                            onClick = { vm.openDialog(InventoryDialog.Grn) },
+                            enabled = state.branchId != null &&
+                                state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
+                            leadingIcon = Icons.Default.LocalShipping,
+                        )
+                    } else {
+                        ErpButton(
+                            text = if (compact) "Supplier" else "New supplier",
+                            onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
+                            enabled = state.suppliersLoaded,
+                            leadingIcon = Icons.Default.Add,
+                        )
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -213,12 +271,12 @@ private fun PendingStockChangesPanel(
     canWrite: Boolean,
     vm: InventoryViewModel,
 ) {
-    Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        title = "Pending stock changes",
+        subtitle = "Receipts and adjustments waiting for the server",
+        icon = Icons.Default.SyncProblem,
+        contentPadding = PaddingValues(12.dp),
     ) {
-        Text("Pending stock changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
         state.pendingGrns.forEach { grn ->
             PendingRow(
                 text = "Stock receipt from ${grn.supplierName}",
@@ -269,75 +327,106 @@ private fun PendingRow(
 
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
-    }
+    OperationalBanner(
+        title = "Inventory updated",
+        detail = message,
+        tone = UiTone.Information,
+        icon = Icons.Default.CheckCircle,
+        action = { TextButton(onClick = onDismiss) { Text("Dismiss") } },
+    )
 }
 
 @Composable
 private fun RefreshErrorBanner(message: String, onRetry: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.Danger, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Danger, modifier = Modifier.weight(1f))
-        TextButton(onClick = onRetry) { Text("Retry") }
-    }
+    OperationalBanner(
+        title = "Inventory refresh failed",
+        detail = message,
+        tone = UiTone.Danger,
+        icon = Icons.Default.CloudOff,
+        action = {
+            ErpButton("Retry", onRetry, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Refresh)
+        },
+    )
 }
 
 @Composable
 private fun StatRow(state: InventoryUiState) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        StatCard("Stock value", state.stockValueMinor.asRupees(), Brand.Foreground, Modifier.weight(1f))
-        StatCard("Ingredients", state.ingredients.size.toString(), Brand.Foreground, Modifier.weight(1f))
-        StatCard(
-            "Low stock",
-            state.lowCount.toString(),
-            if (state.lowCount > 0) Brand.Danger else Brand.Good,
-            Modifier.weight(1f),
-        )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 760.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StockValueMetric(state, Modifier.weight(1f))
+                    IngredientCountMetric(state, Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LowStockMetric(state, Modifier.weight(1f))
+                    SupplierCountMetric(state, Modifier.weight(1f))
+                }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StockValueMetric(state, Modifier.weight(1f))
+                IngredientCountMetric(state, Modifier.weight(1f))
+                LowStockMetric(state, Modifier.weight(1f))
+                SupplierCountMetric(state, Modifier.weight(1f))
+            }
+        }
     }
 }
 
 @Composable
-private fun StatCard(label: String, value: String, tone: Color, modifier: Modifier = Modifier) {
-    Column(
-        modifier.clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Text(value, style = MaterialTheme.typography.headlineMedium, color = tone)
-    }
-}
+private fun StockValueMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Stock value",
+    value = state.stockValueMinor.asRupees(),
+    detail = "Cost value on hand",
+    icon = Icons.Default.Inventory2,
+    tone = UiTone.Brand,
+    modifier = modifier,
+)
+
+@Composable
+private fun IngredientCountMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Ingredients",
+    value = state.ingredients.size.toString(),
+    detail = "Tracked stock items",
+    icon = Icons.Default.Tune,
+    tone = UiTone.Information,
+    modifier = modifier,
+)
+
+@Composable
+private fun LowStockMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Low stock",
+    value = state.lowCount.toString(),
+    detail = if (state.lowCount == 0) "All above reorder level" else "Needs attention",
+    icon = if (state.lowCount == 0) Icons.Default.CheckCircle else Icons.Default.WarningAmber,
+    tone = if (state.lowCount == 0) UiTone.Success else UiTone.Danger,
+    modifier = modifier,
+)
+
+@Composable
+private fun SupplierCountMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Suppliers",
+    value = state.suppliers.size.toString(),
+    detail = "Available for receipts",
+    icon = Icons.Default.LocalShipping,
+    tone = UiTone.Neutral,
+    modifier = modifier,
+)
 
 /** The one thing an owner opens this screen to find out: what to buy today. */
 @Composable
 private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
-    Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Surface).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        title = "Restock priority",
+        subtitle = "Lowest stock relative to each ingredient's reorder level",
+        icon = Icons.Default.WarningAmber,
+        contentPadding = PaddingValues(12.dp),
     ) {
-        Text(
-            "Restock priority",
-            style = MaterialTheme.typography.labelLarge,
-            color = Brand.Danger,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.restockPriority.forEach { ingredient ->
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.restockPriority, key = { it.localWriteId ?: it.id }) { ingredient ->
                 Column(
-                    Modifier.weight(1f).clip(Radius.shapeSm)
+                    Modifier.width(210.dp).clip(Radius.shapeSm)
                         .background(Brand.SurfaceRaised)
                         .clickable { vm.select(ingredient) }
                         .padding(10.dp),
@@ -363,79 +452,125 @@ private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
+                    Spacer(Modifier.height(4.dp))
+                    OperationalStatusBadge(
+                        label = "Low stock",
+                        tone = UiTone.Danger,
+                        icon = Icons.Default.WarningAmber,
+                    )
                 }
             }
-            // Keep the tiles the same size when there are fewer than six.
-            repeat(6 - state.restockPriority.size) { Spacer(Modifier.weight(1f)) }
         }
     }
 }
 
 @Composable
 private fun TabBar(state: InventoryUiState, vm: InventoryViewModel) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        TabButton("Ingredients", state.tab == InventoryTab.INGREDIENTS) {
-            vm.selectTab(InventoryTab.INGREDIENTS)
-        }
-        TabButton("Suppliers", state.tab == InventoryTab.SUPPLIERS) {
-            vm.selectTab(InventoryTab.SUPPLIERS)
-        }
-    }
-}
-
-@Composable
-private fun TabButton(label: String, active: Boolean, onClick: () -> Unit) {
-    Column(
-        Modifier.clickable(onClick = onClick).padding(horizontal = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (active) Brand.Gold else Brand.ForegroundMuted,
-            modifier = Modifier.padding(vertical = 10.dp),
-        )
-        Box(
-            Modifier.height(2.dp).width(96.dp)
-                .background(if (active) Brand.Gold else Color.Transparent),
-        )
-    }
+    PremiumTabBar(
+        options = listOf(
+            TabOption(InventoryTab.INGREDIENTS.name, "Ingredients", state.ingredients.size),
+            TabOption(InventoryTab.SUPPLIERS.name, "Suppliers", state.suppliers.size),
+        ),
+        selectedId = state.tab.name,
+        onSelect = { id -> vm.selectTab(InventoryTab.valueOf(id)) },
+    )
 }
 
 // -------------------------------------------------------------- ingredients
 
 @Composable
-private fun IngredientsPane(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun IngredientsPane(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
     if (state.ingredientsUnavailable) {
-        EmptyState(
-            title = "Ingredients unavailable",
-            body = state.refreshError
-                ?: "This tablet has not successfully downloaded ingredients yet.",
-            actionLabel = "Retry",
-            actionEnabled = !state.syncing,
-            onAction = vm::retry,
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "Ingredients unavailable",
+                body = state.refreshError
+                    ?: "This tablet has not successfully downloaded ingredients yet.",
+                icon = Icons.Default.CloudOff,
+                primaryLabel = "Retry",
+                onPrimary = vm::retry,
+            )
+        }
         return
     }
     if (state.ingredients.isEmpty()) {
-        EmptyState(
-            title = "No ingredients yet",
-            body = "Add what the kitchen and bar actually consume — milk, beans, cups — " +
-                "then record a stock receipt so each one has a costed batch to draw from.",
-            actionLabel = "New ingredient",
-            actionEnabled = canWrite,
-            onAction = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "No ingredients yet",
+                body = "Add what the kitchen and bar actually consume, then record a stock receipt " +
+                    "so each ingredient has a costed FIFO batch to draw from.",
+                icon = Icons.Default.Inventory2,
+                primaryLabel = if (canWrite) "New ingredient" else null,
+                onPrimary = if (canWrite) {
+                    { vm.openDialog(InventoryDialog.IngredientForm(null)) }
+                } else null,
+            )
+        }
         return
     }
 
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
-        ) {
-            items(state.sortedIngredients, key = { it.localWriteId ?: it.id }) { ingredient ->
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.sortedIngredients, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) state.sortedIngredients else state.sortedIngredients.filter {
+            it.name.contains(needle, ignoreCase = true) || it.sku.contains(needle, ignoreCase = true)
+        }
+    }
+
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search ingredients or SKU",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
+            if (maxWidth >= 820.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    IngredientResultsPanel(filtered, state, canWrite, vm, Modifier.weight(1f))
+                    DetailPanel(state, canWrite, vm, Modifier.width(360.dp).fillMaxHeight())
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    IngredientResultsPanel(filtered, state, canWrite, vm, Modifier.weight(0.58f))
+                    if (state.selected != null) {
+                        DetailPanel(state, canWrite, vm, Modifier.weight(0.42f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IngredientResultsPanel(
+    rows: List<IngredientRow>,
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
+    SectionCard(
+        modifier = modifier,
+        title = "Ingredient stock",
+        subtitle = "${rows.size} result${if (rows.size == 1) "" else "s"} · lowest stock first",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        if (rows.isEmpty()) {
+            DesignedEmptyState(
+                title = "No matching ingredients",
+                body = "Try another ingredient name or SKU.",
+                icon = Icons.Default.Inventory2,
+            )
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(rows, key = { _, item -> item.localWriteId ?: item.id }) { index, ingredient ->
                 IngredientRowCard(
                     ingredient = ingredient,
                     selected = ingredient.sku == state.selectedSku,
@@ -447,9 +582,10 @@ private fun IngredientsPane(state: InventoryUiState, canWrite: Boolean, vm: Inve
                     onCancelRemoval = { vm.cancelIngredientRemoval(ingredient) },
                     onRetrySync = { vm.retryIngredientSync(ingredient) },
                 )
+                    if (index < rows.lastIndex) PanelDivider()
+                }
             }
         }
-        DetailPanel(state, canWrite, vm)
     }
 }
 
@@ -465,29 +601,73 @@ private fun IngredientRowCard(
     onCancelRemoval: () -> Unit,
     onRetrySync: () -> Unit,
 ) {
+    val statusLabel: String
+    val statusTone: UiTone
+    val statusIcon = when {
+        ingredient.rejectedError != null -> Icons.Default.SyncProblem
+        ingredient.pendingDelete || ingredient.pendingLocalId != null || ingredient.createConfirmationPending ->
+            Icons.Default.SyncProblem
+        ingredient.isLow -> Icons.Default.WarningAmber
+        else -> Icons.Default.CheckCircle
+    }
+    when {
+        ingredient.rejectedError != null -> {
+            statusLabel = "Sync issue"
+            statusTone = UiTone.Danger
+        }
+        ingredient.pendingDelete -> {
+            statusLabel = "Removal pending"
+            statusTone = UiTone.Warning
+        }
+        ingredient.createConfirmationPending -> {
+            statusLabel = "Confirming create"
+            statusTone = UiTone.Warning
+        }
+        ingredient.pendingLocalId != null -> {
+            statusLabel = "Pending sync"
+            statusTone = UiTone.Warning
+        }
+        ingredient.isLow -> {
+            statusLabel = "Low stock"
+            statusTone = UiTone.Danger
+        }
+        else -> {
+            statusLabel = "Healthy"
+            statusTone = UiTone.Success
+        }
+    }
+
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+        Modifier.fillMaxWidth()
             .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .border(1.dp, if (selected) Brand.GoldMuted else Color.Transparent),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+        DataListRow(
+            onClick = onClick,
+            content = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        ingredient.name,
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OperationalStatusBadge(statusLabel, statusTone, icon = statusIcon)
+                }
                 Text(
-                    ingredient.name,
-                    color = Brand.Foreground,
-                    style = MaterialTheme.typography.bodyLarge,
+                    "${ingredient.sku} · reorder at ${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    ingredient.sku,
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(140.dp)) {
+                LevelBar(ingredient, Modifier.fillMaxWidth())
+            },
+            trailing = {
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(132.dp)) {
                 Text(
                     "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
                     color = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
@@ -498,37 +678,29 @@ private fun IngredientRowCard(
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
-            }
-            Spacer(Modifier.width(8.dp))
-            if (canWrite && !ingredient.pendingDelete && !ingredient.createConfirmationPending) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!ingredient.isUnsyncedDraft) SmallAction("Adjust", onAdjust)
-                    SmallAction("Edit", onEdit)
-                    SmallAction("Delete", onDelete, Brand.Danger)
                 }
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LevelBar(ingredient, Modifier.weight(1f))
-            Spacer(Modifier.width(10.dp))
-            Text(
-                if (ingredient.reorderThreshold > 0) {
-                    "Reorder at ${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}"
-                } else {
-                    "No reorder level set"
-                },
-                color = if (ingredient.isLow) Brand.Danger else Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+                if (canWrite && !ingredient.pendingDelete && !ingredient.createConfirmationPending) {
+                    IngredientActionsMenu(
+                        canAdjust = !ingredient.isUnsyncedDraft,
+                        onAdjust = onAdjust,
+                        onEdit = onEdit,
+                        onDelete = onDelete,
+                    )
+                }
+            },
+        )
         if (ingredient.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
                 color = Brand.GoldMuted,
                 style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else if (ingredient.pendingDelete) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 Text(
                     "Removal pending sync",
                     color = Brand.GoldMuted,
@@ -538,10 +710,15 @@ private fun IngredientRowCard(
                 TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel") }
             }
         } else if (ingredient.pendingLocalId != null) {
-            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Not synced yet",
+                color = Brand.GoldMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         } else if (ingredient.rejectedError != null) {
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
@@ -552,6 +729,38 @@ private fun IngredientRowCard(
                         TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel removal") }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IngredientActionsMenu(
+    canAdjust: Boolean,
+    onAdjust: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (canAdjust) {
+            ErpButton("Adjust", onAdjust, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Tune)
+        }
+        Box {
+            IconButton(onClick = { expanded = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "More ingredient actions", tint = Brand.ForegroundMuted)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Edit ingredient") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = { expanded = false; onEdit() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete ingredient", color = Brand.Danger) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                    onClick = { expanded = false; onDelete() },
+                )
             }
         }
     }
@@ -589,41 +798,55 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
 
 /** FIFO batches for the selected ingredient — what the deduction engine eats first. */
 @Composable
-private fun DetailPanel(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun DetailPanel(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
     val ingredient = state.selected
-    Column(
-        Modifier.width(360.dp).fillMaxSize().clip(Radius.shapeLg)
-            .background(Brand.Surface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    SectionCard(
+        modifier = modifier,
+        title = ingredient?.name ?: "FIFO batches",
+        subtitle = ingredient?.let { "Oldest available stock is consumed first" }
+            ?: "Select an ingredient to inspect its costed stock",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(14.dp),
     ) {
         if (ingredient == null) {
-            Text("Batches", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(
-                "Tap an ingredient to see the batches it will be drawn from, oldest first.",
-                color = Brand.ForegroundMuted,
+            DesignedEmptyState(
+                title = "Select an ingredient",
+                body = "Choose an ingredient to see the batches it will be drawn from, oldest first.",
+                icon = Icons.Default.Inventory2,
             )
-            return@Column
+            return@SectionCard
         }
 
-        Text(ingredient.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-        Text(
-            "${ingredient.currentQty.asQty()} ${ingredient.baseUnit} on hand · " +
-                "avg ${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
-            color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall,
+        InfoRow(
+            label = "On hand",
+            value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
+            valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
+        )
+        InfoRow(
+            label = "Average cost",
+            value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
         )
         if (ingredient.isUnsyncedDraft) {
-            Text(
-                "This ingredient hasn't synced yet — stock actions unlock once it has.",
-                color = Brand.GoldMuted,
-                style = MaterialTheme.typography.labelSmall,
+            OperationalBanner(
+                title = "Ingredient pending sync",
+                detail = "Stock actions unlock after the ingredient is confirmed by the server.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.SyncProblem,
             )
         } else {
-            Button(
+            ErpButton(
+                text = "Adjust stock",
                 onClick = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
                 enabled = canWrite,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Adjust stock") }
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.Tune,
+            )
         }
 
         Text(
@@ -677,7 +900,10 @@ private fun DetailPanel(state: InventoryUiState, canWrite: Boolean, vm: Inventor
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 items(state.batches, key = { it.id }) { batch ->
                     BatchRow(batch, ingredient.baseUnit)
                 }
@@ -722,39 +948,86 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String) {
 // ---------------------------------------------------------------- suppliers
 
 @Composable
-private fun SuppliersPane(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun SuppliersPane(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
     if (state.suppliersUnavailable) {
-        EmptyState(
-            title = "Suppliers unavailable",
-            body = state.refreshError
-                ?: "This tablet has not successfully downloaded suppliers yet.",
-            actionLabel = "Retry",
-            actionEnabled = !state.syncing,
-            onAction = vm::retry,
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "Suppliers unavailable",
+                body = state.refreshError
+                    ?: "This tablet has not successfully downloaded suppliers yet.",
+                icon = Icons.Default.CloudOff,
+                primaryLabel = "Retry",
+                onPrimary = vm::retry,
+            )
+        }
         return
     }
     if (state.suppliers.isEmpty()) {
-        EmptyState(
-            title = "No suppliers yet",
-            body = "A stock receipt has to be attributed to a supplier, so add the shops " +
-                "and distributors you buy from before recording a GRN.",
-            actionLabel = "New supplier",
-            actionEnabled = canWrite,
-            onAction = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "No suppliers yet",
+                body = "Every goods receipt must identify a supplier. Add the shops and distributors " +
+                    "you buy from before recording stock receipts.",
+                icon = Icons.Default.LocalShipping,
+                primaryLabel = if (canWrite) "New supplier" else null,
+                onPrimary = if (canWrite) {
+                    { vm.openDialog(InventoryDialog.SupplierForm(null)) }
+                } else null,
+            )
+        }
         return
     }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(state.suppliers, key = { it.localWriteId ?: it.id }) { supplier ->
-            SupplierRowCard(
-                supplier = supplier,
-                canWrite = canWrite,
-                onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
-                onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
-                onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
-                onRetrySync = { vm.retrySupplierSync(supplier) },
-            )
+
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.suppliers, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) state.suppliers else state.suppliers.filter {
+            it.name.contains(needle, ignoreCase = true) ||
+                it.contact.orEmpty().contains(needle, ignoreCase = true) ||
+                it.gstin.orEmpty().contains(needle, ignoreCase = true)
+        }
+    }
+
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search suppliers, contact, or GSTIN",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SectionCard(
+            modifier = Modifier.weight(1f),
+            title = "Supplier directory",
+            subtitle = "${filtered.size} result${if (filtered.size == 1) "" else "s"} available for goods receipts",
+            icon = Icons.Default.LocalShipping,
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            if (filtered.isEmpty()) {
+                DesignedEmptyState(
+                    title = "No matching suppliers",
+                    body = "Try another supplier name, contact, or GSTIN.",
+                    icon = Icons.Default.LocalShipping,
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    itemsIndexed(filtered, key = { _, item -> item.localWriteId ?: item.id }) { index, supplier ->
+                        SupplierRowCard(
+                            supplier = supplier,
+                            canWrite = canWrite,
+                            onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
+                            onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
+                            onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
+                            onRetrySync = { vm.retrySupplierSync(supplier) },
+                        )
+                        if (index < filtered.lastIndex) PanelDivider()
+                    }
+                }
+            }
         }
     }
 }
@@ -768,45 +1041,76 @@ private fun SupplierRowCard(
     onCancelRemoval: () -> Unit,
     onRetrySync: () -> Unit,
 ) {
+    val (statusLabel, statusTone) = when {
+        supplier.rejectedError != null -> "Sync issue" to UiTone.Danger
+        supplier.pendingDelete -> "Removal pending" to UiTone.Warning
+        supplier.createConfirmationPending -> "Confirming create" to UiTone.Warning
+        supplier.pendingLocalId != null -> "Pending sync" to UiTone.Warning
+        else -> "Ready" to UiTone.Success
+    }
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        Modifier.fillMaxWidth().background(Brand.Surface),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    supplier.name,
-                    color = Brand.Foreground,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+        DataListRow(
+            content = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        supplier.name,
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OperationalStatusBadge(
+                        statusLabel,
+                        statusTone,
+                        icon = if (statusTone == UiTone.Success) Icons.Default.CheckCircle else Icons.Default.SyncProblem,
+                    )
+                }
                 Text(
                     supplier.contact ?: "No contact saved",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
-            Column(Modifier.width(220.dp)) {
-                Text("GSTIN", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                Text(supplier.gstin ?: "—", color = Brand.Foreground)
-            }
-            Column(Modifier.width(180.dp)) {
-                Text("Terms", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                Text(supplier.paymentTerms ?: "—", color = Brand.Foreground)
-            }
-            if (canWrite && !supplier.pendingDelete && !supplier.createConfirmationPending) {
-                SmallAction("Edit", onEdit)
-                SmallAction("Delete", onDelete, Brand.Danger)
-            }
-        }
+            },
+            trailing = {
+                Column(Modifier.width(180.dp), horizontalAlignment = Alignment.End) {
+                    Text(
+                        supplier.gstin?.let { "GSTIN $it" } ?: "GSTIN not saved",
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        supplier.paymentTerms ?: "No payment terms",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (canWrite && !supplier.pendingDelete && !supplier.createConfirmationPending) {
+                    SupplierActionsMenu(onEdit, onDelete)
+                }
+            },
+        )
         if (supplier.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
                 color = Brand.GoldMuted,
                 style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else if (supplier.pendingDelete) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 Text(
                     "Removal pending sync",
                     color = Brand.GoldMuted,
@@ -816,10 +1120,15 @@ private fun SupplierRowCard(
                 TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel") }
             }
         } else if (supplier.pendingLocalId != null) {
-            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Not synced yet",
+                color = Brand.GoldMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         } else if (supplier.rejectedError != null) {
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
@@ -831,6 +1140,28 @@ private fun SupplierRowCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SupplierActionsMenu(onEdit: () -> Unit, onDelete: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More supplier actions", tint = Brand.ForegroundMuted)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit supplier") },
+                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                onClick = { expanded = false; onEdit() },
+            )
+            DropdownMenuItem(
+                text = { Text("Delete supplier", color = Brand.Danger) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                onClick = { expanded = false; onDelete() },
+            )
         }
     }
 }

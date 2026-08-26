@@ -26,6 +26,13 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,8 +44,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import java.util.Locale
 
 @Composable
@@ -47,29 +59,12 @@ fun AnalyticsScreen() {
     val state by vm.state.collectAsState()
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 10.dp)) {
-            Text("Analytics", style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
-            Text(
-                "How the business is actually doing",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Brand.ForegroundMuted,
-            )
-        }
-        Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AnalyticsTab.entries.forEach { tab ->
-                FilterChip(
-                    selected = state.tab == tab,
-                    onClick = { vm.selectTab(tab) },
-                    label = { Text(tab.label) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Brand.Gold,
-                        selectedLabelColor = Brand.Background,
-                        labelColor = Brand.ForegroundMuted,
-                    ),
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
+        PremiumTabBar(
+            options = AnalyticsTab.entries.map { TabOption(it.name, it.label) },
+            selectedId = state.tab.name,
+            onSelect = { id -> AnalyticsTab.entries.firstOrNull { it.name == id }?.let(vm::selectTab) },
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+        )
         Box(Modifier.fillMaxSize()) {
             when (state.tab) {
                 AnalyticsTab.Today -> TodayTab(state, vm::retryToday)
@@ -132,9 +127,18 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
             }
 
             if (!dashboard.hasActivity) {
-                Spacer(Modifier.height(24.dp))
-                Text("No business activity today yet.", color = Brand.ForegroundMuted)
-                Spacer(Modifier.height(24.dp))
+                SectionCard(
+                    title = "Today's operating picture",
+                    subtitle = "Live activity will populate this workspace as orders and sessions are recorded.",
+                    icon = Icons.Filled.Analytics,
+                ) {
+                    DesignedEmptyState(
+                        title = "No business activity today yet",
+                        body = "Revenue, order and margin insights will update automatically after the first completed transaction.",
+                        icon = Icons.AutoMirrored.Filled.TrendingUp,
+                        modifier = Modifier.height(190.dp),
+                    )
+                }
             }
 
             val tiles = listOf(
@@ -201,7 +205,7 @@ private fun RevenueBar(label: String, amountMinor: Long, maxMinor: Long) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 Box(
                     Modifier.fillMaxHeight().width(maxWidth * fraction)
-                        .clip(RoundedCornerShape(4.dp)).background(Brand.Gold),
+                        .clip(RoundedCornerShape(4.dp)).background(Brand.Information),
                 )
             }
         }
@@ -218,21 +222,12 @@ private fun GrowthTab(
     onRetryTopItems: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GrowthPeriodOption.entries.forEach { option ->
-                FilterChip(
-                    selected = state.growthPeriod == option,
-                    onClick = { onSelectPeriod(option) },
-                    label = { Text(option.label) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Brand.Gold,
-                        selectedLabelColor = Brand.Background,
-                        labelColor = Brand.ForegroundMuted,
-                    ),
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
+        PremiumTabBar(
+            options = GrowthPeriodOption.entries.map { TabOption(it.name, it.label) },
+            selectedId = state.growthPeriod.name,
+            onSelect = { id -> GrowthPeriodOption.entries.firstOrNull { it.name == id }?.let(onSelectPeriod) },
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.sm),
+        )
         val growth = state.growth
         when (cachedDataPresentation(growth != null, state.growthLoading, state.growthError)) {
             CachedDataPresentation.INITIAL_LOADING -> LoadingPanel()
@@ -347,7 +342,12 @@ private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
                 onRetry,
             )
             SupplementalListPresentation.FRESH_EMPTY ->
-                Text("Nothing sold yet this month.", color = Brand.ForegroundMuted)
+                DesignedEmptyState(
+                    title = "Nothing sold this month",
+                    body = "Product rankings will appear after completed sales are included in analytics.",
+                    icon = Icons.Filled.PointOfSale,
+                    modifier = Modifier.height(180.dp),
+                )
             SupplementalListPresentation.STALE_EMPTY -> {
                 InlineListError(
                     "${state.topItemsError} The saved empty result may be out of date.",
@@ -381,7 +381,7 @@ private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
                                 color = Brand.ForegroundMuted,
                             )
                         }
-                        Text(item.revenueMinor.asRupees(), color = Brand.Gold, fontWeight = FontWeight.Bold)
+                        Text(item.revenueMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -492,43 +492,41 @@ private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SectionCard(
-    modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
-) {
-    Column(
-        modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface)
-            .border(BorderStroke(1.dp, Brand.Border), Radius.shapeLg).padding(16.dp),
-        content = content,
-    )
-}
-
-@Composable
 private fun CardTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 8.dp))
 }
 
 @Composable
 private fun LoadingPanel() {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        CircularProgressIndicator(color = Brand.Gold)
-        Spacer(Modifier.height(12.dp))
-        Text("Computing…", color = Brand.ForegroundMuted)
+    SectionCard(
+        title = "Business insight workspace",
+        subtitle = "Computing current operational metrics",
+        icon = Icons.Filled.Analytics,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+    ) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = Brand.Gold)
+            Spacer(Modifier.height(Spacing.md))
+            Text("Computing insights…", color = Brand.ForegroundMuted)
+        }
     }
 }
 
 @Composable
 private fun ErrorPanel(message: String, onRetry: () -> Unit) {
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    SectionCard(
+        title = "Business insight workspace",
+        subtitle = "Your selected view is preserved while the request is retried",
+        icon = Icons.Filled.Analytics,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
     ) {
-        Text("Could not load this", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-        Spacer(Modifier.height(8.dp))
-        Text(message, color = Brand.ForegroundMuted, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 460.dp))
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onRetry) { Text("Try again") }
+        DesignedEmptyState(
+            title = "Could not load analytics",
+            body = message,
+            icon = Icons.Filled.Analytics,
+            primaryLabel = "Try again",
+            onPrimary = onRetry,
+        )
     }
 }
 

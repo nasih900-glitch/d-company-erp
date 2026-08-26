@@ -2,9 +2,37 @@ package cloud.dcompany.erp.ui.screens.kitchen
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class KitchenBoardPolicyTest {
+    @Test
+    fun `stale warning remains visible when the cached board is empty`() {
+        val state = KitchenUiState(
+            orders = emptyList(),
+            everSynced = true,
+            lastSyncedAtMillis = 1_000L,
+            nowMillis = 20_000L,
+        )
+
+        assertTrue(state.stale)
+        assertTrue(shouldShowKitchenStaleWarning(state))
+    }
+
+    @Test
+    fun `explicit queue error suppresses duplicate stale warning`() {
+        val state = KitchenUiState(
+            orders = emptyList(),
+            refreshError = "Connection unavailable",
+            everSynced = true,
+            lastSyncedAtMillis = 1_000L,
+            nowMillis = 20_000L,
+        )
+
+        assertTrue(state.stale)
+        assertFalse(shouldShowKitchenStaleWarning(state))
+    }
+
     @Test
     fun `unknown-state cancellation ticket is assigned to exactly one active section`() {
         val cancellationOnly = KitchenOrder(

@@ -1,15 +1,18 @@
 package cloud.dcompany.erp.ui.screens.tables
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,14 +25,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.TableRestaurant
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -54,8 +61,21 @@ import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
 import cloud.dcompany.erp.core.sync.CafeBillProjection
 import cloud.dcompany.erp.ui.components.VoidReasonInput
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.NumericValue
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import java.time.Instant
@@ -68,10 +88,33 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
     val state by vm.state.collectAsState()
     val selectedBill = state.selectedBill
     var discardAction by remember { mutableStateOf<BlockedCafeAction?>(null) }
+    val billsByTable = remember(state.bills) { state.bills.associateBy(CafeBillProjection::tableId) }
     SideEffect { vm.updateAccess(access) }
 
-    Column(Modifier.fillMaxSize()) {
-        if (!access.canCreateOrders) ViewOnlyNotice()
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        PageHeader(
+            title = "Tables",
+            subtitle = "Open service rounds, follow kitchen progress, then hand the final bill to POS.",
+            eyebrow = "Cafe floor",
+            actions = {
+                ErpButton(
+                    text = if (state.busy) "Updating" else "Refresh",
+                    onClick = vm::load,
+                    intent = ActionIntent.Secondary,
+                    enabled = !state.busy,
+                    busy = state.busy,
+                    leadingIcon = Icons.Default.Refresh,
+                )
+            },
+        )
+        if (!access.canCreateOrders) {
+            ViewOnlyNotice(
+                "Tables are view only — an authorised cashier can add rounds or send a bill to POS.",
+            )
+        }
         if (state.refreshError != null && state.tables.isNotEmpty()) {
             TablesRefreshErrorBanner(state.refreshError!!, vm::load)
         }
@@ -84,69 +127,54 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
                 onDiscard = { discardAction = it },
             )
         }
-        Box(Modifier.fillMaxWidth().weight(1f)) {
-            when {
-                state.tables.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.padding(24.dp),
-                    ) {
-                        // Still shown even on a never-synced device: a bare spinner
-                        // with no way out is what this replaced — offline on the
-                        // very first open must not be a dead end.
-                        if (!state.everSynced && state.blockingLoadError == null) {
-                            CircularProgressIndicator(color = Brand.Gold)
-                        }
-                        Text(
-                            if (state.everSynced) "No tables set up" else "Waiting for the first sync",
-                            color = Brand.Foreground,
-                        )
-                        Text(
-                            state.blockingLoadError
-                                ?: "Add floors and tables in the ERP, then refresh.",
-                            color = Brand.ForegroundMuted,
-                        )
-                        Button(onClick = vm::load) { Text("Refresh") }
-                    }
-                }
+        when {
+            state.tables.isEmpty() -> {
+                // Keep the operational frame visible even before the first table is configured.
+                // Truthful zero-state metrics make this read as a ready workspace, not a missing screen.
+                TablesSummary(state)
+                TablesEmptyPanel(
+                    everSynced = state.everSynced,
+                    error = state.blockingLoadError,
+                    onRefresh = vm::load,
+                    modifier = Modifier.weight(1f),
+                )
+            }
 
-                else -> Column(Modifier.fillMaxSize().padding(14.dp)) {
-                    if (state.floors.isNotEmpty()) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            item {
-                                FilterChip(
-                                    selected = state.selectedFloorId == null,
-                                    onClick = { vm.selectFloor(null) },
-                                    label = { Text("All floors") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Brand.Gold,
-                                        selectedLabelColor = Brand.Background,
+            else -> {
+                TablesSummary(state)
+                if (state.floors.isNotEmpty()) {
+                    val allFloorId = "__all_floors__"
+                    PremiumTabBar(
+                        options = buildList {
+                            add(TabOption(allFloorId, "All floors", state.tables.size))
+                            state.floors.forEach { floor ->
+                                add(
+                                    TabOption(
+                                        id = floor.id,
+                                        label = floor.name,
+                                        count = state.tables.count { it.floorId == floor.id },
                                     ),
                                 )
                             }
-                            items(state.floors, key = { it.id }) { f ->
-                                FilterChip(
-                                    selected = state.selectedFloorId == f.id,
-                                    onClick = { vm.selectFloor(f.id) },
-                                    label = { Text(f.name) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Brand.Gold,
-                                        selectedLabelColor = Brand.Background,
-                                    ),
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 150.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        items(state.visibleTables, key = { it.id }) { table ->
-                            TableTile(table, enabled = true) { vm.openTable(table) }
-                        }
+                        },
+                        selectedId = state.selectedFloorId ?: allFloorId,
+                        onSelect = { id -> vm.selectFloor(id.takeUnless { it == allFloorId }) },
+                    )
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 210.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    items(state.visibleTables, key = { it.id }) { table ->
+                        TableTile(
+                            table = table,
+                            bill = billsByTable[table.id],
+                            enabled = !state.busy,
+                            canCreate = access.canCreateOrders,
+                        ) { vm.openTable(table) }
                     }
                 }
             }
@@ -222,23 +250,151 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
 }
 
 @Composable
-private fun TablesRefreshErrorBanner(message: String, onRetry: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeMd)
-            .background(Brand.DangerMuted)
-            .semantics { liveRegion = LiveRegionMode.Assertive }
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Tables may be out of date", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
+private fun TablesSummary(state: TablesUiState) {
+    val available = state.tables.count { it.status.equals("available", ignoreCase = true) }
+    val openBills = state.bills.count { it.status == "open" }
+    val needsReview = state.blockedActions.size
+
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= 760.dp) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                CompactStatCard(
+                    label = "Total tables",
+                    value = state.tables.size.toString(),
+                    detail = if (state.floors.size == 1) "1 floor" else "${state.floors.size} floors",
+                    icon = Icons.Default.TableRestaurant,
+                    modifier = Modifier.weight(1f),
+                )
+                CompactStatCard(
+                    label = "Available",
+                    value = available.toString(),
+                    detail = "Ready for a new order",
+                    icon = Icons.Default.CheckCircle,
+                    tone = UiTone.Success,
+                    modifier = Modifier.weight(1f),
+                )
+                CompactStatCard(
+                    label = "Open bills",
+                    value = openBills.toString(),
+                    detail = "Accepting service rounds",
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                    tone = UiTone.Information,
+                    modifier = Modifier.weight(1f),
+                )
+                CompactStatCard(
+                    label = "Needs review",
+                    value = needsReview.toString(),
+                    detail = if (needsReview == 0) "No blocked actions" else "Saved actions need attention",
+                    icon = Icons.Default.ErrorOutline,
+                    tone = if (needsReview == 0) UiTone.Neutral else UiTone.Danger,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    CompactStatCard(
+                        label = "Total tables",
+                        value = state.tables.size.toString(),
+                        detail = if (state.floors.size == 1) "1 floor" else "${state.floors.size} floors",
+                        icon = Icons.Default.TableRestaurant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactStatCard(
+                        label = "Available",
+                        value = available.toString(),
+                        detail = "Ready for service",
+                        icon = Icons.Default.CheckCircle,
+                        tone = UiTone.Success,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    CompactStatCard(
+                        label = "Open bills",
+                        value = openBills.toString(),
+                        detail = "Taking rounds",
+                        icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                        tone = UiTone.Information,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactStatCard(
+                        label = "Needs review",
+                        value = needsReview.toString(),
+                        detail = if (needsReview == 0) "All clear" else "Action required",
+                        icon = Icons.Default.ErrorOutline,
+                        tone = if (needsReview == 0) UiTone.Neutral else UiTone.Danger,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
-        TextButton(onClick = onRetry) { Text("Retry") }
     }
+}
+
+@Composable
+private fun TablesEmptyPanel(
+    everSynced: Boolean,
+    error: String?,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val title = when {
+        error != null -> "Tables could not be loaded"
+        everSynced -> "No tables are configured"
+        else -> "Connecting this tablet to the floor"
+    }
+    val body = when {
+        error != null -> "$error Your saved table work has not been removed."
+        everSynced -> "There are no tables in the latest server data. Add floors and tables from an authorised management account, then check again."
+        else -> "The first successful sync downloads the configured floors and tables. You can retry without signing out."
+    }
+    val action = when {
+        error != null -> "Retry sync"
+        everSynced -> "Check again"
+        else -> "Download tables"
+    }
+    SectionCard(modifier = modifier, elevated = true) {
+        DesignedEmptyState(
+            title = title,
+            body = body,
+            icon = Icons.Default.TableRestaurant,
+        )
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            ErpButton(
+                text = action,
+                onClick = onRefresh,
+                leadingIcon = Icons.Default.Refresh,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TablesRefreshErrorBanner(message: String, onRetry: () -> Unit) {
+    OperationalBanner(
+        title = "Tables may be out of date",
+        detail = message,
+        tone = UiTone.Danger,
+        icon = Icons.Default.ErrorOutline,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+        action = {
+            ErpButton(
+                text = "Retry",
+                onClick = onRetry,
+                intent = ActionIntent.Secondary,
+            )
+        },
+    )
 }
 
 @Composable
@@ -325,51 +481,117 @@ internal fun formatRejectedTableOrderTime(
     .withZone(zoneId)
     .format(Instant.ofEpochMilli(createdAtMillis))
 
+private data class TableStatusPresentation(
+    val label: String,
+    val tone: UiTone,
+)
+
+private fun tableStatusPresentation(rawStatus: String): TableStatusPresentation =
+    when (rawStatus.lowercase()) {
+        "available" -> TableStatusPresentation("Available", UiTone.Success)
+        "sending to pos" -> TableStatusPresentation("Sending to POS", UiTone.Warning)
+        "at pos" -> TableStatusPresentation("At POS", UiTone.Information)
+        "round syncing" -> TableStatusPresentation("Round syncing", UiTone.Warning)
+        "open bill", "occupied" -> TableStatusPresentation("Open bill", UiTone.Information)
+        "needs attention", "voiding bill" -> TableStatusPresentation("Needs attention", UiTone.Danger)
+        "reserved" -> TableStatusPresentation("Reserved", UiTone.Warning)
+        "cleaning", "merged" -> TableStatusPresentation(
+            rawStatus.replaceFirstChar(Char::uppercase),
+            UiTone.Neutral,
+        )
+        else -> TableStatusPresentation(rawStatus.ifBlank { "Unknown" }, UiTone.Danger)
+    }
+
 @Composable
-private fun TableTile(table: CafeTable, enabled: Boolean, onClick: () -> Unit) {
-    // Colour carries the status so a glance across a busy room is enough;
-    // reading a word on every tile is not.
+private fun TableTile(
+    table: CafeTable,
+    bill: CafeBillProjection?,
+    enabled: Boolean,
+    canCreate: Boolean,
+    onClick: () -> Unit,
+) {
     val status = table.status.lowercase()
     val occupied = status != "available"
-    val statusLabel = when (status) {
-        "available" -> "Free"
-        "sending to pos" -> "Sending to POS…"
-        "at pos" -> "At POS · read only"
-        "round syncing" -> "Round syncing…"
-        "open bill" -> "Open bill"
-        "needs attention" -> "Needs attention"
-        "occupied" -> "Open bill"
-        "reserved" -> "Reserved"
-        "cleaning" -> "Cleaning"
-        "merged" -> "Merged"
-        else -> table.status
-    }
-    val statusColour = when (status) {
-        "available" -> Brand.Good
-        "sending to pos", "round syncing" -> Brand.Gold
-        "open bill", "at pos" -> Brand.ForegroundMuted
-        else -> Brand.Danger
+    val presentation = tableStatusPresentation(table.status)
+    val activeLines = bill?.lines?.count { !it.voided } ?: 0
+    val guidance = when {
+        status == "available" && canCreate -> "Tap to start the first service round"
+        status == "available" -> "Available · view only"
+        bill?.blockedActionId != null -> "Review the saved action above before continuing"
+        bill?.status == "held" -> "Cashier must select this bill in POS"
+        bill?.status == "sending_to_pos" -> "Handoff is saved and waiting for confirmation"
+        bill?.editable == true -> "Tap to review the bill or add another round"
+        else -> "Tap to review this table's current state"
     }
     Column(
         Modifier
+            .fillMaxWidth()
+            .heightIn(min = 168.dp)
             .clip(Radius.shapeLg)
             .background(if (occupied) Brand.SurfaceRaised else Brand.Surface)
+            .border(
+                1.dp,
+                if (presentation.tone == UiTone.Danger) Brand.Danger.copy(alpha = 0.5f) else Brand.BorderSubtle,
+                Radius.shapeLg,
+            )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Table ${table.code}",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleLarge,
+                color = Brand.Foreground,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            OperationalStatusBadge(presentation.label, presentation.tone)
+        }
         Text(
-            table.code,
-            style = MaterialTheme.typography.titleLarge,
-            color = Brand.Foreground,
-            fontWeight = FontWeight.Bold,
+            if (table.seats == 1) "1 seat" else "${table.seats} seats",
+            style = MaterialTheme.typography.labelMedium,
+            color = Brand.ForegroundMuted,
         )
-        Text("${table.seats} seats", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Text(
-            statusLabel,
-            color = statusColour,
-            fontWeight = FontWeight.SemiBold,
-        )
+        HorizontalDivider(color = Brand.BorderSubtle)
+        if (bill != null) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        if (activeLines == 1) "1 active line" else "$activeLines active lines",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Text(
+                        if (bill.amountPending) "Estimated total" else "Current total",
+                        color = if (bill.amountPending) Brand.Warning else Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                NumericValue(
+                    value = bill.totalMinor.asRupees(),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            }
+        } else {
+            Text(
+                "No active bill",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Spacer(Modifier.height(Spacing.xs))
+        Text(guidance, color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
     }
 }
 

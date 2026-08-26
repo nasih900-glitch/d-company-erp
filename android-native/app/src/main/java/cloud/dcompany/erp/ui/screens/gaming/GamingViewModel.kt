@@ -14,7 +14,6 @@ import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +21,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.util.UUID
@@ -34,8 +32,6 @@ data class GamingUiState(
     val error: String? = null,
     /** A gaming pull has completed at least once on this device. */
     val everSynced: Boolean = false,
-    /** Ticks every second so elapsed timers re-render. */
-    val nowMillis: Long = System.currentTimeMillis(),
     /** Same Room-derived id PosViewModel uses — null means no shift open. */
     val activeShiftId: String? = null,
 ) {
@@ -95,7 +91,6 @@ class GamingViewModel : ViewModel() {
 
     private val busyStationId = MutableStateFlow<String?>(null)
     private val error = MutableStateFlow<String?>(null)
-    private val nowMillis = MutableStateFlow(System.currentTimeMillis())
     @Volatile private var access = GamingAccess()
 
     val state: StateFlow<GamingUiState> = combine(
@@ -103,13 +98,13 @@ class GamingViewModel : ViewModel() {
         db.gamingDao().observeSessionCache(),
         db.gamingDao().observeActiveLocalSessions(),
         combine(
-            combine(busyStationId, error, nowMillis, ::Triple),
+            combine(busyStationId, error, ::Pair),
             resolvedShift,
             ::Pair,
         ),
         db.syncMetaDao().observe("gaming"),
     ) { stations, cache, local, ui, meta ->
-        val (uiTriple, currentShift) = ui
+        val (actionState, currentShift) = ui
         // Overlay an in-flight local stop/send on the older server cache row;
         // otherwise a successfully stopped session still renders "active"
         // and its ENDED_UNBILLED handoff disappears until another pull.
@@ -127,10 +122,9 @@ class GamingViewModel : ViewModel() {
         GamingUiState(
             stations = stations.map { it.toStation() },
             sessions = cacheSessions + localOnly,
-            busyStationId = uiTriple.first,
-            error = uiTriple.second,
+            busyStationId = actionState.first,
+            error = actionState.second,
             everSynced = meta != null,
-            nowMillis = uiTriple.third,
             // Starting/operating a session is shared terminal work; opener
             // ownership gates only POS collection and shift close.
             activeShiftId = currentShift?.shiftId,
@@ -150,15 +144,6 @@ class GamingViewModel : ViewModel() {
             }
             appCtx.sync.requestSync()
             appCtx.sync.refresh("gaming")
-        }
-        // A local 1s tick drives only the on-screen elapsed clock. It is
-        // deliberately NOT what raises the overtime alert — see scheduleAlarm:
-        // a coroutine stops with the screen, an AlarmManager alarm does not.
-        viewModelScope.launch {
-            while (isActive) {
-                delay(1_000)
-                nowMillis.value = System.currentTimeMillis()
-            }
         }
         // Reconciles on every meaningful session change, not just once at
         // start. This both schedules new deadlines and cancels an alarm when
@@ -183,9 +168,19 @@ class GamingViewModel : ViewModel() {
         error.value = VIEW_ONLY_MESSAGE
     }
 
+    private fun requireIdle(): Boolean {
+        if (busyStationId.value == null) return true
+        error.value = "Another gaming action is still being saved. Wait for it to finish, then try again."
+        return false
+    }
+
     fun start(station: Station, phone: String?, timerMinutes: Int?) {
         if (!requireWrite()) return
-        if (busyStationId.value != null) return
+        if (!requireIdle()) return
+        if (!station.isActive) {
+            error.value = "${station.name} is disabled and cannot start a session. Ask a manager to enable it."
+            return
+        }
         if (state.value.activeFor(station.id) != null) {
             error.value = "This station already has a session to finish, send to POS, or cancel first."
             return
@@ -238,7 +233,7 @@ class GamingViewModel : ViewModel() {
     fun stop(session: GameSession) {
         if (!requireWrite()) return
         if (!session.canRequestStop()) return
-        if (busyStationId.value != null) return
+        if (!requireIdle()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busyStationId.value = session.stationId
         error.value = null
@@ -289,7 +284,7 @@ class GamingViewModel : ViewModel() {
 
     fun retryStart(session: GameSession) {
         if (!requireWrite()) return
-        if (!session.canRetryStart() || busyStationId.value != null) return
+        if (!session.canRetryStart() || !requireIdle()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busyStationId.value = session.stationId
         error.value = null
@@ -316,7 +311,7 @@ class GamingViewModel : ViewModel() {
 
     fun discardFailedStart(session: GameSession) {
         if (!requireWrite()) return
-        if (!session.canRetryStart() || busyStationId.value != null) return
+        if (!session.canRetryStart() || !requireIdle()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busyStationId.value = session.stationId
         error.value = null
@@ -339,7 +334,7 @@ class GamingViewModel : ViewModel() {
     fun sendToPos(session: GameSession) {
         if (!requireWrite()) return
         if (!session.canSendToPos()) return
-        if (busyStationId.value != null) return
+        if (!requireIdle()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busyStationId.value = session.stationId
         error.value = null
@@ -394,7 +389,7 @@ class GamingViewModel : ViewModel() {
      */
     fun cancelUnbilled(session: GameSession, reason: String) {
         if (!requireWrite()) return
-        if (!session.canCancelUnbilled() || busyStationId.value != null) return
+        if (!session.canCancelUnbilled() || !requireIdle()) return
         val normalizedReason = reason.trim()
         if (normalizedReason.isEmpty()) {
             error.value = "Enter a reason before cancelling this session."

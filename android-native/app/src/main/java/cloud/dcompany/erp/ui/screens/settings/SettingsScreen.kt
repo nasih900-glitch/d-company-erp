@@ -1,29 +1,33 @@
 package cloud.dcompany.erp.ui.screens.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -37,14 +41,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.InfoRow
+import cloud.dcompany.erp.ui.components.LoadingSkeleton
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.fieldColors
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 
 @Composable
 fun SettingsScreen(
@@ -58,37 +75,38 @@ fun SettingsScreen(
         if (state.tab != activeTab) vm.selectTab(activeTab)
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            visibleTabs.forEach { tab ->
-                FilterChip(
-                    selected = activeTab == tab,
-                    onClick = { vm.selectTab(tab) },
-                    label = { Text(tab.label) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Brand.Gold,
-                        selectedLabelColor = Brand.Background,
-                    ),
-                )
+    Column(
+        Modifier.fillMaxSize().padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+    ) {
+        PageHeader(
+            title = "Settings",
+            subtitle = if (canManageSystem) {
+                "Manage your account, business identity, branches and tills."
+            } else {
+                "Review your account and update your sign-in password."
+            },
+            eyebrow = "Workspace",
+        )
+        PremiumTabBar(
+            options = visibleTabs.map { TabOption(it.name, it.label) },
+            selectedId = activeTab.name,
+            onSelect = { id ->
+                visibleTabs.firstOrNull { it.name == id }?.let(vm::selectTab)
+            },
+        )
+        Box(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            when (activeTab) {
+                SettingsTab.Account -> AccountTab(state, vm)
+                SettingsTab.Company -> CompanyTab(state, vm)
+                SettingsTab.Branches -> BranchesTab(state, vm)
+                SettingsTab.Terminals -> TerminalsTab(state, vm)
             }
         }
-        Spacer(Modifier.height(16.dp))
-        when (activeTab) {
-            SettingsTab.Account -> AccountTab(state, vm)
-            SettingsTab.Company -> CompanyTab(state, vm)
-            SettingsTab.Branches -> BranchesTab(state, vm)
-            SettingsTab.Terminals -> TerminalsTab(state, vm)
-        }
     }
-}
-
-@Composable
-private fun Card(content: @Composable () -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Surface).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) { content() }
 }
 
 @Composable
@@ -106,6 +124,8 @@ private fun Field(
         label = { Text(label) },
         singleLine = true,
         enabled = enabled,
+        shape = Radius.shapeMd,
+        colors = fieldColors(),
         modifier = Modifier.fillMaxWidth(),
     )
 }
@@ -123,6 +143,8 @@ private fun NewPasswordField(
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        shape = Radius.shapeMd,
+        colors = fieldColors(),
         modifier = Modifier.fillMaxWidth(),
     )
 }
@@ -140,8 +162,9 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
         SettingsReadPresentation.FRESH,
         SettingsReadPresentation.REFRESHING,
         SettingsReadPresentation.STALE -> Column(
-            Modifier.verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.widthIn(max = 980.dp).fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             if (state.meError != null) {
                 RefreshStatusBanner(
@@ -153,25 +176,40 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
             } else if (state.meLoading) {
                 RefreshingRow("Refreshing account details…")
             }
-            Card {
-                Text("Signed in", color = Brand.ForegroundMuted)
-                Text(state.me!!.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Text(state.me!!.email, color = Brand.ForegroundMuted)
+            SectionCard(
+                title = "Profile",
+                subtitle = "The account currently signed in on this tablet.",
+                icon = Icons.Default.AccountCircle,
+            ) {
+                InfoRow("Name", state.me!!.name)
+                PanelDivider()
+                InfoRow("Email", state.me!!.email)
                 if (state.me!!.roles.isNotEmpty()) {
-                    Text(state.me!!.roles.joinToString(", "), color = Brand.GoldMuted)
+                    PanelDivider()
+                    InfoRow("Roles", state.me!!.roles.joinToString(", "))
+                }
+                state.me!!.branchName?.takeIf(String::isNotBlank)?.let { branchName ->
+                    PanelDivider()
+                    InfoRow("Branch", branchName)
                 }
             }
-            Card {
-                Text("Change password", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
+            SectionCard(
+                title = "Account security",
+                subtitle = "Password changes require a short-lived approval code.",
+                icon = Icons.Default.Lock,
+            ) {
                 if (state.challenge == null) {
                     Text(
                         "A one-time approval code is sent to the business security contact before " +
-                            "the password can be changed.",
+                        "the password can be changed.",
                         color = Brand.ForegroundMuted,
                     )
-                    Button(onClick = vm::requestPasswordCode, enabled = !state.accountBusy) {
-                        Text(if (state.accountBusy) "Sending…" else "Send approval code")
-                    }
+                    ErpButton(
+                        text = if (state.accountBusy) "Sending…" else "Send approval code",
+                        onClick = vm::requestPasswordCode,
+                        enabled = !state.accountBusy,
+                        busy = state.accountBusy,
+                    )
                 } else {
                     val destination = state.challenge.destination.ifBlank {
                         "the business security contact"
@@ -189,14 +227,20 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
                     Field("6-digit approval code", code) { code = it.filter(Char::isDigit).take(6) }
                     NewPasswordField("New password", pwd) { pwd = it }
                     NewPasswordField("Confirm new password", confirm) { confirm = it }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(onClick = {
-                            vm.cancelPasswordChange(); code = ""; pwd = ""; confirm = ""
-                        }) { Text("Cancel") }
-                        Button(
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        ErpButton(
+                            text = "Cancel",
+                            intent = ActionIntent.Secondary,
+                            onClick = {
+                                vm.cancelPasswordChange(); code = ""; pwd = ""; confirm = ""
+                            },
+                        )
+                        ErpButton(
+                            text = if (state.accountBusy) "Changing…" else "Change password",
                             enabled = !state.accountBusy,
                             onClick = { vm.confirmPasswordChange(code, pwd, confirm) },
-                        ) { Text(if (state.accountBusy) "Changing…" else "Change password") }
+                            busy = state.accountBusy,
+                        )
                     }
                 }
                 state.accountError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -223,8 +267,9 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
         SettingsReadPresentation.FRESH,
         SettingsReadPresentation.REFRESHING,
         SettingsReadPresentation.STALE -> Column(
-            Modifier.verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.widthIn(max = 1040.dp).fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             if (state.companyError != null) {
                 RefreshStatusBanner(
@@ -249,38 +294,77 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
                     discardSubject = "failed company change",
                 )
             }
-            Card {
-                Text("Company", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                val f = state.companyForm
-                Field("Trading name", f.name) { v -> vm.editCompany { it.copy(name = v) } }
-                Field("Legal name", f.legalName) { v -> vm.editCompany { it.copy(legalName = v) } }
+            val f = state.companyForm
+            SectionCard(
+                title = "Business profile",
+                subtitle = "Names printed and displayed across the ERP.",
+                icon = Icons.Default.Business,
+            ) {
+                Field("Trading name", f.name) { value -> vm.editCompany { it.copy(name = value) } }
+                Field("Legal name", f.legalName) { value -> vm.editCompany { it.copy(legalName = value) } }
+            }
+            SectionCard(
+                title = "Tax and payments",
+                subtitle = "Registration details and the UPI address used for payment QR codes.",
+                icon = Icons.Default.PointOfSale,
+            ) {
                 Field("GSTIN", f.gstin) { v -> vm.editCompany { it.copy(gstin = v.uppercase()) } }
                 Field("PAN", f.pan) { v -> vm.editCompany { it.copy(pan = v.uppercase()) } }
                 Field("UPI VPA (for payment QR)", f.upiVpa) { v -> vm.editCompany { it.copy(upiVpa = v) } }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = f.isComposition,
+                        onCheckedChange = { v -> vm.editCompany { it.copy(isComposition = v) } },
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    Column {
+                        Text("Composition scheme", color = Brand.Foreground)
+                        Text(
+                            "Use the business's configured tax registration scheme.",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+            SectionCard(
+                title = "Regional operation",
+                subtitle = "Timezone used for business dates, shifts and receipts.",
+                icon = Icons.Default.Schedule,
+            ) {
                 // The backend validates this strictly as an IANA zone and 422s
                 // otherwise; the message is surfaced verbatim below rather than
                 // swallowed, because "Asia/Kolkata" vs "IST" is not guessable.
                 Field("Timezone (e.g. Asia/Kolkata)", f.timezone) { v ->
                     vm.editCompany { it.copy(timezone = v) }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = f.isComposition,
-                        onCheckedChange = { v -> vm.editCompany { it.copy(isComposition = v) } },
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text("Composition scheme", color = Brand.Foreground)
-                }
-                state.companyFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
+            }
+            state.companyFormError?.let { message ->
+                OperationalBanner(
+                    title = "Check these settings",
+                    detail = message,
+                    tone = UiTone.Danger,
+                    icon = Icons.Default.ErrorOutline,
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    ErpButton(
+                        text = "Discard",
                         onClick = { confirmDiscard = true },
+                        intent = ActionIntent.Secondary,
                         enabled = state.companyDirty && !state.companySaving,
-                    ) { Text("Discard") }
-                    Button(
+                    )
+                    ErpButton(
+                        text = if (state.companySaving) "Saving…" else "Save changes",
                         onClick = vm::saveCompany,
                         enabled = state.companyDirty && !state.companySaving,
-                    ) { Text(if (state.companySaving) "Saving…" else "Save changes") }
+                        busy = state.companySaving,
+                    )
                 }
             }
         }
@@ -308,24 +392,24 @@ private fun PendingBanner(
     discardSubject: String = "failed local change",
 ) {
     var confirmDiscard by remember(text) { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(text, color = if (rejected) Brand.Danger else Brand.GoldMuted, modifier = Modifier.weight(1f))
-        if (rejected) {
-            Row {
-                TextButton(onClick = onRetry) { Text("Retry") }
+    OperationalBanner(
+        title = if (rejected) "Saved change needs attention" else "Waiting to sync",
+        detail = text,
+        tone = if (rejected) UiTone.Danger else UiTone.Warning,
+        icon = if (rejected) Icons.Default.ErrorOutline else Icons.Default.CloudQueue,
+        action = if (rejected) {
+            {
+                ErpButton("Retry", onRetry, intent = ActionIntent.Secondary)
                 onDiscard?.let {
-                    TextButton(onClick = { confirmDiscard = true }) {
-                        Text("Discard", color = Brand.Danger)
-                    }
+                    ErpButton(
+                        text = "Discard",
+                        onClick = { confirmDiscard = true },
+                        intent = ActionIntent.Quiet,
+                    )
                 }
             }
-        }
-    }
+        } else null,
+    )
     if (confirmDiscard && onDiscard != null) {
         AlertDialog(
             containerColor = Brand.SurfaceOverlay,
@@ -339,12 +423,14 @@ private fun PendingBanner(
                 )
             },
             confirmButton = {
-                Button(
+                ErpButton(
+                    text = "Discard failed change",
+                    intent = ActionIntent.Destructive,
                     onClick = {
                         confirmDiscard = false
                         onDiscard()
                     },
-                ) { Text("Discard failed change") }
+                )
             },
             dismissButton = {
                 TextButton(onClick = { confirmDiscard = false }) { Text("Keep it") }
@@ -368,7 +454,10 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
         SettingsReadPresentation.BLOCKING_ERROR -> Retry(state.branchesError!!, vm::loadBranches)
         SettingsReadPresentation.FRESH,
         SettingsReadPresentation.REFRESHING,
-        SettingsReadPresentation.STALE -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SettingsReadPresentation.STALE -> Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
             if (state.branchesError != null) {
                 RefreshStatusBanner(
                     title = "Saved branches",
@@ -379,13 +468,52 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
             } else if (state.branchesRefreshing) {
                 RefreshingRow("Refreshing branches…")
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            SectionCard(
+                title = "Branches",
+                subtitle = "Business locations, operating hours and licence details.",
+                icon = Icons.Default.Store,
+                action = {
+                    ErpButton("Add branch", vm::newBranch, leadingIcon = Icons.Default.Add)
+                },
+                contentPadding = PaddingValues(0.dp),
             ) {
-                Text("Branches", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Button(onClick = vm::newBranch) { Text("Add branch") }
+                if (state.branches.isEmpty() && state.pendingBranches.isEmpty()) {
+                    DesignedEmptyState(
+                        title = "No branches yet",
+                        body = "Add a branch before configuring tills and starting billing.",
+                        icon = Icons.Default.Store,
+                        primaryLabel = "Add branch",
+                        onPrimary = vm::newBranch,
+                    )
+                } else {
+                    state.branches.forEachIndexed { index, branch ->
+                        DataListRow(
+                            content = {
+                                Text(
+                                    branch.name,
+                                    color = Brand.Foreground,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    listOfNotNull(
+                                        branch.code?.takeIf(String::isNotBlank),
+                                        branch.timezone?.takeIf(String::isNotBlank),
+                                    ).joinToString(" · ").ifBlank { "No code or timezone recorded" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.ForegroundMuted,
+                                )
+                            },
+                            trailing = {
+                                ErpButton(
+                                    text = "Edit",
+                                    onClick = { vm.editBranch(branch) },
+                                    intent = ActionIntent.Secondary,
+                                )
+                            },
+                        )
+                        if (index != state.branches.lastIndex) PanelDivider()
+                    }
+                }
             }
             if (state.pendingBranches.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -401,25 +529,6 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
                             onDiscard = { vm.discardRejectedBranch(row.localId) },
                             discardSubject = "failed branch \"${row.name}\"",
                         )
-                    }
-                }
-            }
-            if (state.branches.isEmpty() && state.pendingBranches.isEmpty()) {
-                Text("No branches yet. Add one to start billing.", color = Brand.ForegroundMuted)
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.branches, key = { it.id }) { b ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(Brand.SurfaceRaised).padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text(b.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                            Text(b.code ?: "no code", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-                        }
-                        TextButton(onClick = { vm.editBranch(b) }) { Text("Edit") }
                     }
                 }
             }
@@ -439,7 +548,7 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
         containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!state.branchSaving) requestDismiss() },
-        modifier = Modifier.width(480.dp),
+        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
         title = { Text(if (form.isNew) "Add branch" else "Edit ${form.name}") },
         text = {
             Column(
@@ -477,15 +586,16 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
             }
         },
         confirmButton = {
-            Button(onClick = vm::saveBranch, enabled = !state.branchSaving) {
-                Text(
-                    when {
-                        state.branchSaving -> "Saving…"
-                        form.isNew -> "Queue branch"
-                        else -> "Save"
-                    },
-                )
-            }
+            ErpButton(
+                text = when {
+                    state.branchSaving -> "Saving…"
+                    form.isNew -> "Queue branch"
+                    else -> "Save"
+                },
+                onClick = vm::saveBranch,
+                enabled = !state.branchSaving,
+                busy = state.branchSaving,
+            )
         },
         dismissButton = {
             TextButton(onClick = requestDismiss, enabled = !state.branchSaving) { Text("Cancel") }
@@ -509,13 +619,21 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
 @Composable
 private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
     var terminalToDelete by remember { mutableStateOf<TerminalDto?>(null) }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Terminals", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-        Text(
-            "Each till is a terminal. Every sale is stamped with the terminal it " +
-                "was taken on, which is what makes a drawer reconcilable.",
-            color = Brand.ForegroundMuted,
-        )
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        SectionCard(
+            title = "Till terminals",
+            subtitle = "Every sale is stamped with a till so shifts and cash drawers remain reconcilable.",
+            icon = Icons.Default.PointOfSale,
+        ) {
+            Text(
+                "Select a branch to review its assigned tills or add another tablet terminal.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
         if (state.branchesError != null) {
             RefreshStatusBanner(
                 title = "Saved branch list",
@@ -530,19 +648,18 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             ActionErrorBanner(message, vm::dismissTerminalFeedback)
         }
         if (state.branches.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.branches.forEach { b ->
-                    FilterChip(
-                        selected = state.selectedBranchId == b.id,
-                        onClick = { vm.selectBranch(b.id) },
-                        label = { Text(b.name) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Brand.Gold,
-                            selectedLabelColor = Brand.Background,
-                        ),
+            PremiumTabBar(
+                options = state.branches.map { branch ->
+                    TabOption(
+                        id = branch.id,
+                        label = branch.name,
+                        count = state.allTerminals.count { it.branchId == branch.id } +
+                            state.pendingTerminals.count { it.branchId == branch.id },
                     )
-                }
-            }
+                },
+                selectedId = state.selectedBranchId.orEmpty(),
+                onSelect = vm::selectBranch,
+            )
         }
         val pendingForBranch = state.pendingTerminals.filter { it.branchId == state.selectedBranchId }
         when (
@@ -588,39 +705,53 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                         }
                     }
                 }
-                LazyColumn(
-                    modifier = Modifier.weight(1f, fill = false),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                SectionCard(
+                    title = state.branchName(state.selectedBranchId)?.let { "$it terminals" }
+                        ?: "Assigned terminals",
+                    subtitle = "${state.terminals.size} configured till${if (state.terminals.size == 1) "" else "s"}",
+                    icon = Icons.Default.PointOfSale,
+                    contentPadding = PaddingValues(0.dp),
                 ) {
-                    items(state.terminals, key = { it.id }) { t ->
-                        Row(
-                            Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                                .background(Brand.SurfaceRaised).padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column {
-                                Text(t.name, color = Brand.Foreground)
-                                Text(
-                                    t.deviceId ?: "no device id",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
-                                )
-                            }
-                            TextButton(
-                                onClick = { terminalToDelete = t },
-                                enabled = !state.terminalBusy,
-                            ) { Text("Delete", color = Brand.Danger) }
+                    if (state.terminals.isEmpty() && pendingForBranch.isEmpty()) {
+                        DesignedEmptyState(
+                            title = "No terminals for this branch",
+                            body = "Add a till below and assign a stable tablet identifier where available.",
+                            icon = Icons.Default.PointOfSale,
+                        )
+                    } else {
+                        state.terminals.forEachIndexed { index, terminal ->
+                            DataListRow(
+                                content = {
+                                    Text(
+                                        terminal.name,
+                                        color = Brand.Foreground,
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Text(
+                                        terminal.deviceId?.takeIf(String::isNotBlank)
+                                            ?: "No tablet device ID assigned",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Brand.ForegroundMuted,
+                                    )
+                                },
+                                trailing = {
+                                    ErpButton(
+                                        text = "Delete",
+                                        onClick = { terminalToDelete = terminal },
+                                        intent = ActionIntent.Quiet,
+                                        enabled = !state.terminalBusy,
+                                    )
+                                },
+                            )
+                            if (index != state.terminals.lastIndex) PanelDivider()
                         }
                     }
                 }
-                Card {
-                    Text("Add a terminal", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Queued and synced when back online.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Brand.ForegroundMuted,
-                    )
+                SectionCard(
+                    title = "Add a terminal",
+                    subtitle = "Saved locally and synced automatically if the connection drops.",
+                    icon = Icons.Default.Add,
+                ) {
                     Field("Name", state.terminalName, onChange = vm::setTerminalName)
                     Field("Tablet device ID (optional)", state.terminalDeviceId, onChange = vm::setTerminalDeviceId)
                     Text(
@@ -630,10 +761,13 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                         color = Brand.ForegroundMuted,
                     )
                     state.terminalFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    Button(
+                    ErpButton(
+                        text = if (state.terminalBusy) "Saving…" else "Add terminal",
                         onClick = vm::addTerminal,
                         enabled = !state.terminalBusy && state.selectedBranchId != null,
-                    ) { Text(if (state.terminalBusy) "Saving…" else "Add terminal") }
+                        busy = state.terminalBusy,
+                        leadingIcon = Icons.Default.Add,
+                    )
                 }
             }
         }
@@ -655,33 +789,30 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
 }
 
 @Composable
-private fun Loading() = Box(Modifier.fillMaxSize(), Alignment.Center) {
-    CircularProgressIndicator(color = Brand.Gold)
+private fun Loading() = SectionCard(
+    modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp),
+) {
+    LoadingSkeleton(lines = 5)
 }
 
 @Composable
 private fun Retry(message: String, onRetry: () -> Unit) =
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(message, color = MaterialTheme.colorScheme.error)
-            Button(onClick = onRetry) { Text("Try again") }
-        }
-    }
+    DesignedEmptyState(
+        title = "Could not load these settings",
+        body = message,
+        icon = Icons.Default.ErrorOutline,
+        primaryLabel = "Try again",
+        onPrimary = onRetry,
+    )
 
 @Composable
 private fun RefreshingRow(message: String) {
-    Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        CircularProgressIndicator(Modifier.width(18.dp).height(18.dp), color = Brand.Gold, strokeWidth = 2.dp)
-        Text(message, color = Brand.ForegroundMuted)
-    }
+    OperationalBanner(
+        title = "Refreshing",
+        detail = message,
+        tone = UiTone.Information,
+        icon = Icons.Default.Refresh,
+    )
 }
 
 @Composable
@@ -691,36 +822,34 @@ private fun RefreshStatusBanner(
     refreshing: Boolean,
     onRetry: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("$title may be out of date", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
-        }
-        Button(onClick = onRetry, enabled = !refreshing) {
-            Text(if (refreshing) "Retrying…" else "Retry")
-        }
-    }
+    OperationalBanner(
+        title = "$title may be out of date",
+        detail = message,
+        tone = UiTone.Warning,
+        icon = Icons.Default.ErrorOutline,
+        action = {
+            ErpButton(
+                text = if (refreshing) "Retrying…" else "Retry",
+                onClick = onRetry,
+                intent = ActionIntent.Secondary,
+                enabled = !refreshing,
+                busy = refreshing,
+            )
+        },
+    )
 }
 
 @Composable
 private fun ActionErrorBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("Terminal was not deleted", color = Brand.Danger, fontWeight = FontWeight.Bold)
-            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
-        }
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
-    }
+    OperationalBanner(
+        title = "Terminal was not deleted",
+        detail = message,
+        tone = UiTone.Danger,
+        icon = Icons.Default.ErrorOutline,
+        action = {
+            ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
+        },
+    )
 }
 
 @Composable
@@ -737,7 +866,13 @@ private fun DestructiveConfirmationDialog(
         title = { Text(confirmation.title) },
         text = { Text(confirmation.body) },
         confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) { Text(confirmation.confirmLabel) }
+            ErpButton(
+                text = confirmation.confirmLabel,
+                onClick = onConfirm,
+                intent = ActionIntent.Destructive,
+                enabled = !busy,
+                busy = busy,
+            )
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep it") }

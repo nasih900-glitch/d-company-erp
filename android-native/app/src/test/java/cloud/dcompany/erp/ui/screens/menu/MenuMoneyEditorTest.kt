@@ -32,4 +32,23 @@ class MenuMoneyEditorTest {
         assertFalse(base.valid)
         assertTrue(base.copy(taxRatePercent = "18").valid)
     }
+
+    @Test
+    fun financialEditorRejectsMalformedCandidatesWithoutChangingTheirValue() {
+        listOf("1,234.56", "1.2.3", "266.999", "not a number").forEach { raw ->
+            val editor = ItemPricingEditor("item", raw, "5", "", true)
+
+            assertEquals(raw, editor.basePriceRupees)
+            assertNull(editor.basePriceMinor)
+            assertFalse(editor.valid)
+        }
+    }
+
+    @Test
+    fun categorySortOrderKeepsSignedServerContract() {
+        val editor = CategoryEditor(name = "Priority", sortOrder = -10)
+
+        assertTrue(editor.valid)
+        assertEquals(-10, editor.sortOrder)
+    }
 }

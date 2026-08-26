@@ -32,8 +32,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -56,8 +54,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import kotlin.math.abs
 
@@ -108,21 +112,14 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
             }
 
             else -> {
-                TabRow(
-                    selectedTabIndex = tab,
-                    containerColor = Brand.Background,
-                    contentColor = Brand.Gold,
-                ) {
-                    tabs.forEachIndexed { index, title ->
-                        Tab(
-                            selected = tab == index,
-                            onClick = { tab = index },
-                            selectedContentColor = Brand.Gold,
-                            unselectedContentColor = Brand.ForegroundMuted,
-                            text = { Text(title, style = MaterialTheme.typography.labelLarge) },
-                        )
-                    }
-                }
+                PremiumTabBar(
+                    options = tabs.mapIndexed { index, title ->
+                        TabOption(index.toString(), title)
+                    },
+                    selectedId = tab.toString(),
+                    onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
+                    modifier = Modifier.padding(horizontal = Spacing.lg),
+                )
                 // A refresh that failed on top of good data: keep the figures,
                 // but never let the failure pass unmentioned.
                 if (state.error != null) {
@@ -163,27 +160,20 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
 @Composable
 private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
     Column {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Finance",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = Brand.Foreground,
+        PageHeader(
+            title = "Finance",
+            subtitle = "Management P&L (receipt basis), expenses, assets and partner capital.",
+            eyebrow = "Financial control",
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            actions = {
+                ErpButton(
+                    text = "Refresh",
+                    onClick = onRefresh,
+                    intent = ActionIntent.Secondary,
+                    busy = state.loading,
                 )
-                Text(
-                    "Management P&L (receipt basis) · expenses · partner capital",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
-                )
-            }
-            OutlinedButton(onClick = onRefresh, enabled = !state.loading) {
-                Text(if (state.loading) "Refreshing…" else "Refresh")
-            }
-        }
+            },
+        )
         if (state.loading && state.loaded) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),

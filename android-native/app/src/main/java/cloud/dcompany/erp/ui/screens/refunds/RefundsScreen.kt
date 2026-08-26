@@ -1,17 +1,28 @@
 package cloud.dcompany.erp.ui.screens.refunds
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AssignmentReturn
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -31,7 +42,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -41,8 +51,23 @@ import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.Order
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.InfoRow
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import java.text.DateFormat
 import java.util.Date
 
@@ -54,107 +79,226 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
     var cancelRequest by remember { mutableStateOf<RefundTask?>(null) }
     var withdrawTask by remember { mutableStateOf<RefundTask?>(null) }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        item {
-            Text("Refunds", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(
-                "Every refund is tied to this tablet's exact open shift. Cash needs server acceptance and a guarded handover before it leaves the drawer.",
-                color = Brand.ForegroundMuted,
+        PageHeader(
+            title = "Refunds",
+            subtitle = "Shift-bound requests, guarded cash handovers, and traceable payout recovery",
+            eyebrow = "Payments & controls",
+            actions = {
+                ErpButton(
+                    text = if (state.busy) "Checking…" else "Refresh",
+                    onClick = vm::load,
+                    intent = ActionIntent.Secondary,
+                    enabled = !state.busy,
+                    busy = state.busy,
+                    leadingIcon = Icons.Default.Refresh,
+                )
+            },
+        )
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            CompactStatCard(
+                label = "Refundable orders",
+                value = state.orders.size.toString(),
+                detail = "${state.orders.sumOf { it.refundableMinor }.asRupees()} available",
+                icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                tone = UiTone.Information,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Open tasks",
+                value = state.tasks.size.toString(),
+                detail = if (state.tasks.isEmpty()) "No payout recovery pending" else "Resolve each exact task",
+                icon = Icons.AutoMirrored.Filled.AssignmentReturn,
+                tone = if (state.tasks.isEmpty()) UiTone.Success else UiTone.Warning,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Money access",
+                value = when {
+                    !state.online -> "Offline"
+                    state.canManageMoney -> "Ready"
+                    else -> "Locked"
+                },
+                detail = when {
+                    !state.online -> "Requests queue; cash payout waits"
+                    state.canManageMoney -> "Server reachable"
+                    else -> "Shift authority required"
+                },
+                icon = when {
+                    !state.online -> Icons.Default.CloudOff
+                    state.canManageMoney -> Icons.Default.Payments
+                    else -> Icons.Default.Lock
+                },
+                tone = when {
+                    !state.online -> UiTone.Warning
+                    state.canManageMoney -> UiTone.Success
+                    else -> UiTone.Danger
+                },
+                modifier = Modifier.weight(1f),
             )
         }
 
         state.moneyAccessMessage?.let { message ->
-            item {
-                Column(
-                    modifier = Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(Brand.Danger.copy(alpha = 0.13f)).padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("Refund money actions locked", color = Brand.Danger, fontWeight = FontWeight.SemiBold)
-                    Text(message, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            OperationalBanner(
+                title = "Refund money actions locked",
+                detail = message,
+                tone = UiTone.Danger,
+                icon = Icons.Default.Lock,
+            )
         }
-
-        if (state.tasks.isNotEmpty()) {
-            item { Text("Refund tasks", color = Brand.Foreground, fontWeight = FontWeight.SemiBold) }
-            items(state.tasks, key = { "refund-task-${it.localId}" }) { task ->
-                RefundTaskCard(
-                    task = task,
-                    busy = state.busy,
-                    online = state.online,
-                    protectedAccess = state.protectedAccess,
-                    canManageMoney = state.canManageMoney,
-                    onCheckNow = vm::load,
-                    onRetry = vm::retryRejected,
-                    onCancel = { cancelRequest = task },
-                    onBeginHandoff = { beginHandoff = task },
-                    onCashHanded = { confirmCash = task },
-                    onWithdraw = { withdrawTask = task },
-                )
-            }
-        }
-
-        item {
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = vm::search,
-                label = { Text("Find by invoice number") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+        if (!state.online) {
+            OperationalBanner(
+                title = "Offline — no cash payout is authorised",
+                detail = "Requests can be preserved locally, but a cash handover must wait for live server acceptance.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.CloudOff,
             )
         }
 
-        when {
-            state.orders.isEmpty() && !state.everSynced -> item {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    CircularProgressIndicator(color = Brand.Gold)
-                    Text("Waiting for the first server sync", color = Brand.Foreground)
-                    Button(onClick = vm::load) { Text("Refresh") }
-                }
-            }
-            state.visible.isEmpty() -> item {
-                Text(
-                    when {
-                        state.query.isNotBlank() -> "No available paid order matches \"${state.query}\"."
-                        state.tasks.isEmpty() -> "No paid orders have a refundable balance."
-                        else -> "Resolve the task above before refunding that order again."
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                    color = Brand.ForegroundMuted,
+        ActionBar(
+            leading = {
+                SearchInput(
+                    value = state.query,
+                    onValueChange = vm::search,
+                    placeholder = "Find by invoice number",
+                    modifier = Modifier.weight(1f),
+                    enabled = !state.busy,
                 )
-            }
-            else -> items(state.visible, key = { "refundable-order-${it.id}" }) { order ->
-                Row(
-                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(Brand.Surface)
-                        .clickable(enabled = !state.busy && state.canManageMoney) { vm.select(order) }
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column {
+            },
+            trailing = {
+                OperationalStatusBadge(
+                    label = if (state.online) "Online" else "Offline",
+                    tone = if (state.online) UiTone.Success else UiTone.Warning,
+                    icon = if (state.online) Icons.Default.Sync else Icons.Default.CloudOff,
+                )
+            },
+        )
+
+        SectionCard(
+            modifier = Modifier.weight(1f),
+            title = "Refund workspace",
+            subtitle = "Resolve open tasks first, then select a paid order with a server-known refundable balance",
+            icon = Icons.AutoMirrored.Filled.AssignmentReturn,
+            elevated = true,
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            LazyColumn(Modifier.fillMaxSize()) {
+                if (state.tasks.isNotEmpty()) {
+                    item("task-heading") {
+                        Column(
+                            Modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+                                .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text("OPEN REFUND TASKS", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                            Text(
+                                "Complete or reconcile each exact task before refunding that order again.",
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    items(state.tasks, key = { "refund-task-${it.localId}" }) { task ->
+                        Box(Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+                            RefundTaskCard(
+                                task = task,
+                                busy = state.busy,
+                                online = state.online,
+                                protectedAccess = state.protectedAccess,
+                                canManageMoney = state.canManageMoney,
+                                onCheckNow = vm::load,
+                                onRetry = vm::retryRejected,
+                                onCancel = { cancelRequest = task },
+                                onBeginHandoff = { beginHandoff = task },
+                                onCashHanded = { confirmCash = task },
+                                onWithdraw = { withdrawTask = task },
+                            )
+                        }
+                    }
+                    item("orders-divider") { PanelDivider() }
+                }
+
+                item("orders-heading") {
+                    Column(
+                        Modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text("REFUNDABLE ORDERS", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                         Text(
-                            order.invoiceNo ?: "No invoice number",
-                            color = Brand.Foreground,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            "${order.type} · collected ${order.paidMinor.asRupees()}",
-                            style = MaterialTheme.typography.labelSmall,
+                            "Only paid orders with an available balance are shown.",
                             color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("Available", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                        Text(order.refundableMinor.asRupees(), color = Brand.Gold, fontWeight = FontWeight.Bold)
+                }
+
+                when {
+                    state.orders.isEmpty() && !state.everSynced -> item("initial-sync") {
+                        Column(
+                            Modifier.fillMaxWidth().heightIn(min = 240.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            CircularProgressIndicator(color = Brand.Gold)
+                            Text(
+                                "Waiting for the first server sync",
+                                modifier = Modifier.padding(Spacing.md),
+                                color = Brand.Foreground,
+                            )
+                            ErpButton(
+                                text = "Refresh",
+                                onClick = vm::load,
+                                intent = ActionIntent.Secondary,
+                                leadingIcon = Icons.Default.Refresh,
+                            )
+                        }
+                    }
+
+                    state.visible.isEmpty() -> item("empty-orders") {
+                        DesignedEmptyState(
+                            title = if (state.query.isNotBlank()) "No matching invoice" else "No refundable orders",
+                            body = when {
+                                state.query.isNotBlank() -> "No available paid order matches \"${state.query}\". Check the invoice number or clear the search."
+                                state.tasks.isEmpty() -> "Paid orders with an available refundable balance will appear here after sync."
+                                else -> "Resolve the open task above before refunding that order again."
+                            },
+                            icon = if (state.query.isNotBlank()) Icons.Default.Warning else Icons.AutoMirrored.Filled.ReceiptLong,
+                            primaryLabel = if (state.query.isNotBlank()) "Clear search" else null,
+                            onPrimary = if (state.query.isNotBlank()) ({ vm.search("") }) else null,
+                        )
+                    }
+
+                    else -> itemsIndexed(state.visible, key = { _, order -> "refundable-order-${order.id}" }) { index, order ->
+                        DataListRow(
+                            onClick = if (!state.busy && state.canManageMoney) ({ vm.select(order) }) else null,
+                            leading = {
+                                OperationalStatusBadge("Refundable", UiTone.Success, icon = Icons.Default.Payments)
+                            },
+                            content = {
+                                Text(
+                                    order.invoiceNo ?: "No invoice number",
+                                    color = Brand.Foreground,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    "${order.type} · collected ${order.paidMinor.asRupees()}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.ForegroundMuted,
+                                )
+                            },
+                            trailing = {
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("AVAILABLE", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
+                                    Text(order.refundableMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                                }
+                            },
+                        )
+                        if (index != state.visible.lastIndex) PanelDivider()
                     }
                 }
             }
@@ -288,75 +432,150 @@ private fun RefundTaskCard(
         RefundState.CASH_SETTLE_REJECTED,
         RefundState.LEGACY_RECONCILIATION_REQUIRED,
     )
-    val tint = if (urgent) Brand.Danger else Brand.Gold
+    val tone = when {
+        task.state == RefundState.REQUEST_PENDING || task.state == RefundState.CASH_SETTLE_PENDING ||
+            task.state == RefundState.WITHDRAWAL_PENDING -> UiTone.Information
+        urgent || task.state == RefundState.REQUEST_REJECTED ||
+            task.state == RefundState.WITHDRAWAL_REJECTED -> UiTone.Danger
+        else -> UiTone.Warning
+    }
 
-    Column(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .background(tint.copy(alpha = 0.13f)).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    SectionCard(
+        title = headline,
+        subtitle = "${task.invoiceNo ?: "Order"} · ${task.amountMinor.asRupees()} · " +
+            "${task.settlementMethod ?: task.mode ?: "unverified rail"} · $created",
+        action = {
+            OperationalStatusBadge(
+                label = refundTaskStatusLabel(task.state),
+                tone = tone,
+                icon = if (tone == UiTone.Danger) Icons.Default.Warning else Icons.Default.Sync,
+            )
+        },
+        elevated = true,
+        contentPadding = PaddingValues(Spacing.md),
     ) {
-        Text(headline, color = tint, fontWeight = FontWeight.SemiBold)
-        Text(
-            "${task.invoiceNo ?: "Order"} · ${task.amountMinor.asRupees()} · " +
-                "${task.settlementMethod ?: task.mode ?: "unverified rail"} · $created",
-            color = Brand.Foreground,
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text("Reason: $reason", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        InfoRow("Reason", reason)
         Text(instruction, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
         task.receiptNo?.let {
-            Text("Receipt $it", color = Brand.Gold, style = MaterialTheme.typography.labelSmall)
+            InfoRow("Receipt", it, valueColor = Brand.Good)
         }
         task.error?.takeIf(String::isNotBlank)?.let {
-            Text("Status detail: $it", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+            OperationalBanner(
+                title = "Status detail",
+                detail = it,
+                tone = UiTone.Danger,
+                icon = Icons.Default.Warning,
+            )
         }
 
         when (task.state) {
-            RefundState.REQUEST_PENDING -> OutlinedButton(onClick = onCheckNow, enabled = !busy) {
-                Text("Check server now")
-            }
+            RefundState.REQUEST_PENDING -> ErpButton(
+                text = "Check server now",
+                onClick = onCheckNow,
+                intent = ActionIntent.Secondary,
+                enabled = !busy,
+                busy = busy,
+                leadingIcon = Icons.Default.Refresh,
+            )
             RefundState.REQUEST_REJECTED -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onRetry(task.localId) }, enabled = !busy) { Text("Retry same task") }
+                ErpButton(
+                    text = "Retry same task",
+                    onClick = { onRetry(task.localId) },
+                    modifier = Modifier.weight(1f),
+                    intent = ActionIntent.Secondary,
+                    enabled = !busy,
+                    leadingIcon = Icons.Default.Refresh,
+                )
                 if (task.mode == "cash") {
-                    OutlinedButton(onClick = onCancel, enabled = !busy) { Text("Cancel refused request") }
+                    ErpButton(
+                        text = "Cancel refused request",
+                        onClick = onCancel,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Destructive,
+                        enabled = !busy,
+                    )
                 }
             }
             RefundState.ACCEPTED_CASH_DUE -> {
-                Button(
-                    onClick = onBeginHandoff,
-                    enabled = !busy && online && canManageMoney,
-                ) { Text(if (online) "Start cash handover" else "Reconnect to start handover") }
-                if (protectedAccess) {
-                    OutlinedButton(onClick = onWithdraw, enabled = !busy && canManageMoney) {
-                        Text("Withdraw — no cash given")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    ErpButton(
+                        text = if (online) "Start cash handover" else "Reconnect to start handover",
+                        onClick = onBeginHandoff,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Warning,
+                        enabled = !busy && online && canManageMoney,
+                    )
+                    if (protectedAccess) {
+                        ErpButton(
+                            text = "Withdraw — no cash given",
+                            onClick = onWithdraw,
+                            modifier = Modifier.weight(1f),
+                            intent = ActionIntent.Secondary,
+                            enabled = !busy && canManageMoney,
+                        )
                     }
                 }
             }
             RefundState.CASH_HANDOFF_IN_PROGRESS -> {
-                Button(
-                    onClick = onCashHanded,
-                    enabled = !busy && canManageMoney,
-                    colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-                ) { Text("Record ${task.amountMinor.asRupees()} handed over") }
-                if (protectedAccess) {
-                    OutlinedButton(onClick = onWithdraw, enabled = !busy && canManageMoney) {
-                        Text("Withdraw — no cash was given")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    ErpButton(
+                        text = "Record ${task.amountMinor.asRupees()} handed over",
+                        onClick = onCashHanded,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Destructive,
+                        enabled = !busy && canManageMoney,
+                    )
+                    if (protectedAccess) {
+                        ErpButton(
+                            text = "Withdraw — no cash was given",
+                            onClick = onWithdraw,
+                            modifier = Modifier.weight(1f),
+                            intent = ActionIntent.Secondary,
+                            enabled = !busy && canManageMoney,
+                        )
                     }
                 }
             }
             RefundState.CASH_SETTLE_PENDING,
             RefundState.WITHDRAWAL_PENDING,
-            -> OutlinedButton(onClick = onCheckNow, enabled = !busy) { Text("Check server now") }
+            -> ErpButton(
+                text = "Check server now",
+                onClick = onCheckNow,
+                intent = ActionIntent.Secondary,
+                enabled = !busy,
+                busy = busy,
+                leadingIcon = Icons.Default.Refresh,
+            )
             RefundState.CASH_SETTLE_REJECTED,
             RefundState.WITHDRAWAL_REJECTED,
-            -> Button(onClick = { onRetry(task.localId) }, enabled = !busy) { Text("Retry same resolution") }
-            RefundState.LEGACY_RECONCILIATION_REQUIRED -> Text(
-                "No payout action is available in the app. A protected owner must compare the server refund, original shift, and physical drawer before support resolves this row.",
-                color = Brand.Danger,
-                style = MaterialTheme.typography.bodySmall,
+            -> ErpButton(
+                text = "Retry same resolution",
+                onClick = { onRetry(task.localId) },
+                intent = ActionIntent.Secondary,
+                enabled = !busy,
+                leadingIcon = Icons.Default.Refresh,
+            )
+            RefundState.LEGACY_RECONCILIATION_REQUIRED -> OperationalBanner(
+                title = "Protected-owner reconciliation required",
+                detail = "No payout action is available in the app. Compare the server refund, original shift, and physical drawer before support resolves this row.",
+                tone = UiTone.Danger,
+                icon = Icons.Default.Warning,
             )
         }
     }
+}
+
+private fun refundTaskStatusLabel(state: String): String = when (state) {
+    RefundState.REQUEST_PENDING -> "Awaiting server"
+    RefundState.REQUEST_REJECTED -> "Request refused"
+    RefundState.ACCEPTED_CASH_DUE -> "Cash due"
+    RefundState.CASH_HANDOFF_IN_PROGRESS -> "Handover active"
+    RefundState.CASH_SETTLE_PENDING -> "Settlement pending"
+    RefundState.CASH_SETTLE_REJECTED -> "Recovery required"
+    RefundState.WITHDRAWAL_PENDING -> "Withdrawal pending"
+    RefundState.WITHDRAWAL_REJECTED -> "Withdrawal refused"
+    RefundState.LEGACY_RECONCILIATION_REQUIRED -> "Quarantined"
+    else -> "Review"
 }
 
 internal fun refundTaskCopy(task: RefundTask): Pair<String, String> = when (task.state) {

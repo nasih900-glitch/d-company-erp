@@ -33,6 +33,12 @@ import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,8 +54,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -75,7 +88,6 @@ fun ReportsScreen() {
             .fillMaxSize()
             .background(Brand.Background)
     ) {
-        Header()
         PeriodTabs(state.period, vm::selectPeriod)
         PeriodSelector(
             state = state,
@@ -130,40 +142,13 @@ fun ReportsScreen() {
 }
 
 @Composable
-private fun Header() {
-    Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 10.dp)) {
-        Text(
-            "Reports",
-            style = MaterialTheme.typography.headlineMedium,
-            color = Brand.Foreground,
-        )
-        Text(
-            "Management P&L · operational receipt basis · not statutory accounts",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
-        )
-    }
-}
-
-@Composable
 private fun PeriodTabs(selected: ReportPeriod, onSelect: (ReportPeriod) -> Unit) {
-    Row(
-        Modifier.padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        ReportPeriod.entries.forEach { period ->
-            FilterChip(
-                selected = selected == period,
-                onClick = { onSelect(period) },
-                label = { Text(period.tab) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Brand.Gold,
-                    selectedLabelColor = Brand.Background,
-                    labelColor = Brand.ForegroundMuted,
-                ),
-            )
-        }
-    }
+    PremiumTabBar(
+        options = ReportPeriod.entries.map { TabOption(it.name, it.tab) },
+        selectedId = selected.name,
+        onSelect = { id -> ReportPeriod.entries.firstOrNull { it.name == id }?.let(onSelect) },
+        modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+    )
 }
 
 // ---------------------------------------------------------------- selectors
@@ -234,8 +219,8 @@ private fun PeriodSelector(
                         onClick = { onPickQuarter(q) },
                         label = { Text(label) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Brand.Gold,
-                            selectedLabelColor = Brand.Background,
+                            selectedContainerColor = Brand.SurfaceHover,
+                            selectedLabelColor = Brand.Foreground,
                             labelColor = Brand.ForegroundMuted,
                         ),
                     )
@@ -347,43 +332,39 @@ private fun Long.toLocalDateUtc(): LocalDate =
 
 @Composable
 private fun LoadingPanel() {
-    Column(
-        Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    SectionCard(
+        title = "Report result",
+        subtitle = "Computing operational totals from saved orders and journals",
+        icon = Icons.Filled.Assessment,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
     ) {
-        CircularProgressIndicator(color = Brand.Gold)
-        Spacer(Modifier.height(12.dp))
-        Text("Computing…", color = Brand.ForegroundMuted)
+        Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            CircularProgressIndicator(color = Brand.Gold)
+            Spacer(Modifier.height(Spacing.md))
+            Text("Computing report…", color = Brand.ForegroundMuted)
+        }
     }
 }
 
 @Composable
 private fun ErrorPanel(message: String, onRetry: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    SectionCard(
+        title = "Report result",
+        subtitle = "The selected period remains unchanged while you retry",
+        icon = Icons.Filled.Assessment,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
     ) {
-        Text(
-            "Could not load this report",
-            style = MaterialTheme.typography.titleLarge,
-            color = Brand.Foreground,
+        DesignedEmptyState(
+            title = "Could not load this report",
+            body = message,
+            icon = Icons.Filled.Assessment,
+            primaryLabel = "Try again",
+            onPrimary = onRetry,
         )
-        Spacer(Modifier.height(8.dp))
-        // The server's own words. "Report failed" would hide the difference
-        // between "your account cannot see money reports" and "the link
-        // dropped", which need completely different responses.
-        Text(
-            message,
-            color = Brand.ForegroundMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 460.dp),
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onRetry) { Text("Try again") }
     }
 }
 
@@ -415,36 +396,28 @@ private fun StaleReportBanner(message: String, onRetry: () -> Unit) {
 @Composable
 private fun EmptyPanel(period: ReportPeriod, label: String, refreshing: Boolean, fetchedAtMillis: Long?) {
     Column(
-        Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+        Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Text(
-            "Nothing recorded in this period",
-            style = MaterialTheme.typography.titleLarge,
-            color = Brand.Foreground,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "No sales, tickets, payments or expenses fall inside " +
-                label.ifBlank { "this period" } + ". " +
-                "Use the arrows above to look at another ${unitWord(period)}, " +
-                "or leave this open — figures appear here as soon as billing starts.",
-            color = Brand.ForegroundMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 520.dp),
-        )
-        // Same reasoning as ReportHeading: an empty result is itself a cached
-        // fact that can go stale — a period that had nothing yesterday but
-        // has since been billed into must not still read as empty forever.
-        if (fetchedAtMillis != null) {
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            CompactStatCard("Orders", "0", Modifier.weight(1f), "No receipts", Icons.AutoMirrored.Filled.ReceiptLong, UiTone.Neutral)
+            CompactStatCard("Payments", "₹0.00", Modifier.weight(1f), "No movement", Icons.Filled.Payments, UiTone.Neutral)
+            CompactStatCard("Net revenue", "₹0.00", Modifier.weight(1f), "After tax", Icons.AutoMirrored.Filled.TrendingUp, UiTone.Neutral)
+            CompactStatCard("Net profit", "₹0.00", Modifier.weight(1f), "No activity", Icons.Filled.Assessment, UiTone.Neutral)
+        }
+        SectionCard(
+            title = "Report result",
+            subtitle = fetchedAtMillis?.let {
+                "As of ${relativeAge(it)}" + if (refreshing) " · refreshing…" else ""
+            } ?: "No cached result timestamp",
+            icon = Icons.Filled.Assessment,
+            modifier = Modifier.weight(1f),
+        ) {
+            DesignedEmptyState(
+                title = "Nothing recorded in this period",
+                body = "No sales, tickets, payments or expenses fall inside " +
+                    label.ifBlank { "this period" } + ". Use the controls above to inspect another ${unitWord(period)}.",
+                icon = Icons.Filled.Assessment,
             )
         }
     }
@@ -904,22 +877,6 @@ private fun Summary(
 }
 
 // ------------------------------------------------------------- small parts
-
-@Composable
-private fun SectionCard(
-    modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(BorderStroke(1.dp, Brand.Border), Radius.shapeLg)
-            .padding(16.dp),
-        content = content,
-    )
-}
 
 @Composable
 private fun CardTitle(text: String) {

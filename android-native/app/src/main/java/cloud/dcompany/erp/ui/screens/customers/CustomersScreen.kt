@@ -2,28 +2,42 @@ package cloud.dcompany.erp.ui.screens.customers
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Cake
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +57,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -52,8 +68,24 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.CustomersAccess
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.InfoRow
+import cloud.dcompany.erp.ui.components.LoadingSkeleton
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import java.time.Instant
 import java.time.LocalDate
@@ -72,7 +104,10 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
     val state by vm.state.collectAsState()
     SideEffect { vm.updateAccess(access) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
         Header(
             state,
             canWrite = access.canManageCustomers,
@@ -80,86 +115,84 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
             onAdd = vm::startCreate,
         )
         if (!access.canManageCustomers) ViewOnlyNotice()
-        Spacer(Modifier.height(14.dp))
         Totals(state)
-        Spacer(Modifier.height(14.dp))
-        SearchField(
-            query = state.query,
-            onQuery = vm::search,
-            onClear = vm::clearSearch,
+        ActionBar(
+            leading = {
+                SearchInput(
+                    value = state.query,
+                    onValueChange = vm::search,
+                    placeholder = "Search customers by phone or name",
+                    modifier = Modifier.weight(1f),
+                )
+            },
+            trailing = if (state.query.isNotBlank()) {
+                {
+                    ErpButton("Clear", vm::clearSearch, intent = ActionIntent.Quiet)
+                }
+            } else null,
         )
 
         state.notice?.let {
-            Spacer(Modifier.height(10.dp))
             NoticeBanner(it, vm::dismissNotice)
         }
 
-        Spacer(Modifier.height(12.dp))
-
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val twoPane = maxWidth >= 700.dp
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val twoPane = maxWidth >= 760.dp
             val selected = state.selected
 
             when {
-                state.loading -> CentredBlock {
-                    CircularProgressIndicator(color = Brand.Gold)
-                    Text("Loading customers…", color = Brand.ForegroundMuted)
+                state.loading -> SectionCard(Modifier.fillMaxSize()) {
+                    LoadingSkeleton(lines = 7)
                 }
 
-                state.couldNotLoad -> CentredBlock {
-                    Text(
-                        "Could not load customers",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Brand.Foreground,
+                state.couldNotLoad -> SectionCard(
+                    modifier = Modifier.fillMaxSize(),
+                    title = "Customer results",
+                    subtitle = "Searchable customer and loyalty records",
+                    icon = Icons.Default.People,
+                ) {
+                    DesignedEmptyState(
+                        title = "Could not load customers",
+                        body = "No customers are saved on this tablet yet, and the server could not be reached.",
+                        icon = Icons.Default.ErrorOutline,
+                        primaryLabel = "Retry",
+                        onPrimary = vm::retry,
+                        modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        "No customers cached on this tablet yet, and there's no connection " +
-                            "right now to fetch them.",
-                        color = Brand.ForegroundMuted,
+                }
+
+                state.rows.isEmpty() -> SectionCard(
+                    modifier = Modifier.fillMaxSize(),
+                    title = "Customer results",
+                    subtitle = if (state.searching) "Filtered by the current search" else "Customer and loyalty records",
+                    icon = Icons.Default.People,
+                ) {
+                    DesignedEmptyState(
+                        title = if (state.searching) {
+                            "No customer matches “${state.query.trim()}”"
+                        } else {
+                            "No customers yet"
+                        },
+                        body = if (state.searching) {
+                            "Search matches phone numbers and names. Clear the search or add a new customer."
+                        } else {
+                            "Customers are saved automatically when a bill includes a phone number."
+                        },
+                        icon = if (state.searching) Icons.Default.Search else Icons.Default.People,
+                        primaryLabel = "Add customer".takeIf { access.canManageCustomers },
+                        onPrimary = (vm::startCreate).takeIf { access.canManageCustomers },
+                        secondaryLabel = "Clear search".takeIf { state.searching },
+                        onSecondary = (vm::clearSearch).takeIf { state.searching },
+                        modifier = Modifier.weight(1f),
                     )
-                    Button(onClick = vm::retry) { Text("Retry") }
                 }
 
-                state.rows.isEmpty() -> CentredBlock {
-                    if (state.searching) {
-                        Text(
-                            "No customer matches “${state.query.trim()}”",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Brand.Foreground,
-                        )
-                        Text(
-                            "Search matches the phone number or the name. If this is a new " +
-                                "customer, add them with their phone number.",
-                            color = Brand.ForegroundMuted,
-                        )
-                        Button(
-                            onClick = vm::startCreate,
-                            enabled = access.canManageCustomers,
-                        ) { Text("Add customer") }
-                    } else {
-                        Text(
-                            "No customers yet",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Brand.Foreground,
-                        )
-                        Text(
-                            "Customers are saved automatically the first time a bill is taken " +
-                                "with a phone number. You can also add one here.",
-                            color = Brand.ForegroundMuted,
-                        )
-                        Button(
-                            onClick = vm::startCreate,
-                            enabled = access.canManageCustomers,
-                        ) { Text("Add customer") }
-                    }
-                }
-
-                twoPane -> Row(Modifier.fillMaxSize()) {
-                    Column(Modifier.weight(1f).fillMaxHeight()) {
-                        CustomerList(state, vm)
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Box(Modifier.width(360.dp).fillMaxHeight()) {
+                twoPane -> Row(
+                    Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    CustomerResultsPanel(state, vm, Modifier.weight(1f).fillMaxHeight())
+                    Box(Modifier.widthIn(min = 340.dp, max = 400.dp).fillMaxHeight()) {
                         if (selected == null) {
                             DetailPlaceholder()
                         } else {
@@ -183,7 +216,7 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                 )
 
                 else -> Column(Modifier.fillMaxSize()) {
-                    CustomerList(state, vm)
+                    CustomerResultsPanel(state, vm, Modifier.fillMaxSize())
                 }
             }
         }
@@ -210,211 +243,251 @@ private fun Header(
     onRefresh: () -> Unit,
     onAdd: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Customers",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Brand.Foreground,
+    PageHeader(
+        title = "Customers",
+        subtitle = "Search profiles, review visits and manage phone-based loyalty details.",
+        eyebrow = "Loyalty & relationships",
+        actions = {
+            ErpButton(
+                text = if (state.syncing) "Refreshing…" else "Refresh",
+                onClick = onRefresh,
+                intent = ActionIntent.Secondary,
+                enabled = !state.loading && !state.syncing,
+                busy = state.syncing,
+                leadingIcon = Icons.Default.Refresh,
             )
-            Text(
-                "Phone-based loyalty · saved automatically at checkout · " +
-                    "2 points per ₹10 spent on gaming · 10 points = ₹1",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+            ErpButton(
+                text = "Add customer",
+                onClick = onAdd,
+                enabled = canWrite,
+                leadingIcon = Icons.Default.PersonAdd,
             )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefresh, enabled = !state.loading) { Text("Refresh") }
-            Button(onClick = onAdd, enabled = canWrite) { Text("Add customer") }
-        }
-    }
-}
-
-@Composable
-private fun Totals(state: CustomersUiState) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Tile("Customers", state.rows.size.grouped(), Modifier.weight(1f))
-        Tile("Total visits", state.totalVisits.grouped(), Modifier.weight(1f))
-        Tile("Total spend", state.totalSpentMinor.asRupees(), Modifier.weight(1f))
-        Tile(
-            label = "Points held",
-            value = state.totalPoints.grouped(),
-            modifier = Modifier.weight(1f),
-            // A points balance is a liability, so its rupee value is the
-            // number an owner actually cares about.
-            footnote = "worth ${(state.totalPoints * MINOR_PER_POINT).asRupees()}",
-        )
-    }
-}
-
-@Composable
-private fun Tile(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    footnote: String? = null,
-) {
-    Column(
-        modifier
-            .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .padding(14.dp),
-    ) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            value,
-            style = MaterialTheme.typography.titleLarge,
-            color = Brand.Foreground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (footnote != null) {
-            Text(footnote, style = MaterialTheme.typography.labelSmall, color = Brand.GoldMuted)
-        }
-    }
-}
-
-@Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit, onClear: () -> Unit) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQuery,
-        singleLine = true,
-        label = { Text("Search by phone or name") },
-        placeholder = { Text("e.g. 98470 or Anand") },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                TextButton(onClick = onClear) { Text("Clear") }
-            }
         },
-        modifier = Modifier.fillMaxWidth(0.6f),
     )
 }
 
 @Composable
-private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
+private fun Totals(state: CustomersUiState) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val cards: @Composable RowScope.() -> Unit = {
+            CompactStatCard(
+                label = if (state.searching) "Matches" else "Customers",
+                value = state.rows.size.grouped(),
+                detail = if (state.searching) "Current search" else "Saved profiles",
+                icon = Icons.Default.People,
+                tone = UiTone.Information,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Total visits",
+                value = state.totalVisits.grouped(),
+                detail = "Current result set",
+                icon = Icons.Default.EventRepeat,
+                tone = UiTone.Success,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Total spend",
+                value = state.totalSpentMinor.asRupees(),
+                detail = "Current result set",
+                icon = Icons.Default.Payments,
+                tone = UiTone.Brand,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Points held",
+                value = state.totalPoints.grouped(),
+                detail = "Worth ${(state.totalPoints * MINOR_PER_POINT).asRupees()}",
+                icon = Icons.Default.Star,
+                tone = UiTone.Warning,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (maxWidth >= 760.dp) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), content = cards)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    CompactStatCard(
+                        label = if (state.searching) "Matches" else "Customers",
+                        value = state.rows.size.grouped(),
+                        detail = if (state.searching) "Current search" else "Saved profiles",
+                        icon = Icons.Default.People,
+                        tone = UiTone.Information,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactStatCard(
+                        label = "Total visits",
+                        value = state.totalVisits.grouped(),
+                        detail = "Current result set",
+                        icon = Icons.Default.EventRepeat,
+                        tone = UiTone.Success,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    CompactStatCard(
+                        label = "Total spend",
+                        value = state.totalSpentMinor.asRupees(),
+                        detail = "Current result set",
+                        icon = Icons.Default.Payments,
+                        tone = UiTone.Brand,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactStatCard(
+                        label = "Points held",
+                        value = state.totalPoints.grouped(),
+                        detail = "Worth ${(state.totalPoints * MINOR_PER_POINT).asRupees()}",
+                        icon = Icons.Default.Star,
+                        tone = UiTone.Warning,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
     }
 }
 
 @Composable
+private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
+    OperationalBanner(
+        title = "Customer update",
+        detail = message,
+        tone = UiTone.Information,
+        icon = Icons.Default.CheckCircle,
+        action = {
+            ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
+        },
+    )
+}
+
+@Composable
 private fun SyncFailedNotice(error: String?, canRetry: Boolean, onRetry: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.Danger, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text("Could not sync this customer", color = Brand.Danger, fontWeight = FontWeight.SemiBold)
-        Text(
-            error ?: "The server refused this save.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
-        )
-        OutlinedButton(onClick = onRetry, enabled = canRetry) { Text("Retry") }
-    }
+    OperationalBanner(
+        title = "Could not sync this customer",
+        detail = error ?: "The server refused this save.",
+        tone = UiTone.Danger,
+        icon = Icons.Default.ErrorOutline,
+        action = {
+            ErpButton(
+                text = "Retry",
+                onClick = onRetry,
+                intent = ActionIntent.Secondary,
+                enabled = canRetry,
+            )
+        },
+    )
 }
 
 // -------------------------------------------------------------------- list
 
 @Composable
-private fun CustomerList(state: CustomersUiState, vm: CustomersViewModel) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+private fun CustomerResultsPanel(
+    state: CustomersUiState,
+    vm: CustomersViewModel,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.clip(Radius.shapeLg).background(Brand.Surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
     ) {
-        items(state.rows, key = { it.id }) { customer ->
-            CustomerRow(
-                customer = customer,
-                selected = customer.id == state.selectedId,
-                onClick = { vm.select(customer) },
-            )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Customer results", color = Brand.Foreground, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (state.searching) {
+                        "${state.rows.size} match${if (state.rows.size == 1) "" else "es"} for “${state.query.trim()}”"
+                    } else {
+                        "${state.rows.size} saved profile${if (state.rows.size == 1) "" else "s"}"
+                    },
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (state.syncing) {
+                OperationalStatusBadge("Refreshing", UiTone.Information)
+            }
+        }
+        PanelDivider()
+        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+            items(state.rows, key = { it.id }) { customer ->
+                CustomerRow(
+                    customer = customer,
+                    selected = customer.id == state.selectedId,
+                    onClick = { vm.select(customer) },
+                )
+                if (customer.id != state.rows.lastOrNull()?.id) PanelDivider()
+            }
         }
     }
 }
 
 @Composable
 private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeMd)
-            .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
-            .border(
-                width = 1.dp,
-                color = if (selected) Brand.Gold else Brand.Border,
-                shape = Radius.shapeMd,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                customer.displayName,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                fontStyle = if (customer.name.isNullOrBlank()) FontStyle.Italic else FontStyle.Normal,
-                color = if (customer.name.isNullOrBlank()) Brand.ForegroundMuted else Brand.Foreground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (customer.isRejected) {
-                SyncStatusBadge("Sync failed", Brand.Danger)
-            } else if (customer.isPendingSync) {
-                SyncStatusBadge("Not synced", Brand.GoldMuted)
+    DataListRow(
+        modifier = Modifier
+            .background(if (selected) Brand.SurfaceHover else Brand.Surface)
+            .semantics { this.selected = selected },
+        onClick = onClick,
+        leading = {
+            Box(
+                Modifier.size(42.dp).clip(Radius.shapeMd)
+                    .background(if (selected) Brand.Gold.copy(alpha = 0.16f) else Brand.SurfaceRaised),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    customer.name?.trim()?.firstOrNull()?.uppercase() ?: "?",
+                    color = if (selected) Brand.Gold else Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
             }
-            RankBadge(customer.gamingRank)
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        },
+        content = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    customer.displayName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    fontStyle = if (customer.name.isNullOrBlank()) FontStyle.Italic else FontStyle.Normal,
+                    color = if (customer.name.isNullOrBlank()) Brand.ForegroundMuted else Brand.Foreground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                RankBadge(customer.gamingRank)
+            }
             Text(
                 customer.phone,
                 fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Brand.Foreground,
-            )
-            Text(
-                "${customer.visitCount.grouped()} visits",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = Brand.ForegroundMuted,
             )
-            Text(
-                customer.totalSpentMinor.asRupees(),
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                "${customer.loyaltyPoints.grouped()} pts · ${customer.loyaltyValueMinor.asRupees()}",
-                style = MaterialTheme.typography.labelLarge,
-                color = Brand.Gold,
-            )
-        }
-    }
+        },
+        trailing = {
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    "${customer.loyaltyPoints.grouped()} pts",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Brand.Gold,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "${customer.visitCount.grouped()} visits · ${customer.totalSpentMinor.asRupees()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                when {
+                    customer.isRejected -> OperationalStatusBadge("Sync failed", UiTone.Danger)
+                    customer.isPendingSync -> OperationalStatusBadge("Waiting to sync", UiTone.Warning)
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -433,20 +506,6 @@ private fun RankBadge(rank: String) {
     )
 }
 
-@Composable
-private fun SyncStatusBadge(label: String, colour: androidx.compose.ui.graphics.Color) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelSmall,
-        color = colour,
-        modifier = Modifier
-            .padding(end = 8.dp)
-            .clip(Radius.shapePill)
-            .border(1.dp, colour, Radius.shapePill)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    )
-}
-
 private fun rankColour(rank: String) = when (rank) {
     "Legend" -> Brand.Gold
     "Pro" -> Brand.Gold
@@ -458,21 +517,11 @@ private fun rankColour(rank: String) = when (rank) {
 
 @Composable
 private fun DetailPlaceholder() {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .padding(20.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("Pick a customer", color = Brand.Foreground, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Tap a row to see their visits, spend, points balance and gaming rank.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
+    SectionCard(Modifier.fillMaxSize()) {
+        DesignedEmptyState(
+            title = "Select a customer",
+            body = "Tap a result to review visits, spend, loyalty balance and contact details.",
+            icon = Icons.Default.AccountCircle,
         )
     }
 }
@@ -489,78 +538,123 @@ private fun DetailPane(
         Modifier
             .fillMaxSize()
             .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .padding(18.dp)
+            .background(Brand.BackgroundSecondary)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .padding(Spacing.md)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         if (onBack != null) {
-            TextButton(onClick = onBack) { Text("← All customers") }
+            ErpButton(
+                text = "All customers",
+                onClick = onBack,
+                intent = ActionIntent.Quiet,
+                leadingIcon = Icons.AutoMirrored.Filled.ArrowBack,
+            )
         }
 
-        Text(
-            customer.displayName,
-            style = MaterialTheme.typography.headlineMedium,
-            color = Brand.Foreground,
-        )
-        Text(
-            customer.phone,
-            fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodyLarge,
-            color = Brand.Gold,
-        )
+        SectionCard(
+            title = customer.displayName,
+            subtitle = customer.phone,
+            icon = Icons.Default.AccountCircle,
+            elevated = true,
+            action = {
+                ErpButton(
+                    text = "Edit",
+                    onClick = onEdit,
+                    intent = ActionIntent.Secondary,
+                    enabled = canWrite,
+                    leadingIcon = Icons.Default.Edit,
+                )
+            },
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RankBadge(customer.gamingRank)
+                when {
+                    customer.isRejected -> OperationalStatusBadge("Sync failed", UiTone.Danger)
+                    customer.isPendingSync -> OperationalStatusBadge("Waiting to sync", UiTone.Warning)
+                    else -> OperationalStatusBadge("Saved", UiTone.Success)
+                }
+            }
+        }
 
         if (customer.isRejected) {
             SyncFailedNotice(customer.rejectedError, canWrite, onRetrySync)
         } else if (customer.isPendingSync) {
-            Text(
-                "Not synced yet — will save the next time this tablet is online.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+            OperationalBanner(
+                title = "Waiting to sync",
+                detail = "This profile is saved on the tablet and will upload when the connection returns.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.CloudUpload,
             )
         }
 
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
-            Tile("Visits", customer.visitCount.grouped(), Modifier.weight(1f))
-            Tile("Spent", customer.totalSpentMinor.asRupees(), Modifier.weight(1f))
+            CompactStatCard(
+                label = "Visits",
+                value = customer.visitCount.grouped(),
+                icon = Icons.Default.EventRepeat,
+                tone = UiTone.Success,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Spent",
+                value = customer.totalSpentMinor.asRupees(),
+                icon = Icons.Default.Payments,
+                tone = UiTone.Brand,
+                modifier = Modifier.weight(1f),
+            )
         }
-        Tile(
+        CompactStatCard(
             label = "Points balance",
             value = "${customer.loyaltyPoints.grouped()} pts",
+            detail = "Redeemable for ${customer.loyaltyValueMinor.asRupees()} · 10 points = ₹1",
+            icon = Icons.Default.Star,
+            tone = UiTone.Warning,
             modifier = Modifier.fillMaxWidth(),
-            footnote = "redeemable for ${customer.loyaltyValueMinor.asRupees()} (10 pts = ₹1)",
         )
 
         RankCard(customer)
 
-        DetailLine("Last visit", customer.lastVisitLabel())
-        DetailLine("Birthday", customer.birthdayLabel())
-        DetailLine("Email", customer.email?.takeIf { it.isNotBlank() } ?: "—")
-        DetailLine("Notes", customer.notes?.takeIf { it.isNotBlank() } ?: "—")
-
-        Spacer(Modifier.height(4.dp))
-        Button(
-            onClick = onEdit,
-            enabled = canWrite,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+        SectionCard(
+            title = "Profile details",
+            subtitle = "Contact details and visit information.",
+            icon = Icons.Default.AccountCircle,
         ) {
-            Text("Edit customer")
+            InfoRow("Phone", customer.phone, icon = Icons.Default.Phone)
+            PanelDivider()
+            InfoRow(
+                "Email",
+                customer.email?.takeIf(String::isNotBlank) ?: "Not recorded",
+                icon = Icons.Default.Email,
+            )
+            PanelDivider()
+            InfoRow("Birthday", customer.birthdayLabel(), icon = Icons.Default.Cake)
+            PanelDivider()
+            InfoRow("Last visit", customer.lastVisitLabel(), icon = Icons.Default.EventRepeat)
+            PanelDivider()
+            InfoRow(
+                "Notes",
+                customer.notes?.takeIf(String::isNotBlank) ?: "No notes",
+            )
         }
     }
 }
 
 @Composable
 private fun RankCard(customer: Customer) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeMd)
-            .background(Brand.SurfaceRaised)
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        title = "Gaming loyalty",
+        subtitle = "Rank progress comes from lifetime gaming points.",
+        icon = Icons.Default.Star,
+        elevated = true,
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -602,30 +696,6 @@ private fun RankCard(customer: Customer) {
         } else {
             Text("Top rank reached", color = Brand.Gold, fontWeight = FontWeight.SemiBold)
         }
-    }
-}
-
-@Composable
-private fun DetailLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
-            modifier = Modifier.width(96.dp),
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
-    }
-}
-
-@Composable
-private fun CentredBlock(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.padding(24.dp).fillMaxWidth(0.7f),
-        ) { content() }
     }
 }
 
@@ -680,7 +750,7 @@ private fun EditorDialog(
                             "their points and visit history to the new number — it does not " +
                             "create a second customer.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Gold,
+                        color = Brand.Information,
                     )
                 }
 
@@ -754,15 +824,16 @@ private fun EditorDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.phoneValid) {
-                Text(
-                    when {
-                        saving -> "Saving…"
-                        editor.isNew -> "Create"
-                        else -> "Save"
-                    }
-                )
-            }
+            ErpButton(
+                text = when {
+                    saving -> "Saving…"
+                    editor.isNew -> "Create"
+                    else -> "Save"
+                },
+                onClick = onSave,
+                enabled = !saving && editor.phoneValid,
+                busy = saving,
+            )
         },
         dismissButton = {
             TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") }

@@ -177,16 +177,11 @@ fun Loading(modifier: Modifier = Modifier) = Box(modifier.fillMaxSize(), Alignme
 
 @Composable
 fun EmptyState(title: String, body: String, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            modifier = Modifier.width(420.dp).padding(Spacing.xl),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(body, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
+    DesignedEmptyState(
+        title = title,
+        body = body,
+        modifier = modifier.fillMaxSize(),
+    )
 }
 
 // ============================================================================
@@ -367,14 +362,14 @@ fun PrimaryButton(
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = Radius.shapePill,
+        shape = Radius.shapeMd,
         colors = ButtonDefaults.buttonColors(
             containerColor = Brand.Gold,
             contentColor = Brand.Background,
             disabledContainerColor = Brand.SurfaceRaised,
             disabledContentColor = Brand.ForegroundFaint,
         ),
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         content = content,
     )
 }

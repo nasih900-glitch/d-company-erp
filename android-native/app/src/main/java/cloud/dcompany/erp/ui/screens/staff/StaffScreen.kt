@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,8 +15,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -24,8 +27,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -46,8 +51,34 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.LockReset
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PersonOff
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SyncProblem
 import cloud.dcompany.erp.core.auth.StaffAccess
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
@@ -71,7 +102,10 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
     )
     val state by vm.state.collectAsState()
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         Header(
             loading = state.syncing,
             attendanceOnly = !state.canReadDirectory,
@@ -79,8 +113,10 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
             onRefresh = vm::retry,
             onAdd = vm::startCreateLogin,
         )
+        if (state.canReadDirectory) {
+            StaffSummary(state)
+        }
         if (state.canReadDirectory || state.canUseAttendance) {
-            Spacer(Modifier.height(14.dp))
             AttendanceCard(
                 state,
                 canClock = state.canUseAttendance,
@@ -89,63 +125,53 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
                 onDismissError = vm::dismissAttendanceError,
             )
         }
-        Spacer(Modifier.height(14.dp))
 
         state.notice?.takeIf { state.canManageDirectory }?.let {
             NoticeBanner(it, vm::dismissNotice)
-            Spacer(Modifier.height(10.dp))
         }
 
         when {
-            !state.canReadDirectory -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "Attendance access",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Brand.Foreground,
-                )
-                Text(
-                    "Your account can clock in and out, but it cannot view or manage staff logins.",
-                    color = Brand.ForegroundMuted,
+            !state.canReadDirectory -> SectionCard(Modifier.weight(1f), elevated = true) {
+                DesignedEmptyState(
+                    title = "Attendance access",
+                    body = "Your account can clock in and out, but it cannot view or manage staff logins.",
+                    icon = Icons.Default.AccessTime,
                 )
             }
 
-            state.loading -> CentredBlock {
-                CircularProgressIndicator(color = Brand.Gold)
-                Text("Loading staff…", color = Brand.ForegroundMuted)
-            }
-
-            state.couldNotLoad -> CentredBlock {
-                Text("Could not load staff", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                Text(
-                    "No staff cached on this tablet yet, and there's no connection right now to fetch them.",
-                    color = Brand.ForegroundMuted,
-                )
-                Button(onClick = vm::retry) { Text("Retry") }
-            }
-
-            state.rows.isEmpty() -> CentredBlock {
-                Text("No staff yet", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-                if (state.canManageDirectory) {
-                    Button(onClick = vm::startCreateLogin) { Text("Add staff") }
+            state.loading -> SectionCard(Modifier.weight(1f), elevated = true) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator(color = Brand.Gold)
+                        Text("Loading staff…", color = Brand.ForegroundMuted)
+                    }
                 }
             }
 
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(state.rows, key = { it.id }) { row ->
-                    StaffRowCard(
-                        row = row,
-                        onEdit = { vm.startEdit(row) },
-                        onDelete = { vm.startDelete(row) },
-                        onResetPassword = { vm.startPasswordReset(row) },
-                        onRetrySync = { vm.retrySync(row) },
-                        onCancelRemoval = { vm.cancelPendingRemoval(row) },
-                        canManage = state.canManageDirectory,
-                    )
-                }
+            state.couldNotLoad -> SectionCard(Modifier.weight(1f), elevated = true) {
+                DesignedEmptyState(
+                    title = "Could not load staff",
+                    body = "No staff is cached on this tablet yet. Check the connection and try again.",
+                    icon = Icons.Default.CloudOff,
+                    primaryLabel = "Retry",
+                    onPrimary = vm::retry,
+                )
             }
+
+            state.rows.isEmpty() -> SectionCard(Modifier.weight(1f), elevated = true) {
+                DesignedEmptyState(
+                    title = "No staff yet",
+                    body = "Create the first staff login and assign the role needed for daily operations.",
+                    icon = Icons.Default.Groups,
+                    primaryLabel = if (state.canManageDirectory) "Add staff" else null,
+                    onPrimary = if (state.canManageDirectory) vm::startCreateLogin else null,
+                )
+            }
+
+            else -> StaffDirectory(state, vm, Modifier.weight(1f))
         }
     }
 
@@ -172,7 +198,9 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
                     color = Brand.ForegroundMuted,
                 )
             },
-            confirmButton = { Button(onClick = vm::confirmDelete) { Text("Remove") } },
+            confirmButton = {
+                ErpButton("Remove", vm::confirmDelete, intent = ActionIntent.Destructive, leadingIcon = Icons.Default.Delete)
+            },
             dismissButton = { TextButton(onClick = vm::cancelDelete) { Text("Cancel") } },
             containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
@@ -222,25 +250,96 @@ private fun Header(
     onRefresh: () -> Unit,
     onAdd: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("Staff", style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
-            Text(
-                if (attendanceOnly) "Clock in, clock out, and see who's on shift" else "Logins, roles, and attendance",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+    PageHeader(
+        title = "Staff",
+        subtitle = if (attendanceOnly) {
+            "Clock in, clock out, and see who is working now"
+        } else {
+            "Staff logins, roles, account status, and attendance"
+        },
+        eyebrow = "People & access",
+        actions = {
+            ErpButton(
+                text = if (loading) "Refreshing" else "Refresh",
+                onClick = onRefresh,
+                enabled = !loading,
+                busy = loading,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.Refresh,
             )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefresh, enabled = !loading) { Text("Refresh") }
-            if (canManage) Button(onClick = onAdd) { Text("Add staff") }
+            if (canManage) {
+                ErpButton("Add staff", onAdd, leadingIcon = Icons.Default.Add)
+            }
+        },
+    )
+}
+
+@Composable
+private fun StaffSummary(state: StaffUiState) {
+    val active = state.rows.count { it.status.equals("active", ignoreCase = true) }
+    val suspended = state.rows.count { it.status.equals("suspended", ignoreCase = true) }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 760.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StaffTotalMetric(state.rows.size, Modifier.weight(1f))
+                    StaffActiveMetric(active, Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StaffOnShiftMetric(state.onShift.size, Modifier.weight(1f))
+                    StaffSuspendedMetric(suspended, Modifier.weight(1f))
+                }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StaffTotalMetric(state.rows.size, Modifier.weight(1f))
+                StaffActiveMetric(active, Modifier.weight(1f))
+                StaffOnShiftMetric(state.onShift.size, Modifier.weight(1f))
+                StaffSuspendedMetric(suspended, Modifier.weight(1f))
+            }
         }
     }
 }
+
+@Composable
+private fun StaffTotalMetric(count: Int, modifier: Modifier) = CompactStatCard(
+    label = "Directory",
+    value = count.toString(),
+    detail = "Staff logins",
+    icon = Icons.Default.Groups,
+    tone = UiTone.Information,
+    modifier = modifier,
+)
+
+@Composable
+private fun StaffActiveMetric(count: Int, modifier: Modifier) = CompactStatCard(
+    label = "Active accounts",
+    value = count.toString(),
+    detail = "Can sign in",
+    icon = Icons.Default.CheckCircle,
+    tone = UiTone.Success,
+    modifier = modifier,
+)
+
+@Composable
+private fun StaffOnShiftMetric(count: Int, modifier: Modifier) = CompactStatCard(
+    label = "On shift",
+    value = count.toString(),
+    detail = "Clocked in now",
+    icon = Icons.Default.AccessTime,
+    tone = if (count > 0) UiTone.Brand else UiTone.Neutral,
+    modifier = modifier,
+)
+
+@Composable
+private fun StaffSuspendedMetric(count: Int, modifier: Modifier) = CompactStatCard(
+    label = "Suspended",
+    value = count.toString(),
+    detail = "Access disabled",
+    icon = Icons.Default.PersonOff,
+    tone = if (count > 0) UiTone.Warning else UiTone.Neutral,
+    modifier = modifier,
+)
 
 // -------------------------------------------------------------- attendance
 
@@ -252,48 +351,55 @@ private fun AttendanceCard(
     onClockOut: () -> Unit,
     onDismissError: () -> Unit,
 ) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .padding(14.dp),
-    ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Attendance", style = MaterialTheme.typography.titleMedium, color = Brand.Foreground)
-            if (canClock) {
-                Button(
+    SectionCard(
+        title = "Attendance",
+        subtitle = if (state.clockedIn) "You are clocked in" else "Current attendance at this branch",
+        icon = Icons.Default.AccessTime,
+        action = if (!canClock) null else {
+            {
+                ErpButton(
+                    text = if (state.clockedIn) "Clock out" else "Clock in",
                     onClick = if (state.clockedIn) onClockOut else onClockIn,
                     enabled = !state.clockingInOrOut,
-                ) { Text(if (state.clockedIn) "Clock out" else "Clock in") }
+                    busy = state.clockingInOrOut,
+                    intent = if (state.clockedIn) ActionIntent.Secondary else ActionIntent.Success,
+                    leadingIcon = Icons.Default.AccessTime,
+                )
             }
-        }
+        },
+        contentPadding = PaddingValues(12.dp),
+    ) {
         state.attendanceError?.let {
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(it, color = Brand.Danger, modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismissError) { Text("Dismiss") }
-            }
+            OperationalBanner(
+                title = "Attendance action failed",
+                detail = it,
+                tone = UiTone.Danger,
+                icon = Icons.Default.SyncProblem,
+                action = { TextButton(onClick = onDismissError) { Text("Dismiss") } },
+            )
         }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "On shift now (${state.onShift.size})",
-            style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
-        )
-        if (state.onShift.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                state.onShift.forEach { row ->
-                    Text(
-                        "${row.userName ?: row.userEmail ?: "Unknown"} · since ${formatClockInTime(row.clockInAt)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Brand.Foreground,
-                        modifier = Modifier
-                            .clip(Radius.shapeXl)
-                            .background(Brand.SurfaceRaised)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
+        if (state.onShift.isEmpty()) {
+            Text("No staff are clocked in at this branch.", color = Brand.ForegroundMuted)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(state.onShift, key = { it.id }) { row ->
+                    Column(
+                        Modifier.width(220.dp).clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            row.userName ?: row.userEmail ?: "Unknown staff",
+                            color = Brand.Foreground,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                        Text(
+                            "Clocked in at ${formatClockInTime(row.clockInAt)}",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
             }
         }
@@ -301,6 +407,59 @@ private fun AttendanceCard(
 }
 
 // --------------------------------------------------------------------- row
+
+@Composable
+private fun StaffDirectory(state: StaffUiState, vm: StaffViewModel, modifier: Modifier = Modifier) {
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.rows, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) state.rows else state.rows.filter { row ->
+            row.name.contains(needle, ignoreCase = true) ||
+                row.email.contains(needle, ignoreCase = true) ||
+                row.phone.orEmpty().contains(needle, ignoreCase = true) ||
+                row.roles.any { it.contains(needle, ignoreCase = true) }
+        }
+    }
+
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search staff, email, phone, or role",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SectionCard(
+            modifier = Modifier.weight(1f),
+            title = "Staff directory",
+            subtitle = "${filtered.size} result${if (filtered.size == 1) "" else "s"} · roles and account access",
+            icon = Icons.Default.Badge,
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            if (filtered.isEmpty()) {
+                DesignedEmptyState(
+                    title = "No matching staff",
+                    body = "Try another name, email, phone number, or role.",
+                    icon = Icons.Default.Groups,
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    itemsIndexed(filtered, key = { _, row -> row.id }) { index, row ->
+                        StaffRowCard(
+                            row = row,
+                            onEdit = { vm.startEdit(row) },
+                            onDelete = { vm.startDelete(row) },
+                            onResetPassword = { vm.startPasswordReset(row) },
+                            onRetrySync = { vm.retrySync(row) },
+                            onCancelRemoval = { vm.cancelPendingRemoval(row) },
+                            canManage = state.canManageDirectory,
+                        )
+                        if (index < filtered.lastIndex) PanelDivider()
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun StaffRowCard(
@@ -312,41 +471,68 @@ private fun StaffRowCard(
     onCancelRemoval: () -> Unit,
     canManage: Boolean,
 ) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeMd)
-            .background(Brand.Surface)
-            .padding(14.dp),
-    ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+    val statusTone = when {
+        row.rejectedError != null -> UiTone.Danger
+        row.pendingDelete || row.pendingLocalId != null -> UiTone.Warning
+        row.status.equals("active", ignoreCase = true) -> UiTone.Success
+        row.status.equals("suspended", ignoreCase = true) -> UiTone.Warning
+        else -> UiTone.Neutral
+    }
+    val statusLabel = when {
+        row.rejectedError != null -> "Sync issue"
+        row.pendingDelete -> "Removal pending"
+        row.pendingLocalId != null -> "Pending sync"
+        else -> row.status.ifBlank { "Unknown" }
+    }
+
+    Column(Modifier.fillMaxWidth().background(Brand.Surface)) {
+        DataListRow(
+            content = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.name, style = MaterialTheme.typography.titleMedium, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        row.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Brand.Foreground,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     if (row.isSelf) {
                         Spacer(Modifier.width(6.dp))
                         Text("(you)", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
                     }
                 }
                 Text(
-                    "${row.email} · ${row.roles.joinToString(", ").ifBlank { "no role" }} · ${row.status}",
+                    row.email,
                     style = MaterialTheme.typography.bodySmall,
                     color = Brand.ForegroundMuted,
                 )
-                row.phone?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = Brand.ForegroundMuted)
+                Text(
+                    row.phone?.let { "$it · ${row.roles.joinToString(", ").ifBlank { "No role" }}" }
+                        ?: row.roles.joinToString(", ").ifBlank { "No role assigned" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            },
+            trailing = {
+                OperationalStatusBadge(
+                    statusLabel,
+                    statusTone,
+                    icon = when (statusTone) {
+                        UiTone.Success -> Icons.Default.CheckCircle
+                        UiTone.Danger -> Icons.Default.SyncProblem
+                        else -> Icons.Default.PersonOff
+                    },
+                )
+                if (canManage && !row.pendingDelete) {
+                    ErpButton("Edit", onEdit, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Edit)
+                    StaffActionsMenu(row.isSelf, onResetPassword, onDelete)
                 }
-            }
-            if (canManage && !row.pendingDelete) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = onResetPassword) { Text("Password") }
-                    TextButton(onClick = onEdit) { Text("Edit") }
-                    if (!row.isSelf) TextButton(onClick = onDelete) { Text("Remove") }
-                }
-            }
-        }
+            },
+        )
         if (canManage && row.pendingDelete) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 Text(
                     "Pending removal — will sync when back online",
                     color = Brand.GoldMuted,
@@ -355,13 +541,11 @@ private fun StaffRowCard(
                 )
                 TextButton(onClick = onCancelRemoval) { Text("Cancel") }
             }
-        } else if (canManage && row.pendingLocalId != null) {
-            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
         } else if (canManage && row.rejectedError != null) {
-            Spacer(Modifier.height(6.dp))
             Column(
                 Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
                     .clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised)
                     .border(1.dp, Brand.Danger, Radius.shapeSm)
@@ -379,6 +563,37 @@ private fun StaffRowCard(
                         TextButton(onClick = onCancelRemoval) { Text("Cancel removal") }
                     }
                 }
+            }
+        } else if (canManage && row.pendingLocalId != null) {
+            Text(
+                "Not synced yet",
+                color = Brand.GoldMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StaffActionsMenu(isSelf: Boolean, onResetPassword: () -> Unit, onDelete: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More staff actions", tint = Brand.ForegroundMuted)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Reset password") },
+                leadingIcon = { Icon(Icons.Default.LockReset, contentDescription = null) },
+                onClick = { expanded = false; onResetPassword() },
+            )
+            if (!isSelf) {
+                DropdownMenuItem(
+                    text = { Text("Remove staff", color = Brand.Danger) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                    onClick = { expanded = false; onDelete() },
+                )
             }
         }
     }
@@ -461,7 +676,7 @@ private fun RoleDropdown(roles: List<StaffRole>, selectedCode: String, onSelect:
             readOnly = true,
             label = { Text("Role") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             roles.forEach { r ->
@@ -649,18 +864,13 @@ private fun PasswordResetDialog(
 
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
-    }
+    OperationalBanner(
+        title = "Staff updated",
+        detail = message,
+        tone = UiTone.Information,
+        icon = Icons.Default.CheckCircle,
+        action = { TextButton(onClick = onDismiss) { Text("Dismiss") } },
+    )
 }
 
 /**

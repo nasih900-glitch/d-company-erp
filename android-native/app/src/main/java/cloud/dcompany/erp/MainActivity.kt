@@ -18,12 +18,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -84,7 +81,6 @@ import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
 import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
-import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
 
 class MainActivity : ComponentActivity() {
@@ -298,55 +294,26 @@ private fun AppRoot(
                     requiresTill = requiresTill,
                     activeTerminal = activeTerminal,
                 )
-                Scaffold(
-                containerColor = Brand.Background,
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                Text(
-                                    "${visibleDestination.label} · ${s.me.name}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    locationLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
-                                    maxLines = 1,
-                                )
-                            }
-                        },
-                        actions = {
-                            if (s.me.protectedAccess && requiresTill) {
-                                TextButton(onClick = session::requestTerminalReassignment) {
-                                    Text("Change till")
-                                }
-                            }
-                            TextButton(onClick = { confirmSignOut = true }) { Text("Sign out") }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = Brand.Surface,
-                            titleContentColor = Brand.Foreground,
-                        ),
-                    )
-                },
-                ) { padding ->
-                    Box(Modifier.padding(padding)) {
-                        WorkspaceScaffold(
-                            header = { SyncAvailabilityBanner(syncAvailability) },
-                            destinations = destinations,
-                            currentDestination = visibleDestination,
-                            onDestinationChanged = {
-                                currentDestination = it
-                                val focusDestination = when (operationalFocus?.destination) {
-                                    OperationalNotificationDestination.POS -> Destination.Pos
-                                    OperationalNotificationDestination.GAMING -> Destination.Gaming
-                                    null -> null
-                                }
-                                if (focusDestination != it) operationalFocus = null
-                            },
-                        ) { destination, navigateTo ->
-                            when (destination) {
+                WorkspaceScaffold(
+                    destinations = destinations,
+                    currentDestination = visibleDestination,
+                    employeeName = s.me.name,
+                    locationLabel = locationLabel,
+                    connectivityProblem = syncAvailability,
+                    canChangeTill = s.me.protectedAccess && requiresTill,
+                    onChangeTill = session::requestTerminalReassignment,
+                    onSignOut = { confirmSignOut = true },
+                    onDestinationChanged = {
+                        currentDestination = it
+                        val focusDestination = when (operationalFocus?.destination) {
+                            OperationalNotificationDestination.POS -> Destination.Pos
+                            OperationalNotificationDestination.GAMING -> Destination.Gaming
+                            null -> null
+                        }
+                        if (focusDestination != it) operationalFocus = null
+                    },
+                ) { destination, navigateTo ->
+                    when (destination) {
                             Destination.Pos -> {
                                 // Constructing a feature ViewModel starts its
                                 // initial API pulls. Keep it inside its allowed
@@ -435,8 +402,6 @@ private fun AppRoot(
                             Destination.Settings -> SettingsScreen(
                                 canManageSystem = s.me.auditAccess,
                             )
-                            }
-                        }
                     }
                 }
 

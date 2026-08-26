@@ -21,7 +21,7 @@ import cloud.dcompany.erp.core.net.BackendReachability
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Spacing
 
-internal enum class SyncAvailabilityProblem {
+enum class SyncAvailabilityProblem {
     NONE,
     NO_NETWORK,
     SERVER_UNREACHABLE,

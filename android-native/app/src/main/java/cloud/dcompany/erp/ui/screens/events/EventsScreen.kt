@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +33,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Celebration
+import androidx.compose.material.icons.filled.ConfirmationNumber
+import androidx.compose.material.icons.filled.EventAvailable
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -57,8 +64,17 @@ import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 
 /**
  * Events — a hybrid of Menu's shape (CRUD header entity behind a pricing
@@ -76,60 +92,63 @@ fun EventsScreen(access: EventsAccess = EventsAccess()) {
 
 @Composable
 private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
         Header(state, vm, access)
 
         if (!access.canManageEvents) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                ViewOnlyNotice(
-                    if (access.canCheckInTickets) {
-                        "Event scheduling is view only — you can still check in existing tickets."
-                    } else {
-                        "Events are view only — ask a manager if an event action is required."
-                    },
-                )
-            }
+            ViewOnlyNotice(
+                if (access.canCheckInTickets) {
+                    "Event scheduling is view only — you can still check in existing tickets."
+                } else {
+                    "Events are view only — ask a manager if an event action is required."
+                },
+            )
         } else if (!access.canCheckInTickets) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                ViewOnlyNotice("Ticket check-in is view only for this account.")
-            }
+            ViewOnlyNotice("Ticket check-in is view only for this account.")
         }
 
         if (state.notice != null) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                NoticeBanner(state.notice, vm::dismissNotice)
-            }
+            NoticeBanner(state.notice, vm::dismissNotice)
+        }
+        if (state.formError != null && state.dialog == null) {
+            ActionErrorBanner(state.formError, vm::dismissFormError)
         }
         if (state.couldNotLoad != null && state.events.isEmpty()) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                ErrorBanner(state.couldNotLoad, vm::retry)
-            }
+            ErrorBanner(state.couldNotLoad, vm::retry)
         }
         if (state.pendingTicketSales.isNotEmpty() || state.pendingCheckIns.isNotEmpty()) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                PendingEventChangesPanel(state, vm, access)
-            }
+            PendingEventChangesPanel(state, vm, access)
+        }
+
+        if (state.everSynced || state.events.isNotEmpty()) {
+            EventsSummary(state)
         }
 
         when {
             !state.everSynced && state.events.isEmpty() && state.couldNotLoad == null ->
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        CircularProgressIndicator(color = Brand.Gold)
-                        Text("Loading events…", color = Brand.ForegroundMuted)
+                SectionCard(
+                    modifier = Modifier.weight(1f),
+                    title = "Event schedule",
+                    subtitle = "Screenings, tournaments and ticket availability",
+                    icon = Icons.Default.Celebration,
+                ) {
+                    Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                        ) {
+                            CircularProgressIndicator(color = Brand.Gold)
+                            Text("Loading events…", color = Brand.ForegroundMuted)
+                        }
                     }
                 }
 
-            state.events.isEmpty() -> EmptyBlock(
-                title = "No events yet",
-                body = "Football/cricket screenings, movie nights, esports tournaments — " +
-                    "create one to start selling tickets.",
-            )
+            state.events.isEmpty() -> EventsEmptyPanel(state, vm, access, Modifier.weight(1f))
 
-            else -> EventsList(state, vm, access)
+            else -> EventsList(state, vm, access, Modifier.weight(1f))
         }
 
         when (val dialog = state.dialog) {
@@ -153,6 +172,23 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: Eve
                 onConfirm = { vm.deleteEvent(dialog.event) },
                 onDismiss = vm::closeDialog,
             )
+            is EventsDialog.ConfirmCancel -> if (access.canManageEvents) ConfirmDialog(
+                title = "Cancel ${dialog.event.name}?",
+                body = buildString {
+                    append("The event will stop accepting tickets and remain in event history. ")
+                    if (dialog.event.sold > 0) {
+                        append("Its ${dialog.event.sold} sold ticket")
+                        if (dialog.event.sold != 1) append("s")
+                        append(" will be preserved for check-in and reconciliation. ")
+                    }
+                    append("This does not issue refunds automatically.")
+                },
+                confirmLabel = "Cancel event",
+                busy = state.busy,
+                error = state.formError,
+                onConfirm = { vm.setEventStatus(dialog.event, "cancelled") },
+                onDismiss = vm::closeDialog,
+            )
             null -> {}
         }
         if (state.showPricingUnlock && access.canManageEvents) {
@@ -163,29 +199,28 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: Eve
 
 @Composable
 private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
-    Column {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Events", style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
-                Text(
-                    "Screenings · event scheduling · existing ticket check-in",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        PageHeader(
+            title = "Events",
+            subtitle = "Schedule screenings and tournaments, monitor capacity, and check in existing tickets.",
+            eyebrow = "Experiences & ticketing",
+            actions = {
+                ErpButton(
+                    text = if (state.syncing) "Refreshing…" else "Refresh",
+                    onClick = vm::retry,
+                    intent = ActionIntent.Secondary,
+                    enabled = !state.syncing,
+                    busy = state.syncing,
+                    leadingIcon = Icons.Default.Refresh,
                 )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = vm::retry, enabled = !state.syncing) {
-                    Text(if (state.syncing) "Refreshing…" else "Refresh")
-                }
-                Button(onClick = vm::openCreateForm, enabled = access.canManageEvents) {
-                    Text("New event")
-                }
-            }
-        }
+                ErpButton(
+                    text = "New event",
+                    onClick = vm::openCreateForm,
+                    enabled = access.canManageEvents,
+                    leadingIcon = Icons.Default.Add,
+                )
+            },
+        )
         if (state.syncing) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
@@ -196,23 +231,106 @@ private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAcce
     }
 }
 
+@Composable
+private fun EventsSummary(state: EventsUiState) {
+    val soldTickets = state.events.sumOf { it.sold }
+    val pendingChanges = state.pendingTicketSales.size + state.pendingCheckIns.size
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+        CompactStatCard(
+            label = "Upcoming",
+            value = state.upcoming.size.toString(),
+            detail = "Scheduled or live",
+            icon = Icons.Default.EventAvailable,
+            tone = UiTone.Information,
+            modifier = Modifier.weight(1f),
+        )
+        CompactStatCard(
+            label = "Live now",
+            value = state.events.count { it.status == "live" }.toString(),
+            detail = "Accepting check-ins",
+            icon = Icons.Default.Schedule,
+            tone = UiTone.Success,
+            modifier = Modifier.weight(1f),
+        )
+        CompactStatCard(
+            label = "Tickets sold",
+            value = soldTickets.toString(),
+            detail = "Across saved events",
+            icon = Icons.Default.ConfirmationNumber,
+            tone = UiTone.Brand,
+            modifier = Modifier.weight(1f),
+        )
+        CompactStatCard(
+            label = "Pending sync",
+            value = pendingChanges.toString(),
+            detail = "Sales and check-ins",
+            icon = Icons.Default.SyncProblem,
+            tone = if (pendingChanges > 0) UiTone.Warning else UiTone.Neutral,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun EventsEmptyPanel(
+    state: EventsUiState,
+    vm: EventsViewModel,
+    access: EventsAccess,
+    modifier: Modifier = Modifier,
+) {
+    SectionCard(
+        modifier = modifier,
+        title = "Event schedule",
+        subtitle = "Screenings, tournaments and ticket availability",
+        icon = Icons.Default.Celebration,
+    ) {
+        DesignedEmptyState(
+            title = if (state.couldNotLoad != null) "No saved events available" else "No events yet",
+            body = if (state.couldNotLoad != null) {
+                "This tablet has no cached events and the latest refresh could not complete. Check the connection and retry."
+            } else {
+                "Create a football or cricket screening, movie night, or esports tournament when the schedule is ready."
+            },
+            icon = Icons.Default.Celebration,
+            primaryLabel = if (state.couldNotLoad != null) "Retry" else "New event".takeIf { access.canManageEvents },
+            onPrimary = if (state.couldNotLoad != null) vm::retry else (vm::openCreateForm).takeIf { access.canManageEvents },
+            secondaryLabel = "Refresh".takeIf { state.couldNotLoad == null },
+            onSecondary = (vm::retry).takeIf { state.couldNotLoad == null },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 // ============================================================================
 // LIST
 // ============================================================================
 @Composable
-private fun EventsList(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+private fun EventsList(
+    state: EventsUiState,
+    vm: EventsViewModel,
+    access: EventsAccess,
+    modifier: Modifier = Modifier,
+) {
+    SectionCard(
+        modifier = modifier,
+        title = "Event schedule",
+        subtitle = "${state.upcoming.size} upcoming · ${state.past.size} past or cancelled",
+        icon = Icons.Default.Celebration,
+        contentPadding = PaddingValues(0.dp),
     ) {
-        if (state.upcoming.isNotEmpty()) {
-            item { SectionTitle("Upcoming") }
-            items(state.upcoming, key = { it.id }) { event -> EventCard(event, vm, access) }
-        }
-        if (state.past.isNotEmpty()) {
-            item { SectionTitle("Past / cancelled") }
-            items(state.past, key = { it.id }) { event -> EventCard(event, vm, access) }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            if (state.upcoming.isNotEmpty()) {
+                item { SectionTitle("Upcoming") }
+                items(state.upcoming, key = { it.id }) { event -> EventCard(event, vm, access) }
+            }
+            if (state.past.isNotEmpty()) {
+                item { SectionTitle("Past / cancelled") }
+                items(state.past, key = { it.id }) { event -> EventCard(event, vm, access) }
+            }
         }
     }
 }
@@ -225,7 +343,7 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
         soldFraction >= 0.6f -> Brand.Gold
         else -> Brand.Good
     }
-    Panel {
+    SectionCard(elevated = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -240,7 +358,10 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
                     Spacer(Modifier.width(8.dp))
                     Chip(eventTypeLabel(event.eventType), Brand.SurfaceRaised)
                     Spacer(Modifier.width(6.dp))
-                    Chip(eventStatusLabel(event.status), statusColor(event.status))
+                    OperationalStatusBadge(
+                        label = eventStatusLabel(event.status),
+                        tone = eventStatusTone(event.status),
+                    )
                 }
                 Text(
                     "${event.startsAt.asDay()} · ${event.screen}",
@@ -285,7 +406,7 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
             }
             if (event.status in setOf("scheduled", "live")) {
                 TextButton(
-                    onClick = { vm.setEventStatus(event, "cancelled") },
+                    onClick = { vm.openConfirmCancel(event) },
                     enabled = access.canManageEvents,
                 ) {
                     Text("Cancel", color = Brand.Danger)
@@ -310,6 +431,22 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
 }
 
 @Composable
+private fun ActionErrorBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.DangerMuted)
+            .border(1.dp, Brand.Danger, Radius.shapeMd).padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Event action not completed", color = Brand.Danger, fontWeight = FontWeight.Bold)
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
+        }
+        TextButton(onClick = onDismiss) { Text("Dismiss") }
+    }
+}
+
+@Composable
 private fun Chip(text: String, color: Color) {
     Text(
         text,
@@ -319,10 +456,11 @@ private fun Chip(text: String, color: Color) {
     )
 }
 
-private fun statusColor(status: String): Color = when (status) {
-    "live" -> Brand.Good
-    "cancelled" -> Brand.Danger
-    else -> Brand.SurfaceRaised
+private fun eventStatusTone(status: String): UiTone = when (status) {
+    "live" -> UiTone.Success
+    "cancelled" -> UiTone.Danger
+    "ended" -> UiTone.Neutral
+    else -> UiTone.Information
 }
 
 // ============================================================================
@@ -414,20 +552,6 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
             Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
         }
         Button(onClick = onRetry) { Text("Retry") }
-    }
-}
-
-@Composable
-private fun EmptyBlock(title: String, body: String) {
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            modifier = Modifier.width(420.dp).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(body, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
-        }
     }
 }
 
@@ -665,14 +789,6 @@ private fun TicketRow(
 // Finance, now Events); a future cleanup could promote these to a shared
 // ui/components/FormPrimitives.kt, per Inventory/Finance's own class docs.
 // ============================================================================
-@Composable
-private fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
-        content = content,
-    )
-}
-
 @Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 2.dp))

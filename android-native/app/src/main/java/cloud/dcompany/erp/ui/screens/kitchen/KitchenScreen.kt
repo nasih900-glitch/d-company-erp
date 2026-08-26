@@ -21,15 +21,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -60,9 +68,20 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.KitchenAccess
 import cloud.dcompany.erp.core.db.LocalKitchenAdvanceEntity
 import cloud.dcompany.erp.core.db.LocalKitchenCancellationAckEntity
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -126,103 +145,150 @@ fun KitchenScreen(
         if (!access.canAdvanceTickets) ViewOnlyNotice()
 
         state.notice?.let { message ->
-            Banner(message, Brand.Good, "Dismiss", vm::dismissNotice)
+            KitchenBanner(
+                title = "Kitchen update saved",
+                detail = message,
+                tone = UiTone.Success,
+                icon = Icons.Default.CheckCircle,
+                actionLabel = "Dismiss",
+                onAction = vm::dismissNotice,
+            )
         }
 
         // With tickets on screen an error is a banner, never a takeover.
         state.error?.let { message ->
             if (state.orders.isNotEmpty()) {
-                Banner(message, Brand.Danger, "Dismiss", vm::dismissError)
+                KitchenBanner(
+                    title = "Kitchen action needs attention",
+                    detail = message,
+                    tone = UiTone.Danger,
+                    icon = Icons.Default.ErrorOutline,
+                    actionLabel = "Dismiss",
+                    onAction = vm::dismissError,
+                )
             }
         }
         state.refreshError?.let { message ->
             if (state.orders.isNotEmpty()) {
-                Banner(message, Brand.Danger, "Retry", vm::retry)
+                KitchenBanner(
+                    title = "Kitchen queue may be out of date",
+                    detail = message,
+                    tone = UiTone.Danger,
+                    icon = Icons.Default.ErrorOutline,
+                    actionLabel = "Retry",
+                    onAction = vm::retry,
+                )
             }
         }
-        if (
-            state.error == null && state.refreshError == null &&
-            state.stale && state.orders.isNotEmpty()
-        ) {
-            Banner(
-                "Not updating — this board may be out of date.",
-                Brand.GoldMuted,
-                "Retry",
-                vm::retry,
+        if (shouldShowKitchenStaleWarning(state)) {
+            KitchenBanner(
+                title = "Kitchen queue is not updating",
+                detail = if (state.orders.isEmpty()) {
+                    "No tickets are cached, but the last successful update is old. Retry before treating the board as clear."
+                } else {
+                    "The visible tickets are saved locally, but this board may be out of date."
+                },
+                tone = UiTone.Warning,
+                icon = Icons.Default.Schedule,
+                actionLabel = "Retry",
+                onAction = vm::retry,
             )
         }
         if (state.rejectedAdvances.isNotEmpty()) {
             val count = state.rejectedAdvances.size
-            Banner(
-                if (count == 1) {
+            KitchenBanner(
+                title = "Kitchen updates need review",
+                detail = if (count == 1) {
                     "1 kitchen update needs review before this account can sign out."
                 } else {
                     "$count kitchen updates need review before this account can sign out."
                 },
-                Brand.Danger,
-                "Review",
-                { showRecovery = true },
+                tone = UiTone.Danger,
+                icon = Icons.Default.ErrorOutline,
+                actionLabel = "Review",
+                onAction = { showRecovery = true },
             )
         } else if (state.pendingAdvances.isNotEmpty()) {
             val count = state.pendingAdvances.size
-            Banner(
-                if (count == 1) {
+            KitchenBanner(
+                title = "Kitchen updates are waiting to sync",
+                detail = if (count == 1) {
                     "1 kitchen update is saved and waiting for server confirmation."
                 } else {
                     "$count kitchen updates are saved and waiting for server confirmation."
                 },
-                Brand.GoldMuted,
-                "Sync now",
-                vm::syncSavedAdvances,
+                tone = UiTone.Warning,
+                icon = Icons.Default.Schedule,
+                actionLabel = "Sync now",
+                onAction = vm::syncSavedAdvances,
             )
         }
         if (state.rejectedCancellationAcks.isNotEmpty()) {
-            Banner(
-                "${state.rejectedCancellationAcks.size} cancellation acknowledgement(s) need review.",
-                Brand.Danger,
-                "Review",
-                { showCancellationRecovery = true },
+            KitchenBanner(
+                title = "Cancellation acknowledgements need review",
+                detail = "${state.rejectedCancellationAcks.size} acknowledgement(s) were not accepted by the server.",
+                tone = UiTone.Danger,
+                icon = Icons.Default.ErrorOutline,
+                actionLabel = "Review",
+                onAction = { showCancellationRecovery = true },
             )
         } else if (state.pendingCancellationAcks.isNotEmpty()) {
-            Banner(
-                "${state.pendingCancellationAcks.size} cancellation acknowledgement(s) saved and syncing.",
-                Brand.GoldMuted,
-                "Sync now",
-                vm::syncSavedAdvances,
+            KitchenBanner(
+                title = "Cancellation acknowledgements are syncing",
+                detail = "${state.pendingCancellationAcks.size} acknowledgement(s) remain highlighted until confirmed.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.Schedule,
+                actionLabel = "Sync now",
+                onAction = vm::syncSavedAdvances,
             )
         }
 
         when {
             !state.everSynced && state.orders.isEmpty() && state.blockingLoadError == null ->
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator(color = Brand.Gold)
-                }
+                KitchenEmptyBoard(
+                    title = "Connecting to the kitchen queue",
+                    body = "This tablet is downloading the live preparation queue. Retry is safe and does not change any ticket.",
+                    actionLabel = "Check now",
+                    onAction = vm::retry,
+                    modifier = Modifier.weight(1f),
+                )
 
             state.blockingLoadError != null && state.orders.isEmpty() ->
-                CentredMessage(
+                KitchenEmptyBoard(
                     title = "Cannot load the kitchen queue",
                     body = state.blockingLoadError!!,
                     actionLabel = "Retry",
                     onAction = vm::retry,
+                    modifier = Modifier.weight(1f),
                 )
 
-            state.orders.isEmpty() -> CentredMessage(
-                title = if (state.includeServed) "Nothing served yet today" else "Board is clear",
-                body = if (state.includeServed) {
+            state.orders.isEmpty() -> KitchenEmptyBoard(
+                title = when {
+                    state.stale -> "No cached tickets — live status unverified"
+                    state.includeServed -> "Nothing served yet today"
+                    else -> "Board is clear"
+                },
+                body = when {
+                    state.stale -> "The last successful update is old. Use Check now before assuming no new orders are waiting."
+                    state.includeServed -> {
                     "Tickets the kitchen finishes today will be listed here."
-                } else {
+                    }
+                    else -> {
                     "No tickets waiting. New orders from the till appear here on their " +
                         "own within a few seconds — nothing to do until then."
+                    }
                 },
                 actionLabel = "Check now",
                 onAction = vm::retry,
+                modifier = Modifier.weight(1f),
             )
 
-            else -> Board(
+            else -> KitchenBoardShell(
                 state = state,
                 canAdvance = access.canAdvanceTickets,
                 onAdvance = vm::advance,
                 onAcknowledgeCancellation = vm::acknowledgeCancellation,
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -272,6 +338,13 @@ fun KitchenScreen(
     }
 }
 
+/** A stale empty board is still stale. Keeping this policy outside Compose
+ * prevents a future visual cleanup from restoring the dangerous old
+ * `orders.isNotEmpty()` condition. Explicit refresh/action errors already
+ * communicate the outage, so they suppress the duplicate warning. */
+internal fun shouldShowKitchenStaleWarning(state: KitchenUiState): Boolean =
+    state.error == null && state.refreshError == null && state.stale
+
 /**
  * A kitchen board that has dimmed itself is useless, and a cook with wet or
  * gloved hands should not have to wake it. Held only while this screen is on
@@ -304,101 +377,198 @@ private fun KitchenHeader(
     onRefresh: () -> Unit,
     onExit: () -> Unit,
 ) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Brand.Surface)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    BoxWithConstraints(
+        Modifier.fillMaxWidth().background(Brand.Surface)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
     ) {
+        val wide = maxWidth >= 760.dp
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            if (wide) {
+                PageHeader(
+                    title = "Kitchen display",
+                    subtitle = "Move every ticket through New, Preparing and Ready without losing offline work.",
+                    eyebrow = "Live operations",
+                    actions = {
+                        KitchenConnectionBadge(state)
+                        ErpButton(
+                            text = "Refresh",
+                            onClick = onRefresh,
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = Icons.Default.Refresh,
+                        )
+                        ErpButton(
+                            text = "Exit KDS",
+                            onClick = onExit,
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = Icons.AutoMirrored.Filled.ExitToApp,
+                        )
+                    },
+                )
+            } else {
+                PageHeader(
+                    title = "Kitchen display",
+                    subtitle = "Live preparation queue",
+                    eyebrow = "KDS",
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    KitchenConnectionBadge(state)
+                    Spacer(Modifier.weight(1f))
+                    ErpButton(
+                        text = "Refresh",
+                        onClick = onRefresh,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.Refresh,
+                    )
+                    ErpButton(
+                        text = "Exit KDS",
+                        onClick = onExit,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.AutoMirrored.Filled.ExitToApp,
+                    )
+                }
+            }
+
+            KitchenStatusSummary(state = state, wide = wide)
+            PremiumTabBar(
+                options = listOf(
+                    TabOption("live", "Live board"),
+                    TabOption("served", "Served today"),
+                ),
+                selectedId = if (state.includeServed) "served" else "live",
+                onSelect = { selected -> onToggleServed(selected == "served") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun KitchenConnectionBadge(state: KitchenUiState) {
+    val (label, tone) = when {
+        state.secondsSinceSync == null -> "Connecting" to UiTone.Information
+        state.stale -> "Update delayed" to UiTone.Warning
+        else -> "Updated ${state.secondsSinceSync}s ago" to UiTone.Success
+    }
+    OperationalStatusBadge(label = label, tone = tone)
+}
+
+@Composable
+private fun KitchenStatusSummary(state: KitchenUiState, wide: Boolean) {
+    if (wide) {
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            Text(
-                "Kitchen",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Brand.Gold,
+            CompactStatCard(
+                label = "New",
+                value = state.newCount.toString(),
+                detail = "Waiting to start",
+                icon = Icons.Default.Restaurant,
+                tone = UiTone.Information,
+                modifier = Modifier.weight(1f),
             )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    when (val secs = state.secondsSinceSync) {
-                        null -> "connecting…"
-                        else -> "updated ${secs}s ago"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (state.stale) Brand.Danger else Brand.ForegroundMuted,
+            CompactStatCard(
+                label = "Preparing",
+                value = state.preparingCount.toString(),
+                detail = "Being made now",
+                icon = Icons.Default.Schedule,
+                tone = UiTone.Warning,
+                modifier = Modifier.weight(1f),
+            )
+            CompactStatCard(
+                label = "Ready",
+                value = state.readyCount.toString(),
+                detail = "Waiting to serve",
+                icon = Icons.Default.CheckCircle,
+                tone = UiTone.Success,
+                modifier = Modifier.weight(1f),
+            )
+            if (state.includeServed) {
+                CompactStatCard(
+                    label = "Served",
+                    value = state.lane(KitchenState.SERVED).size.toString(),
+                    detail = "Completed today",
+                    icon = Icons.Default.History,
+                    tone = UiTone.Neutral,
+                    modifier = Modifier.weight(1f),
                 )
-                OutlinedButton(onClick = onRefresh, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Refresh")
-                }
-                Button(onClick = onExit, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Exit KDS")
+            }
+        }
+    } else {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            item {
+                CompactStatCard(
+                    label = "New",
+                    value = state.newCount.toString(),
+                    detail = "Waiting to start",
+                    icon = Icons.Default.Restaurant,
+                    tone = UiTone.Information,
+                    modifier = Modifier.width(210.dp),
+                )
+            }
+            item {
+                CompactStatCard(
+                    label = "Preparing",
+                    value = state.preparingCount.toString(),
+                    detail = "Being made now",
+                    icon = Icons.Default.Schedule,
+                    tone = UiTone.Warning,
+                    modifier = Modifier.width(210.dp),
+                )
+            }
+            item {
+                CompactStatCard(
+                    label = "Ready",
+                    value = state.readyCount.toString(),
+                    detail = "Waiting to serve",
+                    icon = Icons.Default.CheckCircle,
+                    tone = UiTone.Success,
+                    modifier = Modifier.width(210.dp),
+                )
+            }
+            if (state.includeServed) {
+                item {
+                    CompactStatCard(
+                        label = "Served",
+                        value = state.lane(KitchenState.SERVED).size.toString(),
+                        detail = "Completed today",
+                        icon = Icons.Default.History,
+                        tone = UiTone.Neutral,
+                        modifier = Modifier.width(210.dp),
+                    )
                 }
             }
         }
+    }
+}
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CountChip("${state.newCount} new", Brand.ForegroundMuted)
-            CountChip("${state.preparingCount} preparing", Brand.Gold)
-            CountChip("${state.readyCount} ready", Brand.Good)
-            Spacer(Modifier.width(4.dp))
-            FilterChip(
-                selected = state.includeServed,
-                onClick = { onToggleServed(!state.includeServed) },
-                label = { Text("Served today") },
-                modifier = Modifier.heightIn(min = 48.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Brand.Gold,
-                    selectedLabelColor = Brand.Background,
-                    labelColor = Brand.ForegroundMuted,
-                ),
+@Composable
+private fun KitchenBanner(
+    title: String,
+    detail: String,
+    tone: UiTone,
+    icon: ImageVector,
+    actionLabel: String,
+    onAction: () -> Unit,
+) {
+    OperationalBanner(
+        title = title,
+        detail = detail,
+        tone = tone,
+        icon = icon,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs)
+            .semantics { liveRegion = LiveRegionMode.Assertive },
+        action = {
+            ErpButton(
+                text = actionLabel,
+                onClick = onAction,
+                intent = ActionIntent.Secondary,
             )
-        }
-    }
-}
-
-@Composable
-private fun CountChip(label: String, colour: Color) {
-    Text(
-        label,
-        modifier = Modifier
-            .clip(Radius.shapeSm)
-            .border(1.dp, colour.copy(alpha = 0.5f), Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        color = colour,
-        fontWeight = FontWeight.SemiBold,
+        },
     )
-}
-
-@Composable
-private fun Banner(message: String, colour: Color, actionLabel: String, onAction: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(colour)
-            .semantics { liveRegion = LiveRegionMode.Assertive }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            message,
-            color = Brand.Background,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = onAction) {
-            Text(actionLabel, color = Brand.Background, fontWeight = FontWeight.Bold)
-        }
-    }
 }
 
 @Composable
@@ -515,28 +685,88 @@ private fun KitchenCancellationRecoveryDialog(
 }
 
 @Composable
-private fun CentredMessage(
+private fun KitchenEmptyBoard(
     title: String,
     body: String,
     actionLabel: String,
     onAction: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(32.dp).width(520.dp),
-        ) {
-            Text(title, style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
-            Text(
-                body,
-                style = MaterialTheme.typography.bodyLarge,
-                color = Brand.ForegroundMuted,
-            )
-            Button(
+    Column(
+        modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            .fillMaxWidth()
+            .clip(Radius.shapeLg)
+            .background(Brand.Surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        DesignedEmptyState(
+            title = title,
+            body = body,
+            icon = Icons.Default.Restaurant,
+        )
+        Box(Modifier.fillMaxWidth().padding(bottom = Spacing.xl), contentAlignment = Alignment.Center) {
+            ErpButton(
+                text = actionLabel,
                 onClick = onAction,
-                modifier = Modifier.heightIn(min = 56.dp).padding(top = 8.dp),
-            ) { Text(actionLabel, fontSize = 17.sp) }
+                leadingIcon = Icons.Default.Refresh,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KitchenBoardShell(
+    state: KitchenUiState,
+    canAdvance: Boolean,
+    onAdvance: (KitchenOrder) -> Unit,
+    onAcknowledgeCancellation: (String, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            .fillMaxWidth()
+            .clip(Radius.shapeLg)
+            .background(Brand.BackgroundSecondary)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (state.includeServed) "Today's served tickets" else "Live production board",
+                    color = Brand.Foreground,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    if (state.includeServed) {
+                        "History is read-only and comes directly from the server."
+                    } else {
+                        "Ticket moves are saved on this tablet first and remain visible until reconciled."
+                    },
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            OperationalStatusBadge(
+                label = if (state.includeServed) "History" else "Live queue",
+                tone = if (state.includeServed) UiTone.Neutral else UiTone.Success,
+                icon = if (state.includeServed) Icons.Default.History else Icons.Default.Restaurant,
+            )
+        }
+        HorizontalDivider(color = Brand.BorderSubtle)
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            Board(
+                state = state,
+                canAdvance = canAdvance,
+                onAdvance = onAdvance,
+                onAcknowledgeCancellation = onAcknowledgeCancellation,
+            )
         }
     }
 }
@@ -559,11 +789,15 @@ private fun Board(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 700.dp
         if (wide) {
-            Row(
-                Modifier.fillMaxSize().padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            val visibleLaneCount = minOf(3, sections.size).coerceAtLeast(1)
+            val gap = Spacing.md
+            val laneWidth = ((maxWidth - Spacing.xl - gap * (visibleLaneCount - 1)) / visibleLaneCount)
+                .coerceAtLeast(280.dp)
+            LazyRow(
+                Modifier.fillMaxSize().padding(Spacing.md),
+                horizontalArrangement = Arrangement.spacedBy(gap),
             ) {
-                sections.forEach { section ->
+                items(sections, key = KitchenBoardSection::title) { section ->
                     Lane(
                         title = section.title,
                         orders = section.orders,
@@ -571,7 +805,7 @@ private fun Board(
                         canAdvance = canAdvance,
                         onAdvance = onAdvance,
                         onAcknowledgeCancellation = onAcknowledgeCancellation,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.width(laneWidth).height(maxHeight - Spacing.xl),
                     )
                 }
             }
@@ -647,9 +881,12 @@ private fun Lane(
     onAcknowledgeCancellation: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.fillMaxSize()) {
+    Column(
+        modifier.fillMaxSize().clip(Radius.shapeLg).background(Brand.Surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg).padding(Spacing.md),
+    ) {
         Row(
-            Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
