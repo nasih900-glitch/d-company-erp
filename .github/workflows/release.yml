@@ -108,17 +108,7 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: |
-            cd android-native
-            mkdir -p app/build/outputs/ci-diagnostics
-            set +e
-            ./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest
-            status=$?
-            if [ "$status" -ne 0 ]; then
-              adb logcat -d -v threadtime > app/build/outputs/ci-diagnostics/logcat.txt || true
-              adb shell dumpsys activity processes > app/build/outputs/ci-diagnostics/activity-processes.txt || true
-            fi
-            exit "$status"
+          script: bash scripts/run_android_instrumentation_ci.sh
       - name: Verify signatures and package release metadata
         env:
           RELEASE_REF: ${{ github.ref_name }}
