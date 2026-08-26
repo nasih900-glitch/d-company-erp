@@ -103,9 +103,15 @@ jobs:
             android-native/gradle/wrapper/gradle-wrapper.properties
             android-native/app/*.gradle.kts
       - uses: android-actions/setup-android@v3
-      - name: Build, lint, and run JVM tests
+      # Keep release and debug Kotlin compilation in separate Gradle processes.
+      # A single combined invocation can compile both variants concurrently and
+      # exhaust the 7 GB hosted-runner memory before instrumentation starts.
+      - name: Build and lint Android release
         working-directory: android-native
-        run: ./gradlew --no-daemon --stacktrace lintRelease testDebugUnitTest assembleRelease bundleRelease
+        run: ./gradlew --no-daemon --max-workers=2 --stacktrace lintRelease assembleRelease bundleRelease
+      - name: Run Android JVM tests
+        working-directory: android-native
+        run: ./gradlew --no-daemon --max-workers=2 --stacktrace testDebugUnitTest
       # Room migration tests need a real Android SQLite/Room runtime. Keeping
       # them blocking prevents a schema change from shipping an app that can no
       # longer open an existing tablet database.
@@ -115,7 +121,7 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: cd android-native && ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
+          script: cd android-native && ./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest
       - name: Upload Android test and lint reports
         if: always()
         uses: actions/upload-artifact@v4

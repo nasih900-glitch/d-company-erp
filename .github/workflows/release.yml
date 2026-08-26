@@ -86,16 +86,21 @@ jobs:
           keyPassword=$ANDROID_KEY_PASSWORD
           EOF
           test -s android-native/dcompany-release.keystore
-      - name: Build, lint, and run JVM tests
+      # Bound workers and separate compilation-heavy release work from tests so
+      # the hosted runner cannot start competing Kotlin compiler workloads.
+      - name: Build and lint signed Android release
         working-directory: android-native
-        run: ./gradlew --no-daemon --stacktrace lintRelease testReleaseUnitTest assembleRelease bundleRelease
+        run: ./gradlew --no-daemon --max-workers=2 --stacktrace lintRelease assembleRelease bundleRelease
+      - name: Run Android release JVM tests
+        working-directory: android-native
+        run: ./gradlew --no-daemon --max-workers=2 --stacktrace testReleaseUnitTest
       - name: Run Android instrumentation tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: cd android-native && ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
+          script: cd android-native && ./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest
       - name: Verify signatures and package release metadata
         env:
           RELEASE_REF: ${{ github.ref_name }}
