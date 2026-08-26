@@ -20,7 +20,6 @@ Requires:
 
 from __future__ import annotations
 
-import smtplib
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -30,6 +29,11 @@ from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
+
+try:
+    from ops.smtp_client import alert_recipients, authenticated_smtp
+except ModuleNotFoundError:  # direct execution: python /opt/.../ops/backup_to_b2.py
+    from smtp_client import alert_recipients, authenticated_smtp
 
 ROOT = Path("/opt/d-company-erp")
 ENV_FILE = ROOT / ".env"
@@ -60,10 +64,27 @@ def run_pg_dump(dest: Path) -> None:
     with open(dest, "wb") as f:
         subprocess.run(
             [
-                "docker", "compose", "-f", str(COMPOSE_FILE), "--env-file", str(ENV_FILE),
-                "exec", "-T", "postgres", "pg_dump", "-U", "erp", "-d", "erp", "-F", "c",
+                "docker",
+                "compose",
+                "-f",
+                str(COMPOSE_FILE),
+                "--env-file",
+                str(ENV_FILE),
+                "exec",
+                "-T",
+                "postgres",
+                "pg_dump",
+                "-U",
+                "erp",
+                "-d",
+                "erp",
+                "-F",
+                "c",
             ],
-            cwd=ROOT, stdout=f, stderr=subprocess.PIPE, check=True,
+            cwd=ROOT,
+            stdout=f,
+            stderr=subprocess.PIPE,
+            check=True,
             timeout=PG_DUMP_TIMEOUT_SECONDS,
         )
     if dest.stat().st_size == 0:
@@ -127,28 +148,33 @@ def cleanup_local() -> None:
         return
     cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
     for f in LOCAL_BACKUP_DIR.iterdir():
-        if f.is_file() and datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) < cutoff:
+        if (
+            f.is_file()
+            and datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) < cutoff
+        ):
             f.unlink()
 
 
 def send_alert(env: dict[str, str], subject: str, body: str) -> None:
-    to_addr = env.get("ACCOUNT_SECURITY_EMAIL")
-    if not to_addr or not env.get("SMTP_HOST"):
-        print("No alert email configured — cannot send failure notice.", file=sys.stderr)
+    recipients = alert_recipients(env)
+    if not recipients or not env.get("SMTP_HOST"):
+        print(
+            "No alert email configured — cannot send failure notice.", file=sys.stderr
+        )
         return
     from_email = env.get("FROM_EMAIL") or env.get("SMTP_USER")
     if not from_email:
-        print("No FROM_EMAIL or SMTP_USER configured — cannot send failure notice.", file=sys.stderr)
+        print(
+            "No FROM_EMAIL or SMTP_USER configured — cannot send failure notice.",
+            file=sys.stderr,
+        )
         return
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"] = f'{env.get("FROM_NAME", "D Company ERP")} <{from_email}>'
-    msg["To"] = to_addr
+    msg["From"] = f"{env.get('FROM_NAME', 'D Company ERP')} <{from_email}>"
+    msg["To"] = ", ".join(recipients)
     try:
-        with smtplib.SMTP_SSL(
-            env["SMTP_HOST"], int(env.get("SMTP_PORT", "465")), timeout=SMTP_TIMEOUT_SECONDS
-        ) as s:
-            s.login(env["SMTP_USER"], env["SMTP_PASSWORD"])
+        with authenticated_smtp(env, timeout_seconds=SMTP_TIMEOUT_SECONDS) as s:
             s.send_message(msg)
     except Exception as exc:  # noqa: BLE001
         print(f"Alert email also failed to send: {exc}", file=sys.stderr)

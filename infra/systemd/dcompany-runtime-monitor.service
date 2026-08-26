@@ -1,0 +1,18 @@
+[Unit]
+Description=D Company ERP production runtime monitor
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/d-company-erp
+ExecStart=/usr/bin/python3 /opt/d-company-erp/ops/runtime_monitor.py
+TimeoutStartSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/d-company-erp/ops
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077

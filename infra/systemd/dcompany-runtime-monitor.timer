@@ -1,0 +1,13 @@
+[Unit]
+Description=Check D Company ERP production runtime every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=20s
+Persistent=true
+Unit=dcompany-runtime-monitor.service
+
+[Install]
+WantedBy=timers.target

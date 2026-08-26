@@ -20,12 +20,16 @@ Requires:
 
 from __future__ import annotations
 
-import smtplib
 import sys
 import urllib.error
 import urllib.request
 from email.mime.text import MIMEText
 from pathlib import Path
+
+try:
+    from ops.smtp_client import alert_recipients, authenticated_smtp
+except ModuleNotFoundError:  # direct execution: python /opt/.../ops/uptime_check.py
+    from smtp_client import alert_recipients, authenticated_smtp
 
 ROOT = Path("/opt/d-company-erp")
 ENV_FILE = ROOT / ".env"
@@ -76,23 +80,23 @@ def check() -> tuple[bool, str]:
 
 
 def send_alert(env: dict[str, str], subject: str, body: str) -> None:
-    to_addr = env.get("ACCOUNT_SECURITY_EMAIL")
-    if not to_addr or not env.get("SMTP_HOST"):
+    recipients = alert_recipients(env)
+    if not recipients or not env.get("SMTP_HOST"):
         print("No alert email configured — cannot send notice.", file=sys.stderr)
         return
     from_email = env.get("FROM_EMAIL") or env.get("SMTP_USER")
     if not from_email:
-        print("No FROM_EMAIL or SMTP_USER configured — cannot send notice.", file=sys.stderr)
+        print(
+            "No FROM_EMAIL or SMTP_USER configured — cannot send notice.",
+            file=sys.stderr,
+        )
         return
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"] = f'{env.get("FROM_NAME", "D Company ERP")} <{from_email}>'
-    msg["To"] = to_addr
+    msg["From"] = f"{env.get('FROM_NAME', 'D Company ERP')} <{from_email}>"
+    msg["To"] = ", ".join(recipients)
     try:
-        with smtplib.SMTP_SSL(
-            env["SMTP_HOST"], int(env.get("SMTP_PORT", "465")), timeout=SMTP_TIMEOUT_SECONDS
-        ) as s:
-            s.login(env["SMTP_USER"], env["SMTP_PASSWORD"])
+        with authenticated_smtp(env, timeout_seconds=SMTP_TIMEOUT_SECONDS) as s:
             s.send_message(msg)
     except Exception as exc:  # noqa: BLE001
         print(f"Alert email also failed to send: {exc}", file=sys.stderr)
@@ -102,7 +106,10 @@ def main() -> int:
     try:
         env = load_env()
     except OSError as exc:
-        print(f"Uptime check FAILED to start: could not read {ENV_FILE}: {exc}", file=sys.stderr)
+        print(
+            f"Uptime check FAILED to start: could not read {ENV_FILE}: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
     is_up, detail = check()

@@ -1,0 +1,129 @@
+name: Production monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: dcompany-production-monitor
+  cancel-in-progress: true
+
+jobs:
+  public-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      BASE_URL: https://dcompany.duckdns.org
+      GH_TOKEN: ${{ github.token }}
+      MONITOR_ISSUE_TITLE: "[Production monitor] D Company ERP unavailable"
+    steps:
+      - name: Check public health and dependency readiness
+        id: check
+        shell: bash
+        run: |
+          set +e
+          health_code="$(curl --silent --show-error --location \
+            --max-time 15 --output /tmp/health.json \
+            --write-out '%{http_code}' "$BASE_URL/healthz")"
+          health_rc=$?
+          ready_metrics="$(curl --silent --show-error --location \
+            --max-time 15 --output /tmp/ready.json \
+            --write-out '%{http_code} %{time_total}' "$BASE_URL/readyz")"
+          ready_rc=$?
+          set -e
+
+          read -r ready_code ready_seconds <<<"$ready_metrics"
+          export health_rc health_code ready_rc ready_code ready_seconds
+          if python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          errors = []
+          if int(os.environ["health_rc"]) != 0 or os.environ["health_code"] != "200":
+              errors.append(
+                  f"healthz failed (curl={os.environ['health_rc']}, "
+                  f"HTTP={os.environ['health_code'] or 'none'})"
+              )
+          if int(os.environ["ready_rc"]) != 0 or os.environ["ready_code"] != "200":
+              errors.append(
+                  f"readyz failed (curl={os.environ['ready_rc']}, "
+                  f"HTTP={os.environ['ready_code'] or 'none'})"
+              )
+          else:
+              try:
+                  payload = json.loads(Path("/tmp/ready.json").read_text())
+              except (OSError, json.JSONDecodeError) as exc:
+                  errors.append(f"readyz returned invalid JSON ({type(exc).__name__})")
+              else:
+                  if payload.get("status") not in {"ok", "ready"}:
+                      errors.append(f"readyz status is {payload.get('status')!r}")
+          try:
+              elapsed = float(os.environ["ready_seconds"])
+          except ValueError:
+              errors.append("readyz latency was unavailable")
+          else:
+              if elapsed > 5:
+                  errors.append(f"readyz took {elapsed:.2f}s (limit 5s)")
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write(f"healthy={'false' if errors else 'true'}\n")
+              handle.write("detail<<EOF\n")
+              handle.write("\n".join(errors) if errors else "All public checks passed.")
+              handle.write("\nEOF\n")
+          raise SystemExit(1 if errors else 0)
+          PY
+          then
+            exit 0
+          fi
+
+          # Keep the job alive long enough to create a single stateful incident
+          # issue. The final step fails only when the outage is first detected;
+          # subsequent runs leave the same issue open without notification spam.
+          exit 0
+
+      - name: Open one incident issue on failure
+        if: steps.check.outputs.healthy == 'false'
+        id: incident
+        shell: bash
+        run: |
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$MONITOR_ISSUE_TITLE in:title" --json number \
+            --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "Production incident already tracked by issue #$existing."
+            exit 0
+          fi
+          body="Automated checks from outside the VPS failed at $(date -u +'%Y-%m-%dT%H:%M:%SZ').
+
+          ${{ steps.check.outputs.detail }}
+
+          Check the DigitalOcean droplet, Docker services, DNS/TLS, database, and Redis. This issue will be closed automatically after recovery."
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$MONITOR_ISSUE_TITLE" --body "$body"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Close the incident after recovery
+        if: steps.check.outputs.healthy == 'true'
+        shell: bash
+        run: |
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$MONITOR_ISSUE_TITLE in:title" --json number \
+            --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            echo "Production is healthy; no open incident exists."
+            exit 0
+          fi
+          gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+            --comment "Recovered at $(date -u +'%Y-%m-%dT%H:%M:%SZ'); all public checks passed."
+
+      - name: Mark the first detected incident as failed
+        if: steps.incident.outputs.created == 'true'
+        run: exit 1

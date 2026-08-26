@@ -6,14 +6,22 @@
 #   - Postgres / Redis / MinIO bound to the internal Docker network
 #   - Strong env values from .env
 #   - Restart policies set to "unless-stopped" so the stack survives reboots
+#   - Bounded Docker logs so a noisy service cannot fill the VPS disk
 #
 # Bring up with:
 #   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -32,6 +40,7 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: erp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -47,6 +56,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -56,6 +66,7 @@ services:
   minio:
     image: minio/minio:latest
     restart: unless-stopped
+    logging: *default-logging
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: erp
@@ -68,17 +79,32 @@ services:
     build:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
+    logging: *default-logging
     environment:
       ENV: prod
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
+      # Safe only while backend has no published port and Caddy overwrites
+      # forwarding headers. Do not expose backend:8000 with this trust policy.
+      FORWARDED_ALLOW_IPS: "*"
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
       REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
+      ANDROID_MIN_SUPPORTED_VERSION_CODE: ${ANDROID_MIN_SUPPORTED_VERSION_CODE:-1}
+      ANDROID_LATEST_VERSION_CODE: ${ANDROID_LATEST_VERSION_CODE:-2}
+      ANDROID_UPDATE_URL: ${ANDROID_UPDATE_URL:-}
+      IOS_MIN_SUPPORTED_VERSION_CODE: ${IOS_MIN_SUPPORTED_VERSION_CODE:-1}
+      IOS_LATEST_VERSION_CODE: ${IOS_LATEST_VERSION_CODE:-1}
+      IOS_UPDATE_URL: ${IOS_UPDATE_URL:-}
+      CLIENT_UPDATE_MESSAGE: ${CLIENT_UPDATE_MESSAGE:-}
+      REQUIRE_NATIVE_VERSION_HEADERS: ${REQUIRE_NATIVE_VERSION_HEADERS:-false}
       ACCOUNT_SECURITY_EMAIL: ${ACCOUNT_SECURITY_EMAIL:-business@retrocafe.online}
       ACCOUNT_SECURITY_COMPANY_ID: ${ACCOUNT_SECURITY_COMPANY_ID:-}
       ACCOUNT_OTP_TTL_MINUTES: ${ACCOUNT_OTP_TTL_MINUTES:-10}
@@ -118,7 +144,10 @@ services:
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
         VITE_APP_VERSION: ${APP_VERSION:-1.0.0}
+        APP_VERSION: ${APP_VERSION:-dev}
+        APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - backend
     # Frontend NOT bound to host either.

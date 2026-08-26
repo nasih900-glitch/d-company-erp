@@ -11,6 +11,11 @@ RUN npm run build
 
 # --- runtime ---
 FROM nginx:1.27-alpine
+ARG APP_VERSION=dev
+ARG APP_REVISION=unknown
+LABEL org.opencontainers.image.title="D Company ERP Web" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${APP_REVISION}"
 COPY infra/nginx/frontend.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 80
