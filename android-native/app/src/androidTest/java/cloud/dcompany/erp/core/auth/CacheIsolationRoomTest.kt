@@ -147,7 +147,7 @@ class CacheIsolationRoomTest {
         Cursor.FIELD_TYPE_NULL -> "null"
         Cursor.FIELD_TYPE_INTEGER -> "integer:${getLong(index)}"
         Cursor.FIELD_TYPE_FLOAT -> "float:${getDouble(index)}"
-        Cursor.FIELD_TYPE_BLOB -> "blob:${getBlob(index).joinToString(",")}" 
+        Cursor.FIELD_TYPE_BLOB -> "blob:${getBlob(index).joinToString(",")}"
         else -> "string:${getString(index)}"
     }
 }
