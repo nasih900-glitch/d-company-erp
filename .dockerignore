@@ -23,6 +23,13 @@ frontend/dist
 frontend/demo-dist*
 frontend/live-dist
 frontend/coverage
+# Native clients are not inputs to either production Docker image. Excluding
+# their source and generated schema history keeps deploy contexts small and
+# prevents unrelated mobile files from invalidating backend/web build caches.
+android-native
+frontend/android
+frontend/ios
+frontend/src-tauri
 frontend/ios/App/build
 frontend/ios/App/DerivedData
 frontend/ios/App/Pods
