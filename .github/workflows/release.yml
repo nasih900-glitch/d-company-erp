@@ -96,10 +96,11 @@ jobs:
         run: ./gradlew --no-daemon --max-workers=2 --stacktrace testReleaseUnitTest
       - name: Enable KVM for Android emulator
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          test -c /dev/kvm
+          # The hosted runner already created /dev/kvm. Change that device
+          # directly: udevadm trigger is not reliable in the runner container
+          # and can exit 1 before applying an otherwise valid rule.
+          sudo chmod 0666 /dev/kvm
           test -r /dev/kvm
           test -w /dev/kvm
       - name: Run Android instrumentation tests
