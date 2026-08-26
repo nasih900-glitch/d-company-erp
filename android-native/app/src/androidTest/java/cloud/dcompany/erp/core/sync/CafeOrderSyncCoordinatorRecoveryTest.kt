@@ -21,6 +21,7 @@ import cloud.dcompany.erp.ui.screens.tables.TableOrderCreateBody
 import cloud.dcompany.erp.ui.screens.tables.TableOrderLine
 import cloud.dcompany.erp.ui.screens.tables.TablesApi
 import cloud.dcompany.erp.ui.screens.tables.VoidOrderLineBody
+import cloud.dcompany.erp.ui.screens.tables.VoidOrderBody
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -121,6 +122,37 @@ class CafeOrderSyncCoordinatorRecoveryTest {
         assertTrue(rejected.lastError.orEmpty().contains("checkout version"))
     }
 
+    @Test
+    fun ambiguousWholeBillVoidRetriesTheSameIdentityThenRemovesTheTerminalChain() = runBlocking {
+        val dao = db.cafeOrderDao()
+        val bill = bill(serverOrderId = "server-order", version = 3)
+        val action = action(
+            id = "void-order-action",
+            kind = CafeActionKind.VOID_ORDER,
+            payload = CafeActionPayload(reason = "Customer left"),
+            dedupe = "void-order:server-order",
+        )
+        assertTrue(dao.captureAction(bill, action))
+        val api = RecordingTablesApi(failFirstVoidAmbiguously = true)
+        val coordinator = CafeOrderSyncCoordinator(db, dao, api)
+
+        assertTrue(coordinator.push().stoppedOnAmbiguousFailure)
+        assertEquals(CafeActionState.PENDING, dao.action(action.actionId)?.state)
+
+        val recovered = coordinator.push()
+        assertFalse(recovered.stoppedOnAmbiguousFailure)
+        assertTrue(recovered.changedActiveTableBills)
+        assertEquals(
+            listOf(
+                "void-order:Customer left:cafe-action:void-order-action",
+                "void-order:Customer left:cafe-action:void-order-action",
+            ),
+            api.calls,
+        )
+        assertNull(dao.action(action.actionId))
+        assertNull(dao.localBill(bill.localBillId))
+    }
+
     private fun bill(serverOrderId: String? = null, version: Long? = null) =
         LocalCafeBillEntity(
             localBillId = "local-bill",
@@ -174,6 +206,7 @@ class CafeOrderSyncCoordinatorRecoveryTest {
 
 private class RecordingTablesApi(
     private var failFirstCreateAmbiguously: Boolean = false,
+    private var failFirstVoidAmbiguously: Boolean = false,
 ) : TablesApi {
     val calls = mutableListOf<String>()
     var createdLines: List<OrderLineBody> = emptyList()
@@ -228,6 +261,19 @@ private class RecordingTablesApi(
         key: String,
         provenance: Map<String, String>,
     ): TableOrder = error("Not used")
+
+    override suspend fun voidOrder(
+        id: String,
+        body: VoidOrderBody,
+        key: String,
+        provenance: Map<String, String>,
+    ) {
+        calls += "void-order:${body.reason}:$key"
+        if (failFirstVoidAmbiguously) {
+            failFirstVoidAmbiguously = false
+            throw ApiException("Gateway timeout", status = 504)
+        }
+    }
 
     override suspend fun sendToPos(
         id: String,

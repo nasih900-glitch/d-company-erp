@@ -1,5 +1,6 @@
 # Gradle / AGP build output
 .gradle/
+.kotlin/
 build/
 app/build/
 local.properties

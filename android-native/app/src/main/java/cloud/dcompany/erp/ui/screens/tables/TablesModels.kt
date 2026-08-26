@@ -154,3 +154,9 @@ data class VoidOrderLineBody(
     @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
     val reason: String,
 )
+
+/** DELETE /pos/orders/{id} returns 204; the reason is its complete body. */
+@Serializable
+data class VoidOrderBody(
+    val reason: String,
+)

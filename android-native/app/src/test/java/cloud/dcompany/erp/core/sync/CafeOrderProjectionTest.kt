@@ -121,6 +121,57 @@ class CafeOrderProjectionTest {
         assertEquals("Another terminal changed this bill", conflict.blockedMessage)
     }
 
+    @Test
+    fun `pending whole bill void shows zero without losing confirmed accounting truth`() {
+        val projected = projectCafeBills(
+            serverBills = listOf(serverBill().copy(taxMinor = 50, totalMinor = 1_050)),
+            localBills = listOf(localBill()),
+            actions = listOf(
+                action(
+                    id = "void-order",
+                    sequence = 1,
+                    kind = CafeActionKind.VOID_ORDER,
+                    payload = CafeActionPayload(reason = "Duplicate bill"),
+                    capturedVersion = 3,
+                ),
+            ),
+        ).single()
+
+        assertEquals("voiding", projected.status)
+        assertEquals(0L, projected.subtotalMinor)
+        assertEquals(0L, projected.taxMinor)
+        assertEquals(0L, projected.totalMinor)
+        assertEquals(1_050L, projected.confirmedTotalMinor)
+        assertTrue(projected.amountPending)
+        assertTrue(projected.lines.all { it.voided && it.voidReason == "Duplicate bill" })
+        assertFalse(projected.editable)
+    }
+
+    @Test
+    fun `rejected whole bill void keeps server lines and totals authoritative`() {
+        val projected = projectCafeBills(
+            serverBills = listOf(serverBill()),
+            localBills = listOf(localBill()),
+            actions = listOf(
+                action(
+                    id = "void-order",
+                    sequence = 1,
+                    kind = CafeActionKind.VOID_ORDER,
+                    payload = CafeActionPayload(reason = "Customer left"),
+                    state = CafeActionState.REJECTED,
+                    error = "Only the shift opener may void this order",
+                ),
+            ),
+        ).single()
+
+        assertEquals("open", projected.status)
+        assertEquals(1_000L, projected.totalMinor)
+        assertFalse(projected.amountPending)
+        assertFalse(projected.lines.single().voided)
+        assertEquals("void-order", projected.blockedActionId)
+        assertFalse(projected.editable)
+    }
+
     private fun serverBill() = CafeBillCacheEntity(
         orderId = "server-order",
         tableId = "table-1",

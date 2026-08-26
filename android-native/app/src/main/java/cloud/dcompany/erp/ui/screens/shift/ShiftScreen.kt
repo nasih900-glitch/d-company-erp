@@ -13,14 +13,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -51,6 +50,8 @@ import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.TouchMoneyEntry
+import cloud.dcompany.erp.ui.components.WholeNumberStepper
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -187,7 +188,7 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
 
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Surface).padding(20.dp),
+            .background(Brand.Surface).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("No shift is open", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
@@ -204,13 +205,12 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
                 style = MaterialTheme.typography.labelSmall,
             )
         }
-        OutlinedTextField(
+        TouchMoneyEntry(
             value = float,
-            onValueChange = { float = it.filter { c -> c.isDigit() || c == '.' } },
-            label = { Text("Opening float (₹)") },
-            singleLine = true,
+            onValueChange = { float = it },
+            label = "Opening float (₹)",
             enabled = canOpen && !state.busy && state.rejectedShift == null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            presetsMinor = listOf(0L, 50_000L, 100_000L),
             modifier = Modifier.fillMaxWidth(),
         )
         Button(
@@ -516,26 +516,27 @@ private fun CloseShiftCard(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         rowNotes.forEach { note ->
-                            Row(
+                            Column(
                                 modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                Text("₹$note", color = Brand.Foreground, modifier = Modifier.width(44.dp))
-                                OutlinedTextField(
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("₹$note", color = Brand.Foreground)
+                                    Text(
+                                        (note * 100 * (counts[note]?.toLongOrNull() ?: 0L)).asRupees(),
+                                        color = Brand.ForegroundMuted,
+                                    )
+                                }
+                                WholeNumberStepper(
                                     value = counts[note] ?: "",
-                                    onValueChange = { counts[note] = it.filter { c -> c.isDigit() }.take(6) },
-                                    singleLine = true,
+                                    onValueChange = { counts[note] = it },
+                                    description = "Count of ₹$note notes",
                                     enabled = closePresentation.canEditCount,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    modifier = Modifier.width(92.dp).semantics {
-                                        contentDescription = "Count of ₹$note notes"
-                                    },
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    (note * 100 * (counts[note]?.toLongOrNull() ?: 0L)).asRupees(),
-                                    color = Brand.ForegroundMuted,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
                             }
                         }

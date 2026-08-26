@@ -36,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +51,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.VoidReasonInput
+import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import java.time.Instant
@@ -564,8 +567,9 @@ private fun CancelUnbilledSessionDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var reason by remember(stationName) { mutableStateOf("") }
-    val normalized = reason.trim()
+    var selectedReasonId by rememberSaveable(stationName) { mutableStateOf<String?>(null) }
+    var customReason by rememberSaveable(stationName) { mutableStateOf("") }
+    val normalized = resolvedVoidReason(selectedReasonId, customReason)
     val hasBillableAmount = amountMinor > 0L
 
     AlertDialog(
@@ -585,13 +589,11 @@ private fun CancelUnbilledSessionDialog(
                     },
                     color = Brand.ForegroundMuted,
                 )
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it.take(500) },
-                    label = { Text("Cancellation reason") },
-                    supportingText = { Text("Required · ${reason.length}/500") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
+                VoidReasonInput(
+                    selectedId = selectedReasonId,
+                    customReason = customReason,
+                    onPresetSelected = { selectedReasonId = it },
+                    onCustomReasonChange = { customReason = it },
                 )
             }
         },

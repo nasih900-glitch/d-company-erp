@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.0.1` |
-| Version code | `2` |
+| Version name | `3.0.2` |
+| Version code | `3` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |

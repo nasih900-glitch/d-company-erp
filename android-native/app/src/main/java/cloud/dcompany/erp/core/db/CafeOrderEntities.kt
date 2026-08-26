@@ -81,7 +81,7 @@ data class LegacyCafeActionLine(
 )
 
 /**
- * One typed payload covers the four mutation kinds without persisting opaque
+ * One typed payload covers the table mutation kinds without persisting opaque
  * Retrofit request JSON. Fields that do not apply to a kind remain empty.
  */
 @Serializable
@@ -97,6 +97,7 @@ object CafeActionKind {
     const val CREATE_ROUND = "create_round"
     const val APPEND_ROUND = "append_round"
     const val VOID_LINE = "void_line"
+    const val VOID_ORDER = "void_order"
     const val SEND_TO_POS = "send_to_pos"
 
     /** Rows moved losslessly from the pre-v24 create-and-immediately-hold outbox. */

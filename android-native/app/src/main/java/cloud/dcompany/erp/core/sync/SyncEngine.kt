@@ -1251,9 +1251,15 @@ class SyncEngine(
                 pushKitchenCancellationAcks()
             }
             withResourceSerialisations("tables", "orders") {
-                val changedHeldQueue = pushCafeActions()
-                if (changedHeldQueue && resourceAccess.canPull("orders")) {
+                val cafeResult = pushCafeActions()
+                if (cafeResult.changedHeldQueue && resourceAccess.canPull("orders")) {
                     pullHeldOrdersBestEffort()
+                }
+                if (cafeResult.changedActiveTableBills && resourceAccess.canPull("tables")) {
+                    // DELETE /pos/orders returns no replacement snapshot and
+                    // may release the physical table. Re-read both table and
+                    // active-bill truth before presenting it as available.
+                    runAndRecordRefreshAlreadyLocked("tables", ::pullTablesData)
                 }
             }
             withResourceSerialisation("customers") { pushCustomers() }
@@ -2005,13 +2011,13 @@ class SyncEngine(
      * The caller uses the returned flag to reconcile POS without re-entering
      * either non-reentrant lock.
      */
-    private suspend fun pushCafeActions(): Boolean {
+    private suspend fun pushCafeActions(): CafeOrderPushResult {
         val result = cafeOrderSync.push()
         result.lastError?.let { _lastError.value = it }
         if (result.stoppedOnAmbiguousFailure) {
             passHadAmbiguousFailure = true
         }
-        return result.changedHeldQueue
+        return result
     }
 
     /**

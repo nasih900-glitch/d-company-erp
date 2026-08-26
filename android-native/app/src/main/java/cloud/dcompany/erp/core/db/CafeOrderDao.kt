@@ -107,6 +107,20 @@ interface CafeOrderDao {
         insertLocalBill(bill)
         val persisted = localBill(bill.localBillId) ?: return false
         if (persisted.tableId != bill.tableId || persisted.shiftId != bill.shiftId) return false
+        val existing = actionsForBill(bill.localBillId)
+        // Whole-bill void is terminal. Keeping this rule inside the Room
+        // transaction closes the rapid-tap race between ViewModel snapshots:
+        // no later round/handoff can be appended while DELETE is in flight.
+        if (existing.any { it.kind == CafeActionKind.VOID_ORDER }) return false
+        if (
+            action.kind == CafeActionKind.VOID_ORDER &&
+            existing.any {
+                it.kind == CafeActionKind.SEND_TO_POS ||
+                    it.kind == CafeActionKind.LEGACY_CREATE_AND_SEND
+            }
+        ) {
+            return false
+        }
         val nextSequence = maxSequence(bill.localBillId) + 1
         val priorExists = nextSequence > 1
         return insertAction(
@@ -224,6 +238,30 @@ interface CafeOrderDao {
             checkoutVersion = server.checkoutVersion,
             status = server.status,
         )
+        deleteAction(actionId)
+        deleteLocalBillIfNoActions(localBillId)
+    }
+
+    @Query("DELETE FROM cafe_bill_cache WHERE orderId = :orderId")
+    suspend fun deleteBillCache(orderId: String)
+
+    /**
+     * A successful whole-order DELETE has no response body. Remove its active
+     * snapshot and advance the terminal action in one crash-safe commit. If a
+     * Room failure occurs, the exact action remains and the same idempotency
+     * key safely replays the already-completed server command.
+     */
+    @Transaction
+    suspend fun confirmVoidOrderAction(
+        localBillId: String,
+        actionId: String,
+        serverOrderId: String,
+    ) {
+        val head = firstAction(localBillId)
+        check(head != null && head.actionId == actionId && head.kind == CafeActionKind.VOID_ORDER) {
+            "Whole-bill void confirmation did not match the ordered action head."
+        }
+        deleteBillCache(serverOrderId)
         deleteAction(actionId)
         deleteLocalBillIfNoActions(localBillId)
     }

@@ -36,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,9 +53,11 @@ import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
 import cloud.dcompany.erp.core.sync.CafeBillProjection
+import cloud.dcompany.erp.ui.components.VoidReasonInput
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -170,6 +173,7 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
                 access = access,
                 onAddRound = vm::startAnotherRound,
                 onCancelLine = vm::requestLineCancellation,
+                onCancelBill = vm::requestBillCancellation,
                 onSendToPos = vm::sendSelectedBillToPos,
                 onDismiss = vm::closeTable,
             )
@@ -537,180 +541,225 @@ private fun BillDialog(
     access: TablesAccess,
     onAddRound: () -> Unit,
     onCancelLine: (CafeBillLineProjection, String) -> Unit,
+    onCancelBill: (String) -> Unit,
     onSendToPos: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var cancellingLine by remember(bill.serverOrderId, bill.localBillId) {
-        mutableStateOf<CafeBillLineProjection?>(null)
+    val billIdentity = bill.localBillId ?: bill.serverOrderId ?: "unresolved:${bill.tableId}"
+    var cancellingLineKey by rememberSaveable(billIdentity) {
+        mutableStateOf<String?>(null)
     }
-    var cancellationReason by remember(cancellingLine?.stableKey) { mutableStateOf("") }
+    var cancellationReasonId by rememberSaveable(billIdentity) {
+        mutableStateOf<String?>(null)
+    }
+    var customCancellationReason by rememberSaveable(billIdentity) {
+        mutableStateOf("")
+    }
+    val cancellationReason = resolvedVoidReason(cancellationReasonId, customCancellationReason)
+    val cancellingLine = cancellingLineKey?.let { key ->
+        bill.lines.firstOrNull { it.stableKey == key }
+    }
+    val activeLineCount = bill.lines.count { !it.voided }
+    val cancellingWholeBill = cancellingLine != null && activeLineCount == 1
     val held = bill.heldOrSending
+
+    fun leaveCancellation() {
+        cancellingLineKey = null
+        cancellationReasonId = null
+        customCancellationReason = ""
+    }
 
     AlertDialog(
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
+        onDismissRequest = {
+            if (!busy) {
+                if (cancellingLine != null) leaveCancellation() else onDismiss()
+            }
+        },
         title = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Table ${table.code} · Current bill")
-                Text(
-                    when {
-                        bill.status == "held" -> "At POS · items locked"
-                        bill.status == "sending_to_pos" -> "Sending to POS · waiting for confirmation"
-                        bill.blockedActionId != null -> "Needs review before more changes"
-                        bill.pendingActionCount > 0 -> "${bill.pendingActionCount} saved action(s) syncing"
-                        else -> "Open · take another round or send for billing"
-                    },
-                    color = if (bill.blockedActionId != null) Brand.Danger else Brand.GoldMuted,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            if (cancellingWholeBill) {
+                Text("Void the whole Table ${table.code} bill?")
+            } else if (cancellingLine != null) {
+                Text("Cancel ${cancellingLine.name}?")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Table ${table.code} · Current bill")
+                    Text(
+                        when {
+                            bill.status == "held" -> "At POS · items locked"
+                            bill.status == "sending_to_pos" -> "Sending to POS · waiting for confirmation"
+                            bill.blockedActionId != null -> "Needs review before more changes"
+                            bill.pendingActionCount > 0 -> "${bill.pendingActionCount} saved action(s) syncing"
+                            else -> "Open · take another round or send for billing"
+                        },
+                        color = if (bill.blockedActionId != null) Brand.Danger else Brand.GoldMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (held) {
+            if (cancellingLine != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "This snapshot is read only. The cashier must select this bill in POS; " +
-                            "do not create a replacement order.",
+                        if (cancellingWholeBill) {
+                            "This is the bill's last active item. Confirming will void the entire bill, " +
+                                "not only this line. The reason remains in the audit history."
+                        } else {
+                            "The item remains visible on KDS until Kitchen acknowledges the cancellation."
+                        },
                         color = Brand.ForegroundMuted,
                     )
+                    VoidReasonInput(
+                        selectedId = cancellationReasonId,
+                        customReason = customCancellationReason,
+                        onPresetSelected = { cancellationReasonId = it },
+                        onCustomReasonChange = { customCancellationReason = it },
+                    )
                 }
-                LazyColumn(
-                    modifier = Modifier.height(360.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(bill.lines, key = CafeBillLineProjection::stableKey) { line ->
-                        Column(
-                            Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                                .background(if (line.voided) Brand.DangerMuted else Brand.SurfaceRaised)
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (held) {
+                        Text(
+                            "This snapshot is read only. The cashier must select this bill in POS; " +
+                                "do not create a replacement order.",
+                            color = Brand.ForegroundMuted,
+                        )
+                    }
+                    LazyColumn(
+                        modifier = Modifier.height(360.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(bill.lines, key = CafeBillLineProjection::stableKey) { line ->
+                            Column(
+                                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                                    .background(if (line.voided) Brand.DangerMuted else Brand.SurfaceRaised)
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
                             ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        "${line.qty.toQtyLabel()} × ${line.name}",
-                                        color = Brand.Foreground,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    line.note?.takeIf(String::isNotBlank)?.let { note ->
-                                        Text("Request: $note", color = Brand.GoldMuted)
-                                    }
-                                    Text(
-                                        buildString {
-                                            line.roundNo?.let { append("Round $it · ") }
-                                            append(
-                                                when {
-                                                    line.locallyPending -> "Waiting for sync"
-                                                    line.voided -> "Cancelled"
-                                                    else -> line.kitchenStatus.replaceFirstChar(Char::uppercase)
-                                                },
-                                            )
-                                        },
-                                        color = Brand.ForegroundMuted,
-                                        style = MaterialTheme.typography.labelSmall,
-                                    )
-                                }
-                                if (
-                                    access.canCancelItems && bill.editable && !line.voided &&
-                                    line.kitchenStatus != "served"
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    TextButton(onClick = { cancellingLine = line }) {
-                                        Text("Cancel item", color = Brand.Danger)
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            "${line.qty.toQtyLabel()} × ${line.name}",
+                                            color = Brand.Foreground,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        line.note?.takeIf(String::isNotBlank)?.let { note ->
+                                            Text("Request: $note", color = Brand.GoldMuted)
+                                        }
+                                        Text(
+                                            buildString {
+                                                line.roundNo?.let { append("Round $it · ") }
+                                                append(
+                                                    when {
+                                                        line.locallyPending -> "Waiting for sync"
+                                                        line.voided -> "Cancelled"
+                                                        else -> line.kitchenStatus.replaceFirstChar(Char::uppercase)
+                                                    },
+                                                )
+                                            },
+                                            color = Brand.ForegroundMuted,
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                    if (
+                                        access.canCancelItems && bill.editable && !line.voided &&
+                                        line.kitchenStatus != "served"
+                                    ) {
+                                        TextButton(
+                                            onClick = {
+                                                cancellationReasonId = null
+                                                customCancellationReason = ""
+                                                cancellingLineKey = line.stableKey
+                                            },
+                                        ) {
+                                            Text(
+                                                if (activeLineCount == 1) "Void whole bill" else "Cancel item",
+                                                color = Brand.Danger,
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                            if (line.voided) {
-                                Text(
-                                    "Reason: ${line.voidReason ?: "Not recorded"}",
-                                    color = Brand.Danger,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                if (line.kitchenCancellationPending) {
+                                if (line.voided) {
                                     Text(
-                                        "Waiting for Kitchen acknowledgement",
-                                        color = Brand.GoldMuted,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        "Reason: ${line.voidReason ?: "Not recorded"}",
+                                        color = Brand.Danger,
+                                        style = MaterialTheme.typography.bodySmall,
                                     )
+                                    if (line.kitchenCancellationPending) {
+                                        Text(
+                                            "Waiting for Kitchen acknowledgement",
+                                            color = Brand.GoldMuted,
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        if (bill.amountPending) "Estimated after sync" else "Current total",
-                        color = Brand.ForegroundMuted,
-                    )
-                    Text(bill.totalMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
-                }
-                if (bill.amountPending) {
-                    Text(
-                        bill.confirmedTotalMinor?.let {
-                            "Last confirmed total: ${it.asRupees()}. Final pricing and tax are confirmed by the server."
-                        } ?: "Final pricing and tax are confirmed by the server after this first round syncs.",
-                        color = Brand.GoldMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(
+                            if (bill.amountPending) "Estimated after sync" else "Current total",
+                            color = Brand.ForegroundMuted,
+                        )
+                        Text(bill.totalMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                    }
+                    if (bill.amountPending) {
+                        Text(
+                            bill.confirmedTotalMinor?.let {
+                                "Last confirmed total: ${it.asRupees()}. Final pricing and tax are confirmed by the server."
+                            } ?: "Final pricing and tax are confirmed by the server after this first round syncs.",
+                            color = Brand.GoldMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!held && bill.editable) {
-                    OutlinedButton(
-                        onClick = onAddRound,
-                        enabled = access.canCreateOrders && !busy,
-                    ) { Text("Add another round") }
-                    Button(
-                        onClick = onSendToPos,
-                        enabled = access.canSendToPos && !busy,
-                    ) { Text(if (busy) "Saving…" else "Send to POS") }
+            if (cancellingLine != null) {
+                Button(
+                    onClick = {
+                        if (cancellingWholeBill) {
+                            onCancelBill(cancellationReason)
+                        } else {
+                            onCancelLine(cancellingLine, cancellationReason)
+                        }
+                        leaveCancellation()
+                    },
+                    enabled = access.canCancelItems && bill.editable && !cancellingLine.voided &&
+                        cancellingLine.kitchenStatus != "served" && cancellationReason.isNotBlank() && !busy,
+                ) { Text(if (cancellingWholeBill) "Void whole bill" else "Cancel item") }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!held && bill.editable) {
+                        OutlinedButton(
+                            onClick = onAddRound,
+                            enabled = access.canCreateOrders && !busy,
+                        ) { Text("Add another round") }
+                        Button(
+                            onClick = onSendToPos,
+                            enabled = access.canSendToPos && !busy,
+                        ) { Text(if (busy) "Saving…" else "Send to POS") }
+                    }
                 }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") } },
-    )
-
-    cancellingLine?.let { line ->
-        AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
-            shape = Radius.shapeLg,
-            onDismissRequest = { cancellingLine = null },
-            title = { Text("Cancel ${line.name}?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "The item remains visible on KDS until Kitchen acknowledges the cancellation.",
-                        color = Brand.ForegroundMuted,
-                    )
-                    OutlinedTextField(
-                        value = cancellationReason,
-                        onValueChange = { cancellationReason = it.take(500) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Cancellation reason") },
-                        placeholder = { Text("e.g. guest changed order") },
-                    )
+        dismissButton = {
+            if (cancellingLine != null) {
+                TextButton(onClick = ::leaveCancellation, enabled = !busy) {
+                    Text(if (cancellingWholeBill) "Keep bill" else "Keep item")
                 }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onCancelLine(line, cancellationReason)
-                        cancellingLine = null
-                    },
-                    enabled = cancellationReason.isNotBlank() && !busy,
-                ) { Text("Confirm cancellation") }
-            },
-            dismissButton = {
-                TextButton(onClick = { cancellingLine = null }) { Text("Keep item") }
-            },
-        )
-    }
+            } else {
+                TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") }
+            }
+        },
+    )
 }
 
 private fun Double.toQtyLabel(): String =

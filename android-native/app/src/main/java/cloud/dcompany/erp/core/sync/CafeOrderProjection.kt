@@ -195,6 +195,27 @@ internal fun projectCafeBills(
                     }
                 }
 
+                CafeActionKind.VOID_ORDER -> {
+                    // A definitive refusal must continue to show server truth,
+                    // not pretend that every line was cancelled. Pending work
+                    // is optimistic and remains visibly labelled as syncing.
+                    if (action.state == CafeActionState.PENDING) {
+                        status = "voiding"
+                        action.payload.reason?.let { reason ->
+                            projected.indices.forEach { index ->
+                                if (!projected[index].voided) {
+                                    projected[index] = projected[index].copy(
+                                        locallyPending = true,
+                                        voided = true,
+                                        voidReason = reason,
+                                        kitchenCancellationPending = projected[index].roundNo != null,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 CafeActionKind.SEND_TO_POS -> status = "sending_to_pos"
             }
         }
@@ -205,12 +226,16 @@ internal fun projectCafeBills(
         val projectedLineTotal = projected.filterNot { it.voided }.sumOf { it.lineTotalMinor }
         val pendingAmountDelta = projectedLineTotal - confirmedLineTotal
         val amountPending = localActions.any {
-            it.kind in setOf(
+            it.state == CafeActionState.PENDING && it.kind in setOf(
                 CafeActionKind.CREATE_ROUND,
                 CafeActionKind.APPEND_ROUND,
                 CafeActionKind.VOID_LINE,
+                CafeActionKind.VOID_ORDER,
                 CafeActionKind.LEGACY_CREATE_AND_SEND,
             )
+        }
+        val wholeBillVoidPending = localActions.any {
+            it.kind == CafeActionKind.VOID_ORDER && it.state == CafeActionState.PENDING
         }
         CafeBillProjection(
             localBillId = local?.localBillId,
@@ -219,11 +244,14 @@ internal fun projectCafeBills(
             tableCode = local?.tableCode,
             status = status,
             checkoutVersion = server?.checkoutVersion ?: local?.confirmedCheckoutVersion,
-            subtotalMinor = server?.subtotalMinor ?: projected.filterNot { it.voided }
-                .sumOf { it.lineTotalMinor },
-            taxMinor = server?.taxMinor ?: 0,
+            subtotalMinor = if (wholeBillVoidPending) 0 else {
+                server?.subtotalMinor ?: projected.filterNot { it.voided }.sumOf { it.lineTotalMinor }
+            },
+            taxMinor = if (wholeBillVoidPending) 0 else server?.taxMinor ?: 0,
             confirmedTotalMinor = server?.totalMinor,
-            totalMinor = ((server?.totalMinor ?: 0L) + pendingAmountDelta).coerceAtLeast(0L),
+            totalMinor = if (wholeBillVoidPending) 0 else {
+                ((server?.totalMinor ?: 0L) + pendingAmountDelta).coerceAtLeast(0L)
+            },
             amountPending = amountPending,
             lines = projected,
             pendingActionCount = localActions.count { it.state == CafeActionState.PENDING },

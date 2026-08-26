@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,13 +34,13 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +50,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
@@ -60,7 +62,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
@@ -73,6 +74,7 @@ import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.EmptyState
 import cloud.dcompany.erp.ui.components.PrimaryButton
+import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.screens.gaming.OperationalAlarmPermissionCard
 import cloud.dcompany.erp.ui.theme.Brand
@@ -910,6 +912,23 @@ private fun CartPanel(
  * computed as the cashier types, which is the single most-used number at the
  * counter and the thing staff most often get wrong under pressure.
  */
+internal fun cashTenderPresets(dueMinor: Long): List<Long> {
+    if (dueMinor <= 0L) return emptyList()
+
+    fun roundUp(value: Long, step: Long): Long {
+        val remainder = value % step
+        return if (remainder == 0L) value else value + (step - remainder)
+    }
+
+    // Exact payment plus the next ₹100 and ₹500 amounts cover the common
+    // counter handovers without making staff do mental change arithmetic.
+    return listOf(
+        dueMinor,
+        roundUp(dueMinor, 10_000L),
+        roundUp(dueMinor, 50_000L),
+    ).distinct()
+}
+
 @Composable
 private fun PayDialog(
     dueMinor: Long,
@@ -922,8 +941,8 @@ private fun PayDialog(
     onDismiss: () -> Unit,
     onConfirm: (String, Long) -> Unit,
 ) {
-    var method by remember { mutableStateOf("cash") }
-    var tendered by remember { mutableStateOf("") }
+    var method by rememberSaveable(confirmationIdentity) { mutableStateOf("cash") }
+    var tendered by rememberSaveable(confirmationIdentity) { mutableStateOf("") }
     var confirmationConsumed by remember(confirmationIdentity) { mutableStateOf(false) }
     val oneShotConfirmation = remember(confirmationIdentity) {
         confirmationIdentity?.let(::OneShotHeldPaymentConfirmation)
@@ -947,7 +966,12 @@ private fun PayDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
                 if (verifiedSharedOrder) {
                     Text(
                         "Live total verified and reserved for this till. Confirm only after " +
@@ -973,14 +997,12 @@ private fun PayDialog(
                 }
 
                 if (method == "cash") {
-                    OutlinedTextField(
+                    TouchMoneyEntry(
                         value = tendered,
-                        onValueChange = { tendered = it.filter { c -> c.isDigit() || c == '.' } },
+                        onValueChange = { tendered = it },
                         enabled = !confirmationConsumed,
-                        label = { Text("Cash received (₹)") },
-                        singleLine = true,
-                        shape = Radius.shapeMd,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        label = "Cash received (₹)",
+                        presetsMinor = cashTenderPresets(dueMinor),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     AnimatedVisibility(tendered.isNotBlank(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {

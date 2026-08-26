@@ -52,8 +52,8 @@ android {
         applicationId = "cloud.dcompany.erp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "3.0.1"
+        versionCode = 3
+        versionName = "3.0.2"
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
@@ -149,7 +149,12 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // Critical cashier forms must be exercised as rendered Compose UI.  The
+    // database/sync instrumentation suite cannot prove that a staff member can
+    // focus a field, enter text, or complete a no-keyboard fallback flow.
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

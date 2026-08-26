@@ -17,6 +17,8 @@ import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.ResolvedOpenShift
+import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.TableOrderState
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
@@ -116,7 +118,9 @@ class TablesViewModel : ViewModel() {
     private val app = DCompanyApp.instance
     private val db = app.db
     private val cafeDao = db.cafeOrderDao()
-    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(app.terminalStore.terminalIdFlow)
+    private val resolvedShift = db.shiftDao()
+        .observeResolvedOpenShift(app.terminalStore.terminalIdFlow)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val selectedFloorId = MutableStateFlow<String?>(null)
     private val selectedTableId = MutableStateFlow<String?>(null)
@@ -174,6 +178,7 @@ class TablesViewModel : ViewModel() {
                 statusOverride = when {
                     bill == null -> null
                     bill.blockedActionId != null -> "needs attention"
+                    bill.status == "voiding" -> "voiding bill"
                     bill.status == "sending_to_pos" -> "sending to pos"
                     bill.status == "held" -> "at pos"
                     bill.pendingActionCount > 0 -> "round syncing"
@@ -450,6 +455,50 @@ class TablesViewModel : ViewModel() {
         )
     }
 
+    /**
+     * Queue a terminal whole-bill void. This deliberately uses the same
+     * ordered outbox as rounds: an offline first round must be created with
+     * its stable identity before the idempotent DELETE can safely follow it.
+     */
+    fun requestBillCancellation(reason: String) {
+        val snapshot = state.value
+        val shift = resolvedShift.value
+        val profile = app.shiftCache.profile.value
+        val actor = profile?.let { ShiftActor(it.userId, it.protectedAccess) }
+        when (
+            val decision = validateBillCancellation(
+                canCancelItems = access.canCancelItems,
+                busy = busy.value,
+                bill = snapshot.selectedBill,
+                shiftAvailable = shift != null,
+                shiftAuthorized = shift?.canManageMoney(actor) == true,
+                shiftAuthorizationMessage = shift?.wholeBillVoidAccessMessage(actor),
+                rawReason = reason,
+            )
+        ) {
+            is BillCancellationDecision.Rejected -> {
+                notice.value = decision.message
+                return
+            }
+
+            is BillCancellationDecision.Accepted -> {
+                val bill = requireNotNull(snapshot.selectedBill)
+                captureExistingBillAction(
+                    billProjection = bill,
+                    kind = CafeActionKind.VOID_ORDER,
+                    payload = CafeActionPayload(reason = decision.reason),
+                    dedupeKey = "void-order:${bill.localBillId ?: bill.serverOrderId}",
+                    successMessage = billVoidSavedNotice(
+                        tableCode = snapshot.selectedTable?.code ?: bill.tableCode.orEmpty(),
+                        online = app.connectivity.online.value,
+                    ),
+                    duplicateMessage = "This whole-bill void is already saved, or the bill changed. " +
+                        "Refresh Tables before taking another action.",
+                )
+            }
+        }
+    }
+
     fun sendSelectedBillToPos() {
         if (!authorizeAction(access.canSendToPos) { notice.value = VIEW_ONLY_MESSAGE }) return
         val bill = state.value.selectedBill ?: return
@@ -488,6 +537,8 @@ class TablesViewModel : ViewModel() {
         payload: CafeActionPayload,
         dedupeKey: String,
         successMessage: String,
+        duplicateMessage: String =
+            "This action was already saved or the account changed. Refresh the bill before trying again.",
     ) {
         if (busy.value) return
         val table = state.value.selectedTable ?: return
@@ -529,7 +580,7 @@ class TablesViewModel : ViewModel() {
                     notice.value = successMessage
                     app.sync.requestSync()
                 } else {
-                    notice.value = "This action was already saved or the account changed. Refresh the bill before trying again."
+                    notice.value = duplicateMessage
                 }
             } catch (_: Exception) {
                 notice.value = "The action was not saved. Nothing was sent; review the bill and try again."
@@ -628,7 +679,9 @@ class TablesViewModel : ViewModel() {
     }
 
     private fun canRecover(kind: String): Boolean = when (kind) {
-        CafeActionKind.VOID_LINE -> access.canCancelItems
+        CafeActionKind.VOID_LINE,
+        CafeActionKind.VOID_ORDER,
+        -> access.canCancelItems
         CafeActionKind.SEND_TO_POS,
         CafeActionKind.LEGACY_CREATE_AND_SEND,
         -> access.canSendToPos
@@ -663,10 +716,111 @@ internal fun sendSavedNotice(tableCode: String, online: Boolean): String = if (o
     "Offline: Table $tableCode's bill handoff is saved, but POS cannot see it yet. It will send automatically after reconnect."
 }
 
+internal fun billVoidSavedNotice(tableCode: String, online: Boolean): String = if (online) {
+    "Table $tableCode's whole-bill void is saved and awaiting server confirmation. " +
+        "Kitchen cancellations and table availability will update after sync confirms it."
+} else {
+    "Offline: Table $tableCode's whole-bill void is saved on this tablet. The bill remains " +
+        "blocked and Kitchen will not see the cancellations until reconnect."
+}
+
+internal sealed interface BillCancellationDecision {
+    data class Accepted(val reason: String) : BillCancellationDecision
+    data class Rejected(val message: String) : BillCancellationDecision
+}
+
+/** Pure policy so reason, state and authority failures cannot regress silently. */
+internal fun validateBillCancellation(
+    canCancelItems: Boolean,
+    busy: Boolean,
+    bill: CafeBillProjection?,
+    shiftAvailable: Boolean,
+    shiftAuthorized: Boolean,
+    shiftAuthorizationMessage: String?,
+    rawReason: String,
+): BillCancellationDecision {
+    if (!canCancelItems) return BillCancellationDecision.Rejected(VIEW_ONLY_MESSAGE)
+    if (busy) {
+        return BillCancellationDecision.Rejected(
+            "Another table action is being saved. Wait for it to finish before voiding this bill.",
+        )
+    }
+    if (bill == null) {
+        return BillCancellationDecision.Rejected(
+            "Select an active table bill before requesting a whole-bill void.",
+        )
+    }
+    when {
+        bill.blockedActionId != null -> return BillCancellationDecision.Rejected(
+            "Resolve the saved table action before voiding this bill.",
+        )
+        bill.status == "voiding" -> return BillCancellationDecision.Rejected(
+            "This whole-bill void is already saved and waiting for server confirmation.",
+        )
+        bill.status == "sending_to_pos" -> return BillCancellationDecision.Rejected(
+            "This bill is already being sent to POS. Wait for confirmation and review it there.",
+        )
+        bill.status == "held" -> return BillCancellationDecision.Rejected(
+            "This bill is already at POS. Review it there before attempting a protected void.",
+        )
+        bill.status != "open" -> return BillCancellationDecision.Rejected(
+            "This bill is ${bill.status.replace('_', ' ')} and can no longer be voided from Tables.",
+        )
+    }
+    val activeLines = bill.lines.filterNot { it.voided }
+    if (activeLines.isEmpty()) {
+        return BillCancellationDecision.Rejected(
+            "This bill has no active items left to void. Refresh Tables and review its history.",
+        )
+    }
+    if (activeLines.any { it.kitchenStatus.equals("served", ignoreCase = true) }) {
+        return BillCancellationDecision.Rejected(
+            "At least one item was already served. Finish and bill the order, then use the protected refund workflow if needed.",
+        )
+    }
+    if (!shiftAvailable) {
+        return BillCancellationDecision.Rejected(
+            "No usable shift is open on this terminal. Reconnect or open a shift before voiding a bill.",
+        )
+    }
+    if (!shiftAuthorized) {
+        return BillCancellationDecision.Rejected(
+            shiftAuthorizationMessage
+                ?: "Only the shift opener or a protected owner can void this whole bill.",
+        )
+    }
+    val reason = rawReason.trim()
+    if (reason.isEmpty()) {
+        return BillCancellationDecision.Rejected(
+            "Enter why the whole bill is being voided. Kitchen and the audit history both need the reason.",
+        )
+    }
+    if (reason.length > 500) {
+        return BillCancellationDecision.Rejected("The void reason must be 500 characters or fewer.")
+    }
+    return BillCancellationDecision.Accepted(reason)
+}
+
+private fun ResolvedOpenShift.wholeBillVoidAccessMessage(actor: ShiftActor?): String? {
+    if (canManageMoney(actor)) return null
+    if (actor == null) {
+        return "The signed-in employee could not be verified. Reconnect before voiding a whole bill."
+    }
+    val opener = openedByName?.takeIf(String::isNotBlank)
+        ?: openedByEmail?.takeIf(String::isNotBlank)
+        ?: "another staff member"
+    return if (openedByUserId == null) {
+        "The shift opener has not been verified on this tablet. Reconnect before voiding a whole bill."
+    } else {
+        "Shift opened by $opener. Only that opener or a protected owner can void this whole bill."
+    }
+}
+
 private fun cafeActionLabel(kind: String): String = when (kind) {
     CafeActionKind.CREATE_ROUND -> "First service round"
     CafeActionKind.APPEND_ROUND -> "Later service round"
     CafeActionKind.VOID_LINE -> "Item cancellation"
+    CafeActionKind.VOID_ORDER -> "Whole-bill void"
     CafeActionKind.SEND_TO_POS -> "Send to POS"
     CafeActionKind.LEGACY_CREATE_AND_SEND -> "Legacy table handoff"
     else -> "Table action"
