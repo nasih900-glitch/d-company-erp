@@ -112,6 +112,18 @@ jobs:
       - name: Run Android JVM tests
         working-directory: android-native
         run: ./gradlew --no-daemon --max-workers=2 --stacktrace testDebugUnitTest
+      # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
+      # consistently granted access. Without KVM the API-35 emulator can take
+      # several minutes to boot and the instrumentation process may be killed
+      # before it discovers any tests.
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
       # Room migration tests need a real Android SQLite/Room runtime. Keeping
       # them blocking prevents a schema change from shipping an app that can no
       # longer open an existing tablet database.
@@ -121,7 +133,17 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: cd android-native && ./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest
+          script: |
+            cd android-native
+            mkdir -p app/build/outputs/ci-diagnostics
+            set +e
+            ./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              adb logcat -d -v threadtime > app/build/outputs/ci-diagnostics/logcat.txt || true
+              adb shell dumpsys activity processes > app/build/outputs/ci-diagnostics/activity-processes.txt || true
+            fi
+            exit "$status"
       - name: Upload Android test and lint reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -135,6 +157,7 @@ jobs:
             android-native/app/build/reports/androidTests/
             android-native/app/build/test-results/
             android-native/app/build/outputs/androidTest-results/
+            android-native/app/build/outputs/ci-diagnostics/
 
   docker:
     runs-on: ubuntu-latest
