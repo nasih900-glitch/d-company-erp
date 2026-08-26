@@ -61,4 +61,35 @@ class ConflatedSyncRequestGateTest {
         assertTrue(gate.claimPass())
         assertFalse(gate.finishPass())
     }
+
+    @Test
+    fun `old cache cohort cannot retire replacement worker after account switch`() {
+        val gate = ConflatedSyncRequestGate()
+
+        val oldWorker = requireNotNull(gate.request(cohort = 11L))
+        assertTrue(gate.claimPass(oldWorker))
+
+        val replacement = requireNotNull(gate.request(cohort = 12L))
+
+        // Simulates a paused old network pass resuming after the new employee
+        // has scheduled their first sync. Its completion must be a no-op.
+        assertFalse(gate.finishPass(oldWorker))
+        assertTrue(gate.claimPass(replacement))
+        assertFalse(gate.finishPass(replacement))
+    }
+
+    @Test
+    fun `session reset prevents cancelled worker ABA from changing new pending state`() {
+        val gate = ConflatedSyncRequestGate()
+
+        val cancelled = requireNotNull(gate.request(cohort = 21L))
+        assertTrue(gate.claimPass(cancelled))
+        gate.reset()
+
+        val current = requireNotNull(gate.request(cohort = 22L))
+        assertFalse(gate.claimPass(cancelled))
+        assertFalse(gate.finishPass(cancelled))
+        assertTrue(gate.claimPass(current))
+        assertFalse(gate.finishPass(current))
+    }
 }

@@ -24,10 +24,12 @@ import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
 import cloud.dcompany.erp.core.sync.CafeBillProjection
 import cloud.dcompany.erp.core.sync.projectCafeBills
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -223,7 +225,8 @@ class TablesViewModel : ViewModel() {
                 },
             online = runtime.online,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TablesUiState())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TablesUiState())
 
     init {
         app.sync.requestSync()

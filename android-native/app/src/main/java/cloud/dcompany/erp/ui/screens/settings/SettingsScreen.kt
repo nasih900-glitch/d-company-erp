@@ -34,7 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,7 +68,7 @@ fun SettingsScreen(
     canManageSystem: Boolean,
     vm: SettingsViewModel = viewModel(),
 ) {
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     val visibleTabs = if (canManageSystem) SettingsTab.entries else listOf(SettingsTab.Account)
     val activeTab = state.tab.takeIf { it in visibleTabs } ?: SettingsTab.Account
     LaunchedEffect(activeTab) {

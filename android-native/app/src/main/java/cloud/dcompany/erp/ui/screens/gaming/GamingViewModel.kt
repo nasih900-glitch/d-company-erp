@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
@@ -14,6 +15,8 @@ import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.sync.ResourceRefreshResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,9 +35,19 @@ data class GamingUiState(
     val error: String? = null,
     /** A gaming pull has completed at least once on this device. */
     val everSynced: Boolean = false,
+    /** The station/session pull currently owns the screen's refresh affordance. */
+    val refreshing: Boolean = true,
+    /** Recoverable read failure, kept separate from station-action errors. */
+    val refreshError: String? = null,
     /** Same Room-derived id PosViewModel uses — null means no shift open. */
     val activeShiftId: String? = null,
 ) {
+    val initialLoading: Boolean
+        get() = !everSynced && stations.isEmpty() && refreshing
+
+    val initialLoadFailed: Boolean
+        get() = !everSynced && stations.isEmpty() && !refreshing && !refreshError.isNullOrBlank()
+
     fun activeFor(stationId: String): GameSession? =
         sessions.firstOrNull {
             it.stationId == stationId && (
@@ -68,6 +81,27 @@ internal fun GameSession.canCancelUnbilled(): Boolean =
 private fun GameSession.isUnbilledEnded(): Boolean = status == "ended" && orderId == null
 
 /**
+ * The legacy repair is best-effort startup hygiene; it must never prevent the
+ * authoritative gaming pull from running. Cancellation is different: it means
+ * the ViewModel is being disposed and must retain structured-concurrency
+ * semantics instead of continuing work for a dead screen/session.
+ */
+internal suspend fun recoverGamingThenRefresh(
+    recover: suspend () -> Unit,
+    refresh: suspend () -> Unit,
+    onRecoveryFailure: (Exception) -> Unit = {},
+) {
+    try {
+        recover()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        onRecoveryFailure(failure)
+    }
+    refresh()
+}
+
+/**
  * Room-backed, offline-first — same shape as PosViewModel/ShiftViewModel.
  * Stations and sessions both read from Room, never the network directly.
  *
@@ -91,14 +125,39 @@ class GamingViewModel : ViewModel() {
 
     private val busyStationId = MutableStateFlow<String?>(null)
     private val error = MutableStateFlow<String?>(null)
+    private val refreshing = MutableStateFlow(true)
+    private val refreshError = MutableStateFlow<String?>(null)
     @Volatile private var access = GamingAccess()
+
+    private data class ScreenState(
+        val busyStationId: String?,
+        val actionError: String?,
+        val refreshing: Boolean,
+        val refreshError: String?,
+    )
 
     val state: StateFlow<GamingUiState> = combine(
         db.gamingDao().observeStations(),
         db.gamingDao().observeSessionCache(),
         db.gamingDao().observeActiveLocalSessions(),
         combine(
-            combine(busyStationId, error, ::Pair),
+            combine(
+                busyStationId,
+                error,
+                refreshing,
+                refreshError,
+                appCtx.sync.resourceRefreshErrors,
+            ) { busyStation, actionError, isRefreshing, localRefreshError, resourceErrors ->
+                ScreenState(
+                    busyStationId = busyStation,
+                    actionError = actionError,
+                    refreshing = isRefreshing,
+                    // A realtime refresh can fail after the initial/manual
+                    // pull. Observe SyncEngine's resource-scoped feedback so
+                    // a populated board never becomes silently stale.
+                    refreshError = localRefreshError ?: resourceErrors["gaming"],
+                )
+            },
             resolvedShift,
             ::Pair,
         ),
@@ -122,9 +181,11 @@ class GamingViewModel : ViewModel() {
         GamingUiState(
             stations = stations.map { it.toStation() },
             sessions = cacheSessions + localOnly,
-            busyStationId = actionState.first,
-            error = actionState.second,
+            busyStationId = actionState.busyStationId,
+            error = actionState.actionError,
             everSynced = meta != null,
+            refreshing = actionState.refreshing,
+            refreshError = actionState.refreshError,
             // Starting/operating a session is shared terminal work; opener
             // ownership gates only POS collection and shift close.
             activeShiftId = currentShift?.shiftId,
@@ -134,16 +195,27 @@ class GamingViewModel : ViewModel() {
     init {
         val recoveryLease = appCtx.cacheIsolation.currentLease()
         viewModelScope.launch {
-            // MIGRATION_16_17 handles normal upgrades. This idempotent call
-            // also repairs an imported backup that was already stamped with a
-            // newer Room version before the user can choose a recovery action.
-            if (recoveryLease != null) {
-                appCtx.cacheIsolation.commitIfCurrent(recoveryLease) {
-                    db.gamingDao().recoverLegacyRejectedSessions()
+            recoverGamingThenRefresh(
+                recover = {
+                    // MIGRATION_16_17 handles normal upgrades. This idempotent
+                    // call also repairs an imported backup that was already
+                    // stamped with a newer Room version before the user can
+                    // choose a recovery action.
+                    if (recoveryLease != null) {
+                        appCtx.cacheIsolation.commitIfCurrent(recoveryLease) {
+                            db.gamingDao().recoverLegacyRejectedSessions()
+                        }
+                    }
+                },
+                refresh = ::refreshGaming,
+                onRecoveryFailure = { failure ->
+                    Log.w(
+                        "GamingViewModel",
+                        "Legacy gaming-session recovery failed; continuing with refresh",
+                        failure,
+                    )
                 }
-            }
-            appCtx.sync.requestSync()
-            appCtx.sync.refresh("gaming")
+            )
         }
         // Reconciles on every meaningful session change, not just once at
         // start. This both schedules new deadlines and cancels an alarm when
@@ -156,8 +228,33 @@ class GamingViewModel : ViewModel() {
     }
 
     fun load() {
-        appCtx.sync.requestSync()
-        viewModelScope.launch { appCtx.sync.refresh("gaming") }
+        if (refreshing.value) return
+        refreshing.value = true
+        refreshError.value = null
+        viewModelScope.launch { refreshGaming() }
+    }
+
+    private suspend fun refreshGaming() {
+        try {
+            // Keep setup inside the protected region: requestSync can touch
+            // storage/work scheduling, so a setup failure must still release
+            // the screen's refresh state in finally.
+            appCtx.sync.requestSync()
+            refreshError.value = when (appCtx.sync.refresh("gaming")) {
+                is ResourceRefreshResult.Refreshed,
+                is ResourceRefreshResult.Failed,
+                -> null // SyncEngine publishes/clears the shared resource error.
+                is ResourceRefreshResult.Skipped ->
+                    "Gaming stations are unavailable for this account. Ask a manager to check Gaming access."
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            refreshError.value =
+                "Could not load gaming stations. Check the connection and try again."
+        } finally {
+            refreshing.value = false
+        }
     }
 
     fun updateAccess(next: GamingAccess) {

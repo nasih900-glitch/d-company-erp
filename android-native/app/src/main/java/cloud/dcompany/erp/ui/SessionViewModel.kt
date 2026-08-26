@@ -29,18 +29,24 @@ import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.Terminal
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 
 sealed interface AuthState {
     data object Loading : AuthState
+    data object SigningOut : AuthState
+    data class SignOutFailed(val message: String) : AuthState
     data object SignedOut : AuthState
     data class SignedIn(val me: MeResponse) : AuthState
     /** A branch has multiple tills and this tablet has no valid saved assignment. */
@@ -150,6 +156,24 @@ internal suspend fun <T : Any> restoreCachedBeforeRemote(
     refreshRemote(cachedSessionActive)
 }
 
+/**
+ * A login cancellation is not allowed to leave its newly persisted token behind.
+ * The caller supplies the lineage-guarded rollback so a late cancellation can
+ * never clear a newer employee's explicit login.
+ */
+internal suspend fun <T : Any> rollbackCancelledLoginAndRethrow(
+    installedLogin: T?,
+    cancelled: CancellationException,
+    rollbackIfCurrent: suspend (T) -> Unit,
+): Nothing {
+    if (installedLogin != null) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            rollbackIfCurrent(installedLogin)
+        }
+    }
+    throw cancelled
+}
+
 class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     private val tokens = (app as DCompanyApp).tokens
@@ -211,6 +235,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = AuthState.Loading
             viewModelScope.launch {
                 cacheIsolation.deactivate()
+                sync.clearSessionFeedback()
                 cache.rememberProfile(null)
                 _state.value = AuthState.SignedOut
                 refreshSignedOutSafetyNotice()
@@ -302,6 +327,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = AuthState.Loading
         restoreJob = viewModelScope.launch {
             cacheIsolation.deactivate()
+            sync.clearSessionFeedback()
             if (!tokens.hasSession()) {
                 cancelOperationalAlarms()
                 _state.value = AuthState.SignedOut
@@ -356,6 +382,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val scope = runCatching { cachedScope(profile) }.getOrNull() ?: return false
         try {
             cacheIsolation.activateCached(scope)
+            sync.clearSessionFeedback()
         } catch (_: CacheScopeException) {
             return false
         }
@@ -463,6 +490,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _loginError.value = null
         viewModelScope.launch {
             var installedLogin: LoginSessionLease? = null
+            // withContext has prompt cancellation on its return dispatch. Keep
+            // the lease as soon as the durable install completes so cleanup
+            // can still identify this lineage if cancellation wins that race.
+            val installedLoginCapture = AtomicReference<LoginSessionLease?>(null)
             try {
                 val pair = ApiClient.api.login(
                     LoginRequest(email = email.trim().lowercase(), password = password),
@@ -472,7 +503,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     _loginError.value = preflight.message
                     return@launch
                 }
-                installedLogin = tokens.installForLogin(pair.accessToken, pair.refreshToken)
+                installedLogin = withContext(Dispatchers.IO) {
+                    tokens.installForLogin(pair.accessToken, pair.refreshToken).also {
+                        installedLoginCapture.set(it)
+                    }
+                }
                 val me = ApiClient.api.me()
                 val tokenIdentity = AccessTokenIdentityParser.parse(pair.accessToken)
                 if (tokenIdentity == null || tokenIdentity != OutboxOwnerIdentity.from(me)) {
@@ -498,6 +533,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = AuthState.SignedIn(me)
                 sync.requestSync()
                 realtime.connect()
+            } catch (cancelled: CancellationException) {
+                rollbackCancelledLoginAndRethrow(
+                    installedLogin = installedLogin ?: installedLoginCapture.get(),
+                    cancelled = cancelled,
+                    rollbackIfCurrent = { rollbackFailedLogin(it) },
+                )
             } catch (e: ApiException) {
                 rollbackFailedLogin(installedLogin)
                 _loginError.value = loginErrorMessage(e)
@@ -580,6 +621,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // Revoke its lease and marker so a process restart cannot
                 // reopen that workspace offline while staff are choosing.
                 cacheIsolation.invalidate()
+                sync.clearSessionFeedback()
                 deactivateTerminalRuntime()
                 realtime.disconnect()
                 pendingTerminalSession = PendingTerminalSession(
@@ -596,6 +638,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // of a server-rejected branch/till assignment.
                 if (!hasUnresolvedLocalWork) {
                     cacheIsolation.invalidate()
+                    sync.clearSessionFeedback()
                     deactivateTerminalRuntime()
                 }
                 throw TerminalScopeException(resolution.message)
@@ -757,6 +800,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             throw TerminalScopeException(finalDecision.message)
         }
 
+        sync.clearSessionFeedback()
+
         // The final gate has revoked every feature lease, so no cart/shift or
         // outbox write can race the switch from this point onward.
         if (!isCurrentReassignmentSession(me, lease)) {
@@ -860,6 +905,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         ) return
         runCatching {
             cacheIsolation.activateCached(scopeFor(current, previous.terminalId))
+            sync.clearSessionFeedback()
             ApiClient.activateTerminalScope(previous.terminalId)
             terminals.activateCachedValidated(previous.terminalId, previous.branchId)
             reconcileOperationalAlarms()
@@ -1115,6 +1161,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 cacheIsolation.activateCached(scopeFor(pending.me, previous.terminalId))
+                sync.clearSessionFeedback()
                 ApiClient.activateTerminalScope(previous.terminalId)
                 if (!terminals.activateCachedValidated(previous.terminalId, previous.branchId)) {
                     deactivateTerminalRuntime()
@@ -1195,6 +1242,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun activateValidatedScope(scope: CacheScope) {
         terminals.deactivateValidatedDisplay()
         val activation = cacheIsolation.activateValidated(scope)
+        sync.clearSessionFeedback()
         ApiClient.activateTerminalScope(scope.terminalId)
         if (activation == CacheScopeActivation.PURGED) {
             // A route is scoped to the account/branch/till that issued its
@@ -1255,19 +1303,42 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 outboxSafety.publishNotice(decision.message)
                 return@launch
             }
+            // Dispose the authenticated feature tree before any IO-backed
+            // credential cleanup suspends. Otherwise the old workspace stays
+            // tappable with an already-deactivated cache lease and actions can
+            // appear to do nothing during sign-out.
+            _state.value = AuthState.SigningOut
+            sync.clearSessionFeedback()
             deactivateTerminalRuntime()
+            realtime.disconnect()
+            PricingLock.lock()
             restoreJob?.cancel()
             pendingTerminalSession = null
             _accessChangeNotice.value = null
             cancelOperationalAlarms()
             (getApplication() as DCompanyApp).notificationRoutes.clearPending()
-            tokens.clear()
-            PricingLock.lock()
+            try {
+                withContext(Dispatchers.IO) { tokens.clear() }
+            } catch (_: Exception) {
+                _state.value = AuthState.SignOutFailed(
+                    "This tablet could not durably remove the secure session. Keep this screen open, " +
+                        "retry sign-out, and do not hand the tablet to another employee until it succeeds.",
+                )
+                return@launch
+            }
             // Must also drop the cached profile: leaving it would let the next
             // cold start reopen the till as the staff member who just signed out.
-            cache.rememberProfile(null)
+            try {
+                cache.rememberProfile(null)
+            } catch (_: Exception) {
+                // Credentials are already gone, so sign-out itself succeeded.
+                // Surface the local cleanup problem on Login rather than
+                // leaving the employee trapped behind an endless spinner.
+                _loginError.value =
+                    "Signed out, but this tablet could not clear its saved display profile. " +
+                        "Restart the app before the next employee signs in."
+            }
             _state.value = AuthState.SignedOut
-            realtime.disconnect()
         }
     }
 
@@ -1309,7 +1380,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         decision as OutboxGateResult.Blocked
         if (installedLogin == null) {
             if (restoredSession == null) {
-                tokens.clear()
+                withContext(Dispatchers.IO) { tokens.clear() }
                 PricingLock.lock()
                 deactivateTerminalRuntime()
                 cache.rememberProfile(null)
@@ -1327,12 +1398,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Clear only this failed login; a newer explicit login always wins. */
     private suspend fun rollbackFailedLogin(installedLogin: LoginSessionLease?): Boolean {
-        if (installedLogin == null || !tokens.rollbackLoginIfCurrent(installedLogin)) return false
+        if (
+            installedLogin == null ||
+            !withContext(Dispatchers.IO) { tokens.rollbackLoginIfCurrent(installedLogin) }
+        ) return false
         terminalChangeJob?.cancel()
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
         cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
         deactivateTerminalRuntime()
         cancelOperationalAlarms()
         cache.rememberProfile(null)
@@ -1355,7 +1430,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (activeAccess != null) {
             val current = tokens.refreshLease()
             if (current != null && current.accessToken == activeAccess) {
-                tokens.clearIfCurrent(current)
+                withContext(Dispatchers.IO) { tokens.clearIfCurrent(current) }
             }
         }
         if (tokens.hasSession()) return
@@ -1368,6 +1443,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         deactivateTerminalRuntime()
         cache.rememberProfile(null)
         cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
         cancelOperationalAlarms()
         message?.let {
             _loginError.value = it
@@ -1396,6 +1472,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         PricingLock.lock()
         deactivateTerminalRuntime()
         cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
         cancelOperationalAlarms()
         realtime.disconnect()
         _state.value = AuthState.Blocked(message)

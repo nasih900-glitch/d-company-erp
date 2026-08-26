@@ -1,9 +1,13 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
 import cloud.dcompany.erp.core.db.GamingSessionState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class GamingViewModelRecoveryTest {
@@ -77,6 +81,62 @@ class GamingViewModelRecoveryTest {
         assertEquals("paused", ui.activeFor("station-paused")?.id)
         assertEquals(listOf("send"), ui.readyForPos.map { it.id })
         assertEquals(listOf("zero"), ui.needsCancellation.map { it.id })
+    }
+
+    @Test
+    fun `cold gaming board distinguishes loading from recoverable failure`() {
+        val loading = GamingUiState(refreshing = true)
+        val failed = GamingUiState(
+            refreshing = false,
+            refreshError = "Could not reach the ERP.",
+        )
+        val syncedEmpty = GamingUiState(everSynced = true, refreshing = false)
+
+        assertTrue(loading.initialLoading)
+        assertFalse(loading.initialLoadFailed)
+
+        assertFalse(failed.initialLoading)
+        assertTrue(failed.initialLoadFailed)
+
+        val betweenRefreshAndMeta = GamingUiState(refreshing = false, refreshError = null)
+        assertFalse(betweenRefreshAndMeta.initialLoadFailed)
+
+        assertFalse(syncedEmpty.initialLoading)
+        assertFalse(syncedEmpty.initialLoadFailed)
+    }
+
+    @Test
+    fun `legacy recovery failure does not prevent authoritative refresh`() = runBlocking {
+        val recoveryFailure = IllegalStateException("backup repair failed")
+        var observedFailure: Exception? = null
+        var refreshed = false
+
+        recoverGamingThenRefresh(
+            recover = { throw recoveryFailure },
+            refresh = { refreshed = true },
+            onRecoveryFailure = { observedFailure = it },
+        )
+
+        assertSame(recoveryFailure, observedFailure)
+        assertTrue(refreshed)
+    }
+
+    @Test
+    fun `legacy recovery cancellation is preserved and does not start refresh`() {
+        val cancellation = CancellationException("view model cleared")
+        var refreshed = false
+
+        val thrown = assertThrows(CancellationException::class.java) {
+            runBlocking {
+                recoverGamingThenRefresh(
+                    recover = { throw cancellation },
+                    refresh = { refreshed = true },
+                )
+            }
+        }
+
+        assertSame(cancellation, thrown)
+        assertFalse(refreshed)
     }
 
     private fun session(

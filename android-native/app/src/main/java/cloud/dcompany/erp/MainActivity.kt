@@ -25,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,9 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.AuthState
@@ -125,41 +126,33 @@ private fun AppRoot(
     session: SessionViewModel = viewModel(),
 ) {
     val compatibility = DCompanyApp.instance.clientCompatibility
-    val compatibilityState by compatibility.state.collectAsState()
-    val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsState()
-    val backendReachability by ApiClient.backendReachability.state.collectAsState()
+    val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
+    val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsStateWithLifecycle()
+    val backendReachability by ApiClient.backendReachability.state.collectAsStateWithLifecycle()
     val syncAvailability = syncAvailabilityProblem(networkValidated, backendReachability)
-    val state by session.state.collectAsState()
-    val signingIn by session.signingIn.collectAsState()
-    val loginError by session.loginError.collectAsState()
-    val accountSafetyNotice by session.accountSafetyNotice.collectAsState()
-    val accessChangeNotice by session.accessChangeNotice.collectAsState()
-    val terminalChange by session.terminalChange.collectAsState()
-    val activeTerminal by DCompanyApp.instance.terminalStore.activeValidatedTerminal.collectAsState()
-    val pendingNotificationTarget by DCompanyApp.instance.notificationRoutes.pending.collectAsState()
+    val state by session.state.collectAsStateWithLifecycle()
+    val signingIn by session.signingIn.collectAsStateWithLifecycle()
+    val loginError by session.loginError.collectAsStateWithLifecycle()
+    val accountSafetyNotice by session.accountSafetyNotice.collectAsStateWithLifecycle()
+    val accessChangeNotice by session.accessChangeNotice.collectAsStateWithLifecycle()
+    val terminalChange by session.terminalChange.collectAsStateWithLifecycle()
+    val activeTerminal by DCompanyApp.instance.terminalStore.activeValidatedTerminal.collectAsStateWithLifecycle()
+    val pendingNotificationTarget by DCompanyApp.instance.notificationRoutes.pending.collectAsStateWithLifecycle()
     val rejectedNotificationOpenNotice by
-        DCompanyApp.instance.notificationRoutes.rejectedOpenNotice.collectAsState()
+        DCompanyApp.instance.notificationRoutes.rejectedOpenNotice.collectAsStateWithLifecycle()
     var notificationRouteNotice by rememberSaveable { mutableStateOf<String?>(null) }
 
     when (val update = compatibilityState) {
-        ClientCompatibilityState.Checking -> {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    CircularProgressIndicator(color = Brand.Gold)
-                    Text("Checking app compatibility…", color = Brand.ForegroundMuted)
-                }
-            }
-            return
-        }
-
         is ClientCompatibilityState.UpdateRequired -> {
             RequiredUpdateScreen(update.notice, onOpenUpdate)
             return
         }
 
+        // Render the cached workspace beneath a non-dismissible safety gate.
+        // This avoids a blank-looking launch while preserving the preflight:
+        // no offline write can be captured until the server either supports
+        // this build or the bounded compatibility check fails open.
+        ClientCompatibilityState.Checking,
         is ClientCompatibilityState.UpdateAvailable,
         ClientCompatibilityState.Supported -> Unit
     }
@@ -167,6 +160,32 @@ private fun AppRoot(
     when (val s = state) {
         is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             CircularProgressIndicator(color = Brand.Gold)
+        }
+
+        is AuthState.SigningOut -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(color = Brand.Gold)
+                Text("Signing out safely…", color = Brand.ForegroundMuted)
+            }
+        }
+
+        is AuthState.SignOutFailed -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(24.dp),
+            ) {
+                Text("Couldn't finish sign-out", style = MaterialTheme.typography.titleLarge)
+                Text(s.message, color = Brand.ForegroundMuted)
+                Button(onClick = session::signOut) { Text("Retry sign-out") }
+                Text(
+                    "If retry still fails, keep this tablet with a manager and contact support.",
+                    color = Brand.ForegroundMuted,
+                )
+            }
         }
 
         is AuthState.SignedOut -> PreLoginViewModelScope {
@@ -320,7 +339,7 @@ private fun AppRoot(
                                 // destination so hidden tabs cannot generate
                                 // background 403s for low-privilege accounts.
                                 val pos: PosViewModel = viewModel()
-                                val posState by pos.state.collectAsState()
+                                val posState by pos.state.collectAsStateWithLifecycle()
                                 val heldFocus = operationalFocus
                                     as? OperationalNotificationTarget.HeldOrder
                                 LaunchedEffect(heldFocus?.orderId) {
@@ -479,7 +498,9 @@ private fun AppRoot(
         }
     }
 
-    if (accountSafetyNotice != null) {
+    if (compatibilityState is ClientCompatibilityState.Checking) {
+        CompatibilityCheckDialog()
+    } else if (accountSafetyNotice != null) {
         AlertDialog(
             onDismissRequest = session::dismissAccountSafetyNotice,
             title = { Text("Account safety lock") },
@@ -525,6 +546,31 @@ private fun AppRoot(
             onOpenUpdate = onOpenUpdate,
         )
     }
+}
+
+@Composable
+private fun CompatibilityCheckDialog() {
+    AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
+        title = { Text("Getting this tablet ready") },
+        text = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(color = Brand.Gold)
+                Text(
+                    "Verifying this app version before orders can be changed. " +
+                        "Saved work is safe; this usually takes a moment.",
+                )
+            }
+        },
+        confirmButton = {},
+    )
 }
 
 @Composable

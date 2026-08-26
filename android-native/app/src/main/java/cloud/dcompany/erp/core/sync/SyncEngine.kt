@@ -166,9 +166,13 @@ import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
 import cloud.dcompany.erp.ui.screens.staff.StaffApi
 import cloud.dcompany.erp.ui.screens.staff.StaffUserUpdateBody
 import cloud.dcompany.erp.ui.screens.tables.TablesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -178,6 +182,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import java.time.Instant
 import java.util.Locale
@@ -295,34 +300,59 @@ internal class ConnectivityObserver(
  * request, so a request at the pass/idle boundary cannot be stranded.
  */
 internal class ConflatedSyncRequestGate {
-    private var workerRunning = false
-    private var requestPending = false
+    internal data class WorkerLease(
+        val cohort: Long,
+        val sequence: Long,
+    )
 
-    /** Returns true only for the caller responsible for starting the worker. */
+    private var worker: WorkerLease? = null
+    private var requestPending = false
+    private var nextSequence = 0L
+
+    /** Compatibility form used by policy tests and non-session callers. */
     @Synchronized
-    fun request(): Boolean {
+    fun request(): Boolean = request(cohort = 0L) != null
+
+    /** Returns a lease only for the caller responsible for starting the worker. */
+    @Synchronized
+    fun request(cohort: Long): WorkerLease? {
+        val existing = worker
+        if (existing != null && existing.cohort == cohort) {
+            requestPending = true
+            return null
+        }
+        val replacement = WorkerLease(cohort = cohort, sequence = ++nextSequence)
+        worker = replacement
         requestPending = true
-        if (workerRunning) return false
-        workerRunning = true
-        return true
+        return replacement
     }
+
+    /** Compatibility form used by policy tests and non-session callers. */
+    @Synchronized
+    fun claimPass(): Boolean = worker?.let(::claimPass) ?: false
 
     /** Called under SyncEngine's pass mutex immediately before a worker pass. */
     @Synchronized
-    fun claimPass(): Boolean {
+    fun claimPass(lease: WorkerLease): Boolean {
+        if (worker != lease) return false
         if (!requestPending) {
-            workerRunning = false
+            worker = null
             return false
         }
         requestPending = false
         return true
     }
 
+    /** Compatibility form used by policy tests and non-session callers. */
+    @Synchronized
+    fun finishPass(): Boolean = worker?.let(::finishPass) ?: false
+
     /** Returns true when at least one request arrived during the preceding pass. */
     @Synchronized
-    fun finishPass(): Boolean {
+    fun finishPass(lease: WorkerLease): Boolean {
+        if (worker != lease) return false
         if (requestPending) return true
-        workerRunning = false
+        worker = null
         return false
     }
 
@@ -330,6 +360,67 @@ internal class ConflatedSyncRequestGate {
     @Synchronized
     fun absorbPendingIntoDirectPass() {
         requestPending = false
+    }
+
+    @Synchronized
+    fun absorbPendingIntoDirectPass(cohort: Long) {
+        if (worker?.cohort == cohort) requestPending = false
+    }
+
+    /**
+     * Revoke a process-scoped worker without letting its late completion alter
+     * a replacement worker from a newer authenticated cache generation.
+     */
+    @Synchronized
+    fun revoke(lease: WorkerLease) {
+        if (worker != lease) return
+        worker = null
+        requestPending = false
+    }
+
+    /** Session/account transitions must not leave an old worker registered. */
+    @Synchronized
+    fun reset() {
+        worker = null
+        requestPending = false
+    }
+}
+
+/**
+ * Carries an authenticated-work lease through every nested suspend helper.
+ *
+ * Cancellation is cooperative, so a network/database call may finish after
+ * sign-out even when its owning job has already been cancelled.  This guard
+ * gives those nested helpers a generation-aware feedback channel and an
+ * explicit checkpoint before the next resource leg.  [publishIfCurrent] must
+ * check the lease and run the update atomically with the session transition.
+ */
+internal class SessionWorkGuard<L>(
+    private val isCurrent: (L) -> Boolean,
+    private val publishIfCurrent: (L, () -> Unit) -> Boolean,
+) {
+    private val contextualLease = ThreadLocal<L?>()
+
+    suspend fun <T> withLease(lease: L, block: suspend () -> T): T =
+        withContext(contextualLease.asContextElement(lease)) { block() }
+
+    fun ensureCurrent(lease: L) {
+        if (!isCurrent(lease)) {
+            throw CancellationException("Authenticated sync scope changed")
+        }
+    }
+
+    fun publish(lease: L, update: () -> Unit): Boolean = publishIfCurrent(lease, update)
+
+    /** Non-session callers retain the existing direct feedback behaviour. */
+    fun publishFromContext(update: () -> Unit): Boolean {
+        val lease = contextualLease.get()
+        return if (lease == null) {
+            update()
+            true
+        } else {
+            publishIfCurrent(lease, update)
+        }
     }
 }
 
@@ -384,6 +475,145 @@ internal class ResourceRefreshSerialiser {
     }
 }
 
+/**
+ * Coalesces repeated pull-only refresh requests without weakening the ordering
+ * guarantees in [ResourceRefreshSerialiser]. The first request owns the active
+ * pass. Requests that arrive while that pass is in flight share exactly one
+ * trailing pass, so polling/realtime bursts cannot build an unbounded queue of
+ * stale GETs.
+ *
+ * The worker lives in SyncEngine's process scope rather than in the first
+ * caller. Cancelling a screen that requested a refresh therefore cancels only
+ * that screen's wait; it cannot strand another caller that joined the same
+ * trailing pass. This runner is deliberately used only for equivalent,
+ * pull-only refreshes. Confirmed writes and compound resource critical
+ * sections continue to use [ResourceRefreshSerialiser] directly and are never
+ * conflated.
+ */
+internal class ConflatedResourceRefreshRunner(
+    private val scope: CoroutineScope,
+) {
+    private class Slot(
+        var active: CompletableDeferred<ResourceRefreshResult>,
+        var trailing: CompletableDeferred<ResourceRefreshResult>? = null,
+    ) {
+        var worker: Job? = null
+    }
+
+    private data class Registration(
+        val result: CompletableDeferred<ResourceRefreshResult>,
+        val workerToStart: Job? = null,
+    )
+
+    private val monitor = Any()
+    private val slots = mutableMapOf<String, Slot>()
+
+    suspend fun run(
+        resource: String,
+        refresh: suspend () -> ResourceRefreshResult,
+    ): ResourceRefreshResult = runScoped(resource, cohort = null, refresh)
+
+    suspend fun run(
+        resource: String,
+        cohort: Long,
+        refresh: suspend () -> ResourceRefreshResult,
+    ): ResourceRefreshResult = runScoped(resource, cohort = cohort, refresh)
+
+    private suspend fun runScoped(
+        resource: String,
+        cohort: Long?,
+        refresh: suspend () -> ResourceRefreshResult,
+    ): ResourceRefreshResult {
+        val canonical = canonicalRefreshResource(resource)
+        // Keep bursts from different authenticated cache generations apart.
+        // The resource serialiser below still orders their actual pulls.
+        val key = cohort?.let { "$canonical@$it" } ?: canonical
+        val registration = synchronized(monitor) {
+            val existing = slots[key]
+            if (existing == null) {
+                val active = CompletableDeferred<ResourceRefreshResult>()
+                val slot = Slot(active = active)
+                val worker = scope.launch(start = CoroutineStart.LAZY) {
+                    drain(key, slot, refresh)
+                }
+                slot.worker = worker
+                slots[key] = slot
+                worker.invokeOnCompletion { failure ->
+                    if (failure != null) failOutstanding(key, slot, failure)
+                }
+                Registration(result = active, workerToStart = worker)
+            } else {
+                val trailing = existing.trailing
+                    ?: CompletableDeferred<ResourceRefreshResult>().also {
+                        existing.trailing = it
+                    }
+                Registration(result = trailing)
+            }
+        }
+
+        registration.workerToStart?.start()
+        return registration.result.await()
+    }
+
+    /**
+     * Revoke every process-scoped pull when the authenticated cache generation
+     * changes. Lease guards already prevent stale commits; cancellation also
+     * prevents an old employee's slow request from holding the canonical
+     * resource mutex and delaying the next employee's first screen.
+     */
+    fun cancelAll() {
+        val cancelled = synchronized(monitor) {
+            slots.values.toList().also { slots.clear() }
+        }
+        cancelled.forEach { slot ->
+            val cause = CancellationException("Authenticated refresh scope changed")
+            slot.active.completeExceptionally(cause)
+            slot.trailing?.completeExceptionally(cause)
+            slot.worker?.cancel(cause)
+        }
+    }
+
+    private suspend fun drain(
+        key: String,
+        ownedSlot: Slot,
+        refresh: suspend () -> ResourceRefreshResult,
+    ) {
+        while (true) {
+            val current = synchronized(monitor) {
+                slots[key]?.takeIf { it === ownedSlot }?.active
+            } ?: return
+            val result = refresh()
+            current.complete(result)
+
+            val hasTrailingPass = synchronized(monitor) {
+                val slot = slots[key]?.takeIf { it === ownedSlot }
+                    ?: return@synchronized false
+                val trailing = slot.trailing
+                if (trailing == null) {
+                    slots.remove(key)
+                    false
+                } else {
+                    slot.active = trailing
+                    slot.trailing = null
+                    true
+                }
+            }
+            if (!hasTrailingPass) return
+        }
+    }
+
+    private fun failOutstanding(key: String, ownedSlot: Slot, failure: Throwable) {
+        val waiting = synchronized(monitor) {
+            val slot = slots[key]?.takeIf { it === ownedSlot } ?: return
+            slots.remove(key)
+            listOfNotNull(slot.active, slot.trailing)
+        }
+        waiting.forEach { result ->
+            if (!result.isCompleted) result.completeExceptionally(failure)
+        }
+    }
+}
+
 internal fun canonicalResourceLockOrder(resources: Collection<String>): List<String> = resources
     .map(::canonicalRefreshResource)
     .distinct()
@@ -404,6 +634,10 @@ internal class ResourceRefreshFeedbackStore {
                 -> current - result.resource
             }
         }
+    }
+
+    fun clear() {
+        _errors.value = emptyMap()
     }
 }
 
@@ -513,8 +747,29 @@ class SyncEngine(
     private val settingsApi = ApiClient.create<SettingsApi>()
     private val mutex = Mutex()
     private val syncRequests = ConflatedSyncRequestGate()
+    private val kitchenSyncRequests = ConflatedSyncRequestGate()
     private val resourceRefreshSerialiser = ResourceRefreshSerialiser()
+    private val conflatedResourceRefreshes = ConflatedResourceRefreshRunner(scope)
     private val resourceRefreshFeedback = ResourceRefreshFeedbackStore()
+    private val sessionWorkerMonitor = Any()
+    private var sessionWorkerEpoch = 0L
+    private val sessionWorkers = mutableSetOf<Job>()
+
+    /**
+     * A cache lease prevents stale Room commits; this extra epoch also closes
+     * the small capture/register race when clearSessionFeedback() revokes
+     * process-scoped broad/KDS workers during sign-out or account switching.
+     */
+    private data class SessionWorkLease(
+        val cache: CacheScopeLease,
+        val epoch: Long,
+    )
+
+    private val sessionWorkGuard = SessionWorkGuard<SessionWorkLease>(
+        isCurrent = ::isCurrentSessionWork,
+        publishIfCurrent = ::publishSessionFeedbackAtomically,
+    )
+
     private data class ActiveBatchTarget(
         val ingredientId: String,
         val lease: CacheScopeLease,
@@ -532,8 +787,20 @@ class SyncEngine(
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
 
+    private var sessionAwareSyncing: Boolean
+        get() = _syncing.value
+        set(value) {
+            sessionWorkGuard.publishFromContext { _syncing.value = value }
+        }
+
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
+    private var sessionAwareLastError: String?
+        get() = _lastError.value
+        set(value) {
+            sessionWorkGuard.publishFromContext { _lastError.value = value }
+        }
 
     /** Screen-facing pull failures. A kitchen failure cannot masquerade as a Tables error. */
     val resourceRefreshErrors: StateFlow<Map<String, String>> = resourceRefreshFeedback.errors
@@ -714,7 +981,20 @@ class SyncEngine(
     */
     suspend fun refresh(resource: String): ResourceRefreshResult {
         val key = canonicalRefreshResource(resource)
-        return withResourceSerialisation(key) { refreshAlreadyLocked(key) }
+        val sessionLease = captureSessionWorkLease()
+            ?: return ResourceRefreshResult.Skipped(key)
+        return conflatedResourceRefreshes.run(key, sessionLease.cache.generation) {
+            // ConflatedResourceRefreshRunner owns a process-scoped worker, so
+            // explicitly reinstall the caller's session context inside that
+            // worker. Late nested failures can then never leak onto the next
+            // employee's workspace after cancellation/account switching.
+            sessionWorkGuard.withLease(sessionLease) {
+                ensureCurrentSessionWork(sessionLease)
+                withSessionResourceSerialisation(sessionLease, key) {
+                    refreshAlreadyLocked(key, sessionLease.cache)
+                }
+            }
+        }
     }
 
     /**
@@ -738,15 +1018,46 @@ class SyncEngine(
         block: suspend () -> T,
     ): T = resourceRefreshSerialiser.runAll(resources.asList(), block)
 
+    /**
+     * A broad sync may wait behind a screen refresh. Recheck its authenticated
+     * generation after the wait and before the next network/Room leg.
+     */
+    private suspend fun <T> withSessionResourceSerialisation(
+        sessionLease: SessionWorkLease,
+        resource: String,
+        block: suspend () -> T,
+    ): T {
+        ensureCurrentSessionWork(sessionLease)
+        return withResourceSerialisation(resource) {
+            ensureCurrentSessionWork(sessionLease)
+            block()
+        }
+    }
+
+    private suspend fun <T> withSessionResourceSerialisations(
+        sessionLease: SessionWorkLease,
+        vararg resources: String,
+        block: suspend () -> T,
+    ): T {
+        ensureCurrentSessionWork(sessionLease)
+        return withResourceSerialisations(*resources) {
+            ensureCurrentSessionWork(sessionLease)
+            block()
+        }
+    }
+
     /** Performs one refresh after its canonical resource lock is already held. */
-    private suspend fun refreshAlreadyLocked(key: String): ResourceRefreshResult {
+    private suspend fun refreshAlreadyLocked(
+        key: String,
+        feedbackLease: CacheScopeLease? = cacheIsolation.currentLease(),
+    ): ResourceRefreshResult {
         val pull = onDemandPulls[key]
         val result = if (pull == null || !currentResourceAccess().canPull(key)) {
             ResourceRefreshResult.Skipped(key)
         } else {
-            return runAndRecordRefreshAlreadyLocked(key, pull)
+            return runAndRecordRefreshAlreadyLocked(key, pull, feedbackLease)
         }
-        resourceRefreshFeedback.record(result)
+        recordRefreshFeedbackIfCurrent(feedbackLease, result)
         return result
     }
 
@@ -754,6 +1065,7 @@ class SyncEngine(
     private suspend fun runAndRecordRefreshAlreadyLocked(
         key: String,
         pull: suspend () -> Unit,
+        feedbackLease: CacheScopeLease? = cacheIsolation.currentLease(),
     ): ResourceRefreshResult {
         val result = runResourceRefresh(
             resource = key,
@@ -766,13 +1078,120 @@ class SyncEngine(
                 )
             },
         )
-        resourceRefreshFeedback.record(result)
-        if (result is ResourceRefreshResult.Failed) {
-            // Compatibility for the existing app-wide sync banner. New
-            // feature feedback must use resourceRefreshErrors instead.
-            _lastError.value = result.userMessage
-        }
+        recordRefreshFeedbackIfCurrent(feedbackLease, result)
         return result
+    }
+
+    private suspend fun recordRefreshFeedbackIfCurrent(
+        lease: CacheScopeLease?,
+        result: ResourceRefreshResult,
+    ) {
+        if (lease == null) return
+        cacheIsolation.commitIfCurrent(lease) {
+            resourceRefreshFeedback.record(result)
+            if (result is ResourceRefreshResult.Failed) {
+                // Compatibility for the existing app-wide sync banner. New
+                // feature feedback must use resourceRefreshErrors instead.
+                sessionAwareLastError = result.userMessage
+            }
+        }
+    }
+
+    private fun captureSessionWorkLease(): SessionWorkLease? {
+        val cacheLease = cacheIsolation.currentLease() ?: return null
+        return synchronized(sessionWorkerMonitor) {
+            if (cacheIsolation.currentLease() != cacheLease) null
+            else SessionWorkLease(cache = cacheLease, epoch = sessionWorkerEpoch)
+        }
+    }
+
+    private fun isCurrentSessionWork(lease: SessionWorkLease): Boolean =
+        synchronized(sessionWorkerMonitor) {
+            lease.epoch == sessionWorkerEpoch && cacheIsolation.currentLease() == lease.cache
+        }
+
+    private fun ensureCurrentSessionWork(lease: SessionWorkLease) =
+        sessionWorkGuard.ensureCurrent(lease)
+
+    private fun publishSessionFeedback(
+        lease: SessionWorkLease,
+        update: () -> Unit,
+    ) {
+        sessionWorkGuard.publish(lease, update)
+    }
+
+    private fun publishSessionFeedbackAtomically(
+        lease: SessionWorkLease,
+        update: () -> Unit,
+    ): Boolean {
+        synchronized(sessionWorkerMonitor) {
+            return if (
+                lease.epoch == sessionWorkerEpoch &&
+                cacheIsolation.currentLease() == lease.cache
+            ) {
+                update()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private fun publishOutboxNotice(message: String) {
+        sessionWorkGuard.publishFromContext { outboxSafety.publishNotice(message) }
+    }
+
+    private fun launchSessionWorker(
+        lease: SessionWorkLease,
+        onRegistrationRejected: () -> Unit = {},
+        block: suspend () -> Unit,
+    ) {
+        lateinit var worker: Job
+        worker = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                sessionWorkGuard.withLease(lease) { block() }
+            } finally {
+                synchronized(sessionWorkerMonitor) { sessionWorkers.remove(worker) }
+            }
+        }
+        val registered = synchronized(sessionWorkerMonitor) {
+            if (
+                lease.epoch != sessionWorkerEpoch ||
+                cacheIsolation.currentLease() != lease.cache
+            ) {
+                false
+            } else {
+                sessionWorkers += worker
+                true
+            }
+        }
+        if (registered) {
+            worker.start()
+        } else {
+            onRegistrationRejected()
+            worker.cancel(CancellationException("Authenticated sync scope changed"))
+        }
+    }
+
+    /** Session-scoped status must not leak onto the next employee's workspace. */
+    fun clearSessionFeedback() {
+        val workersToCancel = synchronized(sessionWorkerMonitor) {
+            sessionWorkerEpoch += 1L
+            syncRequests.reset()
+            kitchenSyncRequests.reset()
+            sessionWorkers.toList().also { sessionWorkers.clear() }
+                .also {
+                    resourceRefreshFeedback.clear()
+                    sessionAwareLastError = null
+                    sessionAwareSyncing = false
+                    _shiftHistoryRefreshing.value = false
+                    _shiftHistoryError.value = null
+                }
+        }
+        workersToCancel.forEach {
+            it.cancel(CancellationException("Authenticated sync scope changed"))
+        }
+        conflatedResourceRefreshes.cancelAll()
     }
 
     /**
@@ -789,7 +1208,7 @@ class SyncEngine(
             if (!commitToCurrentScope(lease) { db.shiftDao().deleteServerOpen(terminalId) }) {
                 return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
             }
-            refreshAlreadyLocked("shifts")
+            refreshAlreadyLocked("shifts", lease)
         }
 
     /** Narrow settings refreshes used after direct online writes. */
@@ -856,8 +1275,13 @@ class SyncEngine(
     }
 
     fun requestSync() {
-        if (syncRequests.request()) {
-            scope.launch { drainRequestedSyncs() }
+        val sessionLease = captureSessionWorkLease() ?: return
+        val workerLease = syncRequests.request(sessionLease.cache.generation) ?: return
+        launchSessionWorker(
+            lease = sessionLease,
+            onRegistrationRejected = { syncRequests.revoke(workerLease) },
+        ) {
+            drainRequestedSyncs(workerLease, sessionLease)
         }
     }
 
@@ -867,8 +1291,13 @@ class SyncEngine(
      * never enters the broad sync pass just because a cook advanced a ticket.
      */
     fun requestKitchenSync() {
-        scope.launch {
-            mutex.withLock { runKitchenSyncPass() }
+        val sessionLease = captureSessionWorkLease() ?: return
+        val workerLease = kitchenSyncRequests.request(sessionLease.cache.generation) ?: return
+        launchSessionWorker(
+            lease = sessionLease,
+            onRegistrationRejected = { kitchenSyncRequests.revoke(workerLease) },
+        ) {
+            drainRequestedKitchenSyncs(workerLease, sessionLease)
         }
     }
 
@@ -878,9 +1307,13 @@ class SyncEngine(
      * older fire-and-forget request that this pass is about to satisfy.
      */
     suspend fun sync() {
-        mutex.withLock {
-            syncRequests.absorbPendingIntoDirectPass()
-            runSyncPass()
+        val sessionLease = captureSessionWorkLease() ?: return
+        sessionWorkGuard.withLease(sessionLease) {
+            mutex.withLock {
+                ensureCurrentSessionWork(sessionLease)
+                syncRequests.absorbPendingIntoDirectPass(sessionLease.cache.generation)
+                runSyncPass(sessionLease)
+            }
         }
     }
 
@@ -907,8 +1340,8 @@ class SyncEngine(
     private suspend fun verifyAndClearRejectedShiftOpenAlreadyLocked(
         localId: String,
     ): RejectedShiftOpenVerificationResult {
-        _syncing.value = true
-        _lastError.value = null
+        sessionAwareSyncing = true
+        sessionAwareLastError = null
         return try {
             val safety = try {
                 outboxSafety.canSync()
@@ -1058,13 +1491,13 @@ class SyncEngine(
             } else {
                 "The live server check failed on this tablet. Nothing was cleared; try again."
             }
-            _lastError.value = message
+            sessionAwareLastError = message
             RejectedShiftOpenVerificationResult(
                 RejectedShiftOpenVerificationStatus.FAILED,
                 message,
             )
         } finally {
-            _syncing.value = false
+            sessionAwareSyncing = false
         }
     }
 
@@ -1116,14 +1549,18 @@ class SyncEngine(
      * only when a request arrived during the pass that just completed; there
      * is no recursion, polling, or spin while idle.
      */
-    private suspend fun drainRequestedSyncs() {
+    private suspend fun drainRequestedSyncs(
+        workerLease: ConflatedSyncRequestGate.WorkerLease,
+        sessionLease: SessionWorkLease,
+    ) {
         while (true) {
             var claimed = false
             var failure: Exception? = null
             try {
                 mutex.withLock {
-                    claimed = syncRequests.claimPass()
-                    if (claimed) runSyncPass()
+                    ensureCurrentSessionWork(sessionLease)
+                    claimed = syncRequests.claimPass(workerLease)
+                    if (claimed) runSyncPass(sessionLease)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1133,9 +1570,41 @@ class SyncEngine(
 
             if (!claimed) return
             failure?.let {
-                _lastError.value = it.message ?: "Sync failed because of an unexpected app error."
+                publishSessionFeedback(sessionLease) {
+                    sessionAwareLastError =
+                        it.message ?: "Sync failed because of an unexpected app error."
+                }
             }
-            if (!syncRequests.finishPass()) return
+            if (!syncRequests.finishPass(workerLease)) return
+        }
+    }
+
+    private suspend fun drainRequestedKitchenSyncs(
+        workerLease: ConflatedSyncRequestGate.WorkerLease,
+        sessionLease: SessionWorkLease,
+    ) {
+        while (true) {
+            var claimed = false
+            var failure: Exception? = null
+            try {
+                mutex.withLock {
+                    ensureCurrentSessionWork(sessionLease)
+                    claimed = kitchenSyncRequests.claimPass(workerLease)
+                    if (claimed) runKitchenSyncPass(sessionLease)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                failure = error
+            }
+            if (!claimed) return
+            failure?.let {
+                publishSessionFeedback(sessionLease) {
+                    sessionAwareLastError =
+                        it.message ?: "Kitchen sync failed because of an unexpected app error."
+                }
+            }
+            if (!kitchenSyncRequests.finishPass(workerLease)) return
         }
     }
 
@@ -1145,7 +1614,8 @@ class SyncEngine(
      * read reconciliation also refreshes Tables because both screens project
      * the same OrderLine.kitchen_status through different Room caches.
      */
-    private suspend fun runKitchenSyncPass() {
+    private suspend fun runKitchenSyncPass(sessionLease: SessionWorkLease) {
+        ensureCurrentSessionWork(sessionLease)
         try {
             val safety = try {
                 outboxSafety.canSync()
@@ -1155,18 +1625,22 @@ class SyncEngine(
                 val message =
                     "Sync is locked because the app could not verify who owns the saved work. " +
                         "Keep this tablet offline and ask a manager or support technician for help."
-                outboxSafety.publishNotice(message)
-                _lastError.value = message
+                publishOutboxNotice(message)
+                publishSessionFeedback(sessionLease) { sessionAwareLastError = message }
                 return
             }
             if (safety is OutboxGateResult.Blocked) {
-                _lastError.value = safety.message
+                publishSessionFeedback(sessionLease) { sessionAwareLastError = safety.message }
                 return
             }
-            _syncing.value = true
-            _lastError.value = null
+            publishSessionFeedback(sessionLease) {
+                sessionAwareSyncing = true
+                sessionAwareLastError = null
+            }
             passHadAmbiguousFailure = false
+            ensureCurrentSessionWork(sessionLease)
             withResourceSerialisation("kitchen") {
+                ensureCurrentSessionWork(sessionLease)
                 pushKitchenAdvances()
                 if (!passHadAmbiguousFailure) pushKitchenCancellationAcks()
             }
@@ -1176,17 +1650,19 @@ class SyncEngine(
             // routine offline failure as cache-preserving, so a kitchen-only
             // account never gains Tables access and no broad sync is started.
             for (resource in RealtimeRefreshPolicy.resourcesFor("kitchen")) {
+                ensureCurrentSessionWork(sessionLease)
                 refresh(resource)
             }
         } catch (e: ApiException) {
-            _lastError.value = e.message
+            publishSessionFeedback(sessionLease) { sessionAwareLastError = e.message }
         } finally {
-            _syncing.value = false
+            publishSessionFeedback(sessionLease) { sessionAwareSyncing = false }
         }
     }
 
     /** The actual serialized network/Room pass. Call only while holding [mutex]. */
-    private suspend fun runSyncPass() {
+    private suspend fun runSyncPass(sessionLease: SessionWorkLease) {
+        ensureCurrentSessionWork(sessionLease)
         try {
             val resourceAccess = currentResourceAccess()
             val safety = try {
@@ -1197,21 +1673,23 @@ class SyncEngine(
                 val message =
                     "Sync is locked because the app could not verify who owns the saved work. " +
                         "Keep this tablet offline and ask a manager or support technician for help."
-                outboxSafety.publishNotice(message)
-                _lastError.value = message
+                publishOutboxNotice(message)
+                publishSessionFeedback(sessionLease) { sessionAwareLastError = message }
                 return
             }
             if (safety is OutboxGateResult.Blocked) {
-                _lastError.value = safety.message
+                publishSessionFeedback(sessionLease) { sessionAwareLastError = safety.message }
                 return
             }
-            _syncing.value = true
-            _lastError.value = null
+            publishSessionFeedback(sessionLease) {
+                sessionAwareSyncing = true
+                sessionAwareLastError = null
+            }
             passHadAmbiguousFailure = false
             // Shifts before orders: an order captured against a shift that
             // hasn't synced yet has nothing to attach to until the shift's
             // open leg resolves (see pushPendingOrders).
-            withResourceSerialisation("shifts") {
+            withSessionResourceSerialisation(sessionLease, "shifts") {
                 // This must be the first shift operation in the pass. A close
                 // captured before its offline open has a server id is also in
                 // pushableOpens(); reject a missing/negative saved count locally
@@ -1219,7 +1697,7 @@ class SyncEngine(
                 val invalidCloseIntents =
                     db.shiftCloseSafetyDao().rejectInvalidCloseIntentsBeforeNetwork()
                 if (invalidCloseIntents.isNotEmpty()) {
-                    _lastError.value = invalidCloseIntents.first().message
+                    sessionAwareLastError = invalidCloseIntents.first().message
                 }
                 pushShiftOpens()
                 // Pull before dependents as well as after an attempted close.
@@ -1228,7 +1706,7 @@ class SyncEngine(
                 // same pass. A read failure must not block unrelated outboxes.
                 if (resourceAccess.canPull("shifts")) pullOpenShiftBestEffort()
             }
-            withResourceSerialisation("orders") {
+            withSessionResourceSerialisation(sessionLease, "orders") {
                 pushPendingOrders()
                 // A held-order payment always targets an order that's already
                 // real on the server. Keep its confirmed local state and its
@@ -1240,17 +1718,17 @@ class SyncEngine(
             // These outboxes also update the same Room projections their
             // screen/realtime pulls replace. Share the resource locks so an
             // older in-flight GET cannot land after a newer confirmed write.
-            withResourceSerialisations("gaming", "orders") {
+            withSessionResourceSerialisations(sessionLease, "gaming", "orders") {
                 val changedHeldQueue = pushGamingSessions()
                 if (changedHeldQueue && resourceAccess.canPull("orders")) {
                     pullHeldOrdersBestEffort()
                 }
             }
-            withResourceSerialisation("kitchen") {
+            withSessionResourceSerialisation(sessionLease, "kitchen") {
                 pushKitchenAdvances()
                 pushKitchenCancellationAcks()
             }
-            withResourceSerialisations("tables", "orders") {
+            withSessionResourceSerialisations(sessionLease, "tables", "orders") {
                 val cafeResult = pushCafeActions()
                 if (cafeResult.changedHeldQueue && resourceAccess.canPull("orders")) {
                     pullHeldOrdersBestEffort()
@@ -1259,18 +1737,22 @@ class SyncEngine(
                     // DELETE /pos/orders returns no replacement snapshot and
                     // may release the physical table. Re-read both table and
                     // active-bill truth before presenting it as available.
-                    runAndRecordRefreshAlreadyLocked("tables", ::pullTablesData)
+                    runAndRecordRefreshAlreadyLocked(
+                        "tables",
+                        ::pullTablesData,
+                        sessionLease.cache,
+                    )
                 }
             }
-            withResourceSerialisation("customers") { pushCustomers() }
-            withResourceSerialisation("staff") { pushStaff() }
+            withSessionResourceSerialisation(sessionLease, "customers") { pushCustomers() }
+            withSessionResourceSerialisation(sessionLease, "staff") { pushStaff() }
             // Ingredients/suppliers before GRN/adjustments: both depend on an
             // already-synced ingredient/supplier server id (the GRN/adjust
             // dialogs' own pickers exclude anything still local-only, so this
             // ordering isn't required for correctness, just gives a
             // same-pass chance for a just-created ingredient to be usable by
             // a GRN queued in the same batch of offline work).
-            withResourceSerialisation("inventory") {
+            withSessionResourceSerialisation(sessionLease, "inventory") {
                 pushIngredients()
                 pushSuppliers()
                 pushGrns()
@@ -1282,7 +1764,7 @@ class SyncEngine(
             // options, same dependency-sidestep as GRN/adjustments above) —
             // placed here purely to keep all outbox pushes grouped before
             // the menu pull.
-            withResourceSerialisation("finance") {
+            withSessionResourceSerialisation(sessionLease, "finance") {
                 val hadFinanceWork =
                     db.financeDao().pushableExpenses().isNotEmpty() ||
                         db.financeDao().pushableAssets().isNotEmpty() ||
@@ -1293,12 +1775,16 @@ class SyncEngine(
                 if (hadFinanceWork && resourceAccess.canPull("finance")) {
                     // Keep the pass alive if only the follow-up read fails;
                     // every confirmed POST remains replay-safe in its outbox.
-                    runAndRecordRefreshAlreadyLocked("finance") {
-                        val missingReferences = pullFinanceSnapshots()
-                        if (missingReferences.isNotEmpty()) {
-                            throw FinanceReferenceRefreshException(missingReferences)
-                        }
-                    }
+                    runAndRecordRefreshAlreadyLocked(
+                        key = "finance",
+                        pull = {
+                            val missingReferences = pullFinanceSnapshots()
+                            if (missingReferences.isNotEmpty()) {
+                                throw FinanceReferenceRefreshException(missingReferences)
+                            }
+                        },
+                        feedbackLease = sessionLease.cache,
+                    )
                 }
             }
             // Sales before check-ins: the tickets UI only ever offers
@@ -1307,14 +1793,14 @@ class SyncEngine(
             // in practice a check-in row's ticketId is never itself
             // pending — this ordering just matches the general "push a
             // dependency before its dependent" discipline everywhere else.
-            withResourceSerialisation("events") {
+            withSessionResourceSerialisation(sessionLease, "events") {
                 pushTicketSales()
                 pushCheckIns()
             }
             // Membership collection is a server-reserved, multi-stage money
             // workflow. Reconcile before replay, then push one stable local
             // action per stage; never use the retired direct subscribe path.
-            withResourceSerialisation("memberships") {
+            withSessionResourceSerialisation(sessionLease, "memberships") {
                 pullMembershipPaymentTasksBestEffort()
                 reconcileMembershipPaymentActionsFromCache()
                 ensureMembershipPaymentFinalizations()
@@ -1330,7 +1816,7 @@ class SyncEngine(
             // picker only ever shows branch_cache rows), so a branch created
             // in this same drain must land first. Company edit has no
             // dependency either way.
-            withResourceSerialisation("settings") {
+            withSessionResourceSerialisation(sessionLease, "settings") {
                 pushCompanyEdit()
                 pushBranches()
                 pushTerminals()
@@ -1339,7 +1825,7 @@ class SyncEngine(
             // class doc already gives for running last: this device's own
             // just-synced category/item edits, and any other device's,
             // should already be reflected the instant pullMenu() runs.
-            withResourceSerialisation("menu") {
+            withSessionResourceSerialisation(sessionLease, "menu") {
                 pushMenuCategories()
                 pushMenuItems()
                 if (resourceAccess.canPull("menu")) {
@@ -1351,16 +1837,16 @@ class SyncEngine(
             // to the shift. If an earlier response was ambiguous, leave the
             // close queued for the next pass so idempotent recovery happens
             // before the till can close.
-            withResourceSerialisation("shifts") {
+            withSessionResourceSerialisation(sessionLease, "shifts") {
                 val closeAttempted = if (!passHadAmbiguousFailure) pushShiftCloses() else false
                 if (closeAttempted && resourceAccess.canPull("shifts")) {
                     pullOpenShiftBestEffort()
                 }
             }
         } catch (e: ApiException) {
-            _lastError.value = e.message
+            publishSessionFeedback(sessionLease) { sessionAwareLastError = e.message }
         } finally {
-            _syncing.value = false
+            publishSessionFeedback(sessionLease) { sessionAwareSyncing = false }
         }
     }
 
@@ -1400,7 +1886,7 @@ class SyncEngine(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
-                _lastError.value = e.message
+                sessionAwareLastError = e.message
                 if (e !is ApiException) {
                     markRejected(row, "Could not sync this (app error): ${e.message}")
                     continue
@@ -1425,7 +1911,7 @@ class SyncEngine(
         val terminalId = DCompanyApp.instance.terminalStore.terminalId()
         if (terminalId == null) {
             if (dao.pushableOpens().isNotEmpty()) {
-                _lastError.value =
+                sessionAwareLastError =
                     "A saved shift open is waiting, but this tablet has no verified POS terminal. Sign in online before syncing it."
             }
             return
@@ -1435,7 +1921,7 @@ class SyncEngine(
         if (eligible.size != rows.size) {
             // Never post a v16 outbox leg under a different X-Terminal-Id.
             // It stays pending for explicit terminal recovery.
-            _lastError.value =
+            sessionAwareLastError =
                 "A saved shift belongs to another terminal and was not sent. Ask an owner to restore that terminal assignment."
         }
         drainOutbox(
@@ -1457,8 +1943,9 @@ class SyncEngine(
         val terminalId = DCompanyApp.instance.terminalStore.terminalId() ?: return
         val rows = shiftApi.shifts(onlyOpen = true)
         if (rows.size > 1) {
-            if (commitToCurrentScope(lease) { db.shiftDao().deleteServerOpen(terminalId) }) {
-                _lastError.value =
+            commitToCurrentScope(lease) {
+                db.shiftDao().deleteServerOpen(terminalId)
+                sessionAwareLastError =
                     "The server returned multiple open shifts for this terminal. POS money actions are locked until an owner reconciles them."
             }
             return
@@ -1473,8 +1960,9 @@ class SyncEngine(
                     detail.status != "open"
             )
         ) {
-            if (commitToCurrentScope(lease) { db.shiftDao().deleteServerOpen(terminalId) }) {
-                _lastError.value =
+            commitToCurrentScope(lease) {
+                db.shiftDao().deleteServerOpen(terminalId)
+                sessionAwareLastError =
                     "The server shift did not match this signed-in branch and terminal. POS money actions are locked."
             }
             return
@@ -1485,8 +1973,9 @@ class SyncEngine(
         } else {
             val openedAt = runCatching { Instant.parse(detail.openedAt).toEpochMilli() }.getOrNull()
             if (openedAt == null) {
-                if (commitToCurrentScope(lease) { db.shiftDao().deleteServerOpen(terminalId) }) {
-                    _lastError.value =
+                commitToCurrentScope(lease) {
+                    db.shiftDao().deleteServerOpen(terminalId)
+                    sessionAwareLastError =
                         "The server shift opening time was invalid. POS money actions are locked."
                 }
                 return
@@ -1514,31 +2003,41 @@ class SyncEngine(
         val lease = cacheIsolation.currentLease() ?: return
         val terminalId = DCompanyApp.instance.terminalStore.terminalId() ?: return
         val branchId = DCompanyApp.instance.shiftCache.profile.value?.branchId ?: return
-        _shiftHistoryRefreshing.value = true
+        if (!cacheIsolation.commitIfCurrent(lease) { _shiftHistoryRefreshing.value = true }) return
         try {
             val rows = shiftApi.shifts(onlyOpen = false, limit = 200)
             if (rows.any { it.terminalId != terminalId || it.branchId != branchId }) {
-                _shiftHistoryError.value =
-                    "The downloaded history belonged to a different branch or terminal. Saved history was kept."
+                cacheIsolation.commitIfCurrent(lease) {
+                    _shiftHistoryError.value =
+                        "The downloaded history belonged to a different branch or terminal. Saved history was kept."
+                }
                 return
             }
             val fetchedAt = System.currentTimeMillis()
-            val mapped = rows.map { detail ->
-                val openedAt = runCatching { Instant.parse(detail.openedAt).toEpochMilli() }.getOrNull()
-                val closedAt = detail.closedAt?.let {
-                    runCatching { Instant.parse(it).toEpochMilli() }.getOrNull()
+            val mapped = buildList {
+                for (detail in rows) {
+                    val openedAt = runCatching {
+                        Instant.parse(detail.openedAt).toEpochMilli()
+                    }.getOrNull()
+                    val closedAt = detail.closedAt?.let {
+                        runCatching { Instant.parse(it).toEpochMilli() }.getOrNull()
+                    }
+                    if (openedAt == null || (detail.closedAt != null && closedAt == null)) {
+                        cacheIsolation.commitIfCurrent(lease) {
+                            _shiftHistoryError.value =
+                                "The downloaded history contained an invalid time. Saved history was kept."
+                        }
+                        return
+                    }
+                    add(
+                        detail.toShiftHistoryCache(
+                            terminalId = terminalId,
+                            openedAtMillis = openedAt,
+                            closedAtMillis = closedAt,
+                            fetchedAtMillis = fetchedAt,
+                        ),
+                    )
                 }
-                if (openedAt == null || (detail.closedAt != null && closedAt == null)) {
-                    _shiftHistoryError.value =
-                        "The downloaded history contained an invalid time. Saved history was kept."
-                    return
-                }
-                detail.toShiftHistoryCache(
-                    terminalId = terminalId,
-                    openedAtMillis = openedAt,
-                    closedAtMillis = closedAt,
-                    fetchedAtMillis = fetchedAt,
-                )
             }
             if (commitToCurrentScope(lease) {
                     db.withTransaction {
@@ -1547,25 +2046,28 @@ class SyncEngine(
                     }
                 }
             ) {
-                _shiftHistoryError.value = null
+                cacheIsolation.commitIfCurrent(lease) { _shiftHistoryError.value = null }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            _shiftHistoryError.value = e.message?.takeIf { it.isNotBlank() }
-                ?: "Could not refresh shift history. Saved history was kept."
+            cacheIsolation.commitIfCurrent(lease) {
+                _shiftHistoryError.value = e.message?.takeIf { it.isNotBlank() }
+                    ?: "Could not refresh shift history. Saved history was kept."
+            }
             throw e
         } finally {
-            _shiftHistoryRefreshing.value = false
+            cacheIsolation.commitIfCurrent(lease) { _shiftHistoryRefreshing.value = false }
         }
     }
 
     private suspend fun pullOpenShiftBestEffort() {
+        val lease = cacheIsolation.currentLease() ?: return
         try {
             pullOpenShift()
             pullShiftHistory()
         } catch (e: ApiException) {
-            _lastError.value = e.message
+            cacheIsolation.commitIfCurrent(lease) { sessionAwareLastError = e.message }
         }
     }
 
@@ -1604,14 +2106,14 @@ class SyncEngine(
                         row.localId,
                         validation.message,
                     )
-                    _lastError.value = validation.message
+                    sessionAwareLastError = validation.message
                 }
             }
         }
         val terminalId = DCompanyApp.instance.terminalStore.terminalId()
         if (terminalId == null) {
             if (countEligible.isNotEmpty()) {
-                _lastError.value =
+                sessionAwareLastError =
                     "A saved shift close is waiting, but this tablet has no verified POS terminal. Sign in online before syncing it."
             }
             return false
@@ -1639,14 +2141,14 @@ class SyncEngine(
             )
             when {
                 legacyPosRefunds > 0 || unscopedMembershipMoney > 0 -> {
-                    _lastError.value =
+                    sessionAwareLastError =
                         "Shift close is waiting: ${legacyPosRefunds + unscopedMembershipMoney} money record(s) from an older app " +
                             "lack a trustworthy shift or physical-action state. Do not move value again; " +
                             "a protected owner must reconcile server and drawer records."
                     false
                 }
                 legacyMembershipUnresolved + paymentUnresolved + refundUnresolved + posRefundUnresolved > 0 -> {
-                    _lastError.value =
+                    sessionAwareLastError =
                         "Shift close is waiting: $posRefundUnresolved POS refund action(s) and " +
                             "${legacyMembershipUnresolved + paymentUnresolved + refundUnresolved} membership payment/refund action(s) for this " +
                             "exact shift still need attention. Resolve them before counting cash."
@@ -1657,7 +2159,7 @@ class SyncEngine(
         }
         if (eligible.size != rows.size) {
             if (terminalEligible.size != countEligible.size) {
-                _lastError.value =
+                sessionAwareLastError =
                     "A saved shift close belongs to another terminal and was not sent. Ask an owner to restore that terminal assignment."
             }
         }
@@ -1674,7 +2176,7 @@ class SyncEngine(
                 terminalId = terminalId,
             ).serverPostMessage()
             if (finalBlocker != null) {
-                _lastError.value = finalBlocker
+                sessionAwareLastError = finalBlocker
                 // Do not strand the UI in close_pending. A pending write can
                 // legitimately turn into a server-side workflow (for example
                 // a table handoff or an ended gaming bill) while this pass is
@@ -1698,7 +2200,7 @@ class SyncEngine(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
-                _lastError.value = e.message
+                sessionAwareLastError = e.message
                 if (e is ApiException && e.mustPreserveOutbox) {
                     passHadAmbiguousFailure = true
                     if (e.status == 426) throw e
@@ -1927,11 +2429,11 @@ class SyncEngine(
                 KitchenAdvanceDisposition.SATISFIED -> dao.deletePendingAdvance(row.localId)
                 KitchenAdvanceDisposition.NEEDS_ATTENTION -> {
                     dao.markAdvanceRejected(row.localId, message)
-                    _lastError.value = message
+                    sessionAwareLastError = message
                 }
                 KitchenAdvanceDisposition.KEEP_PENDING -> {
                     dao.keepAdvancePending(row.localId, message)
-                    _lastError.value = message
+                    sessionAwareLastError = message
                     passHadAmbiguousFailure = true
                     // Match generic outbox semantics: do not hammer the same
                     // failed connection or let shift close overtake an
@@ -1994,7 +2496,7 @@ class SyncEngine(
                 throw cancelled
             } catch (e: Exception) {
                 val message = e.message ?: "Kitchen cancellation acknowledgement was not confirmed."
-                _lastError.value = message
+                sessionAwareLastError = message
                 if (e !is ApiException || e.mustPreserveOutbox) {
                     dao.noteCancellationAckPending(row.localId, message)
                     passHadAmbiguousFailure = true
@@ -2013,7 +2515,7 @@ class SyncEngine(
      */
     private suspend fun pushCafeActions(): CafeOrderPushResult {
         val result = cafeOrderSync.push()
-        result.lastError?.let { _lastError.value = it }
+        result.lastError?.let { sessionAwareLastError = it }
         if (result.stoppedOnAmbiguousFailure) {
             passHadAmbiguousFailure = true
         }
@@ -2078,7 +2580,7 @@ class SyncEngine(
         val profile = DCompanyApp.instance.shiftCache.profile.value
         if (profile == null || !EffectivePermissions.from(profile).has(ErpPermission.PosRefund)) {
             if (dao.reconcilableRefunds().isNotEmpty() || dao.legacyReconciliationCount() > 0) {
-                _lastError.value =
+                sessionAwareLastError =
                     "POS refund work is saved on this tablet, but this employee no longer has refund access. " +
                         "A protected owner must sign in and resolve it before the shift can close."
             }
@@ -2474,7 +2976,7 @@ class SyncEngine(
                     // The endpoint has no pagination/completeness header. At
                     // the hard cap, replacing would silently delete unseen
                     // financial work from the local queue and its alarms.
-                    _lastError.value = "Held orders exceed this app's safe $safeLimit-order cache. " +
+                    sessionAwareLastError = "Held orders exceed this app's safe $safeLimit-order cache. " +
                         "No queue rows were replaced; bill older held orders or update the app."
                     return@fetchAndCommitScoped
                 }
@@ -2507,7 +3009,7 @@ class SyncEngine(
             throw cancelled
         } catch (failure: Exception) {
             Log.e(REFRESH_LOG_TAG, "Held-order reconciliation failed", failure)
-            _lastError.value = resourceRefreshFailureMessage("orders", failure)
+            sessionAwareLastError = resourceRefreshFailureMessage("orders", failure)
         }
     }
 
@@ -2519,7 +3021,7 @@ class SyncEngine(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
-                _lastError.value = e.message
+                sessionAwareLastError = e.message
                 if (e !is ApiException) {
                     // A converter/Room failure can occur after the server
                     // committed but before this device durably observed it.
@@ -3100,17 +3602,20 @@ class SyncEngine(
         val requestedId = ingredientId.trim()
         if (requestedId.isEmpty()) return ResourceRefreshResult.Skipped("inventory")
         return withResourceSerialisation("inventory") {
+            val feedbackLease = cacheIsolation.currentLease()
             if (!currentResourceAccess().canPull("inventory")) {
-                ResourceRefreshResult.Skipped("inventory").also(resourceRefreshFeedback::record)
-            } else {
-                val lease = cacheIsolation.currentLease()
-                    ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("inventory")
-                        .also(resourceRefreshFeedback::record)
-                activeBatchTarget.set(ActiveBatchTarget(requestedId, lease))
-                runAndRecordRefreshAlreadyLocked("inventory") {
-                    pullBatchesForAlreadyLocked(requestedId)
-                }
+                val result = ResourceRefreshResult.Skipped("inventory")
+                recordRefreshFeedbackIfCurrent(feedbackLease, result)
+                return@withResourceSerialisation result
             }
+            val lease = feedbackLease
+                ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("inventory")
+            activeBatchTarget.set(ActiveBatchTarget(requestedId, lease))
+            runAndRecordRefreshAlreadyLocked(
+                key = "inventory",
+                pull = { pullBatchesForAlreadyLocked(requestedId) },
+                feedbackLease = feedbackLease,
+            )
         }
     }
 
@@ -3734,7 +4239,7 @@ class SyncEngine(
             // The confirmed money/action state is already durable. Realtime or
             // the next screen refresh can retry this replaceable projection.
             Log.e(REFRESH_LOG_TAG, "Membership projection reconciliation failed", failure)
-            _lastError.value = resourceRefreshFailureMessage("memberships", failure)
+            sessionAwareLastError = resourceRefreshFailureMessage("memberships", failure)
         }
     }
 
@@ -3789,7 +4294,7 @@ class SyncEngine(
                 resource = "membership payment tasks",
             )
             if (tasks.any { it.status !in MembershipPaymentTaskStatus.known }) {
-                _lastError.value =
+                sessionAwareLastError =
                     "Membership payment tasks contain a status this app does not understand. Update the app before touching money."
                 passHadAmbiguousFailure = true
                 return false
@@ -3805,7 +4310,7 @@ class SyncEngine(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            _lastError.value = e.message ?: "Could not reconcile membership payment tasks."
+            sessionAwareLastError = e.message ?: "Could not reconcile membership payment tasks."
             // A missing/truncated canonical list is itself an unknown money
             // state, even when this device has no local action to replay.
             passHadAmbiguousFailure = true
@@ -4182,7 +4687,7 @@ class SyncEngine(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            _lastError.value = e.message ?: "Could not reconcile membership refund tasks."
+            sessionAwareLastError = e.message ?: "Could not reconcile membership refund tasks."
             passHadAmbiguousFailure = true
             false
         }

@@ -79,7 +79,12 @@ class SyncResourceLockCoverageTest {
     @Test
     fun `sync pass keeps every shared projection push behind its resource lock`() {
         val source = readSource(mainSourceRoot().resolve(SYNC_ENGINE_PATH))
-        val pass = source.bracedBlockAfter("private suspend fun runSyncPass()")
+        val pass = source.bracedBlockAfter("private suspend fun runSyncPass(")
+
+        assertTrue(
+            "Broad sync must verify the authenticated session before each resource leg",
+            "withSessionResourceSerialisation(sessionLease" in pass,
+        )
 
         assertLockedPass(pass, "shifts", "pushShiftOpens()")
         assertLockedPass(pass, "shifts", "pushShiftCloses()")
@@ -148,6 +153,29 @@ class SyncResourceLockCoverageTest {
             "clearFinanceReadCachesForScopeChange",
             "finance",
             "clearReadCachesForScopeChange",
+        )
+    }
+
+    @Test
+    fun `process scoped refresh worker reinstalls authenticated session guard`() {
+        val source = readSource(mainSourceRoot().resolve(SYNC_ENGINE_PATH))
+        val refresh = source.bracedBlockAfter("suspend fun refresh(resource")
+
+        assertTrue(
+            "On-demand refresh must capture the full session lease before scheduling process work",
+            "val sessionLease = captureSessionWorkLease()" in refresh,
+        )
+        assertTrue(
+            "The process-scoped refresh lambda must reinstall the captured session context",
+            "sessionWorkGuard.withLease(sessionLease)" in refresh,
+        )
+        assertTrue(
+            "Refresh must recheck the session after waiting for its canonical resource lock",
+            "withSessionResourceSerialisation(sessionLease, key)" in refresh,
+        )
+        assertTrue(
+            "Resource feedback must be committed against the captured cache generation",
+            "refreshAlreadyLocked(key, sessionLease.cache)" in refresh,
         )
     }
 
@@ -228,7 +256,9 @@ class SyncResourceLockCoverageTest {
     }
 
     private fun assertLockedPass(pass: String, resource: String, vararg requiredCalls: String) {
-        val blocks = pass.bracedBlocksAfter("withResourceSerialisation(\"$resource\")")
+        val blocks = pass.bracedBlocksAfter(
+            "withSessionResourceSerialisation(sessionLease, \"$resource\")",
+        )
         requiredCalls.forEach { call ->
             assertTrue(
                 "Missing $call behind the $resource resource lock",
@@ -243,7 +273,9 @@ class SyncResourceLockCoverageTest {
         requiredCall: String,
     ) {
         val arguments = resources.joinToString(", ") { "\"$it\"" }
-        val blocks = pass.bracedBlocksAfter("withResourceSerialisations($arguments)")
+        val blocks = pass.bracedBlocksAfter(
+            "withSessionResourceSerialisations(sessionLease, $arguments)",
+        )
         assertTrue(
             "Missing $requiredCall behind the ${resources.joinToString("+")} resource locks",
             blocks.any { requiredCall in it },

@@ -16,6 +16,7 @@ import cloud.dcompany.erp.core.db.cached
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.Serializable
 import java.util.UUID
@@ -388,6 +390,7 @@ class FinanceViewModel : ViewModel() {
     }
 
     /** Room is the sole delivery path for manual and realtime Finance reads. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private inline fun <reified T> observeSnapshot(
         baseKey: String,
         crossinline publish: (T?) -> Unit,
@@ -397,8 +400,10 @@ class FinanceViewModel : ViewModel() {
                 if (scope == null) flowOf(null)
                 else db.reportSnapshotDao().observe(scope.key(baseKey))
             }.collect { row ->
-                val value = row?.let {
-                    runCatching { ApiClient.json.decodeFromString<T>(it.jsonBody) }.getOrNull()
+                val value = withContext(Dispatchers.Default) {
+                    row?.let {
+                        runCatching { ApiClient.json.decodeFromString<T>(it.jsonBody) }.getOrNull()
+                    }
                 }
                 publish(value)
             }

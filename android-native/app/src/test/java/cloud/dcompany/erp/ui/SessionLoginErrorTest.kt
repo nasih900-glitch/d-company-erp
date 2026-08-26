@@ -4,10 +4,14 @@ import cloud.dcompany.erp.core.auth.OutboxGateResult
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -100,6 +104,47 @@ class SessionLoginErrorTest {
             releaseRemote.complete(Unit)
             restore.join()
         }
+    }
+
+    @Test
+    fun `cancellation immediately after token install rolls back before propagating`() = runBlocking {
+        val installed = CompletableDeferred<Unit>()
+        val holdInstallReturn = CompletableDeferred<Unit>()
+        val rolledBack = CompletableDeferred<String>()
+        val capturedLease = AtomicReference<String?>(null)
+
+        val login = launch(Dispatchers.Default) {
+            try {
+                withContext(Dispatchers.IO) {
+                    capturedLease.set("installed-login-lineage")
+                    installed.complete(Unit)
+                    // Model cancellation winning the IO-to-caller return race
+                    // after installForLogin has already persisted its token.
+                    holdInstallReturn.await()
+                }
+            } catch (cancelled: CancellationException) {
+                rollbackCancelledLoginAndRethrow(
+                    installedLogin = capturedLease.get(),
+                    cancelled = cancelled,
+                    rollbackIfCurrent = { lease ->
+                        // A suspension here proves rollback runs with a live
+                        // NonCancellable job rather than the cancelled login.
+                        delay(10)
+                        rolledBack.complete(lease)
+                    },
+                )
+            }
+        }
+
+        withTimeout(1_000) { installed.await() }
+        login.cancel(CancellationException("login screen left"))
+        withTimeout(1_000) { login.join() }
+
+        assertEquals(
+            "installed-login-lineage",
+            withTimeout(1_000) { rolledBack.await() },
+        )
+        assertTrue(login.isCancelled)
     }
 
     @Test

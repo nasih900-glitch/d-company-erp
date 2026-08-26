@@ -24,6 +24,7 @@ import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -219,6 +221,7 @@ class InventoryViewModel : ViewModel() {
     private var batchTargetId: String? = null
     @Volatile private var access = InventoryAccess()
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val state: StateFlow<InventoryUiState> = combine(
         combine(
             db.inventoryDao().observeIngredientCache(),
@@ -288,7 +291,7 @@ class InventoryViewModel : ViewModel() {
             formError = ed.formError,
             notice = ed.notice,
         )
-    }.let { base ->
+    }.flowOn(Dispatchers.Default).let { base ->
         // Batches are a second combine stage keyed off the selected
         // ingredient's *real id*, re-derived from `base` on every emission
         // (via selected?.id) rather than tracked as a separately-mutated

@@ -39,7 +39,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.TableRestaurant
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,7 +85,7 @@ import java.util.Locale
 
 @Composable
 fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = viewModel()) {
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     val selectedBill = state.selectedBill
     var discardAction by remember { mutableStateOf<BlockedCafeAction?>(null) }
     val billsByTable = remember(state.bills) { state.bills.associateBy(CafeBillProjection::tableId) }

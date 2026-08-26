@@ -43,7 +43,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,7 +85,7 @@ import cloud.dcompany.erp.ui.theme.Spacing
 @Composable
 fun EventsScreen(access: EventsAccess = EventsAccess()) {
     val vm: EventsViewModel = viewModel()
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
     EventsContent(state, vm, access)
 }
@@ -735,11 +735,13 @@ private fun TicketsDialog(
             if (state.tickets.isEmpty()) {
                 Text("No tickets sold yet.", color = Brand.ForegroundMuted)
             } else {
-                Column(
-                    modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 480.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    state.tickets.forEach { ticket -> TicketRow(event, ticket, state, vm, canCheckIn) }
+                    items(state.tickets, key = { it.id }) { ticket ->
+                        TicketRow(event, ticket, state, vm, canCheckIn)
+                    }
                 }
             }
         },

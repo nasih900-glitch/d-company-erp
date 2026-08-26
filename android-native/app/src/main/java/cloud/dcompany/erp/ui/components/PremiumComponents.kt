@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -42,6 +44,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.ui.theme.Brand
@@ -325,45 +328,67 @@ fun DesignedEmptyState(
     icon: ImageVector = Icons.Default.Inbox,
     primaryLabel: String? = null,
     onPrimary: (() -> Unit)? = null,
+    primaryEnabled: Boolean = true,
+    primaryBusy: Boolean = false,
     primaryIcon: ImageVector? = null,
     secondaryLabel: String? = null,
     onSecondary: (() -> Unit)? = null,
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth().heightIn(min = 240.dp).padding(Spacing.xl),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(
-            Modifier.size(64.dp).clip(Radius.shapeLg).background(Brand.SurfaceHover)
-                .border(1.dp, Brand.Border, Radius.shapeLg),
-            contentAlignment = Alignment.Center,
+    BoxWithConstraints(modifier.fillMaxWidth().heightIn(min = 240.dp)) {
+        // Some dense dashboard cards intentionally give the shared empty state
+        // less than its preferred 240dp height. Compact the internal rhythm in
+        // that case instead of letting the fixed icon/padding push copy outside
+        // the card's bounds.
+        val compact = maxHeight < 240.dp
+        val outerPadding = if (compact) Spacing.md else Spacing.xl
+        val iconBoxSize = if (compact) 48.dp else 64.dp
+        val iconSize = if (compact) 24.dp else 30.dp
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(outerPadding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = Brand.GoldMuted, modifier = Modifier.size(30.dp))
-        }
-        Spacer(Modifier.height(Spacing.lg))
-        Text(
-            title,
-            color = Brand.Foreground,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(Spacing.sm))
-        Text(
-            body,
-            modifier = Modifier.widthIn(max = 480.dp),
-            color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-        if ((primaryLabel != null && onPrimary != null) || (secondaryLabel != null && onSecondary != null)) {
-            Spacer(Modifier.height(Spacing.lg))
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if (secondaryLabel != null && onSecondary != null) {
-                    ErpButton(secondaryLabel, onSecondary, intent = ActionIntent.Secondary)
-                }
-                if (primaryLabel != null && onPrimary != null) {
-                    ErpButton(primaryLabel, onPrimary, leadingIcon = primaryIcon)
+            Box(
+                Modifier.size(iconBoxSize).clip(Radius.shapeLg).background(Brand.SurfaceHover)
+                    .border(1.dp, Brand.Border, Radius.shapeLg),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = Brand.GoldMuted, modifier = Modifier.size(iconSize))
+            }
+            Spacer(Modifier.height(if (compact) Spacing.sm else Spacing.lg))
+            Text(
+                title,
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(if (compact) Spacing.xs else Spacing.sm))
+            Text(
+                body,
+                modifier = Modifier.widthIn(max = 480.dp),
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                maxLines = if (compact) 2 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if ((primaryLabel != null && onPrimary != null) || (secondaryLabel != null && onSecondary != null)) {
+                Spacer(Modifier.height(if (compact) Spacing.sm else Spacing.lg))
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    if (secondaryLabel != null && onSecondary != null) {
+                        ErpButton(secondaryLabel, onSecondary, intent = ActionIntent.Secondary)
+                    }
+                    if (primaryLabel != null && onPrimary != null) {
+                        ErpButton(
+                            text = primaryLabel,
+                            onClick = onPrimary,
+                            enabled = primaryEnabled,
+                            busy = primaryBusy,
+                            leadingIcon = primaryIcon,
+                        )
+                    }
                 }
             }
         }

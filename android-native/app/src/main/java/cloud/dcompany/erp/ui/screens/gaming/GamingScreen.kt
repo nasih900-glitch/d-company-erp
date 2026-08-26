@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Error
@@ -62,7 +63,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.State
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +85,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.net.asRupees
@@ -106,6 +111,7 @@ import cloud.dcompany.erp.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -148,8 +154,24 @@ fun GamingScreen(
     onDismissFocus: () -> Unit = {},
     vm: GamingViewModel = viewModel(),
 ) {
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
+
+    // One lifecycle-aware clock drives every visible active station. This
+    // avoids one coroutine per card and stops all timer wakeups while the app
+    // is backgrounded, while the backend remains authoritative for billing.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val wallClock = remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val hasTickingSession = state.sessions.any { it.status in setOf("active", "stopping") }
+    LaunchedEffect(lifecycleOwner, hasTickingSession) {
+        if (!hasTickingSession) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (isActive) {
+                wallClock.longValue = System.currentTimeMillis()
+                delay(1_000)
+            }
+        }
+    }
 
     var selectedFilter by rememberSaveable { mutableStateOf("all") }
     var starting by remember { mutableStateOf<Station?>(null) }
@@ -199,6 +221,24 @@ fun GamingScreen(
                     stationName = state.stations.firstOrNull { it.id == focusStationId }?.name,
                     onDismiss = onDismissFocus,
                 )
+            }
+
+            state.refreshError?.let { message ->
+                OperationalBanner(
+                    title = "Gaming board may be out of date",
+                    detail = message,
+                    tone = UiTone.Warning,
+                    icon = Icons.Filled.CloudOff,
+                ) {
+                    ErpButton(
+                        text = if (state.refreshing) "Refreshing…" else "Retry",
+                        onClick = vm::load,
+                        intent = ActionIntent.Secondary,
+                        enabled = !state.refreshing,
+                        busy = state.refreshing,
+                        leadingIcon = Icons.Filled.Refresh,
+                    )
+                }
             }
 
             GamingMetrics(state)
@@ -277,6 +317,7 @@ fun GamingScreen(
                         GamingStationCard(
                             station = station,
                             session = state.activeFor(station.id),
+                            wallClock = wallClock,
                             actionInProgress = state.busyStationId != null,
                             busyHere = state.busyStationId == station.id,
                             focused = station.id == focusStationId,
@@ -415,21 +456,37 @@ private fun GamingEmptyState(state: GamingUiState, onRefresh: () -> Unit) {
             icon = Icons.Filled.SportsEsports,
             modifier = Modifier.weight(1f),
         ) {
-            if (!state.everSynced) {
+            if (state.initialLoading) {
                 Box(Modifier.fillMaxWidth().heightIn(min = 240.dp), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                         CircularProgressIndicator(color = Brand.Gold, modifier = Modifier.size(30.dp))
                         Text("Waiting for the first station sync", color = Brand.Foreground, style = MaterialTheme.typography.titleLarge)
-                        Text(state.error ?: "The board will populate as soon as the ERP responds.", color = Brand.ForegroundMuted)
+                        Text("The board will populate as soon as the ERP responds.", color = Brand.ForegroundMuted)
                     }
                 }
+            } else if (state.initialLoadFailed) {
+                DesignedEmptyState(
+                    title = "Could not load gaming stations",
+                    body = state.refreshError
+                        ?: "This tablet has no saved station data yet. Check the connection and try again.",
+                    icon = Icons.Filled.CloudOff,
+                    primaryLabel = "Retry",
+                    onPrimary = onRefresh,
+                )
             } else {
                 DesignedEmptyState(
                     title = "No gaming stations configured",
-                    body = state.error ?: "Add stations in ERP settings, then refresh this operational board.",
+                    body = state.refreshError ?: if (state.refreshing) {
+                        "Checking the ERP for configured stations. Saved data remains available."
+                    } else {
+                        "Add stations in ERP settings, then refresh this operational board."
+                    },
                     icon = Icons.Filled.SportsEsports,
-                    primaryLabel = "Refresh",
+                    primaryLabel = if (state.refreshing) "Refreshing…" else "Refresh",
                     onPrimary = onRefresh,
+                    primaryEnabled = !state.refreshing,
+                    primaryBusy = state.refreshing,
+                    primaryIcon = Icons.Filled.Refresh,
                 )
             }
         }
@@ -544,6 +601,7 @@ private fun GamingFilterRow(
 private fun GamingStationCard(
     station: Station,
     session: GameSession?,
+    wallClock: State<Long>,
     actionInProgress: Boolean,
     busyHere: Boolean,
     focused: Boolean,
@@ -558,14 +616,8 @@ private fun GamingStationCard(
     // A paused session must look paused. Without an authoritative paused-at
     // field, freezing the local display is safer than inventing elapsed time.
     val shouldTick = session?.status in setOf("active", "stopping")
-    var nowMillis by remember(session?.id) { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(session?.id, shouldTick) {
-        if (!shouldTick) return@LaunchedEffect
-        while (isActive) {
-            nowMillis = System.currentTimeMillis()
-            delay(1_000)
-        }
-    }
+    val frozenMillis = remember(session?.id) { System.currentTimeMillis() }
+    val nowMillis = if (shouldTick) wallClock.value else frozenMillis
 
     val presentation = stationPresentation(station, session, nowMillis)
     val cardBackground = when (presentation.tone) {
@@ -593,29 +645,31 @@ private fun GamingStationCard(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    station.name,
-                    color = Brand.Foreground,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "${stationTypeLabel(station.type)} · ${station.ratePerHourMinor.asRupees()}/hour",
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                station.name,
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
             OperationalStatusBadge(
                 label = presentation.statusLabel,
                 tone = presentation.tone,
                 icon = presentation.statusIcon,
             )
         }
+        // Keep rate details out of the badge-constrained title row. Long
+        // names such as "Racing Simulator 1" remain identifiable and their
+        // price never disappears behind an ellipsis on a four-column tablet.
+        Text(
+            "${stationTypeLabel(station.type)} · ${station.ratePerHourMinor.asRupees()}/hour",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
 
         Row(
             Modifier.fillMaxWidth().weight(1f, fill = false),
@@ -922,7 +976,7 @@ internal fun unbilledSessionDetail(state: StationVisualState, session: GameSessi
     StationVisualState.SendPending -> "POS handoff saved and waiting for confirmation."
     StationVisualState.SendRejected -> session?.lastError?.takeIf(String::isNotBlank)
         ?: "POS refused the handoff. Check the shift and connection, then retry."
-    else -> "Send to POS before starting another session."
+    else -> "Send to POS before the next session."
 }
 
 internal fun sessionCustomerLabel(session: GameSession?): String? {
@@ -1262,7 +1316,7 @@ private fun formatElapsed(millis: Long): String {
     val hours = totalSeconds / 3_600
     val minutes = (totalSeconds % 3_600) / 60
     val seconds = totalSeconds % 60
-    return String.format("%02d:%02d:%02d", hours, minutes, seconds)
+    return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds)
 }
 
 private fun sessionWord(count: Int): String = if (count == 1) "session" else "sessions"

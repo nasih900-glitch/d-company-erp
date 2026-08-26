@@ -21,7 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +45,7 @@ fun LoginScreen(
     onSignIn: (String, String) -> Unit,
 ) {
     val recovery: PasswordRecoveryViewModel = viewModel()
-    val recoveryState by recovery.state.collectAsState()
+    val recoveryState by recovery.state.collectAsStateWithLifecycle()
     // rememberSaveable so a keyboard-driven config change does not wipe a
     // half-typed email.
     var email by rememberSaveable { mutableStateOf("") }

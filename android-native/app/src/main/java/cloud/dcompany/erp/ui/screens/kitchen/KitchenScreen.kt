@@ -43,8 +43,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.State
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,7 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -100,10 +102,13 @@ fun KitchenScreen(
     onExit: () -> Unit = {},
     vm: KitchenViewModel = viewModel(),
 ) {
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     var showRecovery by remember { mutableStateOf(false) }
     var showCancellationRecovery by remember { mutableStateOf(false) }
     var discardCandidate by remember { mutableStateOf<LocalKitchenAdvanceEntity?>(null) }
+    // Pass the state holder, not its value, into the two small time-dependent
+    // regions below. Updating it therefore never invalidates the ticket board.
+    val wallClock = remember { mutableLongStateOf(System.currentTimeMillis()) }
     SideEffect { vm.updateAccess(access) }
     LaunchedEffect(showRecovery, state.rejectedAdvances.size) {
         if (showRecovery && state.rejectedAdvances.isEmpty()) showRecovery = false
@@ -125,12 +130,15 @@ fun KitchenScreen(
             var nextRefreshAtMillis = 0L
             while (isActive) {
                 val now = System.currentTimeMillis()
-                vm.tick()
+                wallClock.longValue = now
                 if (now >= nextRefreshAtMillis) {
                     vm.refresh()
                     nextRefreshAtMillis = now + KITCHEN_POLL_MS
                 }
-                delay(1_000)
+                // Freshness copy changes only in five-second steps; matching
+                // the poll cadence avoids waking an otherwise idle KDS every
+                // second while keeping the stale threshold operationally clear.
+                delay(KITCHEN_POLL_MS)
             }
         }
     }
@@ -138,6 +146,7 @@ fun KitchenScreen(
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
         KitchenHeader(
             state,
+            wallClock = wallClock,
             onToggleServed = vm::setIncludeServed,
             onRefresh = vm::retry,
             onExit = onExit,
@@ -169,7 +178,7 @@ fun KitchenScreen(
             }
         }
         state.refreshError?.let { message ->
-            if (state.orders.isNotEmpty()) {
+            if (!state.includeServed && state.orders.isNotEmpty()) {
                 KitchenBanner(
                     title = "Kitchen queue may be out of date",
                     detail = message,
@@ -180,20 +189,19 @@ fun KitchenScreen(
                 )
             }
         }
-        if (shouldShowKitchenStaleWarning(state)) {
-            KitchenBanner(
-                title = "Kitchen queue is not updating",
-                detail = if (state.orders.isEmpty()) {
-                    "No tickets are cached, but the last successful update is old. Retry before treating the board as clear."
-                } else {
-                    "The visible tickets are saved locally, but this board may be out of date."
-                },
-                tone = UiTone.Warning,
-                icon = Icons.Default.Schedule,
-                actionLabel = "Retry",
-                onAction = vm::retry,
-            )
+        state.historyError?.let { message ->
+            if (state.includeServed && state.historyStatus == KitchenHistoryStatus.LOADED) {
+                KitchenBanner(
+                    title = "Served history could not refresh",
+                    detail = "Showing the last history loaded on this screen. $message",
+                    tone = UiTone.Warning,
+                    icon = Icons.Default.History,
+                    actionLabel = "Retry",
+                    onAction = vm::retry,
+                )
+            }
         }
+        KitchenStaleWarning(state = state, wallClock = wallClock, onRetry = vm::retry)
         if (state.rejectedAdvances.isNotEmpty()) {
             val count = state.rejectedAdvances.size
             KitchenBanner(
@@ -243,53 +251,48 @@ fun KitchenScreen(
             )
         }
 
-        when {
-            !state.everSynced && state.orders.isEmpty() && state.blockingLoadError == null ->
-                KitchenEmptyBoard(
-                    title = "Connecting to the kitchen queue",
-                    body = "This tablet is downloading the live preparation queue. Retry is safe and does not change any ticket.",
-                    actionLabel = "Check now",
-                    onAction = vm::retry,
-                    modifier = Modifier.weight(1f),
-                )
-
-            state.blockingLoadError != null && state.orders.isEmpty() ->
-                KitchenEmptyBoard(
-                    title = "Cannot load the kitchen queue",
-                    body = state.blockingLoadError!!,
-                    actionLabel = "Retry",
-                    onAction = vm::retry,
-                    modifier = Modifier.weight(1f),
-                )
-
-            state.orders.isEmpty() -> KitchenEmptyBoard(
-                title = when {
-                    state.stale -> "No cached tickets — live status unverified"
-                    state.includeServed -> "Nothing served yet today"
-                    else -> "Board is clear"
-                },
-                body = when {
-                    state.stale -> "The last successful update is old. Use Check now before assuming no new orders are waiting."
-                    state.includeServed -> {
-                    "Tickets the kitchen finishes today will be listed here."
-                    }
-                    else -> {
-                    "No tickets waiting. New orders from the till appear here on their " +
-                        "own within a few seconds — nothing to do until then."
-                    }
-                },
-                actionLabel = "Check now",
-                onAction = vm::retry,
-                modifier = Modifier.weight(1f),
-            )
-
-            else -> KitchenBoardShell(
+        if (state.includeServed) {
+            KitchenHistoryContent(
                 state = state,
-                canAdvance = access.canAdvanceTickets,
-                onAdvance = vm::advance,
-                onAcknowledgeCancellation = vm::acknowledgeCancellation,
+                wallClock = wallClock,
+                onRetry = vm::retry,
                 modifier = Modifier.weight(1f),
             )
+        } else {
+            when {
+                !state.everSynced && state.orders.isEmpty() && state.blockingLoadError == null ->
+                    KitchenEmptyBoard(
+                        title = "Connecting to the kitchen queue",
+                        body = "This tablet is downloading the live preparation queue. Retry is safe and does not change any ticket.",
+                        actionLabel = "Check now",
+                        onAction = vm::retry,
+                        modifier = Modifier.weight(1f),
+                    )
+
+                state.blockingLoadError != null && state.orders.isEmpty() ->
+                    KitchenEmptyBoard(
+                        title = "Cannot load the kitchen queue",
+                        body = state.blockingLoadError!!,
+                        actionLabel = "Retry",
+                        onAction = vm::retry,
+                        modifier = Modifier.weight(1f),
+                    )
+
+                state.orders.isEmpty() -> KitchenEmptyBoardForState(
+                    state = state,
+                    wallClock = wallClock,
+                    onAction = vm::retry,
+                    modifier = Modifier.weight(1f),
+                )
+
+                else -> KitchenBoardShell(
+                    state = state,
+                    canAdvance = access.canAdvanceTickets,
+                    onAdvance = vm::advance,
+                    onAcknowledgeCancellation = vm::acknowledgeCancellation,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 
@@ -342,8 +345,135 @@ fun KitchenScreen(
  * prevents a future visual cleanup from restoring the dangerous old
  * `orders.isNotEmpty()` condition. Explicit refresh/action errors already
  * communicate the outage, so they suppress the duplicate warning. */
-internal fun shouldShowKitchenStaleWarning(state: KitchenUiState): Boolean =
-    state.error == null && state.refreshError == null && state.stale
+internal fun shouldShowKitchenStaleWarning(
+    state: KitchenUiState,
+    nowMillis: Long,
+): Boolean = !state.includeServed &&
+    state.error == null &&
+    state.refreshError == null &&
+    kitchenFreshness(state.lastSyncedAtMillis, nowMillis).stale
+
+@Composable
+private fun KitchenStaleWarning(
+    state: KitchenUiState,
+    wallClock: State<Long>,
+    onRetry: () -> Unit,
+) {
+    if (state.includeServed) return
+    if (!shouldShowKitchenStaleWarning(state, wallClock.value)) return
+    KitchenBanner(
+        title = "Kitchen queue is not updating",
+        detail = if (state.orders.isEmpty()) {
+            "No tickets are cached, but the last successful update is old. Retry before treating the board as clear."
+        } else {
+            "The visible tickets are saved locally, but this board may be out of date."
+        },
+        tone = UiTone.Warning,
+        icon = Icons.Default.Schedule,
+        actionLabel = "Retry",
+        onAction = onRetry,
+    )
+}
+
+@Composable
+private fun KitchenEmptyBoardForState(
+    state: KitchenUiState,
+    wallClock: State<Long>,
+    onAction: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Served history has its own explicit load state. Active-queue freshness
+    // must not rename a successfully loaded, empty history result as stale.
+    val stale = !state.includeServed &&
+        kitchenFreshness(state.lastSyncedAtMillis, wallClock.value).stale
+    KitchenEmptyBoard(
+        title = when {
+            stale -> "No cached tickets — live status unverified"
+            state.includeServed -> "Nothing served yet today"
+            else -> "Board is clear"
+        },
+        body = when {
+            stale -> "The last successful update is old. Use Check now before assuming no new orders are waiting."
+            state.includeServed -> "Tickets the kitchen finishes today will be listed here."
+            else -> "No tickets waiting. New orders from the till appear here on their " +
+                "own within a few seconds — nothing to do until then."
+        },
+        actionLabel = "Check now",
+        onAction = onAction,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun KitchenHistoryContent(
+    state: KitchenUiState,
+    wallClock: State<Long>,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (state.historyStatus) {
+        KitchenHistoryStatus.INACTIVE,
+        KitchenHistoryStatus.LOADING -> KitchenHistoryLoadingBoard(modifier)
+
+        KitchenHistoryStatus.FAILED -> KitchenEmptyBoard(
+            title = "Could not load served history",
+            body = buildString {
+                append("The live kitchen queue has not been shown in its place. ")
+                append(state.historyError ?: "Check the connection and try again.")
+            },
+            actionLabel = "Retry",
+            onAction = onRetry,
+            modifier = modifier,
+        )
+
+        KitchenHistoryStatus.LOADED -> if (state.orders.isEmpty()) {
+            KitchenEmptyBoardForState(
+                state = state,
+                wallClock = wallClock,
+                onAction = onRetry,
+                modifier = modifier,
+            )
+        } else {
+            KitchenBoardShell(
+                state = state,
+                // History is explicitly read-only; return to Live board for
+                // state transitions or cancellation acknowledgements.
+                canAdvance = false,
+                onAdvance = {},
+                onAcknowledgeCancellation = { _, _ -> },
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KitchenHistoryLoadingBoard(modifier: Modifier = Modifier) {
+    Column(
+        modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            .fillMaxWidth()
+            .clip(Radius.shapeLg)
+            .background(Brand.Surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        CircularProgressIndicator(color = Brand.Gold, strokeWidth = 3.dp)
+        Text(
+            "Loading served history",
+            modifier = Modifier.padding(top = Spacing.lg),
+            color = Brand.Foreground,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            "Fetching today's kitchen history. Live tickets will never be shown as a substitute.",
+            modifier = Modifier.padding(top = Spacing.sm),
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
 
 /**
  * A kitchen board that has dimmed itself is useless, and a cook with wet or
@@ -373,6 +503,7 @@ private fun Context.findActivity(): Activity? {
 @Composable
 private fun KitchenHeader(
     state: KitchenUiState,
+    wallClock: State<Long>,
     onToggleServed: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onExit: () -> Unit,
@@ -389,7 +520,7 @@ private fun KitchenHeader(
                     subtitle = "Move every ticket through New, Preparing and Ready without losing offline work.",
                     eyebrow = "Live operations",
                     actions = {
-                        KitchenConnectionBadge(state)
+                        KitchenSourceStatusBadge(state, wallClock)
                         ErpButton(
                             text = "Refresh",
                             onClick = onRefresh,
@@ -415,7 +546,7 @@ private fun KitchenHeader(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    KitchenConnectionBadge(state)
+                    KitchenSourceStatusBadge(state, wallClock)
                     Spacer(Modifier.weight(1f))
                     ErpButton(
                         text = "Refresh",
@@ -446,11 +577,35 @@ private fun KitchenHeader(
 }
 
 @Composable
-private fun KitchenConnectionBadge(state: KitchenUiState) {
+private fun KitchenSourceStatusBadge(
+    state: KitchenUiState,
+    wallClock: State<Long>,
+) {
+    if (!state.includeServed) {
+        KitchenConnectionBadge(state.lastSyncedAtMillis, wallClock)
+        return
+    }
     val (label, tone) = when {
-        state.secondsSinceSync == null -> "Connecting" to UiTone.Information
-        state.stale -> "Update delayed" to UiTone.Warning
-        else -> "Updated ${state.secondsSinceSync}s ago" to UiTone.Success
+        state.historyStatus == KitchenHistoryStatus.FAILED -> "History unavailable" to UiTone.Danger
+        state.historyRefreshing -> "Updating history" to UiTone.Information
+        state.historyStatus == KitchenHistoryStatus.LOADED && state.historyError != null ->
+            "History may be out of date" to UiTone.Warning
+        state.historyStatus == KitchenHistoryStatus.LOADED -> "History loaded" to UiTone.Success
+        else -> "Loading history" to UiTone.Information
+    }
+    OperationalStatusBadge(label = label, tone = tone, icon = Icons.Default.History)
+}
+
+@Composable
+private fun KitchenConnectionBadge(
+    lastSyncedAtMillis: Long?,
+    wallClock: State<Long>,
+) {
+    val freshness = kitchenFreshness(lastSyncedAtMillis, wallClock.value)
+    val (label, tone) = when {
+        freshness.secondsSinceSync == null -> "Connecting" to UiTone.Information
+        freshness.stale -> "Update delayed" to UiTone.Warning
+        else -> "Updated ${freshness.secondsSinceSync}s ago" to UiTone.Success
     }
     OperationalStatusBadge(label = label, tone = tone)
 }

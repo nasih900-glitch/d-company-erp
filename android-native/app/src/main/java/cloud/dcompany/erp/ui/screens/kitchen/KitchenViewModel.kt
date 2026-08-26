@@ -15,6 +15,8 @@ import cloud.dcompany.erp.core.db.shiftClosingMessageOr
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -45,13 +47,19 @@ data class KitchenUiState(
     val savedAdvances: List<LocalKitchenAdvanceEntity> = emptyList(),
     val savedCancellationAcks: List<LocalKitchenCancellationAckEntity> = emptyList(),
     val includeServed: Boolean = false,
+    val historyStatus: KitchenHistoryStatus = KitchenHistoryStatus.INACTIVE,
+    val historyRefreshing: Boolean = false,
+    val historyError: String? = null,
     /** The ticket whose advance is queued or in flight. */
     val busyOrderId: String? = null,
+    /**
+     * A non-zero deadline means the short post-advance guard is active. The
+     * ViewModel clears it when the guard expires, so reading this value never
+     * needs a per-second wall-clock tick through the complete queue state.
+     */
     val advanceLockedUntilMillis: Long = 0L,
     val everSynced: Boolean = false,
     val lastSyncedAtMillis: Long? = null,
-    /** Ticks every second so "synced 4s ago" and the tap lock stay honest. */
-    val nowMillis: Long = System.currentTimeMillis(),
 ) {
     fun lane(state: KitchenState): List<KitchenOrder> =
         orders.filter { KitchenState.from(it.kitchenState) == state }
@@ -73,7 +81,7 @@ data class KitchenUiState(
     val preparingCount: Int get() = lane(KitchenState.PREPARING).size
     val readyCount: Int get() = lane(KitchenState.READY).size
 
-    val tapsLocked: Boolean get() = busyOrderId != null || nowMillis < advanceLockedUntilMillis
+    val tapsLocked: Boolean get() = busyOrderId != null || advanceLockedUntilMillis != 0L
 
     val pendingAdvances: List<LocalKitchenAdvanceEntity>
         get() = savedAdvances.filter { it.state == KitchenAdvanceState.PENDING }
@@ -90,17 +98,76 @@ data class KitchenUiState(
     val acknowledgingLineIds: Set<String>
         get() = savedCancellationAcks.mapTo(mutableSetOf()) { it.lineId }
 
-    /** Seconds since the last successful read, or null before the first one. */
-    val secondsSinceSync: Long?
-        get() = lastSyncedAtMillis?.let { ((nowMillis - it) / 1000).coerceAtLeast(0) }
-
-    /**
-     * A KDS that quietly stops updating is dangerous — the cook reads a frozen
-     * screen as "no new orders". Two missed polls is enough to say so out loud.
-     */
-    val stale: Boolean get() = (secondsSinceSync ?: 0) > (KITCHEN_POLL_MS / 1000) * 3
-
     val blockingLoadError: String? get() = error ?: refreshError
+}
+
+/**
+ * Time-dependent presentation is deliberately kept outside [KitchenUiState].
+ * The kitchen queue can be large, and putting a one-second clock into that
+ * state rebuilt every order and every lane even though only the small
+ * connection badge and stale warning had changed.
+ */
+internal data class KitchenFreshness(
+    val secondsSinceSync: Long?,
+    val stale: Boolean,
+)
+
+internal fun kitchenFreshness(
+    lastSyncedAtMillis: Long?,
+    nowMillis: Long,
+): KitchenFreshness {
+    val seconds = lastSyncedAtMillis
+        ?.let { ((nowMillis - it) / 1_000L).coerceAtLeast(0L) }
+    return KitchenFreshness(
+        secondsSinceSync = seconds,
+        stale = (seconds ?: 0L) > (KITCHEN_POLL_MS / 1_000L) * 3L,
+    )
+}
+
+enum class KitchenHistoryStatus {
+    INACTIVE,
+    LOADING,
+    LOADED,
+    FAILED,
+}
+
+/**
+ * Served history is an online-only source and must never be represented by the
+ * active Room cache. The explicit status prevents `null` from ambiguously
+ * meaning either "not requested yet" or "request failed".
+ */
+internal data class KitchenHistorySnapshot(
+    val status: KitchenHistoryStatus = KitchenHistoryStatus.INACTIVE,
+    val orders: List<KitchenOrder> = emptyList(),
+    val refreshing: Boolean = false,
+    val error: String? = null,
+)
+
+internal fun visibleKitchenOrders(
+    includeServed: Boolean,
+    activeOrders: List<KitchenOrder>,
+    history: KitchenHistorySnapshot,
+): List<KitchenOrder> = when {
+    !includeServed -> activeOrders
+    history.status == KitchenHistoryStatus.LOADED -> history.orders
+    else -> emptyList()
+}
+
+internal fun beginKitchenHistoryLoad(
+    current: KitchenHistorySnapshot,
+): KitchenHistorySnapshot = if (current.status == KitchenHistoryStatus.LOADED) {
+    current.copy(refreshing = true, error = null)
+} else {
+    KitchenHistorySnapshot(status = KitchenHistoryStatus.LOADING)
+}
+
+internal fun failKitchenHistoryLoad(
+    previous: KitchenHistorySnapshot,
+    message: String,
+): KitchenHistorySnapshot = if (previous.status == KitchenHistoryStatus.LOADED) {
+    previous.copy(refreshing = false, error = message)
+} else {
+    KitchenHistorySnapshot(status = KitchenHistoryStatus.FAILED, error = message)
 }
 
 /**
@@ -125,11 +192,13 @@ class KitchenViewModel : ViewModel() {
     private val includeServed = MutableStateFlow(false)
     private val busyOrderId = MutableStateFlow<String?>(null)
     private val advanceLockedUntilMillis = MutableStateFlow(0L)
-    private val nowMillis = MutableStateFlow(System.currentTimeMillis())
+    private var releaseAdvanceLockJob: Job? = null
     private val error = MutableStateFlow<String?>(null)
     private val notice = MutableStateFlow<String?>(null)
-    /** Non-null only while includeServed = true — bypasses Room entirely. */
-    private val historySnapshot = MutableStateFlow<List<KitchenOrder>?>(null)
+    /** Explicit online-only history state; active Room rows are never a fallback. */
+    private val historySnapshot = MutableStateFlow(KitchenHistorySnapshot())
+    private var historyLoadJob: Job? = null
+    private var historyRequestId = 0L
     @Volatile private var access = KitchenAccess()
     private val syncActions = KitchenSyncActions(
         pullActiveQueue = {
@@ -151,15 +220,13 @@ class KitchenViewModel : ViewModel() {
         combine(
             error,
             notice,
-            nowMillis,
             appCtx.db.syncMetaDao().observe("kitchen"),
             appCtx.sync.resourceRefreshErrors,
-        ) { err, note, now, meta, refreshErrors ->
+        ) { err, note, meta, refreshErrors ->
             KitchenStatus(
                 error = err,
                 refreshError = refreshErrors["kitchen"],
                 notice = note,
-                nowMillis = now,
                 lastSyncedAtMillis = meta?.lastSyncMillis,
             )
         },
@@ -167,27 +234,28 @@ class KitchenViewModel : ViewModel() {
         val (unresolved, cancellationAcks) = localWork
         val (includeServedNow, busy, lockedUntil) = uiA
         val pending = unresolved.filter { it.state == KitchenAdvanceState.PENDING }
+        val activeOrders = if (includeServedNow) {
+            emptyList()
+        } else {
+            mergeCacheWithPending(cache, pending)
+        }
         KitchenUiState(
             error = uiB.error,
             refreshError = uiB.refreshError,
             notice = uiB.notice,
-            orders = history ?: mergeCacheWithPending(cache, pending),
+            orders = visibleKitchenOrders(includeServedNow, activeOrders, history),
             savedAdvances = unresolved,
             savedCancellationAcks = cancellationAcks,
             includeServed = includeServedNow,
+            historyStatus = history.status,
+            historyRefreshing = history.refreshing,
+            historyError = history.error,
             busyOrderId = busy,
             advanceLockedUntilMillis = lockedUntil,
             everSynced = uiB.lastSyncedAtMillis != null,
             lastSyncedAtMillis = uiB.lastSyncedAtMillis,
-            nowMillis = uiB.nowMillis,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KitchenUiState())
-
-    /** Called only while the KDS is visibly composed. Keeping this clock in
-     * the ViewModel would continue waking the tablet after staff leave KDS. */
-    fun tick() {
-        nowMillis.value = System.currentTimeMillis()
-    }
 
     /** Re-reads the queue — realtime push already keeps Room fresh; this is the manual/poll path. */
     fun refresh() {
@@ -209,18 +277,57 @@ class KitchenViewModel : ViewModel() {
 
     fun setIncludeServed(include: Boolean) {
         if (include == includeServed.value) return
-        includeServed.value = include
         error.value = null
-        if (include) loadHistorySnapshot() else historySnapshot.value = null
+        if (include) {
+            // Publish LOADING before selecting the history tab. Even if combine
+            // observes the flows separately, no state can pair includeServed
+            // with active-cache rows.
+            historyLoadJob?.cancel()
+            historySnapshot.value = KitchenHistorySnapshot(status = KitchenHistoryStatus.LOADING)
+            includeServed.value = true
+            loadHistorySnapshot()
+        } else {
+            includeServed.value = false
+            historyRequestId += 1L
+            historyLoadJob?.cancel()
+            historyLoadJob = null
+            historySnapshot.value = KitchenHistorySnapshot()
+        }
     }
 
     private fun loadHistorySnapshot() {
-        viewModelScope.launch {
+        if (!includeServed.value || historyLoadJob?.isActive == true) return
+        val previous = historySnapshot.value
+        historySnapshot.value = beginKitchenHistoryLoad(previous)
+        val requestId = ++historyRequestId
+        historyLoadJob = viewModelScope.launch {
             try {
-                historySnapshot.value = api.queue(includeServed = true)
-                error.value = null
+                val orders = api.queue(includeServed = true)
+                if (includeServed.value && requestId == historyRequestId) {
+                    historySnapshot.value = KitchenHistorySnapshot(
+                        status = KitchenHistoryStatus.LOADED,
+                        orders = orders,
+                    )
+                }
             } catch (e: ApiException) {
-                error.value = e.message ?: "Could not reach the server."
+                if (includeServed.value && requestId == historyRequestId) {
+                    historySnapshot.value = failKitchenHistoryLoad(
+                        previous = previous,
+                        message = e.message?.takeIf(String::isNotBlank)
+                            ?: "Could not reach the server.",
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (includeServed.value && requestId == historyRequestId) {
+                    historySnapshot.value = failKitchenHistoryLoad(
+                        previous = previous,
+                        message = "Served history could not be read. Check the connection and try again.",
+                    )
+                }
+            } finally {
+                if (requestId == historyRequestId) historyLoadJob = null
             }
         }
     }
@@ -375,7 +482,7 @@ class KitchenViewModel : ViewModel() {
                         )
                     }
                 ) return@launch
-                advanceLockedUntilMillis.value = System.currentTimeMillis() + ADVANCE_LOCK_MS
+                holdAdvanceLock()
                 syncActions.advancesQueued()
                 if (includeServed.value) loadHistorySnapshot()
             } catch (cancelled: CancellationException) {
@@ -388,13 +495,24 @@ class KitchenViewModel : ViewModel() {
             }
         }
     }
+
+    private fun holdAdvanceLock() {
+        val deadline = System.currentTimeMillis() + ADVANCE_LOCK_MS
+        advanceLockedUntilMillis.value = deadline
+        releaseAdvanceLockJob?.cancel()
+        releaseAdvanceLockJob = viewModelScope.launch {
+            delay((deadline - System.currentTimeMillis()).coerceAtLeast(0L))
+            if (advanceLockedUntilMillis.value == deadline) {
+                advanceLockedUntilMillis.value = 0L
+            }
+        }
+    }
 }
 
 private data class KitchenStatus(
     val error: String?,
     val refreshError: String?,
     val notice: String?,
-    val nowMillis: Long,
     val lastSyncedAtMillis: Long?,
 )
 

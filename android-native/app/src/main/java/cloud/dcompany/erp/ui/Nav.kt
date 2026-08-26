@@ -1,15 +1,9 @@
 package cloud.dcompany.erp.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -69,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,7 +87,6 @@ import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.fieldColors
 import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 
@@ -149,6 +143,7 @@ fun WorkspaceScaffold(
     }
 
     var commandOpen by remember { mutableStateOf(false) }
+    val destinationStateHolder = rememberSaveableStateHolder()
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Brand.Background)) {
         val compact = maxWidth < 1_000.dp
@@ -185,15 +180,15 @@ fun WorkspaceScaffold(
                 )
                 SyncAvailabilityBanner(connectivityProblem)
                 Box(Modifier.fillMaxSize()) {
-                    AnimatedContent(
-                        targetState = current,
-                        transitionSpec = {
-                            fadeIn(tween(Motion.medium, easing = Motion.emphasized))
-                                .togetherWith(fadeOut(tween(Motion.fast)))
-                        },
-                        label = "destinationCrossfade",
-                    ) { destination ->
-                        content(destination) { target ->
+                    // A full-screen crossfade renders both destination trees into
+                    // overlapping layers. On the target 2560 x 1600 tablet that
+                    // turns every sidebar tap into several expensive 4 MP frames,
+                    // delaying both the visual response and the newly opened
+                    // screen's first interaction. Route changes are operational
+                    // navigation, so swap the content immediately and reserve
+                    // motion for small, local state changes.
+                    destinationStateHolder.SaveableStateProvider(current.name) {
+                        content(current) { target ->
                             if (target in destinations) onDestinationChanged(target)
                         }
                     }
@@ -315,7 +310,6 @@ private fun WorkspaceNavItem(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val interaction = remember { MutableInteractionSource() }
     val selectedBackground = Brand.Gold.copy(alpha = 0.14f)
     Box(
         modifier
@@ -325,8 +319,6 @@ private fun WorkspaceNavItem(
             .background(if (selected) selectedBackground else Color.Transparent)
             .selectable(
                 selected = selected,
-                interactionSource = interaction,
-                indication = null,
                 role = Role.Tab,
                 onClick = onClick,
             )
