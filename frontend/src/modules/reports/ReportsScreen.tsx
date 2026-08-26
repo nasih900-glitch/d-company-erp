@@ -17,9 +17,18 @@ import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
 import { DEFAULT_BUSINESS_TIMEZONE, dateISOInTimeZone } from '@/lib/manual-collections';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
-import { analytics as analyticsApi, reports as reportsApi, settings, type BranchDTO, type CompanyDTO } from '@/lib/erp-api';
+import {
+  analytics as analyticsApi,
+  insights,
+  reports as reportsApi,
+  settings,
+  type BranchDTO,
+  type CompanyDTO,
+  type CostingCoverageDTO,
+} from '@/lib/erp-api';
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { useNotifications } from '@/components/ui/Notifications';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
 type HalfYear = 'H1' | 'H2';
@@ -42,15 +51,23 @@ interface ReportData {
   orders_count: number;
   tickets_count: number;
   avg_ticket_minor: number;
+  // Optional during rolling web/backend deployment; current backend always
+  // returns it. A positive value means revenue is included on legacy closed_at
+  // fallback but invoice provenance still needs owner reconciliation.
+  unissued_paid_orders_count?: number;
   revenue: {
     food_minor: number;
     gaming_minor: number;
     hookah_minor: number;
     event_tickets_minor: number;
+    memberships_minor: number;
     delivery_aggregator_minor: number;
     other_minor: number;
     manual_collections_minor: number;
     discounts_and_points_redeemed_minor: number;
+    rounding_income_minor: number;
+    rounding_expense_minor: number;
+    round_off_minor: number;
     total_minor: number;
   };
   tax_collected: {
@@ -71,7 +88,11 @@ interface ReportData {
     total_minor: number;
   };
   manual_collections_minor: number;
+  tips_collected_minor: number;
   refunds_issued_minor: number;
+  settled_refunds_issued_minor: number;
+  membership_refunds_issued_minor: number;
+  refunded_tips_minor: number;
   net_payments_received_minor: number;
   expenses: Array<{ category: string; amount_minor: number }>;
   expense_total_minor: number;
@@ -109,6 +130,7 @@ interface TaxComplianceData {
 }
 
 export default function ReportsScreen() {
+  const notifications = useNotifications();
   const { me, demo } = useAuth();
   // Same gating shape as the sidebar's insights_reports nav items (see
   // AppShell.tsx isVisible): protected owners bypass, everyone else needs
@@ -116,9 +138,11 @@ export default function ReportsScreen() {
   // and analytics CSV exports below all require analytics.export, which is
   // bundled into this same module — see backend/app/core/permissions.py.
   const canExport = Boolean(demo || me?.protected_access || me?.accessible_modules?.includes('insights_reports'));
+  const canViewCosting = Boolean(demo || me?.protected_access || me?.accessible_modules?.includes('finance'));
   const [period, setPeriod] = useState<Period>('daily');
   const [report, setReport] = useState<ReportData | null>(null);
   const [taxHealth, setTaxHealth] = useState<TaxComplianceData | null>(null);
+  const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [taxError, setTaxError] = useState<string | null>(null);
   const [loading, setLoading] = useState(LIVE_MODE);
   const [error, setError] = useState<string | null>(null);
@@ -156,12 +180,21 @@ export default function ReportsScreen() {
         setTaxHealth(null);
         setTaxError((taxIssue as Error).message);
       }
+      if (LIVE_MODE && canViewCosting) {
+        try {
+          setCosting(await insights.costingCoverage());
+        } catch {
+          setCosting(null);
+        }
+      } else {
+        setCosting(null);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [halfYear, month, onDate, period, quarter, timezoneReady, weekDate, year]);
+  }, [canViewCosting, halfYear, month, onDate, period, quarter, timezoneReady, weekDate, year]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -217,8 +250,15 @@ export default function ReportsScreen() {
       expense_total_minor: report.expense_total_minor,
       net_profit_minor: report.net_profit_minor,
     });
-    if (ok) alert('✓ Report pushed to Google Sheets (ERP Entries tab)');
-    else alert('Failed to push to Google Sheets. Check Settings → Google Sheets.');
+    if (ok) {
+      notifications.success('Report pushed to the ERP Entries tab in Google Sheets.', {
+        title: 'Google Sheets updated',
+      });
+    } else {
+      notifications.error('Check the Google Sheets connection in Settings and try again.', {
+        title: 'Could not push report',
+      });
+    }
   }
 
   async function exportPeriodCsv() {
@@ -379,6 +419,9 @@ export default function ReportsScreen() {
             <p className="text-xs text-fg-muted print:text-black/70 mt-1">
               {report.period_start} to {report.period_end} · FY {report.fiscal_year}
             </p>
+            <p className="text-xs text-accent-gold print:text-black/70 mt-1">
+              Management P&amp;L · operational cash/receipt basis, not accrual or statutory accounts
+            </p>
           </header>
 
           {/* KPI strip */}
@@ -394,6 +437,23 @@ export default function ReportsScreen() {
             <KPI label="Net profit" value={inr(report.net_profit_minor)}
               tone={report.net_profit_minor >= 0 ? 'good' : 'bad'}/>
           </div>
+
+          {costing && !costing.is_complete && (
+            <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-sm print:border print:border-black/40">
+              <b>Provisional profit: {costing.incomplete_item_count} sellable inventory item{costing.incomplete_item_count === 1 ? '' : 's'} lack complete costing.</b>{' '}
+              Recorded COGS excludes unknown recipe or ingredient costs, so gross and net profit may be overstated.
+              Resolve these items in Menu and Inventory before using this report for partner distributions.
+            </div>
+          )}
+
+          {(report.unissued_paid_orders_count ?? 0) > 0 && (
+            <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-sm print:border print:border-black/40">
+              <b>
+                {report.unissued_paid_orders_count} paid order{report.unissued_paid_orders_count === 1 ? '' : 's'} lack an issued-invoice timestamp.
+              </b>{' '}
+              Their sales are included using the recorded order-close time and their payments and refunds use the actual money-movement time, so totals are not hidden. An owner should reconcile the missing receipt provenance before relying on this report for statutory accounts or partner distributions.
+            </div>
+          )}
 
           {report.manual_collections_minor > 0 && (
             <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm print:border print:border-black/30">
@@ -442,6 +502,7 @@ export default function ReportsScreen() {
               {isAppStoreAllowedType('hookah') && report.revenue.hookah_minor > 0 &&
                 <Row label="Hookah"                           v={report.revenue.hookah_minor}/>}
               <Row label="Event tickets"                     v={report.revenue.event_tickets_minor}/>
+              <Row label="Memberships"                       v={report.revenue.memberships_minor ?? 0}/>
               <Row label="Delivery (Zomato/Swiggy §9(5))"    v={report.revenue.delivery_aggregator_minor}
                    sub="aggregator pays the GST"/>
               {report.revenue.manual_collections_minor > 0 &&
@@ -451,11 +512,19 @@ export default function ReportsScreen() {
                 <Row label="Other"                          v={report.revenue.other_minor}/>}
               {report.revenue.discounts_and_points_redeemed_minor > 0 &&
                 <Row label="Less: discounts & points redeemed" v={-report.revenue.discounts_and_points_redeemed_minor}/>}
+              {report.revenue.rounding_income_minor > 0 &&
+                <Row label="Invoice round-up" v={report.revenue.rounding_income_minor}/>}
+              {report.revenue.rounding_expense_minor > 0 &&
+                <Row label="Less: invoice round-down" v={-report.revenue.rounding_expense_minor}/>}
               <Divider/>
               <Row label="Gross revenue" v={report.revenue.total_minor} bold
                 sub="everything customers paid, before tax and costs"/>
               {(report.refunds_issued_minor ?? 0) > 0 && (
                 <Row label="Less: refunds" v={-(report.refunds_issued_minor ?? 0)}/>
+              )}
+              {(report.refunded_tips_minor ?? 0) > 0 && (
+                <Row label="Add back: refunded tips" v={report.refunded_tips_minor}
+                  sub="tips were a staff liability, not cafe revenue"/>
               )}
               <Row label="Less: GST collected" v={-report.tax_collected.total_minor}
                 sub="owed to the government, never was your money"/>
@@ -499,13 +568,24 @@ export default function ReportsScreen() {
                 <Row label="Other" v={report.payments_received.other_minor}/>}
               <Divider/>
               <Row label="Gross payments collected" v={report.payments_received.total_minor}/>
-              {(report.refunds_issued_minor ?? 0) > 0 && (
-                <Row label="Less: refunds issued" v={-(report.refunds_issued_minor ?? 0)}/>
+              {(report.tips_collected_minor ?? 0) > 0 && (
+                <Row label="Of which: tips held for staff" v={report.tips_collected_minor}
+                  sub="included in payments, excluded from revenue"/>
+              )}
+              {(report.settled_refunds_issued_minor ?? 0) > 0 && (
+                <Row label="Less: cash/payment refunds" v={-report.settled_refunds_issued_minor}
+                  sub={(report.membership_refunds_issued_minor ?? 0) > 0
+                    ? `includes ${inr(report.membership_refunds_issued_minor)} in settled membership reversals`
+                    : undefined}/>
+              )}
+              {report.refunds_issued_minor - report.settled_refunds_issued_minor > 0 && (
+                <Row label="Store-credit refunds (no cash movement)"
+                  v={report.refunds_issued_minor - report.settled_refunds_issued_minor}/>
               )}
               <Divider/>
               <Row label="Net payment movement"
                 v={report.net_payments_received_minor
-                  ?? report.payments_received.total_minor - (report.refunds_issued_minor ?? 0)} bold/>
+                  ?? report.payments_received.total_minor - (report.settled_refunds_issued_minor ?? 0)} bold/>
             </section>
 
             {/* Expenses */}
@@ -741,10 +821,14 @@ function demoReport(
       gaming_minor: gaming,
       hookah_minor: hookah,
       event_tickets_minor: tickets_revenue,
+      memberships_minor: 0,
       delivery_aggregator_minor: delivery,
       other_minor: 0,
       manual_collections_minor: 0,
       discounts_and_points_redeemed_minor: 0,
+      rounding_income_minor: 0,
+      rounding_expense_minor: 0,
+      round_off_minor: 0,
       total_minor: gross,
     },
     tax_collected: {
@@ -762,7 +846,11 @@ function demoReport(
       total_minor:  gross,
     },
     manual_collections_minor: 0,
+    tips_collected_minor: 0,
     refunds_issued_minor: 0,
+    settled_refunds_issued_minor: 0,
+    membership_refunds_issued_minor: 0,
+    refunded_tips_minor: 0,
     net_payments_received_minor: gross,
     expenses: [
       { category: 'Wages',            amount_minor: wages },

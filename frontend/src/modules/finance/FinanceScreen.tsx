@@ -19,18 +19,22 @@ import {
 
 import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import {
-  finance, settings, reports,
+  finance, insights, settings, reports,
   type ExpenseDTO, type PartnerDTO, type BranchDTO, type ExpenseCategoryDTO,
   type CapitalEntryDTO, type ReportDataDTO, type PartnerPLReportDTO,
   type BusinessMetricsDTO, type DistributableProfitReportDTO,
+  type CostingCoverageDTO,
 } from '@/lib/erp-api';
 import {
   DEFAULT_BUSINESS_TIMEZONE,
   dateISOInTimeZone,
   rupeesToMinor,
 } from '@/lib/manual-collections';
+import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
 import TipPayoutsTab from './TipPayoutsTab';
@@ -83,6 +87,7 @@ export default function FinanceScreen() {
 function OverviewTab() {
   const [data, setData] = useState<ReportDataDTO | null>(null);
   const [metrics, setMetrics] = useState<BusinessMetricsDTO | null>(null);
+  const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [gstRegistered, setGstRegistered] = useState(true);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -90,9 +95,10 @@ function OverviewTab() {
   async function load() {
     setLoading(true); setErr(null);
     try {
-      const [company, businessMetrics] = await Promise.all([
+      const [company, businessMetrics, costingCoverage] = await Promise.all([
         settings.getCompany(),
         finance.businessMetrics(),
+        insights.costingCoverage(),
       ]);
       const daily = await reports.daily(dateISOInTimeZone(
         new Date(),
@@ -100,6 +106,7 @@ function OverviewTab() {
       ));
       setData(daily);
       setMetrics(businessMetrics);
+      setCosting(costingCoverage);
       setGstRegistered(company.gst_registration_type !== 'unregistered');
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
@@ -131,6 +138,10 @@ function OverviewTab() {
           <RefreshCw size={11}/>
         </button>
       </div>
+      <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
+        <b>Management cash/receipt-basis P&amp;L.</b>{' '}
+        This operational view is not an accrual or statutory set of accounts.
+      </div>
 
       {empty && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm">
@@ -143,6 +154,23 @@ function OverviewTab() {
           <b>Not GST-registered.</b> The GST fields below are inactive placeholders for when
           you register — they are not live tax figures, and no GST is actually being charged
           or collected today.
+        </div>
+      )}
+
+      {costing && !costing.is_complete && (
+        <div className="card mb-4 border-accent-bad/50 bg-accent-bad/10 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={17} className="text-accent-bad mt-0.5 shrink-0"/>
+            <div>
+              <b>Profit is provisional: {costing.incomplete_item_count} sellable item{costing.incomplete_item_count === 1 ? '' : 's'} lack complete costing.</b>{' '}
+              Automatic COGS excludes unknown costs, so gross and operating profit may be overstated.
+              Fix the listed items in <b>Menu → Recipe</b> and receive stock with a real unit cost in <b>Inventory</b> before distributing profit.
+              <div className="mt-2 text-xs text-fg-muted">
+                {costing.issues.slice(0, 4).map((issue) => issue.name).join(' · ')}
+                {costing.issues.length > 4 ? ` · +${costing.issues.length - 4} more` : ''}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -171,6 +199,7 @@ function OverviewTab() {
           {rev.gaming_minor > 0 && <Row label={gstRegistered ? 'Gaming (18% GST)' : 'Gaming'} v={rev.gaming_minor}/>}
           {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label={gstRegistered ? 'Shisha (18% GST)' : 'Shisha'} v={rev.hookah_minor}/>}
           {rev.event_tickets_minor > 0 && <Row label={gstRegistered ? 'Event tickets (18% GST)' : 'Event tickets'} v={rev.event_tickets_minor}/>}
+          {rev.memberships_minor > 0 && <Row label="Memberships" v={rev.memberships_minor}/>}
           {rev.delivery_aggregator_minor > 0 && (
             <Row label={gstRegistered ? 'Delivery aggregator (§9(5))' : 'Delivery aggregator'} v={rev.delivery_aggregator_minor} sub={gstRegistered ? 'zero GST on our invoice' : undefined}/>
           )}
@@ -183,6 +212,12 @@ function OverviewTab() {
           {rev.discounts_and_points_redeemed_minor > 0 && (
             <Row label="Less: discounts & points redeemed" v={-rev.discounts_and_points_redeemed_minor}/>
           )}
+          {rev.rounding_income_minor > 0 && (
+            <Row label="Invoice round-up" v={rev.rounding_income_minor}/>
+          )}
+          {rev.rounding_expense_minor > 0 && (
+            <Row label="Less: invoice round-down" v={-rev.rounding_expense_minor}/>
+          )}
           {gstRegistered && (
             <>
               <Divider/>
@@ -194,8 +229,11 @@ function OverviewTab() {
             </>
           )}
           <Divider/>
-          <Row label="Less: cost of goods sold" v={-data.cogs_minor} sub="what the food/drinks/items you sold actually cost you"/>
-          <Row label="Gross profit" v={data.gross_profit_minor} bold sub={manualCollections > 0 ? 'includes manual collections at 0% COGS' : undefined}/>
+          <Row label="Less: recorded cost of goods sold" v={-data.cogs_minor}
+            sub={costing && !costing.is_complete ? 'incomplete until all sellable stock items have recipes and costed ingredients' : 'what the food/drinks/items you sold actually cost you'}/>
+          <Row label={costing && !costing.is_complete ? 'Provisional gross profit' : 'Gross profit'}
+            v={data.gross_profit_minor} bold
+            sub={manualCollections > 0 ? 'includes manual collections at 0% COGS' : undefined}/>
         </div>
 
         <div className="card">
@@ -234,9 +272,8 @@ function OverviewTab() {
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
             <Stat label="Avg order value (this period)" value={inrShort(metrics.aov_minor)}
               sub={`${metrics.orders_count} order${metrics.orders_count === 1 ? '' : 's'} this period`}/>
-            <Stat label="MRR" value={inrShort(metrics.mrr_minor)}
-              sub={`${metrics.active_members_count} active member${metrics.active_members_count === 1 ? '' : 's'}`}/>
-            <Stat label="ARR" value={inrShort(metrics.arr_minor)} sub="MRR × 12"/>
+            <Stat label="Active memberships" value={metrics.active_members_count.toString()}
+              sub="unexpired, non-revoked terms active right now"/>
             <Stat label="Customer LTV (all-time)" value={inrShort(metrics.ltv_minor)}
               sub={`avg across ${metrics.customers_count} customer${metrics.customers_count === 1 ? '' : 's'}, all-time`}/>
             <Stat label="CAC" value={metrics.cac_minor === null ? '—' : inrShort(metrics.cac_minor)}
@@ -248,8 +285,8 @@ function OverviewTab() {
               sub={metrics.burn_rate_minor > 0 ? 'lost money this period, after cost of goods sold and expenses' : 'profitable this period'}/>
           </div>
           <p className="text-xs text-fg-muted mt-3">
-            These are the metrics that actually fit a single-location, self-funded business —
-            not SaaS/VC fundraising metrics like Rule of 40 or TAM/SAM/SOM, which don't apply here.
+            Memberships are prepaid manual terms, not recurring subscriptions. MRR/ARR stay
+            hidden until an actual recurring-billing provider is operating.
           </p>
         </div>
       )}
@@ -261,12 +298,15 @@ function OverviewTab() {
 // EXPENSES TAB
 // ============================================================================
 function ExpensesTab() {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<ExpenseDTO[]>([]);
   const [cats, setCats] = useState<ExpenseCategoryDTO[]>([]);
   const [branches, setBranches] = useState<BranchDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [deleteExpense, setDeleteExpense] = useState<ExpenseDTO | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -282,10 +322,19 @@ function ExpensesTab() {
   }
   useEffect(() => { load(); }, []);
 
-  async function onDelete(id: string) {
-    if (!confirm('Delete this expense?')) return;
-    try { await finance.deleteExpense(id); await load(); }
-    catch (e) { alert((e as Error).message); }
+  async function confirmDelete() {
+    if (!deleteExpense || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await finance.deleteExpense(deleteExpense.id);
+      setDeleteExpense(null);
+      await load();
+      notifications.success('The expense was deleted.', { title: 'Expense deleted' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not delete expense' });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   if (loading) return <SkeletonCard />;
@@ -348,7 +397,7 @@ function ExpensesTab() {
                   <td className="p-3"><span className="chip text-xs">{r.paid_via}</span></td>
                   <td className="p-3 text-right font-mono">{inr(r.amount_minor)}</td>
                   <td className="p-3 text-right pr-4">
-                    <button onClick={() => onDelete(r.id)}
+                    <button onClick={() => setDeleteExpense(r)}
                       className="text-fg-muted hover:text-accent-bad">
                       <Trash2 size={14}/>
                     </button>
@@ -380,7 +429,7 @@ function ExpensesTab() {
                 <div className="mt-3 flex justify-end">
                   <button
                     aria-label="Delete expense"
-                    onClick={() => onDelete(r.id)}
+                    onClick={() => setDeleteExpense(r)}
                     className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 hover:!text-accent-bad"
                   >
                     <Trash2 size={14}/>
@@ -392,9 +441,24 @@ function ExpensesTab() {
         </div>
       )}
 
-      {addOpen && <ExpenseForm cats={cats} branches={branches}
-        onClose={() => setAddOpen(false)}
-        onSuccess={() => { setAddOpen(false); load(); }}/>}
+      {addOpen && (
+        <ExpenseForm cats={cats} branches={branches} onClose={() => setAddOpen(false)} onSuccess={() => {
+          setAddOpen(false);
+          void load();
+          notifications.success('The expense was recorded.', { title: 'Expense saved' });
+        }}/>
+      )}
+      {deleteExpense && (
+        <ConfirmModal
+          title="Delete expense"
+          message={`Delete the ${inr(deleteExpense.amount_minor)} expense${deleteExpense.vendor_name ? ` from ${deleteExpense.vendor_name}` : ''}?`}
+          confirmLabel="Delete expense"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => { void confirmDelete(); }}
+          onCancel={() => { if (!deleteBusy) setDeleteExpense(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -431,10 +495,14 @@ function ExpenseForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
+      const amountMinor = parseRupeesToMinor(form.amount_rupees);
+      if (amountMinor === null || amountMinor <= 0) {
+        throw new Error('Expense amount must be above ₹0 with at most two decimals.');
+      }
       await finance.createExpense({
         branch_id: form.branch_id,
         category_id: form.category_id,
-        amount_minor: Math.round(parseFloat(form.amount_rupees || '0') * 100),
+        amount_minor: amountMinor,
         paid_via: form.paid_via,
         paid_at: new Date(form.paid_at).toISOString(),
         vendor_name: form.vendor_name || undefined,

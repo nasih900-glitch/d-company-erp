@@ -11,8 +11,13 @@
  *
  * Mobile: full-screen sheet on <md, centered card on ≥md.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
+
+let openModalCount = 0;
+let bodyOverflowBeforeFirstModal = '';
+let nextModalId = 0;
+const openModalStack: number[] = [];
 
 export interface ModalProps {
   open: boolean;
@@ -23,18 +28,39 @@ export interface ModalProps {
 }
 
 export default function Modal({ open, onClose, title, children, size = 'md' }: ModalProps) {
+  const onCloseRef = useRef(onClose);
+  const modalIdRef = useRef<number | null>(null);
+  if (modalIdRef.current === null) modalIdRef.current = ++nextModalId;
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
+    const modalId = modalIdRef.current!;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && openModalStack[openModalStack.length - 1] === modalId) {
+        onCloseRef.current();
+      }
     };
+    openModalStack.push(modalId);
     document.addEventListener('keydown', onKey);
-    document.body.style.overflow = 'hidden';
+    if (openModalCount === 0) {
+      bodyOverflowBeforeFirstModal = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+    openModalCount += 1;
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = '';
+      const stackIndex = openModalStack.lastIndexOf(modalId);
+      if (stackIndex >= 0) openModalStack.splice(stackIndex, 1);
+      openModalCount = Math.max(0, openModalCount - 1);
+      if (openModalCount === 0) {
+        document.body.style.overflow = bodyOverflowBeforeFirstModal;
+      }
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

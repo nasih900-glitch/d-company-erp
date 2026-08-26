@@ -140,7 +140,37 @@ export interface OrderDTO {
   closed_at: string | null;
   invoice_issued_at: string | null;
   held_at: string | null;
+  checkout_version: number;
   lines: OrderLineDTO[];
+}
+
+export interface CheckoutClaimDTO {
+  claim_id: string;
+  order_id: string;
+  claim_token: string;
+  expires_at: string;
+  order_total_minor: number;
+  paid_minor: number;
+  due_minor: number;
+  order_version: number;
+  claimant_user_id: string;
+  terminal_id: string;
+  reused: boolean;
+}
+
+export interface ReceiptBusinessDTO {
+  brand_name: string;
+  supplier_name: string;
+  branch_name: string;
+  address: string | null;
+  gstin: string | null;
+  gst_registration_type: string;
+  is_composition: boolean;
+  fssai_license_no: string | null;
+  trade_license_no: string | null;
+  state_code: string | null;
+  timezone: string;
+  upi_vpa: string | null;
 }
 
 export interface CreateOrderRequest {
@@ -197,6 +227,8 @@ export const menu = {
 
 // ----- POS -----
 export const pos = {
+  receiptBusiness: () =>
+    api.get<ReceiptBusinessDTO>('/pos/receipt-business').then((r) => r.data),
   createOrder: (req: CreateOrderRequest, idempotencyKey: string) =>
     api
       .post<OrderDTO>('/pos/orders', req, {
@@ -259,6 +291,13 @@ export const pos = {
       .then((r) => r.data),
   voidOrder: (orderId: string, reason: string) =>
     api.delete(`/pos/orders/${orderId}`, { data: { reason } }).then(() => undefined),
+  claimCheckout: (orderId: string) =>
+    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/checkout-claim`)
+      .then((r) => r.data),
+  releaseCheckout: (orderId: string, claimToken: string) =>
+    api.delete(`/pos/orders/${orderId}/checkout-claim`, {
+      headers: { 'X-Checkout-Claim': claimToken },
+    }).then(() => undefined),
   recordPayment: (
     orderId: string,
     body: {
@@ -271,6 +310,7 @@ export const pos = {
       tip_minor?: number;
     },
     idempotencyKey: string,
+    checkoutClaimToken?: string,
   ) =>
     api
       .post<{
@@ -284,10 +324,15 @@ export const pos = {
       }>(
         `/pos/orders/${orderId}/payments`,
         body,
-        { headers: { 'Idempotency-Key': idempotencyKey } },
+        {
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+            ...(checkoutClaimToken ? { 'X-Checkout-Claim': checkoutClaimToken } : {}),
+          },
+        },
       )
       .then((r) => r.data),
-  finalizeZero: (orderId: string, idempotencyKey: string) =>
+  finalizeZero: (orderId: string, idempotencyKey: string, checkoutClaimToken?: string) =>
     api
       .post<{
         order_id: string;
@@ -299,7 +344,12 @@ export const pos = {
       }>(
         `/pos/orders/${orderId}/finalize-zero`,
         undefined,
-        { headers: { 'Idempotency-Key': idempotencyKey } },
+        {
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+            ...(checkoutClaimToken ? { 'X-Checkout-Claim': checkoutClaimToken } : {}),
+          },
+        },
       )
       .then((r) => r.data),
 };
@@ -843,6 +893,15 @@ export interface AuditEntryDTO {
   after: Record<string, unknown> | null;
   ip: string | null;
   user_agent: string | null;
+  terminal_id: string | null;
+  request_id: string | null;
+  client_platform: string | null;
+  client_version_code: number | null;
+  client_action_id: string | null;
+  client_reported_at: string | null;
+  client_was_offline: boolean | null;
+  synced_at: string | null;
+  reason: string | null;
   created_at: string;
 }
 export interface AuditFacetsDTO {
@@ -962,6 +1021,21 @@ export interface RecipeMarginDTO {
   sale_price_minor: number; cost_minor: number;
   margin_minor: number; margin_pct: number;
 }
+export interface CostingIssueDTO {
+  menu_item_id: string; sku: string; name: string; type: string;
+  issue: 'missing_recipe' | 'empty_recipe' | 'missing_ingredient_cost';
+  detail: string;
+}
+export interface CostingCoverageDTO {
+  inventory_item_count: number;
+  fully_costed_item_count: number;
+  incomplete_item_count: number;
+  missing_recipe_count: number;
+  empty_recipe_count: number;
+  missing_ingredient_cost_count: number;
+  is_complete: boolean;
+  issues: CostingIssueDTO[];
+}
 export interface TopItemDTO {
   menu_item_id: string; name: string; type: string;
   qty_sold: number; revenue_minor: number;
@@ -970,6 +1044,7 @@ export interface GrowthPeriodDTO {
   label: string; revenue_minor: number;
   refunds_minor: number;
   manual_collections_minor: number;
+  memberships_minor: number;
   orders_count: number; avg_ticket_minor: number;
 }
 export interface GrowthDTO {
@@ -995,6 +1070,8 @@ export const insights = {
     api.get<InventoryValuationDTO>('/insights/inventory/valuation').then((r) => r.data),
   recipeMargin: () =>
     api.get<RecipeMarginDTO[]>('/insights/menu/recipe-margin').then((r) => r.data),
+  costingCoverage: () =>
+    api.get<CostingCoverageDTO>('/insights/inventory/costing-coverage').then((r) => r.data),
   growth: (period: 'mom' | 'yoy' | 'wow' = 'mom') =>
     api.get<GrowthDTO>('/insights/growth', { params: { period } }).then((r) => r.data),
   topItems: (params?: { from_date?: string; to_date?: string; limit?: number }) =>
@@ -1057,9 +1134,79 @@ export interface SubscriptionDTO {
   starts_at: string;
   expires_at: string;
   cancelled_at: string | null;
+  revoked_at: string | null;
   auto_renew: boolean;
   amount_paid_minor: number;
+  payment_id: string | null;
+  payment_method: 'cash' | 'card' | 'upi' | 'razorpay' | null;
+  payment_shift_id: string | null;
+  payment_receipt_no: string | null;
+  payment_paid_at: string | null;
+  refund_id: string | null;
+  refund_status: 'accepted_cash_due' | 'settled' | 'withdrawn' | null;
+  refund_accepted_at: string | null;
+  refunded_at: string | null;
+  refund_method: 'cash' | 'card' | 'upi' | 'razorpay' | null;
+  refund_receipt_no: string | null;
+  refund_external_reference: string | null;
   is_active: boolean;
+}
+
+export interface MembershipRefundDTO {
+  id: string;
+  membership_id: string;
+  payment_id: string;
+  shift_id: string;
+  method: 'cash' | 'card' | 'upi' | 'razorpay';
+  amount_minor: number;
+  accepted_at: string;
+  status: 'accepted_cash_due' | 'settled' | 'withdrawn';
+  settled_at: string | null;
+  reason: string;
+  external_reference: string | null;
+  receipt_no: string | null;
+  entitlement_restored: boolean;
+}
+
+export interface MembershipSubscribeRequestDTO {
+  customer_id: string;
+  tier_id: string;
+  shift_id: string;
+  expected_amount_minor: number;
+  collected_at: string;
+  billing_cycle?: 'monthly' | 'annual';
+  paid_via?: 'cash' | 'card' | 'upi' | 'razorpay';
+}
+
+export type MembershipRefundBaseRequestDTO = {
+  shift_id: string;
+  expected_amount_minor: number;
+  reason: string;
+};
+
+export type MembershipRefundRequestDTO =
+  | (MembershipRefundBaseRequestDTO & {
+      method: 'cash';
+      settled_at?: never;
+      external_reference?: never;
+    })
+  | (MembershipRefundBaseRequestDTO & {
+      method: 'card' | 'upi' | 'razorpay';
+      settled_at: string;
+      external_reference: string;
+    });
+
+export interface MembershipCashSettlementRequestDTO {
+  shift_id: string;
+  expected_amount_minor: number;
+  settled_at: string;
+  cash_handed_over: true;
+}
+
+export interface MembershipCashWithdrawalRequestDTO {
+  shift_id: string;
+  cash_not_handed_over: true;
+  reason: string;
 }
 
 export const memberships = {
@@ -1073,18 +1220,45 @@ export const memberships = {
   // *second* real subscription, not a retry of the same one, so a retry
   // after a dropped response would otherwise silently mint a duplicate
   // membership term.
-  subscribe: (body: {
-    customer_id: string; tier_id: string;
-    billing_cycle?: 'monthly' | 'annual';
-    paid_via?: 'cash' | 'card' | 'upi' | 'razorpay';
-  }, idempotencyKey: string) =>
+  subscribe: (body: MembershipSubscribeRequestDTO, idempotencyKey: string) =>
     api.post<SubscriptionDTO>('/memberships/subscribe', body, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
   getCustomerSubscription: (customer_id: string) =>
     api.get<SubscriptionDTO | null>(`/memberships/customer/${customer_id}`).then((r) => r.data),
-  cancel: (subscription_id: string) =>
-    api.post<SubscriptionDTO>(`/memberships/${subscription_id}/cancel`).then((r) => r.data),
+  getCustomerSubscriptionHistory: (customer_id: string) =>
+    api.get<SubscriptionDTO[]>(`/memberships/customer/${customer_id}/history`).then((r) => r.data),
+  cancel: (subscription_id: string, idempotencyKey: string) =>
+    api.post<SubscriptionDTO>(`/memberships/${subscription_id}/cancel`, undefined, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  // Cash refund creation only accepts the liability; after staff physically
+  // hand over the money, settleCashRefund records that separate action.
+  // Non-cash refunds must already have provider settlement evidence.
+  refund: (
+    subscription_id: string,
+    body: MembershipRefundRequestDTO,
+    idempotencyKey: string,
+  ) =>
+    api.post<MembershipRefundDTO>(`/memberships/${subscription_id}/refund`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  settleCashRefund: (
+    refund_id: string,
+    body: MembershipCashSettlementRequestDTO,
+    idempotencyKey: string,
+  ) =>
+    api.post<MembershipRefundDTO>(`/memberships/refunds/${refund_id}/settle-cash`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  withdrawCashRefund: (
+    refund_id: string,
+    body: MembershipCashWithdrawalRequestDTO,
+    idempotencyKey: string,
+  ) =>
+    api.post<MembershipRefundDTO>(`/memberships/refunds/${refund_id}/withdraw-cash`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
 };
 
 // =============================================================================
@@ -1203,10 +1377,14 @@ export interface ReportRevenueDTO {
   gaming_minor: number;
   hookah_minor: number;
   event_tickets_minor: number;
+  memberships_minor: number;
   delivery_aggregator_minor: number;
   other_minor: number;
   manual_collections_minor: number;
   discounts_and_points_redeemed_minor: number;
+  rounding_income_minor: number;
+  rounding_expense_minor: number;
+  round_off_minor: number;
   total_minor: number;
 }
 export interface ReportTaxDTO {
@@ -1231,6 +1409,7 @@ export interface ReportExpenseLineDTO {
   amount_minor: number;
 }
 export interface ReportDataDTO {
+  accounting_basis: 'operational_receipt';
   period: string;
   label: string;
   period_start: string;
@@ -1239,11 +1418,16 @@ export interface ReportDataDTO {
   orders_count: number;
   tickets_count: number;
   avg_ticket_minor: number;
+  unissued_paid_orders_count: number;
   revenue: ReportRevenueDTO;
   tax_collected: ReportTaxDTO;
   payments_received: ReportPaymentsDTO;
   manual_collections_minor: number;
+  tips_collected_minor: number;
   refunds_issued_minor: number;
+  settled_refunds_issued_minor: number;
+  membership_refunds_issued_minor: number;
+  refunded_tips_minor: number;
   net_payments_received_minor: number;
   expenses: ReportExpenseLineDTO[];
   expense_total_minor: number;
@@ -1282,6 +1466,7 @@ export interface DashboardKPIsDTO {
   revenue_gaming_minor: number;
   revenue_hookah_minor: number;
   revenue_events_minor: number;
+  revenue_memberships_minor: number;
   revenue_manual_collections_minor: number;
   discounts_and_points_redeemed_minor: number;
   revenue_total_minor: number;
@@ -1335,6 +1520,14 @@ export interface ShiftDTO {
   counted_minor: number | null;
   variance_minor: number | null;
   pos_sales_minor: number;
+  membership_sales_minor: number;
+  gross_collections_minor: number;
+  settled_pos_refunds_minor: number;
+  settled_membership_refunds_minor: number;
+  total_refunds_minor: number;
+  net_collections_minor: number;
+  /** @deprecated Use gross_collections_minor. This alias is not net sales. */
+  total_sales_minor: number;
   opened_by: string;
   opened_by_name: string | null;
   opened_by_email: string | null;
@@ -1478,6 +1671,14 @@ export interface GamingBookingDTO {
   created_at: string;
 }
 
+export interface GamingReconciliationDTO {
+  order_id: string;
+  amount_minor: number;
+  source_shift_id: string;
+  target_shift_id: string;
+  already_linked: boolean;
+}
+
 export const gaming = {
   listStations: () => api.get<StationDTO[]>('/gaming/stations').then((r) => r.data),
   createStation: (body: {
@@ -1510,8 +1711,10 @@ export const gaming = {
   }) => api.post<GameSessionDTO>('/gaming/sessions/start', body).then((r) => r.data),
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
-  extendSessionWithPackage: (id: string, package_id: string) =>
-    api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend`, { package_id }).then((r) => r.data),
+  extendSessionWithPackage: (id: string, package_id: string, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend`, { package_id }, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
   stopSession: (id: string) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`).then((r) => r.data),
   cancelSession: (id: string, reason: string) =>
@@ -1519,6 +1722,11 @@ export const gaming = {
   sendToPos: (id: string) =>
     api.post<{ order_id: string; amount_minor: number }>(`/gaming/sessions/${id}/send-to-pos`)
       .then((r) => r.data),
+  reconcileToPos: (id: string, target_shift_id: string, reason: string) =>
+    api.post<GamingReconciliationDTO>(`/gaming/sessions/${id}/reconcile-to-pos`, {
+      target_shift_id,
+      reason,
+    }).then((r) => r.data),
 
   listBookings: (params?: {
     from_date?: string; to_date?: string; status?: GamingBookingDTO['status'][];

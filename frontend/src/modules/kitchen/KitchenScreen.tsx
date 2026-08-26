@@ -17,6 +17,7 @@ import {
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { kitchen, type KitchenOrderDTO } from '@/lib/erp-api';
 import { subscribeRealtime } from '@/lib/realtime';
+import { useNotifications } from '@/components/ui/Notifications';
 
 // Fallback only — real-time push is the primary mechanism. This kiosk
 // screen can sit open for a whole shift, so it's worth a somewhat tighter
@@ -52,6 +53,7 @@ const NEXT_LABEL: Record<string, string> = {
 };
 
 export default function KitchenScreen() {
+  const notifications = useNotifications();
   const [orders, setOrders] = useState<KitchenOrderDTO[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
@@ -92,7 +94,7 @@ export default function KitchenScreen() {
       await kitchen.setState(o.id, NEXT_STATE[o.kitchen_state]);
       await load();
     } catch (e) {
-      alert((e as Error).message);
+      notifications.error((e as Error).message, { title: 'Kitchen update failed' });
     }
   }
 

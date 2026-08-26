@@ -23,13 +23,13 @@ import {
 import { ALARM_REPEAT_MS, notifyAlarm, playAlarmTone } from '@/lib/alarm';
 import { clearDraft, loadDraft, saveDraft } from '@/lib/draft-storage';
 import { inr } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import {
   customers,
   memberships,
   menu,
   orders,
   pos,
-  settings,
   shifts,
   type CustomerDTO,
   type MembershipTierDTO,
@@ -50,7 +50,7 @@ import {
   hasCollectibleCheckoutBalance,
   isAmbiguousApiError,
   isBusinessRuleApiError,
-  isStaleCheckoutBalanceRejection,
+  isCheckoutClaimRejection,
   normalizePosRetryDraft,
   shouldPreserveCheckoutRetry,
   type CheckoutDeliveryVia,
@@ -113,6 +113,31 @@ function canAbandonCheckoutRetry(retry: PosCheckoutRetry | null): boolean {
   );
 }
 
+function hasUsableCheckoutClaim(retry: PosCheckoutRetry, now = Date.now()): boolean {
+  if (!retry.checkoutClaimRequired) return true;
+  if (!retry.checkoutClaimToken || !retry.checkoutClaimExpiresAt) return false;
+  const expiresAt = Date.parse(retry.checkoutClaimExpiresAt);
+  // Leave enough time for the payment request to reach a congested cafe link.
+  return Number.isFinite(expiresAt) && expiresAt > now + 15_000;
+}
+
+/**
+ * Once staff confirm that money was physically received, the journaled bill
+ * must never be silently replaced by a newer server snapshot. A fresh claim
+ * is safe only when every settlement-affecting value is still identical.
+ */
+function matchesConfirmedSettlement(retry: PosCheckoutRetry, order: OrderDTO): boolean {
+  return retry.pendingOrderId === order.id
+    && retry.checkoutClaimOrderVersion === order.checkout_version
+    && retry.orderTotalMinor === order.total_minor
+    && retry.paymentAmountMinor === order.due_minor
+    && (retry.orderDiscountMinor ?? 0) === order.discount_minor
+    && (retry.orderManualDiscountMinor ?? 0) === order.manual_discount_minor
+    && (retry.orderPointsRedeemedMinor ?? 0) === order.points_redeemed_minor
+    && (retry.freeGamingMinutesApplied ?? 0) === order.free_gaming_minutes_applied
+    && (retry.freeHookahCountApplied ?? 0) === order.free_hookah_count_applied;
+}
+
 export default function LivePOSScreen() {
   const { me, terminalId, terminalReady } = useAuth();
   const draftKey = me?.company_id && me.branch_id && me.user_id && terminalId
@@ -121,7 +146,11 @@ export default function LivePOSScreen() {
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [shiftId, setShiftId] = useState<string | null>(null);
   const [shiftError, setShiftError] = useState<string | null>(null);
-  const [todaysSalesMinor, setTodaysSalesMinor] = useState<number | null>(null);
+  const [shiftCollections, setShiftCollections] = useState<{
+    posMinor: number;
+    membershipMinor: number;
+    grossMinor: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -189,12 +218,9 @@ export default function LivePOSScreen() {
   // updates checkoutRetry.tipMinor locally.
   const [tipInput, setTipInput] = useState('');
   const [tipError, setTipError] = useState<string | null>(null);
-  // Cash handed over by the customer, entered on the confirm-payment screen
-  // purely so the cashier can see the exact change to hand back without
-  // mental math. Display-only — it is never sent to the server, and the
-  // payment submission's tendered_minor still always mirrors amount+tip
-  // exactly as before (see buildCheckoutPaymentSubmission in
-  // retry-drafts.ts, entirely unchanged by this).
+  // Cash handed over by the customer. It is parsed into exact integer paise,
+  // persisted before submission, and sent as tendered_minor so the receipt and
+  // reconciliation record the same change the cashier sees here.
   const [cashTenderedInput, setCashTenderedInput] = useState('');
   const lastHeldAlarmAtRef = useRef(0);
   const heldOrderScopeRef = useRef(draftKey);
@@ -373,8 +399,23 @@ export default function LivePOSScreen() {
                   + 'Keep this recovery locked and ask a protected owner to reconcile the physical payment.',
                 );
               }
-              if (retry.phase !== 'recording_payment') {
-                retry = applyCanonicalCheckoutBalance(retry, pendingOrder);
+              if (retry.phase !== 'recording_payment' && retry.phase !== 'finalizing_zero') {
+                try {
+                  retry = await canonicalizeAndClaim(retry, pendingOrder);
+                } catch (claimError) {
+                  // The server has not accepted a payment at this phase. Keep
+                  // the order journal, but prevent the restored screen from
+                  // asking staff to collect until it owns a fresh lease.
+                  retry = withoutCheckoutClaim({
+                    ...applyCanonicalCheckoutBalance(retry, pendingOrder),
+                    phase: 'preparing_order',
+                  });
+                  saveDraft<PosRetryDraft>(activeDraftKey, { ...storedDraft, retry });
+                  setError(
+                    `${(claimError as Error).message} No payment should be collected. ` +
+                    'Resume this checkout to claim the bill safely.',
+                  );
+                }
               }
             } catch (e) {
               if (cancelled) return;
@@ -473,27 +514,33 @@ export default function LivePOSScreen() {
     return () => { unsubscribe(); clearInterval(id); };
   }, [loadHeldOrders, shiftId]);
 
-  // Today's sales corner badge — scoped to itemized POS sales on this shift
-  // (all payment methods), not the cash-only expected_minor float or any
-  // separate off-POS manual collection. Naturally reads back to 0 once the
-  // shift closes and a new one opens.
-  const loadTodaysSales = useCallback(async () => {
-    if (!shiftId) { setTodaysSalesMinor(null); return; }
+  // Gross shift collections include itemized POS and separately identified
+  // membership payments. They exclude float, refunds and off-shift collections.
+  const loadShiftCollections = useCallback(async () => {
+    if (!shiftId) { setShiftCollections(null); return; }
     try {
       const rows = await shifts.list(true);
       const current = rows.find((s) => s.id === shiftId);
-      if (current) setTodaysSalesMinor(current.pos_sales_minor);
+      if (current) {
+        setShiftCollections({
+          posMinor: current.pos_sales_minor ?? 0,
+          membershipMinor: current.membership_sales_minor ?? 0,
+          grossMinor: current.total_sales_minor ?? 0,
+        });
+      } else {
+        setShiftCollections(null);
+      }
     } catch {
       // Non-critical display — leave the last known value rather than error.
     }
   }, [shiftId]);
   useEffect(() => {
-    if (!shiftId) { setTodaysSalesMinor(null); return; }
-    loadTodaysSales();
-    const unsubscribe = subscribeRealtime('shifts', loadTodaysSales);
-    const id = setInterval(loadTodaysSales, HELD_ORDERS_POLL_MS);
+    if (!shiftId) { setShiftCollections(null); return; }
+    loadShiftCollections();
+    const unsubscribe = subscribeRealtime('shifts', loadShiftCollections);
+    const id = setInterval(loadShiftCollections, HELD_ORDERS_POLL_MS);
     return () => { unsubscribe(); clearInterval(id); };
-  }, [loadTodaysSales, shiftId]);
+  }, [loadShiftCollections, shiftId]);
 
   // Age-based alarm: a held order sitting too long should nag, not vanish
   // from mind. The interval below re-renders every second (via setAlarmTick),
@@ -594,23 +641,22 @@ export default function LivePOSScreen() {
   useEffect(() => {
     let cancelled = false;
     setReceiptSettingsError(null);
-    Promise.all([settings.getCompany(), settings.listBranches()])
-      .then(([company, branches]) => {
+    pos.receiptBusiness()
+      .then((receiptIdentity) => {
         if (cancelled) return;
-        const branch = branches.find((candidate) => candidate.id === me?.branch_id) ?? branches[0] ?? null;
-        if (!branch) {
-          setReceiptBusiness(null);
-          setReceiptSettingsError('No branch is configured. Add a branch in Settings before using POS.');
-          return;
-        }
-        const details = buildReceiptBusinessDetails(company, branch, me?.name);
+        const details = buildReceiptBusinessDetails(receiptIdentity, me?.name);
         setReceiptBusiness(details);
         setReceiptSettingsError(receiptConfigurationIssue(details));
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (cancelled) return;
         setReceiptBusiness(null);
-        setReceiptSettingsError('Receipt settings could not be loaded. Refresh before charging an order.');
+        const message = (error as Error).message?.trim();
+        setReceiptSettingsError(
+          message && message !== 'Network Error'
+            ? message
+            : 'Receipt settings could not be loaded. Refresh before charging an order.',
+        );
       });
     return () => { cancelled = true; };
   }, [me?.branch_id, me?.name]);
@@ -750,6 +796,71 @@ export default function LivePOSScreen() {
     }
   }
 
+  /**
+   * Acquire the exclusive checkout lease only after all server-side edits.
+   * Discounts, points, rewards and lines bump the bill version, so each such
+   * mutation must be followed by a fresh claim before staff collect money.
+   */
+  async function canonicalizeAndClaim(
+    retry: PosCheckoutRetry,
+    order: OrderDTO,
+  ): Promise<PosCheckoutRetry> {
+    if (order.status !== 'held') {
+      const canonical = applyCanonicalCheckoutBalance(retry, order);
+      return {
+        ...canonical,
+        checkoutClaimRequired: false,
+        checkoutClaimToken: undefined,
+        checkoutClaimExpiresAt: undefined,
+        checkoutClaimOrderVersion: undefined,
+      };
+    }
+    let canonicalOrder = order;
+    let claim = await pos.claimCheckout(order.id);
+    if (claim.order_id !== canonicalOrder.id) {
+      throw new Error('The checkout lock was issued for a different order. Reload the POS queue.');
+    }
+    // The OrderDTO may have been loaded just before another terminal changed
+    // the bill. A claim carries the authoritative checkout version; if it is
+    // newer, reload the complete bill (benefits/customer metadata included)
+    // and rotate the same-cashier claim once. Never display a hybrid of stale
+    // metadata and current totals.
+    if (claim.order_version !== canonicalOrder.checkout_version) {
+      canonicalOrder = await pos.getOrder(order.id);
+      if (canonicalOrder.status !== 'held') {
+        throw new Error('This bill left the unpaid POS queue while checkout was opening. Refresh POS.');
+      }
+      claim = await pos.claimCheckout(order.id);
+    }
+    if (
+      claim.order_id !== canonicalOrder.id
+      || claim.order_version !== canonicalOrder.checkout_version
+      || claim.order_total_minor !== canonicalOrder.total_minor
+      || claim.due_minor !== canonicalOrder.due_minor
+    ) {
+      throw new Error('This shared bill is changing on another device. Do not collect money; wait a moment and refresh it.');
+    }
+    const canonical = applyCanonicalCheckoutBalance(retry, canonicalOrder);
+    return {
+      ...canonical,
+      orderTotalMinor: claim.order_total_minor,
+      paymentAmountMinor: claim.due_minor,
+      checkoutClaimRequired: true,
+      checkoutClaimToken: claim.claim_token,
+      checkoutClaimExpiresAt: claim.expires_at,
+      checkoutClaimOrderVersion: claim.order_version,
+    };
+  }
+
+  function withoutCheckoutClaim(retry: PosCheckoutRetry): PosCheckoutRetry {
+    return {
+      ...retry,
+      checkoutClaimToken: undefined,
+      checkoutClaimExpiresAt: undefined,
+      checkoutClaimOrderVersion: undefined,
+    };
+  }
+
   function finishCheckout(paidOrder: OrderDTO) {
     setReceipt(paidOrder);
     setCheckoutRetry(null);
@@ -761,7 +872,7 @@ export default function LivePOSScreen() {
     clearCustomer();
     if (draftKey) clearDraft(draftKey);
     void loadHeldOrders(true);
-    void loadTodaysSales();
+    void loadShiftCollections();
   }
 
   async function lookupCustomer() {
@@ -952,7 +1063,7 @@ export default function LivePOSScreen() {
         order = await pos.redeemPoints(order.id, pendingCartPointsMinor / 10, `cart-points:${retry.key}`);
         setPendingCartPointsMinor(0);
       }
-      retry = applyCanonicalCheckoutBalance(retry, order);
+      retry = await canonicalizeAndClaim(retry, order);
       if (order.due_minor <= 0 && !hasBenefitCoveredZeroBalance(retry)) {
         throw new Error('The server reports no amount due, but no final invoice is available. Ask a protected owner to reconcile this order.');
       }
@@ -1013,6 +1124,17 @@ export default function LivePOSScreen() {
       await prepareCheckout(current.paymentMethod);
       return;
     }
+    // Before staff confirm receipt, an expiring lease must be renewed. Once
+    // the phase is recording/finalizing, however, replay the same settlement
+    // key first: the backend deliberately returns a committed idempotent result
+    // before looking for the already-consumed claim.
+    if (current.phase === 'awaiting_payment' && !hasUsableCheckoutClaim(current)) {
+      setError(
+        'This shared bill is no longer locked to this till. No payment should be collected yet; refreshing the exact bill now.',
+      );
+      await prepareCheckout(current.paymentMethod);
+      return;
+    }
     if (
       !current.pendingOrderId
       || current.paymentAmountMinor === undefined
@@ -1021,14 +1143,28 @@ export default function LivePOSScreen() {
       setError('The checkout journal is incomplete. Ask a protected owner to reconcile it before collecting money.');
       return;
     }
-    const benefitCoveredZero = hasBenefitCoveredZeroBalance(current);
+    let confirmed = current;
+    if (
+      current.phase === 'awaiting_payment'
+      && current.paymentMethod === 'cash'
+      && hasCollectibleCheckoutBalance(current)
+    ) {
+      const tenderedMinor = parseRupeesToMinor(cashTenderedInput);
+      const collectedMinor = current.paymentAmountMinor + (current.tipMinor ?? 0);
+      if (tenderedMinor === null || tenderedMinor < collectedMinor) {
+        setError(`Enter cash received of at least ${inr(collectedMinor)} before confirming payment.`);
+        return;
+      }
+      confirmed = { ...current, cashTenderedMinor: tenderedMinor };
+    }
+    const benefitCoveredZero = hasBenefitCoveredZeroBalance(confirmed);
     const retry: PosCheckoutRetry = benefitCoveredZero
-      ? current.phase === 'finalizing_zero'
-        ? current
-        : { ...current, phase: 'finalizing_zero' }
-      : current.phase === 'recording_payment'
-        ? current
-        : { ...current, phase: 'recording_payment' };
+      ? confirmed.phase === 'finalizing_zero'
+        ? confirmed
+        : { ...confirmed, phase: 'finalizing_zero' }
+      : confirmed.phase === 'recording_payment'
+        ? confirmed
+        : { ...confirmed, phase: 'recording_payment' };
     const paymentSubmission = buildCheckoutPaymentSubmission(retry);
     const zeroFinalization = buildCheckoutZeroFinalization(retry);
     if (!paymentSubmission && !zeroFinalization) {
@@ -1044,72 +1180,119 @@ export default function LivePOSScreen() {
 
     setPaying(true);
     setError(null);
-    try {
-      const settlement = zeroFinalization
+
+    async function submitSettlement(attempt: PosCheckoutRetry): Promise<OrderDTO> {
+      const payment = buildCheckoutPaymentSubmission(attempt);
+      const zero = buildCheckoutZeroFinalization(attempt);
+      if (!payment && !zero) {
+        throw new Error(
+          'The checkout journal has an invalid settlement amount. Ask a protected owner to reconcile it before collecting money.',
+        );
+      }
+      const settlement = zero
         ? await pos.finalizeZero(
-          zeroFinalization.orderId,
-          zeroFinalization.idempotencyKey,
+          zero.orderId,
+          zero.idempotencyKey,
+          attempt.checkoutClaimToken,
         )
         : await pos.recordPayment(
-          paymentSubmission!.orderId,
-          paymentSubmission!.body,
-          paymentSubmission!.idempotencyKey,
+          payment!.orderId,
+          payment!.body,
+          payment!.idempotencyKey,
+          attempt.checkoutClaimToken,
         );
       if (settlement.order_status !== 'paid' || !settlement.invoice_no) {
         throw new Error(
-          zeroFinalization
+          zero
             ? 'The membership benefit did not finalize an invoice.'
             : 'The payment attempt did not finalize an invoice. Do not collect payment again.',
         );
       }
-      const paidOrder = await pos.getOrder(
-        zeroFinalization?.orderId ?? paymentSubmission!.orderId,
-      );
+      const paidOrder = await pos.getOrder(zero?.orderId ?? payment!.orderId);
       if (
         paidOrder.status !== 'paid'
         || !paidOrder.invoice_no
         || !paidOrder.invoice_issued_at
       ) {
         throw new Error(
-          zeroFinalization
+          zero
             ? 'The membership benefit was accepted, but the final invoice could not be loaded. Resume this same recovery.'
             : 'Payment was accepted, but the final invoice could not be loaded. Resume this same recovery; do not charge again.',
         );
       }
-      finishCheckout(paidOrder);
-    } catch (e) {
-      // A stale-bill refusal is decided before the server writes anything —
-      // no Payment row, no shift movement, and the whole request (including
-      // its idempotency reservation) rolls back. Treating it as an unresolved
-      // in-flight payment would falsely tell the cashier money was taken and
-      // freeze the terminal on a total that can never be refreshed. Reopen
-      // the confirm-payment screen on the current server balance instead; the
-      // payment key is deliberately kept, so a submission that did commit
-      // still replays as itself rather than charging twice.
-      if (paymentSubmission && isStaleCheckoutBalanceRejection(e)) {
-        let reopened: PosCheckoutRetry = { ...retry, phase: 'awaiting_payment' };
-        let refreshed = false;
+      return paidOrder;
+    }
+
+    try {
+      finishCheckout(await submitSettlement(retry));
+    } catch (caught) {
+      let error = caught;
+      let activeRetry = retry;
+
+      // A deterministic claim refusal records no server payment, but staff may
+      // already be holding cash or have verified UPI. Reacquire only if the
+      // complete canonical settlement fingerprint is unchanged, then replay
+      // the original idempotency key automatically. Any changed bill remains
+      // locked for protected-owner reconciliation; the UI never asks the
+      // customer to pay twice.
+      if (isCheckoutClaimRejection(error)) {
         try {
-          const currentOrder = await pos.getOrder(paymentSubmission.orderId);
-          reopened = applyCanonicalCheckoutBalance(reopened, currentOrder);
-          refreshed = true;
-        } catch {
-          // The refusal is still definitive, so the recovery stays unlocked
-          // and self-heals: this screen refreshes the balance on reload, and
-          // re-submitting the stale amount can only be refused the same way.
+          const currentOrder = await pos.getOrder(activeRetry.pendingOrderId!);
+          if (
+            currentOrder.status === 'paid'
+            && currentOrder.invoice_no
+            && currentOrder.invoice_issued_at
+          ) {
+            if (zeroFinalization) {
+              finishCheckout(currentOrder);
+              return;
+            }
+            // A checkout-claim refusal is definitive: this payment key did
+            // not write anything. If the bill is now paid, another settlement
+            // won the race, while this cashier may still hold physical money.
+            throw new Error(
+              'This bill was paid by another settlement after this till confirmed payment. Do not discard this recovery or collect again; a protected owner must reconcile the duplicate physical collection.',
+            );
+          }
+          if (currentOrder.status !== 'held' || !matchesConfirmedSettlement(activeRetry, currentOrder)) {
+            throw new Error(
+              'The shared bill changed after payment was confirmed. Do not collect again or alter this recovery; ask a protected owner to reconcile the physical payment against the current bill.',
+            );
+          }
+          const claim = await pos.claimCheckout(currentOrder.id);
+          if (
+            claim.order_id !== currentOrder.id
+            || claim.order_total_minor !== activeRetry.orderTotalMinor
+            || claim.due_minor !== activeRetry.paymentAmountMinor
+            || claim.order_version !== activeRetry.checkoutClaimOrderVersion
+          ) {
+            throw new Error(
+              'The bill changed while its checkout lock was being renewed. Do not collect again; ask a protected owner to reconcile it.',
+            );
+          }
+          activeRetry = {
+            ...activeRetry,
+            checkoutClaimToken: claim.claim_token,
+            checkoutClaimExpiresAt: claim.expires_at,
+            checkoutClaimOrderVersion: claim.order_version,
+          };
+          if (!persistCheckoutRetry(activeRetry)) {
+            setError(
+              'A fresh bill lock was issued, but recovery storage failed. Nothing was resubmitted. Keep this page open and restore browser storage; do not collect money again.',
+            );
+            return;
+          }
+          finishCheckout(await submitSettlement(activeRetry));
+          return;
+        } catch (recoveryError) {
+          error = recoveryError;
         }
-        persistCheckoutRetry(reopened);
-        setError(`${(e as Error).message} No money was recorded for this attempt.${
-          refreshed
-            ? ' The amount below is the refreshed server balance; confirm it with the customer and collect again.'
-            : ' The refreshed balance could not be loaded — do not collect against the amount below until it reloads.'
-        }`);
-        return;
       }
-      persistCheckoutRetry(retry);
+
+      persistCheckoutRetry(activeRetry);
       setError(zeroFinalization
-        ? `${(e as Error).message} The no-payment membership settlement remains locked to the same key. Resume it; do not collect money.`
-        : `${(e as Error).message} The payment attempt remains locked to the same key. `
+        ? `${(error as Error).message} The no-payment membership settlement remains locked to the same key. Resume it; do not collect money.`
+        : `${(error as Error).message} The payment attempt remains locked to the same key. `
           + 'Do not collect money again; resume or ask a protected owner to reconcile it.');
     } finally {
       setPaying(false);
@@ -1117,12 +1300,11 @@ export default function LivePOSScreen() {
   }
 
   async function applyManualDiscount() {
-    const rupees = Number(discountInput);
-    if (!Number.isFinite(rupees) || rupees < 0) {
+    const minor = parseRupeesToMinor(discountInput);
+    if (minor === null) {
       setDiscountError('Enter a valid discount amount.');
       return;
     }
-    const minor = Math.round(rupees * 100);
 
     // Prefer an order that already exists (a resumed held order, or the
     // exact bill already prepared on the confirm-payment screen). A brand
@@ -1152,13 +1334,16 @@ export default function LivePOSScreen() {
         setResumingOrder(order);
       }
       if (checkoutRetry?.pendingOrderId === order.id) {
-        const updated = applyCanonicalCheckoutBalance(checkoutRetry, order);
+        const updated = await canonicalizeAndClaim(checkoutRetry, order);
         setCheckoutRetry(updated);
         persistCheckoutRetry(updated);
       }
       setPendingCartDiscountMinor(0);
       setDiscountInput('');
     } catch (e) {
+      if (checkoutRetry?.checkoutClaimRequired) {
+        persistCheckoutRetry(withoutCheckoutClaim({ ...checkoutRetry, phase: 'preparing_order' }));
+      }
       setDiscountError((e as Error).message);
     } finally {
       setApplyingDiscount(false);
@@ -1170,13 +1355,12 @@ export default function LivePOSScreen() {
   // server-side "apply" call — it rides along with the final payment
   // submission as its own field (see buildCheckoutPaymentSubmission).
   function applyTip() {
-    const rupees = Number(tipInput);
-    if (!Number.isFinite(rupees) || rupees < 0) {
+    const minor = parseRupeesToMinor(tipInput);
+    if (minor === null) {
       setTipError('Enter a valid tip amount.');
       return;
     }
     if (!checkoutRetry) return;
-    const minor = Math.round(rupees * 100);
     const updated: PosCheckoutRetry = { ...checkoutRetry, tipMinor: minor };
     setCheckoutRetry(updated);
     if (!persistCheckoutRetry(updated)) {
@@ -1227,13 +1411,16 @@ export default function LivePOSScreen() {
         setResumingOrder(order);
       }
       if (checkoutRetry?.pendingOrderId === order.id) {
-        const updated = applyCanonicalCheckoutBalance(checkoutRetry, order);
+        const updated = await canonicalizeAndClaim(checkoutRetry, order);
         setCheckoutRetry(updated);
         persistCheckoutRetry(updated);
       }
       setPendingCartPointsMinor(0);
       setPointsInput('');
     } catch (e) {
+      if (checkoutRetry?.checkoutClaimRequired) {
+        persistCheckoutRetry(withoutCheckoutClaim({ ...checkoutRetry, phase: 'preparing_order' }));
+      }
       setPointsError((e as Error).message);
     } finally {
       setApplyingPoints(false);
@@ -1254,11 +1441,14 @@ export default function LivePOSScreen() {
         setResumingOrder(order);
       }
       if (checkoutRetry?.pendingOrderId === order.id) {
-        const updated = applyCanonicalCheckoutBalance(checkoutRetry, order);
+        const updated = await canonicalizeAndClaim(checkoutRetry, order);
         setCheckoutRetry(updated);
         persistCheckoutRetry(updated);
       }
     } catch (e) {
+      if (checkoutRetry?.checkoutClaimRequired) {
+        persistCheckoutRetry(withoutCheckoutClaim({ ...checkoutRetry, phase: 'preparing_order' }));
+      }
       setRewardError((e as Error).message);
     } finally {
       setRedeemingReward(null);
@@ -1330,6 +1520,13 @@ export default function LivePOSScreen() {
             + 'It remains locked here; restore browser storage before releasing it back to POS.',
           );
           return;
+        }
+        // Only release after the durable draft no longer says this browser
+        // owns checkout. If release succeeds and the process dies immediately,
+        // another cashier can safely claim it without this browser resurrecting
+        // the old token on reload.
+        if (retry.checkoutClaimRequired && retry.checkoutClaimToken) {
+          await pos.releaseCheckout(order.id, retry.checkoutClaimToken);
         }
         setCart([]);
         setResumingOrder(order);
@@ -1403,9 +1600,16 @@ export default function LivePOSScreen() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {shiftId && todaysSalesMinor !== null && (
-              <div className="chip text-xs !py-1.5" title="Total sales on this shift — resets when a new shift opens">
-                Today: <span className="font-bold font-mono ml-1">{inr(todaysSalesMinor)}</span>
+            {shiftId && shiftCollections !== null && (
+              <div
+                className="chip text-xs !py-1.5 flex-wrap"
+                title="Payment receipts on this shift before refunds; opening float is excluded"
+              >
+                Gross collections:
+                <span className="font-bold font-mono">{inr(shiftCollections.grossMinor)}</span>
+                <span className="text-fg-muted">
+                  POS {inr(shiftCollections.posMinor)} · Memberships {inr(shiftCollections.membershipMinor)}
+                </span>
               </div>
             )}
             <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }} title="Orders sent here from Tables and Gaming">
@@ -1930,10 +2134,19 @@ export default function LivePOSScreen() {
             const tipMinor = checkoutRetry.tipMinor ?? 0;
             const collectibleBalance = hasCollectibleCheckoutBalance(checkoutRetry);
             const benefitCoveredZero = hasBenefitCoveredZeroBalance(checkoutRetry);
+            const parsedCashTendered = parseRupeesToMinor(cashTenderedInput);
+            const cashCollectedMinor = collectibleBalance
+              ? checkoutRetry.paymentAmountMinor + tipMinor
+              : 0;
+            const cashTenderReady = checkoutRetry.paymentMethod !== 'cash'
+              || benefitCoveredZero
+              || (parsedCashTendered !== null && parsedCashTendered >= cashCollectedMinor);
             const isGenuineRestore = checkoutRetry.key === restoredRetryKey;
+            const checkoutClaimReady = hasUsableCheckoutClaim(checkoutRetry);
             const scanMethod = checkoutRetry.paymentMethod === 'upi'
               || checkoutRetry.paymentMethod === 'qr';
             const upiLink = checkoutRetry.phase === 'awaiting_payment'
+              && checkoutClaimReady
               && scanMethod
               && collectibleBalance
               && receiptBusiness
@@ -1953,6 +2166,8 @@ export default function LivePOSScreen() {
                 <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 px-3 py-2 text-sm text-accent-gold">
                   {checkoutRetry.phase === 'preparing_order'
                     ? 'The server bill preparation was interrupted. No payment should be collected yet; resume the same request key.'
+                    : checkoutRetry.phase === 'awaiting_payment' && !checkoutClaimReady
+                      ? 'This shared bill lock expired or is unavailable. Do not collect money; refresh the exact bill lock first.'
                     : checkoutRetry.phase === 'awaiting_payment'
                       ? benefitCoveredZero
                         ? 'The member allowance covers this exact server bill. Collect no money; complete the allowance to issue the final invoice.'
@@ -2037,11 +2252,7 @@ export default function LivePOSScreen() {
                 {checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && collectibleBalance
                   && checkoutRetry.paymentMethod === 'cash' && amount !== undefined && (() => {
                   const dueMinor = amount + tipMinor;
-                  const trimmedTendered = cashTenderedInput.trim();
-                  const tenderedRupees = trimmedTendered ? Number(trimmedTendered) : NaN;
-                  const tenderedMinor = trimmedTendered && Number.isFinite(tenderedRupees) && tenderedRupees >= 0
-                    ? Math.round(tenderedRupees * 100)
-                    : null;
+                  const tenderedMinor = parsedCashTendered;
                   const changeMinor = tenderedMinor !== null ? tenderedMinor - dueMinor : null;
                   // Dedupe — at larger due amounts, "next ₹500 above" and
                   // "next ₹1000 above" can land on the same round number.
@@ -2128,8 +2339,18 @@ export default function LivePOSScreen() {
                       {benefitCoveredZero ? 'Cancel prepared bill' : 'No payment · Cancel'}
                     </button>
                     <button className="btn btn-primary disabled:opacity-40"
-                      disabled={paying || (!collectibleBalance && !benefitCoveredZero)} onClick={completeCheckout}>
-                      {paying ? <Loader2 size={16} className="animate-spin"/> : <Check size={16}/>} {benefitCoveredZero ? 'Complete member benefit' : 'Payment received'}
+                      disabled={
+                        paying
+                        || (checkoutClaimReady && !collectibleBalance && !benefitCoveredZero)
+                        || (checkoutClaimReady && collectibleBalance && !cashTenderReady)
+                      }
+                      onClick={() => checkoutClaimReady
+                        ? completeCheckout()
+                        : prepareCheckout(checkoutRetry.paymentMethod)}>
+                      {paying ? <Loader2 size={16} className="animate-spin"/> : checkoutClaimReady ? <Check size={16}/> : <RefreshCwIcon/>}
+                      {checkoutClaimReady
+                        ? benefitCoveredZero ? 'Complete member benefit' : 'Payment received'
+                        : 'Refresh bill lock'}
                     </button>
                   </div>
                 ) : canAbandonCheckoutRetry(checkoutRetry) ? (

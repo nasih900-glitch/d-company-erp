@@ -50,6 +50,8 @@ export interface PosCheckoutRetry {
   // buildCheckoutPaymentSubmission below), additional money on top of
   // paymentAmountMinor, never folded into it.
   tipMinor?: number;
+  /** Actual cash handed to the cashier, used for receipt/change audit. */
+  cashTenderedMinor?: number;
   // Combined membership + custom-discount + points figure — kept for the
   // final receipt/reconciliation math. For the cashier-facing "applied so
   // far" confirmation, use orderManualDiscountMinor/orderPointsRedeemedMinor
@@ -60,6 +62,11 @@ export interface PosCheckoutRetry {
   orderPointsRedeemedMinor?: number;
   freeGamingMinutesApplied?: number;
   freeHookahCountApplied?: number;
+  /** Required only for a shared Tables/Gaming held order. */
+  checkoutClaimToken?: string;
+  checkoutClaimExpiresAt?: string;
+  checkoutClaimOrderVersion?: number;
+  checkoutClaimRequired?: boolean;
   snapshot: PosCheckoutSnapshot;
 }
 
@@ -278,12 +285,14 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
   const amount = value.paymentAmountMinor;
   const orderTotal = value.orderTotalMinor;
   const tip = value.tipMinor;
+  const cashTendered = value.cashTenderedMinor;
   const orderDiscount = value.orderDiscountMinor;
   const orderManualDiscount = value.orderManualDiscountMinor;
   const orderPointsRedeemed = value.orderPointsRedeemedMinor;
   const freeGamingMinutes = value.freeGamingMinutesApplied;
   const freeHookahCount = value.freeHookahCountApplied;
   const pendingOrderId = nonEmptyString(value.pendingOrderId);
+  const checkoutClaimOrderVersion = value.checkoutClaimOrderVersion;
   const phase = CHECKOUT_PHASES.has(value.phase as CheckoutPhase)
     ? value.phase as CheckoutPhase
     // Version-2 drafts created by the earlier one-step checkout were saved
@@ -305,6 +314,9 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
       : undefined,
     ...(typeof tip === 'number' && Number.isInteger(tip) && tip >= 0
       ? { tipMinor: tip }
+      : {}),
+    ...(typeof cashTendered === 'number' && Number.isInteger(cashTendered) && cashTendered >= 0
+      ? { cashTenderedMinor: cashTendered }
       : {}),
     ...(typeof orderDiscount === 'number'
       && Number.isInteger(orderDiscount)
@@ -331,6 +343,14 @@ function normalizeCheckoutRetry(value: unknown): PosCheckoutRetry | undefined {
       && freeHookahCount >= 0
       ? { freeHookahCountApplied: freeHookahCount }
       : {}),
+    checkoutClaimToken: nonEmptyString(value.checkoutClaimToken),
+    checkoutClaimExpiresAt: nonEmptyString(value.checkoutClaimExpiresAt),
+    ...(typeof checkoutClaimOrderVersion === 'number'
+      && Number.isInteger(checkoutClaimOrderVersion)
+      && checkoutClaimOrderVersion > 0
+      ? { checkoutClaimOrderVersion }
+      : {}),
+    checkoutClaimRequired: value.checkoutClaimRequired === true,
     snapshot,
   };
 }
@@ -449,6 +469,15 @@ export function buildCheckoutPaymentSubmission(
   const tip = Number.isInteger(retry.tipMinor) && (retry.tipMinor as number) >= 0
     ? (retry.tipMinor as number)
     : 0;
+  const tendered = retry.paymentMethod === 'cash'
+    ? retry.cashTenderedMinor ?? amount + tip
+    : undefined;
+  if (
+    retry.paymentMethod === 'cash'
+    && (!Number.isInteger(tendered) || (tendered as number) < amount + tip)
+  ) {
+    return null;
+  }
   return {
     orderId,
     idempotencyKey: `payment:${retry.key}`,
@@ -457,7 +486,7 @@ export function buildCheckoutPaymentSubmission(
       amount_minor: amount,
       // Cash tendered must cover what is actually collected — bill + tip —
       // or the server's tendered-vs-collected check rejects it.
-      ...(retry.paymentMethod === 'cash' ? { tendered_minor: amount + tip } : {}),
+      ...(retry.paymentMethod === 'cash' ? { tendered_minor: tendered } : {}),
       expected_order_total_minor: total,
       expected_due_minor: amount,
       tip_minor: tip,
@@ -496,6 +525,26 @@ export function isAmbiguousApiError(error: unknown): boolean {
  */
 export function isBusinessRuleApiError(error: unknown): boolean {
   return (error as Error & { code?: string } | null)?.code === 'business_rule';
+}
+
+const CHECKOUT_CLAIM_ERROR_CODES = new Set([
+  'checkout_claim_required',
+  'checkout_claim_conflict',
+  'checkout_claim_expired',
+  'checkout_claim_invalid',
+  'checkout_claim_stale',
+  'checkout_claim_unavailable',
+]);
+
+/**
+ * A deterministic refusal that happened before the server wrote a Payment or
+ * finalized a zero-value invoice. The cashier may already have confirmed the
+ * physical payment, so callers must retain the original settlement key and
+ * reconcile/reacquire the bill instead of asking the customer to pay again.
+ */
+export function isCheckoutClaimRejection(error: unknown): boolean {
+  const code = (error as Error & { code?: string } | null)?.code;
+  return typeof code === 'string' && CHECKOUT_CLAIM_ERROR_CODES.has(code);
 }
 
 // The two stale-bill guards in _validate_confirmed_payment_balance

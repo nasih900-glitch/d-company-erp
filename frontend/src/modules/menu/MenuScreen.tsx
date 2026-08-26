@@ -12,12 +12,15 @@ import {
 import { LIVE_MODE } from '@/lib/demo';
 import { CATEGORIES, MENU } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   menu, menuAdmin, inventory, recipes, type MenuItemDTO, type MenuCategoryDTO,
   type IngredientDTO, type RecipeDTO, type RecipeLineDTO,
 } from '@/lib/erp-api';
+import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type ItemType = 'food' | 'drink' | 'dessert' | 'gaming' | 'event' | 'hookah' | 'streaming';
@@ -30,6 +33,7 @@ function defaultTaxMeta(type: ItemType) {
 }
 
 export default function MenuScreen() {
+  const notifications = useNotifications();
   const canManageMenu = true;
   const [items, setItems] = useState<MenuItemDTO[]>([]);
   const [cats, setCats] = useState<MenuCategoryDTO[]>([]);
@@ -42,6 +46,8 @@ export default function MenuScreen() {
   const [editItem, setEditItem] = useState<MenuItemDTO | null>(null);
   const [addCatOpen, setAddCatOpen] = useState(false);
   const [recipeItem, setRecipeItem] = useState<MenuItemDTO | null>(null);
+  const [deleteItem, setDeleteItem] = useState<MenuItemDTO | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -75,16 +81,32 @@ export default function MenuScreen() {
     });
   }, [items, q, catFilter]);
 
-  async function onDelete(it: MenuItemDTO) {
-    if (!confirm(`Delete '${it.name}'? Past orders will keep showing the old name.`)) return;
-    try { await menuAdmin.deleteItem(it.id); await load(); }
-    catch (e) { alert((e as Error).message); }
+  async function confirmDeleteItem() {
+    if (!deleteItem || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await menuAdmin.deleteItem(deleteItem.id);
+      const itemName = deleteItem.name;
+      setDeleteItem(null);
+      await load();
+      notifications.success(`${itemName} was removed from the menu.`, { title: 'Menu item deleted' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not delete menu item' });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
   async function onToggleAvail(it: MenuItemDTO) {
     try {
-      await menuAdmin.updateItem(it.id, { is_available: !it.is_available });
+      const isAvailable = !it.is_available;
+      await menuAdmin.updateItem(it.id, { is_available: isAvailable });
       await load();
-    } catch (e) { alert((e as Error).message); }
+      notifications.success(`${it.name} is now ${isAvailable ? 'available in POS' : 'hidden from POS'}.`, {
+        title: 'Availability updated',
+      });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not update availability' });
+    }
   }
 
   return (
@@ -189,7 +211,7 @@ export default function MenuScreen() {
                       <button className="text-fg-muted hover:text-accent" onClick={() => setEditItem(m)}>
                         <Edit2 size={14}/>
                       </button>
-                      <button className="text-fg-muted hover:text-accent-bad" onClick={() => onDelete(m)}>
+                      <button className="text-fg-muted hover:text-accent-bad" onClick={() => setDeleteItem(m)}>
                         <Trash2 size={14}/>
                       </button>
                     </td>
@@ -247,7 +269,7 @@ export default function MenuScreen() {
                       </button>
                       <button
                         aria-label={`Delete ${m.name}`}
-                        onClick={() => onDelete(m)}
+                        onClick={() => setDeleteItem(m)}
                         className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 hover:!text-accent-bad"
                       >
                         <Trash2 size={14}/>
@@ -263,11 +285,19 @@ export default function MenuScreen() {
 
       {canManageMenu && addItemOpen && (
         <ItemForm cats={cats} onClose={() => setAddItemOpen(false)}
-          onSuccess={() => { setAddItemOpen(false); load(); }}/>
+          onSuccess={() => {
+            setAddItemOpen(false);
+            void load();
+            notifications.success('The menu item was added.', { title: 'Menu item saved' });
+          }}/>
       )}
       {canManageMenu && editItem && (
         <ItemForm cats={cats} item={editItem} onClose={() => setEditItem(null)}
-          onSuccess={() => { setEditItem(null); load(); }}/>
+          onSuccess={() => {
+            setEditItem(null);
+            void load();
+            notifications.success('The menu item was updated.', { title: 'Changes saved' });
+          }}/>
       )}
       {canManageMenu && addCatOpen && (
         <CategoryManagerModal cats={cats} onClose={() => setAddCatOpen(false)}
@@ -275,6 +305,17 @@ export default function MenuScreen() {
       )}
       {canManageMenu && recipeItem && (
         <RecipeEditorModal item={recipeItem} onClose={() => setRecipeItem(null)}/>
+      )}
+      {deleteItem && (
+        <ConfirmModal
+          title="Delete menu item"
+          message={`Delete '${deleteItem.name}'? Past orders will keep showing the old name.`}
+          confirmLabel="Delete item"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => { void confirmDeleteItem(); }}
+          onCancel={() => { if (!deleteBusy) setDeleteItem(null); }}
+        />
       )}
     </div>
   );
@@ -309,7 +350,10 @@ function ItemForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      const base_price_minor = Math.round(parseFloat(form.price_rupees || '0') * 100);
+      const base_price_minor = parseRupeesToMinor(form.price_rupees);
+      if (base_price_minor === null) {
+        throw new Error('Price must be a non-negative amount with at most two decimals.');
+      }
       const tax_rate = parseFloat(form.tax_rate_pct || '0') / 100;
       if (isEdit) {
         await menuAdmin.updateItem(item!.id, {
@@ -436,6 +480,7 @@ function ItemForm({
 function CategoryManagerModal({
   cats, onClose, onChanged,
 }: { cats: MenuCategoryDTO[]; onClose: () => void; onChanged: () => void }) {
+  const notifications = useNotifications();
   const [name, setName] = useState('');
   const [sortOrder, setSortOrder] = useState('0');
   const [busy, setBusy] = useState(false);
@@ -444,6 +489,7 @@ function CategoryManagerModal({
   const [editName, setEditName] = useState('');
   const [editSortOrder, setEditSortOrder] = useState('0');
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [deleteCategory, setDeleteCategory] = useState<MenuCategoryDTO | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
@@ -454,6 +500,7 @@ function CategoryManagerModal({
       });
       setName(''); setSortOrder('0');
       onChanged();
+      notifications.success('The category was created.', { title: 'Category saved' });
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   }
@@ -471,23 +518,32 @@ function CategoryManagerModal({
       });
       setEditingId(null);
       onChanged();
+      notifications.success('The category was updated.', { title: 'Changes saved' });
     } catch (e) { setErr((e as Error).message); }
     finally { setRowBusy(null); }
   }
 
-  async function remove(c: MenuCategoryDTO) {
-    if (!confirm(`Delete category "${c.name}"? Only works if it has no items in it.`)) return;
-    setRowBusy(c.id); setErr(null);
+  async function confirmRemove() {
+    if (!deleteCategory || rowBusy) return;
+    setRowBusy(deleteCategory.id); setErr(null);
     try {
-      await menuAdmin.deleteCategory(c.id);
+      await menuAdmin.deleteCategory(deleteCategory.id);
+      const categoryName = deleteCategory.name;
+      setDeleteCategory(null);
       onChanged();
-    } catch (e) { setErr((e as Error).message); }
+      notifications.success(`${categoryName} was deleted.`, { title: 'Category deleted' });
+    } catch (e) {
+      const message = (e as Error).message;
+      setErr(message);
+      notifications.error(message, { title: 'Could not delete category' });
+    }
     finally { setRowBusy(null); }
   }
 
   return (
-    <Modal open onClose={onClose} title="Categories">
-      <div className="space-y-4">
+    <>
+      <Modal open onClose={onClose} title="Categories">
+        <div className="space-y-4">
         {err && <ErrorRow text={err}/>}
 
         {cats.length > 0 && (
@@ -516,7 +572,7 @@ function CategoryManagerModal({
                       <Edit2 size={13}/>
                     </button>
                     <button type="button" className="btn btn-ghost !py-1.5 !px-2 text-accent-bad"
-                      disabled={rowBusy === c.id} onClick={() => remove(c)}>
+                      disabled={rowBusy !== null} onClick={() => setDeleteCategory(c)}>
                       {rowBusy === c.id ? <Loader2 className="animate-spin" size={13}/> : <Trash2 size={13}/>}
                     </button>
                   </>
@@ -543,8 +599,20 @@ function CategoryManagerModal({
             </button>
           </div>
         </form>
-      </div>
-    </Modal>
+        </div>
+      </Modal>
+      {deleteCategory && (
+        <ConfirmModal
+          title="Delete category"
+          message={`Delete category "${deleteCategory.name}"? This only works when the category has no items.`}
+          confirmLabel="Delete category"
+          danger
+          busy={rowBusy === deleteCategory.id}
+          onConfirm={() => { void confirmRemove(); }}
+          onCancel={() => { if (!rowBusy) setDeleteCategory(null); }}
+        />
+      )}
+    </>
   );
 }
 
@@ -556,11 +624,13 @@ function CategoryManagerModal({
 function RecipeEditorModal({
   item, onClose,
 }: { item: MenuItemDTO; onClose: () => void }) {
+  const notifications = useNotifications();
   const [ingredients, setIngredients] = useState<IngredientDTO[]>([]);
   const [recipe, setRecipe] = useState<RecipeDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -587,13 +657,18 @@ function RecipeEditorModal({
   }
 
   async function removeRecipe() {
-    if (!recipe) return;
-    if (!confirm('Remove this recipe? The item will stop deducting stock at checkout until a new recipe is set up.')) return;
+    if (!recipe || busy) return;
     setBusy(true); setError(null);
     try {
       await recipes.delete(recipe.id);
       setRecipe(null);
-    } catch (e) { setError((e as Error).message); }
+      setConfirmRemoveOpen(false);
+      notifications.success(`The recipe for ${item.name} was removed.`, { title: 'Recipe removed' });
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      notifications.error(message, { title: 'Could not remove recipe' });
+    }
     finally { setBusy(false); }
   }
 
@@ -630,8 +705,9 @@ function RecipeEditorModal({
   }
 
   return (
-    <Modal open onClose={onClose} title={`Recipe — ${item.name}`} size="lg">
-      <div className="space-y-4">
+    <>
+      <Modal open onClose={onClose} title={`Recipe — ${item.name}`} size="lg">
+        <div className="space-y-4">
         <p className="text-xs text-fg-muted">
           What one {item.name} consumes from inventory at checkout. Qty is in each ingredient&apos;s
           stock unit; wastage % is added on top (5% wastage on 150ml deducts 157.5ml).
@@ -663,7 +739,8 @@ function RecipeEditorModal({
             <AddLineForm ingredients={ingredients} busy={busy} onAdd={addLine}/>
             <div className="pt-2 border-t border-bg-border flex justify-between items-center">
               <span className="text-xs text-fg-muted">Version {recipe.version} · active</span>
-              <button type="button" className="btn btn-ghost text-accent-bad !py-1.5" disabled={busy} onClick={removeRecipe}>
+              <button type="button" className="btn btn-ghost text-accent-bad !py-1.5" disabled={busy}
+                onClick={() => setConfirmRemoveOpen(true)}>
                 <Trash2 size={13}/> Remove recipe
               </button>
             </div>
@@ -672,8 +749,20 @@ function RecipeEditorModal({
         <div className="flex justify-end pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
         </div>
-      </div>
-    </Modal>
+        </div>
+      </Modal>
+      {confirmRemoveOpen && recipe && (
+        <ConfirmModal
+          title="Remove recipe"
+          message="Remove this recipe? The item will stop deducting stock at checkout until a new recipe is set up."
+          confirmLabel="Remove recipe"
+          danger
+          busy={busy}
+          onConfirm={() => { void removeRecipe(); }}
+          onCancel={() => { if (!busy) setConfirmRemoveOpen(false); }}
+        />
+      )}
+    </>
   );
 }
 

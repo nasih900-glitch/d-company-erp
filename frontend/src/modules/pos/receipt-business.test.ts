@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BranchDTO, CompanyDTO } from '@/lib/erp-api';
+import type { ReceiptBusinessDTO } from '@/lib/erp-api';
 import {
   buildReceiptBusinessDetails,
   buildUpiPayLink,
@@ -9,50 +9,30 @@ import {
   receiptDocumentTitle,
 } from './receipt-business';
 
-const company: CompanyDTO = {
-  id: 'company-1',
-  name: 'D Company',
-  legal_name: 'D Company Private Limited',
-  currency: 'INR',
-  timezone: 'Asia/Kolkata',
-  country: 'IN',
+const receiptIdentity: ReceiptBusinessDTO = {
+  brand_name: 'D Company',
+  supplier_name: 'D Company Private Limited',
+  branch_name: 'Nilambur',
+  address: 'Nilambur, Malappuram, Kerala',
   gstin: '32ABCDE1234F1Z5',
-  pan: 'ABCDE1234F',
   gst_registration_type: 'regular',
   is_composition: false,
-  e_invoicing_enabled: false,
-  fiscal_year_start_month: 4,
-  google_sheets_webhook_url: null,
-  upi_vpa: null,
-  payment_provider: null,
-  payment_key_id: null,
-  payment_secret_set: false,
-};
-
-const branch: BranchDTO = {
-  id: 'branch-1',
-  name: 'Nilambur',
-  code: 'NB',
-  address: 'Nilambur, Malappuram, Kerala',
-  timezone: 'Asia/Kolkata',
-  opens_at: null,
-  closes_at: null,
-  state_code: '32',
   fssai_license_no: null,
   trade_license_no: null,
-  branch_gstin: null,
+  state_code: '32',
+  timezone: 'Asia/Kolkata',
+  upi_vpa: null,
 };
 
 describe('upi pay link', () => {
   it('returns null when no VPA is configured', () => {
-    const details = buildReceiptBusinessDetails(company, branch, 'Nasih');
+    const details = buildReceiptBusinessDetails(receiptIdentity, 'Nasih');
     expect(buildUpiPayLink(details, 18000)).toBeNull();
   });
 
   it('builds an amount-locked upi link with the merchant VPA left literal', () => {
     const details = buildReceiptBusinessDetails(
-      { ...company, upi_vpa: 'Q530001220@ybl' },
-      branch,
+      { ...receiptIdentity, upi_vpa: 'Q530001220@ybl' },
     );
     const link = buildUpiPayLink(details, 18000, 'D Company');
     expect(link).toBe(
@@ -63,7 +43,7 @@ describe('upi pay link', () => {
 
 describe('receipt business details', () => {
   it('uses live legal and branch fields without inventing missing licences', () => {
-    const details = buildReceiptBusinessDetails(company, branch, 'Nasih');
+    const details = buildReceiptBusinessDetails(receiptIdentity, 'Nasih');
 
     expect(details.supplierName).toBe('D Company Private Limited');
     expect(details.address).toBe('Nilambur, Malappuram, Kerala');
@@ -76,8 +56,7 @@ describe('receipt business details', () => {
 
   it('never labels an unregistered sale as a tax invoice', () => {
     const details = buildReceiptBusinessDetails(
-      { ...company, gstin: null, gst_registration_type: 'unregistered' },
-      branch,
+      { ...receiptIdentity, gstin: null, gst_registration_type: 'unregistered' },
     );
 
     expect(receiptDocumentTitle(details, false)).toBe('Sale Receipt');
@@ -85,30 +64,28 @@ describe('receipt business details', () => {
   });
 
   it('requires registered businesses to configure a GSTIN', () => {
-    const details = buildReceiptBusinessDetails({ ...company, gstin: null }, branch);
+    const details = buildReceiptBusinessDetails({ ...receiptIdentity, gstin: null });
 
     expect(receiptConfigurationIssue(details)).toContain('GST setup is incomplete');
   });
 
   it('blocks payment when the timezone would throw while printing the receipt', () => {
     const details = buildReceiptBusinessDetails(
-      { ...company, timezone: 'Asia/Kolkatta' },
-      { ...branch, timezone: null },
+      { ...receiptIdentity, timezone: 'Asia/Kolkatta' },
     );
 
     expect(receiptConfigurationIssue(details)).toContain('Business timezone is invalid');
   });
 
   it('blocks payment when the branch overrides the company with a bad timezone', () => {
-    const details = buildReceiptBusinessDetails(company, { ...branch, timezone: 'GMT+5:30' });
+    const details = buildReceiptBusinessDetails({ ...receiptIdentity, timezone: 'GMT+5:30' });
 
     expect(receiptConfigurationIssue(details)).toContain('Business timezone is invalid');
   });
 
   it('labels composition documents as bills of supply', () => {
     const details = buildReceiptBusinessDetails(
-      { ...company, gst_registration_type: 'composition', is_composition: true },
-      branch,
+      { ...receiptIdentity, gst_registration_type: 'composition', is_composition: true },
     );
 
     expect(receiptDocumentTitle(details, false)).toBe('Bill of Supply');

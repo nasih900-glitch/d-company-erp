@@ -132,10 +132,12 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   }, [drawerOpen]);
 
   return (
-    <div className="min-h-[100dvh] overflow-x-hidden md:grid md:h-[100dvh] md:grid-cols-[260px_1fr]">
-      {/* ===================== MOBILE: top bar ===================== */}
+    <div className="min-h-[100dvh] overflow-x-hidden lg:grid lg:h-[100dvh] lg:grid-cols-[260px_1fr]">
+      {/* Compact/mobile + tablet portrait: top bar. Keep the permanent
+          navigation rail for landscape/desktop widths where it does not
+          crowd the cashier workspace. */}
       <header
-        className="md:hidden sticky top-0 z-30 bg-bg-surface/95 backdrop-blur border-b border-bg-border flex items-center justify-between px-3 py-3"
+        className="lg:hidden sticky top-0 z-30 bg-bg-surface/95 backdrop-blur border-b border-bg-border flex items-center justify-between px-3 py-3"
         style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
       >
         <div className="flex items-center gap-3">
@@ -165,12 +167,12 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       </header>
 
       {/* ===================== SIDEBAR =====================
-          Desktop:  always visible, fixed column.
-          Mobile:   off-canvas drawer; slides in when drawerOpen=true. */}
+          Landscape/desktop: always visible, fixed column.
+          Compact/mobile: off-canvas drawer; slides in when drawerOpen=true. */}
       <aside
         className={`
           fixed inset-y-0 left-0 z-50 w-[min(84vw,280px)] bg-bg-surface border-r border-bg-border p-4 flex min-h-0 flex-col
-          transition-transform duration-200 ease-out will-change-transform md:w-[260px] md:translate-x-0 md:static md:z-auto md:will-change-auto
+          transition-transform duration-200 ease-out will-change-transform lg:w-[260px] lg:translate-x-0 lg:static lg:z-auto lg:will-change-auto
           ${drawerOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}
         `}
         style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}
@@ -191,7 +193,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close menu"
-            className="md:hidden p-2 -m-2 rounded-lg hover:bg-bg-raised"
+            className="lg:hidden p-2 -m-2 rounded-lg hover:bg-bg-raised"
           >
             <X size={20} />
           </button>
@@ -243,12 +245,12 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         </div>
       </aside>
 
-      {/* Mobile backdrop when drawer open */}
+      {/* Compact-layout backdrop when drawer is open. */}
       {drawerOpen && (
         <div
           onClick={() => setDrawerOpen(false)}
           aria-hidden
-          className="md:hidden fixed inset-0 z-40 bg-bg/80 backdrop-blur-sm"
+          className="lg:hidden fixed inset-0 z-40 bg-bg/80 backdrop-blur-sm"
           style={{ animation: 'modal-backdrop-in var(--motion-fast) ease-out both' }}
         />
       )}

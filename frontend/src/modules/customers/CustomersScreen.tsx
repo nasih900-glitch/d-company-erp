@@ -15,7 +15,9 @@ import {
 
 import { inr } from '@/lib/inr';
 import { customers, type CustomerDTO } from '@/lib/erp-api';
+import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const RANK_STYLES: Record<string, string> = {
@@ -34,12 +36,15 @@ function RankBadge({ rank }: { rank: string }) {
 }
 
 export default function CustomersScreen() {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<CustomerDTO[]>([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<CustomerDTO | null>(null);
+  const [deleteCustomer, setDeleteCustomer] = useState<CustomerDTO | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async (search = '') => {
     setLoading(true); setErr(null);
@@ -51,14 +56,22 @@ export default function CustomersScreen() {
 
   const onSearch = (e: React.FormEvent) => { e.preventDefault(); void load(q); };
 
-  async function onDelete(c: CustomerDTO) {
-    if (!confirm(
-      `Delete ${c.name || c.phone}? This removes their name, phone and notes — ` +
-      `their visit/spend history stays on past orders and reports, but they'll ` +
-      `no longer be found by search or auto-filled at checkout.`
-    )) return;
-    try { await customers.remove(c.id); await load(q); }
-    catch (e) { setErr((e as Error).message); }
+  async function confirmDelete() {
+    if (!deleteCustomer || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await customers.remove(deleteCustomer.id);
+      const customerName = deleteCustomer.name || deleteCustomer.phone;
+      setDeleteCustomer(null);
+      await load(q);
+      notifications.success(`${customerName} was removed from customer search.`, {
+        title: 'Customer deleted',
+      });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not delete customer' });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   const totals = {
@@ -148,7 +161,7 @@ export default function CustomersScreen() {
                     <button
                       aria-label={`Delete ${c.name || c.phone}`}
                       className="text-fg-muted hover:text-accent-bad ml-2"
-                      onClick={() => onDelete(c)}
+                      onClick={() => setDeleteCustomer(c)}
                     >
                       <Trash2 size={14}/>
                     </button>
@@ -180,7 +193,7 @@ export default function CustomersScreen() {
                     <button
                       aria-label={`Delete ${c.name || c.phone}`}
                       className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 text-accent-bad"
-                      onClick={() => onDelete(c)}
+                      onClick={() => setDeleteCustomer(c)}
                     >
                       <Trash2 size={14}/>
                     </button>
@@ -214,10 +227,35 @@ export default function CustomersScreen() {
         </div>
       )}
 
-      {addOpen && <CustomerForm onClose={() => setAddOpen(false)}
-        onSuccess={() => { setAddOpen(false); load(); }}/>}
-      {edit && <CustomerForm customer={edit} onClose={() => setEdit(null)}
-        onSuccess={() => { setEdit(null); load(); }}/>}
+      {addOpen && (
+        <CustomerForm onClose={() => setAddOpen(false)} onSuccess={() => {
+          setAddOpen(false);
+          void load();
+          notifications.success('The customer was added.', { title: 'Customer saved' });
+        }}/>
+      )}
+      {edit && (
+        <CustomerForm customer={edit} onClose={() => setEdit(null)} onSuccess={() => {
+          setEdit(null);
+          void load();
+          notifications.success('The customer details were updated.', { title: 'Changes saved' });
+        }}/>
+      )}
+      {deleteCustomer && (
+        <ConfirmModal
+          title="Delete customer"
+          message={
+            `Delete ${deleteCustomer.name || deleteCustomer.phone}? This removes their name, phone and notes. `
+            + 'Their visit and spend history stays on past orders and reports, but they will no longer be found '
+            + 'by search or auto-filled at checkout.'
+          }
+          confirmLabel="Delete customer"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => { void confirmDelete(); }}
+          onCancel={() => { if (!deleteBusy) setDeleteCustomer(null); }}
+        />
+      )}
     </div>
   );
 }

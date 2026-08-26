@@ -18,6 +18,7 @@ import {
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
 import {
   orders, shifts,
@@ -341,6 +342,20 @@ function ShiftsTab() {
                 )}
               </div>
 
+              <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-bg-border/60">
+                <Stat label="POS collections" value={inr(s.pos_sales_minor ?? 0)}/>
+                <Stat label="Memberships" value={inr(s.membership_sales_minor ?? 0)}/>
+                <Stat label="Gross collections" value={inr(s.gross_collections_minor ?? 0)}/>
+              </div>
+              <p className="mt-1 text-[10px] text-fg-muted">
+                Payment receipts before refunds; opening float is excluded.
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
+                <Stat label="POS refunds" value={inr(s.settled_pos_refunds_minor ?? 0)}/>
+                <Stat label="Membership refunds" value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+                <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
+                <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
+              </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                 <Stat label="Opening float" value={inr(s.opening_float_minor)}/>
                 <Stat label="Expected cash" value={s.expected_minor != null ? inr(s.expected_minor) : '—'}/>
@@ -375,7 +390,11 @@ function OpenShiftForm({ onClose, onSuccess, onError }: { onClose: () => void; o
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      await shifts.open(Math.round(parseFloat(float || '0') * 100));
+      const openingFloatMinor = parseRupeesToMinor(float);
+      if (openingFloatMinor === null) {
+        throw new Error('Opening float must be a non-negative amount with at most two decimals.');
+      }
+      await shifts.open(openingFloatMinor);
       onSuccess();
     } catch (e) {
       setErr((e as Error).message);
@@ -452,7 +471,10 @@ function CloseShiftForm({
       // free-text mode submits exactly as before (unchanged wire format).
       const countedMinor = mode === 'denomination'
         ? denomTotalMinor
-        : Math.round(parseFloat(counted || '0') * 100);
+        : parseRupeesToMinor(counted);
+      if (countedMinor === null) {
+        throw new Error('Counted cash must be a non-negative amount with at most two decimals.');
+      }
       const r = await shifts.close(shift.id, countedMinor);
       setResult(r);
     } catch (e) { setErr((e as Error).message); }

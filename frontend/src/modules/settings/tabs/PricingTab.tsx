@@ -5,6 +5,12 @@ import {
 } from 'lucide-react';
 
 import { inr } from '@/lib/inr';
+import {
+  clearPricingToken,
+  hasActivePricingToken,
+  storePricingToken,
+} from '@/lib/api';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   events,
@@ -34,7 +40,7 @@ type Drafts = {
 const EMPTY_DRAFTS: Drafts = { menu: {}, stations: {}, events: {}, tiers: {} };
 
 export default function PricingTab() {
-  const [unlocked, setUnlocked] = useState(hasValidPricingToken);
+  const [unlocked, setUnlocked] = useState(hasActivePricingToken);
   const [password, setPassword] = useState('');
   const [unlocking, setUnlocking] = useState(false);
   const [items, setItems] = useState<MenuItemDTO[]>([]);
@@ -85,8 +91,7 @@ export default function PricingTab() {
     setErr(null);
     try {
       const r = await pricingLock.unlock(password);
-      localStorage.setItem('pricing_token', r.pricing_token);
-      localStorage.setItem('pricing_token_expires_at', String(Date.now() + r.expires_in * 1000));
+      storePricingToken(r.pricing_token, r.expires_in);
       setPassword('');
       setUnlocked(true);
     } catch (e) {
@@ -97,8 +102,7 @@ export default function PricingTab() {
   }
 
   function lockPricing() {
-    localStorage.removeItem('pricing_token');
-    localStorage.removeItem('pricing_token_expires_at');
+    clearPricingToken();
     setUnlocked(false);
     setItems([]);
     setStations([]);
@@ -580,12 +584,6 @@ function matches(q: string, ...values: Array<string | null | undefined>) {
   return values.some((value) => (value ?? '').toLowerCase().includes(q));
 }
 
-function hasValidPricingToken() {
-  const token = localStorage.getItem('pricing_token');
-  const expiresAt = Number(localStorage.getItem('pricing_token_expires_at') || '0');
-  return Boolean(token && expiresAt > Date.now());
-}
-
 function isPricingUnlockError(message: string) {
   return message.toLowerCase().includes('pricing password unlock');
 }
@@ -600,9 +598,11 @@ function toPercent(rate: number) {
 }
 
 function toMinor(raw: string, label: string) {
-  const value = Number.parseFloat(raw);
-  if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be a positive number`);
-  return Math.round(value * 100);
+  const value = parseRupeesToMinor(raw);
+  if (value === null) {
+    throw new Error(`${label} must be a non-negative amount with at most two decimals`);
+  }
+  return value;
 }
 
 function toRate(raw: string, label: string) {

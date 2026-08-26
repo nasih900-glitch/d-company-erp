@@ -21,11 +21,14 @@ export function ConfirmModal({
   onCancel: () => void;
   busy?: boolean;
 }) {
+  const handleCancel = () => {
+    if (!busy) onCancel();
+  };
   return (
-    <Modal open onClose={onCancel} title={title} size="sm">
+    <Modal open onClose={handleCancel} title={title} size="sm">
       <p className="text-sm text-fg-muted mb-4">{message}</p>
       <div className="flex justify-end gap-2">
-        <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button type="button" className="btn btn-ghost" onClick={handleCancel} disabled={busy}>Cancel</button>
         <button type="button" className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={onConfirm} disabled={busy}>
           {busy ? <Loader2 className="animate-spin" size={14}/> : null} {confirmLabel}
         </button>
@@ -35,20 +38,24 @@ export function ConfirmModal({
 }
 
 export function PromptModal({
-  title, label, placeholder, confirmLabel = 'Confirm', required = true, onSubmit, onCancel, busy,
+  title, label, placeholder, confirmLabel = 'Confirm', required = true, danger, onSubmit, onCancel, busy,
 }: {
   title: string;
   label: string;
   placeholder?: string;
   confirmLabel?: string;
   required?: boolean;
+  danger?: boolean;
   onSubmit: (value: string) => void;
   onCancel: () => void;
   busy?: boolean;
 }) {
   const [value, setValue] = useState('');
+  const handleCancel = () => {
+    if (!busy) onCancel();
+  };
   return (
-    <Modal open onClose={onCancel} title={title} size="sm">
+    <Modal open onClose={handleCancel} title={title} size="sm">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -69,8 +76,8 @@ export function PromptModal({
           />
         </label>
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="button" className="btn btn-ghost" onClick={handleCancel} disabled={busy}>Cancel</button>
+          <button type="submit" className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} disabled={busy}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : null} {confirmLabel}
           </button>
         </div>

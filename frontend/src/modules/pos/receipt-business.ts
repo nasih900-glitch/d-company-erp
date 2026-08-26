@@ -1,4 +1,4 @@
-import type { BranchDTO, CompanyDTO } from '@/lib/erp-api';
+import type { ReceiptBusinessDTO } from '@/lib/erp-api';
 import { isValidTimeZone } from '@/lib/manual-collections';
 
 export interface ReceiptBusinessDetails {
@@ -23,24 +23,23 @@ const clean = (value: string | null | undefined): string | null => {
 };
 
 export function buildReceiptBusinessDetails(
-  company: CompanyDTO,
-  branch: BranchDTO | null,
+  receipt: ReceiptBusinessDTO,
   cashierName?: string | null,
 ): ReceiptBusinessDetails {
   return {
-    brandName: company.name.trim(),
-    supplierName: clean(company.legal_name) ?? company.name.trim(),
-    branchName: clean(branch?.name),
-    address: clean(branch?.address),
-    gstin: clean(branch?.branch_gstin) ?? clean(company.gstin),
-    gstRegistrationType: company.gst_registration_type.trim().toLowerCase(),
-    isComposition: company.is_composition,
-    fssaiLicenseNo: clean(branch?.fssai_license_no),
-    tradeLicenseNo: clean(branch?.trade_license_no),
-    stateCode: clean(branch?.state_code),
+    brandName: receipt.brand_name.trim(),
+    supplierName: receipt.supplier_name.trim(),
+    branchName: clean(receipt.branch_name),
+    address: clean(receipt.address),
+    gstin: clean(receipt.gstin),
+    gstRegistrationType: receipt.gst_registration_type.trim().toLowerCase(),
+    isComposition: receipt.is_composition,
+    fssaiLicenseNo: clean(receipt.fssai_license_no),
+    tradeLicenseNo: clean(receipt.trade_license_no),
+    stateCode: clean(receipt.state_code),
     cashierName: clean(cashierName),
-    timezone: clean(branch?.timezone) ?? company.timezone,
-    upiVpa: clean(company.upi_vpa),
+    timezone: receipt.timezone.trim(),
+    upiVpa: clean(receipt.upi_vpa),
   };
 }
 

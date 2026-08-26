@@ -135,7 +135,7 @@ export default function AuditScreen() {
             <ShieldCheck size={22} className="text-accent"/> Audit Log
           </h2>
           <p className="text-fg-muted text-sm">
-            Every change to the system · who · when · what · before vs after
+            Every change · actor · device · online/offline sync · before vs after
           </p>
         </div>
         <div className="flex gap-2">
@@ -389,7 +389,7 @@ function auditArea(entry: AuditEntryDTO): string {
   if (entry.action.startsWith('login_')) return 'login';
   if (entry.entity_type === 'AuditAccess' || entry.entity_type === 'PricingAccess') return 'system';
   if (['User', 'UserRole', 'Role'].includes(entry.entity_type)) return 'staff';
-  if (['Order', 'OrderLine', 'Payment', 'Refund', 'Shift'].includes(entry.entity_type)) return 'pos';
+  if (['Order', 'OrderLine', 'Payment', 'Refund', 'MembershipPaymentRequest', 'MembershipPaymentCashCollection', 'MembershipPaymentProviderAction', 'MembershipPaymentRequestResolution', 'MembershipPayment', 'MembershipPaymentAttemptResolution', 'MembershipRefund', 'MembershipRefundCashHandoff', 'MembershipRefundProviderAction', 'MembershipRefundSettlement', 'MembershipRefundResolution', 'Shift'].includes(entry.entity_type)) return 'pos';
   if (['Customer', 'CustomerMembership', 'MembershipTier'].includes(entry.entity_type)) return 'customers';
   if (['Ingredient', 'Supplier', 'Batch', 'StockMovement', 'PurchaseOrder', 'PurchaseOrderLine', 'GRN'].includes(entry.entity_type)) return 'inventory';
   if (['Account', 'Asset', 'Expense', 'ExpenseCategory', 'JournalEntry', 'JournalLine', 'ManualCollection', 'Partner', 'CapitalEntry'].includes(entry.entity_type)) return 'finance';
@@ -415,6 +415,17 @@ function entityLabel(entityType: string): string {
     OrderLine: 'Order item',
     Payment: 'Payment',
     Refund: 'Refund',
+    MembershipPaymentRequest: 'Membership payment request',
+    MembershipPaymentCashCollection: 'Membership cash collection started',
+    MembershipPaymentProviderAction: 'Membership provider payment started',
+    MembershipPaymentRequestResolution: 'Membership payment request resolution',
+    MembershipPayment: 'Membership payment',
+    MembershipPaymentAttemptResolution: 'Legacy membership payment recovery',
+    MembershipRefund: 'Membership refund request',
+    MembershipRefundCashHandoff: 'Membership refund cash handover started',
+    MembershipRefundProviderAction: 'Membership provider refund started',
+    MembershipRefundSettlement: 'Membership refund settlement',
+    MembershipRefundResolution: 'Membership refund withdrawal',
     Shift: 'POS shift',
     Customer: 'Customer',
     CustomerMembership: 'Membership',
@@ -615,6 +626,17 @@ function auditSummary(entry: AuditEntryDTO): { title: string; detail: string } {
 function createDetail(entry: AuditEntryDTO, readableFields: string[]): string {
   if (entry.entity_type === 'Order') return `Bill/order ${textValue(entry, 'invoice_no') || 'created'}`;
   if (entry.entity_type === 'Payment') return 'Payment recorded';
+  if (entry.entity_type === 'MembershipPaymentRequest') return 'Membership payment prepared';
+  if (entry.entity_type === 'MembershipPaymentCashCollection') return 'Membership cash collection started';
+  if (entry.entity_type === 'MembershipPaymentProviderAction') return 'Membership provider payment started';
+  if (entry.entity_type === 'MembershipPaymentRequestResolution') return 'Membership payment request resolved';
+  if (entry.entity_type === 'MembershipPayment') return 'Membership payment recorded';
+  if (entry.entity_type === 'MembershipPaymentAttemptResolution') return 'Rejected membership payment recovered';
+  if (entry.entity_type === 'MembershipRefund') return 'Membership refund accepted';
+  if (entry.entity_type === 'MembershipRefundCashHandoff') return 'Membership refund cash handover started';
+  if (entry.entity_type === 'MembershipRefundProviderAction') return 'Membership provider refund started';
+  if (entry.entity_type === 'MembershipRefundSettlement') return 'Membership refund settled';
+  if (entry.entity_type === 'MembershipRefundResolution') return 'Unpaid membership refund withdrawn';
   if (entry.entity_type === 'Customer') return textValue(entry, 'phone') || 'Customer profile added';
   if (entry.entity_type === 'User') return textValue(entry, 'email') || 'User account added';
   if (entry.entity_type === 'Expense') return 'Expense recorded';
@@ -635,6 +657,24 @@ function AuditDetailModal({ entry, onClose }: { entry: AuditEntryDTO; onClose: (
         <Row label="When" value={new Date(entry.created_at).toLocaleString('en-IN')}/>
         <Row label="Who" value={entry.actor_name ? `${entry.actor_name} (${entry.actor_email || '—'})` : 'system'}/>
         <Row label="Record" value={`${entityLabel(entry.entity_type)} · ${entry.entity_id}`}/>
+        <Row label="Connection" value={auditConnection(entry)}/>
+        {entry.terminal_id && <Row label="Terminal" value={entry.terminal_id}/>}
+        {entry.client_platform && (
+          <Row
+            label="Client"
+            value={`${entry.client_platform}${entry.client_version_code ? ` build ${entry.client_version_code}` : ''}`}
+          />
+        )}
+        {entry.client_reported_at && (
+          <Row
+            label="Device-reported time"
+            value={`${new Date(entry.client_reported_at).toLocaleString('en-IN')} (not authoritative)`}
+          />
+        )}
+        {entry.synced_at && <Row label="Accepted by server" value={new Date(entry.synced_at).toLocaleString('en-IN')}/>}
+        {entry.reason && <Row label="Reason / comment" value={entry.reason}/>}
+        {entry.client_action_id && <Row label="Client action ID" value={entry.client_action_id}/>}
+        {entry.request_id && <Row label="Request ID" value={entry.request_id}/>}
         {entry.ip && <Row label="From IP" value={entry.ip}/>}
 
         {entry.action === 'update' && changed.length > 0 && (
@@ -687,6 +727,12 @@ function AuditDetailModal({ entry, onClose }: { entry: AuditEntryDTO; onClose: (
       </div>
     </Modal>
   );
+}
+
+function auditConnection(entry: AuditEntryDTO): string {
+  if (entry.client_was_offline === true) return 'Captured offline and later synced';
+  if (entry.client_was_offline === false) return 'Online';
+  return 'Legacy / system action (not reported)';
 }
 
 function Row({ label, value }: { label: string; value: string }) {

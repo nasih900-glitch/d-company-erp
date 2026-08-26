@@ -21,6 +21,7 @@ import {
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   reservations, gaming, tables,
@@ -425,6 +426,12 @@ function BookingForm({ onClose, onSuccess }: {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
       if (!form.station_id) throw new Error('Select a station.');
+      const depositMinor = form.deposit_rupees
+        ? parseRupeesToMinor(form.deposit_rupees)
+        : undefined;
+      if (depositMinor === null) {
+        throw new Error('Deposit must be a non-negative amount with at most two decimals.');
+      }
       await gaming.createBooking({
         station_id: form.station_id,
         guest_name: form.guest_name.trim(),
@@ -432,9 +439,7 @@ function BookingForm({ onClose, onSuccess }: {
         contact: form.contact.trim() || undefined,
         starts_at: new Date(form.starts_at).toISOString(),
         ends_at: new Date(form.ends_at).toISOString(),
-        deposit_minor: form.deposit_rupees
-          ? Math.round(parseFloat(form.deposit_rupees) * 100)
-          : undefined,
+        deposit_minor: depositMinor,
       });
       onSuccess();
     } catch (e) {

@@ -22,14 +22,21 @@ import {
 import { LIVE_MODE } from '@/lib/demo';
 import { INGREDIENTS } from '@/lib/demo-data';
 import { inr, inrShort } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import {
   inventory, settings, type IngredientDTO, type SupplierDTO, type BranchDTO,
 } from '@/lib/erp-api';
+import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 
 type Tab = 'ingredients' | 'suppliers';
+type DeleteTarget =
+  | { kind: 'ingredient'; item: IngredientDTO }
+  | { kind: 'supplier'; item: SupplierDTO };
 
 export default function InventoryScreen() {
+  const notifications = useNotifications();
   const [tab, setTab] = useState<Tab>('ingredients');
   const [ingredients, setIngredients] = useState<IngredientDTO[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierDTO[]>([]);
@@ -43,6 +50,8 @@ export default function InventoryScreen() {
   const [adjustIng, setAdjustIng] = useState<IngredientDTO | null>(null);
   const [addSupOpen, setAddSupOpen] = useState(false);
   const [editSup, setEditSup] = useState<SupplierDTO | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -82,15 +91,28 @@ export default function InventoryScreen() {
       .slice(0, 5);
   }, [ingredients]);
 
-  async function onDelete(i: IngredientDTO) {
-    if (!confirm(`Delete ingredient '${i.name}'? Existing batches stay in audit trail.`)) return;
-    try { await inventory.deleteIngredient(i.id); await load(); }
-    catch (e) { alert((e as Error).message); }
-  }
-  async function onDeleteSupplier(s: SupplierDTO) {
-    if (!confirm(`Delete supplier '${s.name}'?`)) return;
-    try { await inventory.deleteSupplier(s.id); await load(); }
-    catch (e) { alert((e as Error).message); }
+  async function confirmDelete() {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      if (deleteTarget.kind === 'ingredient') {
+        await inventory.deleteIngredient(deleteTarget.item.id);
+      } else {
+        await inventory.deleteSupplier(deleteTarget.item.id);
+      }
+      const { kind, item } = deleteTarget;
+      setDeleteTarget(null);
+      await load();
+      notifications.success(`${item.name} was deleted.`, {
+        title: `${kind === 'ingredient' ? 'Ingredient' : 'Supplier'} deleted`,
+      });
+    } catch (e) {
+      notifications.error((e as Error).message, {
+        title: `Could not delete ${deleteTarget.kind}`,
+      });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   return (
@@ -171,26 +193,73 @@ export default function InventoryScreen() {
           rows={ingredients}
           onEdit={setEditIng}
           onAdjust={setAdjustIng}
-          onDelete={onDelete}
+          onDelete={(item) => setDeleteTarget({ kind: 'ingredient', item })}
         />
       ) : (
-        <SuppliersList rows={suppliers} onEdit={setEditSup} onDelete={onDeleteSupplier}/>
+        <SuppliersList
+          rows={suppliers}
+          onEdit={setEditSup}
+          onDelete={(item) => setDeleteTarget({ kind: 'supplier', item })}
+        />
       )}
 
-      {addIngOpen && <IngredientForm onClose={() => setAddIngOpen(false)}
-        onSuccess={() => { setAddIngOpen(false); load(); }}/>}
-      {editIng && <IngredientForm ingredient={editIng} onClose={() => setEditIng(null)}
-        onSuccess={() => { setEditIng(null); load(); }}/>}
-      {grnOpen && <GRNForm ingredients={ingredients} suppliers={suppliers}
-        branches={branches} onClose={() => setGrnOpen(false)}
-        onSuccess={() => { setGrnOpen(false); load(); }}/>}
-      {adjustIng && <AdjustmentForm ingredient={adjustIng} branches={branches}
-        onClose={() => setAdjustIng(null)}
-        onSuccess={() => { setAdjustIng(null); load(); }}/>}
-      {addSupOpen && <SupplierForm onClose={() => setAddSupOpen(false)}
-        onSuccess={() => { setAddSupOpen(false); load(); }}/>}
-      {editSup && <SupplierForm supplier={editSup} onClose={() => setEditSup(null)}
-        onSuccess={() => { setEditSup(null); load(); }}/>}
+      {addIngOpen && (
+        <IngredientForm onClose={() => setAddIngOpen(false)} onSuccess={() => {
+          setAddIngOpen(false);
+          void load();
+          notifications.success('The ingredient was added.', { title: 'Ingredient saved' });
+        }}/>
+      )}
+      {editIng && (
+        <IngredientForm ingredient={editIng} onClose={() => setEditIng(null)} onSuccess={() => {
+          setEditIng(null);
+          void load();
+          notifications.success('The ingredient was updated.', { title: 'Changes saved' });
+        }}/>
+      )}
+      {grnOpen && (
+        <GRNForm ingredients={ingredients} suppliers={suppliers} branches={branches}
+          onClose={() => setGrnOpen(false)} onSuccess={() => {
+          setGrnOpen(false);
+          void load();
+          notifications.success('The stock receipt was recorded.', { title: 'GRN saved' });
+          }}/>
+      )}
+      {adjustIng && (
+        <AdjustmentForm ingredient={adjustIng} branches={branches} onClose={() => setAdjustIng(null)}
+          onSuccess={() => {
+          setAdjustIng(null);
+          void load();
+          notifications.success('The stock adjustment was recorded.', { title: 'Stock updated' });
+          }}/>
+      )}
+      {addSupOpen && (
+        <SupplierForm onClose={() => setAddSupOpen(false)} onSuccess={() => {
+          setAddSupOpen(false);
+          void load();
+          notifications.success('The supplier was added.', { title: 'Supplier saved' });
+        }}/>
+      )}
+      {editSup && (
+        <SupplierForm supplier={editSup} onClose={() => setEditSup(null)} onSuccess={() => {
+          setEditSup(null);
+          void load();
+          notifications.success('The supplier was updated.', { title: 'Changes saved' });
+        }}/>
+      )}
+      {deleteTarget && (
+        <ConfirmModal
+          title={`Delete ${deleteTarget.kind}`}
+          message={deleteTarget.kind === 'ingredient'
+            ? `Delete ingredient '${deleteTarget.item.name}'? Existing batches stay in the audit trail.`
+            : `Delete supplier '${deleteTarget.item.name}'?`}
+          confirmLabel={`Delete ${deleteTarget.kind}`}
+          danger
+          busy={deleteBusy}
+          onConfirm={() => { void confirmDelete(); }}
+          onCancel={() => { if (!deleteBusy) setDeleteTarget(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -518,15 +587,27 @@ function GRNForm({
     e.preventDefault();
     if (!branchId) { setErr('select a branch'); return; }
     if (!supplierId) { setErr('select a supplier'); return; }
-    const linesOut = lines
-      .filter((ln) => ln.ingredient_id && ln.qty)
-      .map((ln) => ({
-        ingredient_id: ln.ingredient_id,
-        qty: parseFloat(ln.qty),
-        unit_cost_minor: Math.round(parseFloat(ln.unit_cost_rupees || '0') * 100),
-        expires_at: ln.expires_at ? new Date(ln.expires_at).toISOString() : undefined,
-        lot_code: ln.lot_code.trim() || undefined,
-      }));
+    let linesOut;
+    try {
+      linesOut = lines
+        .filter((ln) => ln.ingredient_id && ln.qty)
+        .map((ln, index) => {
+          const unitCostMinor = parseRupeesToMinor(ln.unit_cost_rupees);
+          if (unitCostMinor === null) {
+            throw new Error(`Line ${index + 1}: enter unit cost with at most two decimals.`);
+          }
+          return {
+            ingredient_id: ln.ingredient_id,
+            qty: parseFloat(ln.qty),
+            unit_cost_minor: unitCostMinor,
+            expires_at: ln.expires_at ? new Date(ln.expires_at).toISOString() : undefined,
+            lot_code: ln.lot_code.trim() || undefined,
+          };
+        });
+    } catch (error) {
+      setErr((error as Error).message);
+      return;
+    }
     if (!linesOut.length) { setErr('add at least one line'); return; }
     setBusy(true); setErr(null);
     try {

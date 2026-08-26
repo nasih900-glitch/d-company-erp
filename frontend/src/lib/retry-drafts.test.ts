@@ -9,6 +9,7 @@ import {
   hasLockedTableRetryOperation,
   hasBenefitCoveredZeroBalance,
   hasCollectibleCheckoutBalance,
+  isCheckoutClaimRejection,
   isStaleCheckoutBalanceRejection,
   isTableDraftHydratedForKey,
   normalizePosRetryDraft,
@@ -128,6 +129,10 @@ describe('POS checkout retry drafts', () => {
       pendingOrderId: 'order-1',
       orderTotalMinor: 42000,
       paymentAmountMinor: 42000,
+      checkoutClaimRequired: true,
+      checkoutClaimToken: 'claim-token-1',
+      checkoutClaimExpiresAt: '2026-08-25T12:00:00Z',
+      checkoutClaimOrderVersion: 7,
       snapshot: {
         shiftId: 'shift-1',
         cart: [{ itemId: 'tea', qty: 2 }],
@@ -156,6 +161,20 @@ describe('POS checkout retry drafts', () => {
 
   it('round-trips the key, request snapshot, resuming order, and pending order', () => {
     expect(normalizePosRetryDraft(JSON.parse(JSON.stringify(retryDraft)))).toEqual(retryDraft);
+  });
+
+  it('fails closed when restored checkout-claim credentials are malformed', () => {
+    const malformed = JSON.parse(JSON.stringify(retryDraft));
+    malformed.retry.checkoutClaimToken = '   ';
+    malformed.retry.checkoutClaimExpiresAt = 123;
+    malformed.retry.checkoutClaimOrderVersion = 1.5;
+
+    expect(normalizePosRetryDraft(malformed)?.retry).toMatchObject({
+      checkoutClaimRequired: true,
+    });
+    expect(normalizePosRetryDraft(malformed)?.retry?.checkoutClaimToken).toBeUndefined();
+    expect(normalizePosRetryDraft(malformed)?.retry?.checkoutClaimExpiresAt).toBeUndefined();
+    expect(normalizePosRetryDraft(malformed)?.retry?.checkoutClaimOrderVersion).toBeUndefined();
   });
 
   it('round-trips a discount and points entered before the order existed', () => {
@@ -246,6 +265,23 @@ describe('POS checkout retry drafts', () => {
     expect(isStaleCheckoutBalanceRejection(null)).toBe(false);
   });
 
+  it('recognises the complete checkout-claim error family', () => {
+    for (const code of [
+      'checkout_claim_required',
+      'checkout_claim_conflict',
+      'checkout_claim_expired',
+      'checkout_claim_invalid',
+      'checkout_claim_stale',
+      'checkout_claim_unavailable',
+    ]) {
+      expect(isCheckoutClaimRejection(Object.assign(new Error(code), { code }))).toBe(true);
+    }
+    expect(isCheckoutClaimRejection(
+      Object.assign(new Error('connection lost'), { code: 'network_error' }),
+    )).toBe(false);
+    expect(isCheckoutClaimRejection(null)).toBe(false);
+  });
+
   it('uses a fresh canonical balance before collection but never rewrites a confirmed attempt', () => {
     const awaiting = applyCanonicalCheckoutBalance(retryDraft.retry!, {
       id: 'order-1',
@@ -302,6 +338,16 @@ describe('POS checkout retry drafts', () => {
       ...recording,
       paymentMethod: 'cash',
     })?.body.tendered_minor).toBe(8000);
+    expect(buildCheckoutPaymentSubmission({
+      ...recording,
+      paymentMethod: 'cash',
+      cashTenderedMinor: 10_000,
+    })?.body.tendered_minor).toBe(10_000);
+    expect(buildCheckoutPaymentSubmission({
+      ...recording,
+      paymentMethod: 'cash',
+      cashTenderedMinor: 7_999,
+    })).toBeNull();
     // Tip is additional money on top of the bill, never folded into
     // amount_minor — but cash tendered must cover the full collected amount.
     expect(buildCheckoutPaymentSubmission({

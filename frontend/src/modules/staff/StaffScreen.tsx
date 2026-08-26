@@ -25,6 +25,7 @@ import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
+import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const ROLE_COLOR: Record<string, string> = {
@@ -53,6 +54,7 @@ const DEFAULT_ROLES: RoleDTO[] = [
 const ROLE_DESCRIPTIONS = new Map(DEFAULT_ROLES.map((role) => [role.code, role.description]));
 
 export default function StaffScreen() {
+  const notifications = useNotifications();
   const [users, setUsers] = useState<UserDTO[]>([]);
   const [roles, setRoles] = useState<RoleDTO[]>(DEFAULT_ROLES);
   const [loading, setLoading] = useState(true);
@@ -94,10 +96,12 @@ export default function StaffScreen() {
     setDeleteBusy(true);
     try {
       await staff.deleteUser(deleteUser.id);
+      const deletedName = deleteUser.name;
       setDeleteUser(null);
       await load();
+      notifications.success(`${deletedName} was removed from staff.`, { title: 'Staff user deleted' });
     } catch (e) {
-      alert((e as Error).message);
+      notifications.error((e as Error).message, { title: 'Could not delete staff user' });
     } finally {
       setDeleteBusy(false);
     }
@@ -108,8 +112,9 @@ export default function StaffScreen() {
     try {
       await staff.updateUser(u.id, { status: next });
       await load();
+      notifications.success(`${u.name} is now ${next}.`, { title: 'Staff status updated' });
     } catch (e) {
-      alert((e as Error).message);
+      notifications.error((e as Error).message, { title: 'Could not update staff status' });
     }
   }
 
@@ -160,7 +165,11 @@ export default function StaffScreen() {
       {addOpen && (
         <AddUserModal
           onClose={() => setAddOpen(false)}
-          onSuccess={() => { setAddOpen(false); load(); }}
+          onSuccess={() => {
+            setAddOpen(false);
+            void load();
+            notifications.success('The staff account was created.', { title: 'User added' });
+          }}
         />
       )}
       {editUser && (
@@ -169,14 +178,21 @@ export default function StaffScreen() {
           roles={roles}
           currentUserId={me?.user_id ?? null}
           onClose={() => setEditUser(null)}
-          onSuccess={() => { setEditUser(null); load(); }}
+          onSuccess={() => {
+            setEditUser(null);
+            void load();
+            notifications.success('The staff account was updated.', { title: 'Changes saved' });
+          }}
         />
       )}
       {pwdUser && (
         <PasswordModal
           user={pwdUser}
           onClose={() => setPwdUser(null)}
-          onSuccess={() => setPwdUser(null)}
+          onSuccess={() => {
+            setPwdUser(null);
+            notifications.success('The password was reset.', { title: 'Password updated' });
+          }}
         />
       )}
       {deleteUser && (

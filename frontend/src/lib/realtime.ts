@@ -14,7 +14,7 @@
  * Auth is a first-message handshake, not a query-string token — the token
  * would otherwise sit in plaintext in server access logs.
  */
-import { BASE_URL } from './api';
+import { BASE_URL, readAccessToken } from './api';
 
 type Listener = () => void;
 
@@ -115,14 +115,14 @@ function scheduleReconnect() {
 }
 
 /**
- * Connects using whatever access token is currently in localStorage — read
+ * Connects using the current access token — read
  * fresh every call (including on every reconnect attempt) rather than
  * captured once, so a token rotated by the normal HTTP refresh flow while
  * the socket was briefly down doesn't leave reconnects retrying with a
  * token that's already stale.
  */
 export function connectRealtime(): void {
-  const token = localStorage.getItem('access_token');
+  const token = readAccessToken();
   if (!token) return;
   intentionallyClosed = false;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -139,7 +139,7 @@ export function connectRealtime(): void {
     const wasReconnect = reconnectAttempt > 0;
     reconnectAttempt = 0;
     lastMessageAt = Date.now();
-    socket?.send(JSON.stringify({ token: localStorage.getItem('access_token') }));
+    socket?.send(JSON.stringify({ token: readAccessToken() }));
     startWatchdog();
     // Anything that changed while we were disconnected produced a "changed"
     // frame nobody was listening to. Without this every screen keeps showing

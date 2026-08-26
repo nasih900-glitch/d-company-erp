@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
-      - run: cd frontend && npm install --no-audit --no-fund
+      - run: cd frontend && npm ci --no-audit --no-fund
       # Blocking: only prod dependencies are gated (--omit=dev). As of 2026-07-19, npm audit finds
       # real high/critical CVEs in vite/vitest, but both are devDependencies used only by the local
       # dev server and test runner — never built into or run by the shipped app. Blocking on those
@@ -84,6 +84,51 @@ jobs:
       - run: cd frontend && npm run typecheck
       - run: cd frontend && npm run test
       - run: cd frontend && npm run build
+
+  android-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Android release version guard
+        run: python3 -m unittest discover -s tests -p 'test_android_release_version.py'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android-native/*.gradle.kts
+            android-native/gradle.properties
+            android-native/gradle/wrapper/gradle-wrapper.properties
+            android-native/app/*.gradle.kts
+      - uses: android-actions/setup-android@v3
+      - name: Build, lint, and run JVM tests
+        working-directory: android-native
+        run: ./gradlew --no-daemon --stacktrace lintRelease testDebugUnitTest assembleRelease bundleRelease
+      # Room migration tests need a real Android SQLite/Room runtime. Keeping
+      # them blocking prevents a schema change from shipping an app that can no
+      # longer open an existing tablet database.
+      - name: Run Android instrumentation tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: cd android-native && ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
+      - name: Upload Android test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-native-ci-reports
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            android-native/app/build/reports/lint-results-*.html
+            android-native/app/build/reports/tests/
+            android-native/app/build/reports/androidTests/
+            android-native/app/build/test-results/
+            android-native/app/build/outputs/androidTest-results/
 
   docker:
     runs-on: ubuntu-latest

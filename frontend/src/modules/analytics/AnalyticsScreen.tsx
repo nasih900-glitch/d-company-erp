@@ -122,6 +122,9 @@ export default function AnalyticsScreen() {
                     ? [{ name: 'Hookah', value: data.revenue_hookah_minor / 100 }]
                     : []),
                   { name: 'Events', value: data.revenue_events_minor / 100 },
+                  ...(data.revenue_memberships_minor > 0
+                    ? [{ name: 'Memberships', value: data.revenue_memberships_minor / 100 }]
+                    : []),
                   ...(data.revenue_manual_collections_minor > 0
                     ? [{ name: 'Manual', value: data.revenue_manual_collections_minor / 100 }]
                     : []),

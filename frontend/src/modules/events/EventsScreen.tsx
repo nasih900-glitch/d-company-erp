@@ -21,10 +21,13 @@ import {
 import { LIVE_MODE } from '@/lib/demo';
 import { EVENTS } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import {
   events as eventsApi, type EventDTO, type EventTicketDTO,
 } from '@/lib/erp-api';
+import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 
 const TYPE_LABEL: Record<EventDTO['event_type'], string> = {
   football: '⚽ Football',
@@ -48,6 +51,7 @@ const STATUS_COLOR: Record<EventDTO['status'], string> = {
 };
 
 export default function EventsScreen() {
+  const notifications = useNotifications();
   const canManageEvents = true;
   const [rows, setRows] = useState<EventDTO[]>([]);
   const [includeP, setIncludeP] = useState(true);
@@ -57,6 +61,8 @@ export default function EventsScreen() {
   const [edit, setEdit] = useState<EventDTO | null>(null);
   const [sellingFor, setSellingFor] = useState<EventDTO | null>(null);
   const [ticketsFor, setTicketsFor] = useState<EventDTO | null>(null);
+  const [deleteEvent, setDeleteEvent] = useState<EventDTO | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -72,10 +78,20 @@ export default function EventsScreen() {
   }, [includeP]);
   useEffect(() => { void load(); }, [load]);
 
-  async function onDelete(ev: EventDTO) {
-    if (!confirm(`Delete "${ev.name}"?`)) return;
-    try { await eventsApi.delete(ev.id); await load(); }
-    catch (e) { alert((e as Error).message); }
+  async function confirmDelete() {
+    if (!deleteEvent || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await eventsApi.delete(deleteEvent.id);
+      const eventName = deleteEvent.name;
+      setDeleteEvent(null);
+      await load();
+      notifications.success(`${eventName} was deleted.`, { title: 'Event deleted' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not delete event' });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   return (
@@ -84,7 +100,7 @@ export default function EventsScreen() {
         <div>
           <h2 className="text-2xl font-bold">Events</h2>
           <p className="text-fg-muted text-sm">
-            Projector screenings · ticket sales · 18% GST (SAC 999692)
+            Projector screenings · event scheduling · existing ticket check-in
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -122,23 +138,48 @@ export default function EventsScreen() {
               ev={ev}
               canManage={canManageEvents}
               onEdit={() => setEdit(ev)}
-              onDelete={() => onDelete(ev)}
+              onDelete={() => setDeleteEvent(ev)}
               onSell={() => setSellingFor(ev)}
               onViewTickets={() => setTicketsFor(ev)}/>
           ))}
         </div>
       )}
 
-      {canManageEvents && addOpen && <EventForm onClose={() => setAddOpen(false)}
-        onSuccess={() => { setAddOpen(false); load(); }}/>}
-      {canManageEvents && edit && <EventForm event={edit} onClose={() => setEdit(null)}
-        onSuccess={() => { setEdit(null); load(); }}/>}
-      {sellingFor && <SellTicketForm event={sellingFor}
-        onClose={() => setSellingFor(null)}
-        onSuccess={() => { setSellingFor(null); load(); }}/>}
-      {ticketsFor && <TicketsModal event={ticketsFor}
-        onClose={() => setTicketsFor(null)}
-        onChange={load}/>}
+      {canManageEvents && addOpen && (
+        <EventForm onClose={() => setAddOpen(false)} onSuccess={() => {
+          setAddOpen(false);
+          void load();
+          notifications.success('The event was created.', { title: 'Event saved' });
+        }}/>
+      )}
+      {canManageEvents && edit && (
+        <EventForm event={edit} onClose={() => setEdit(null)} onSuccess={() => {
+          setEdit(null);
+          void load();
+          notifications.success('The event was updated.', { title: 'Changes saved' });
+        }}/>
+      )}
+      {sellingFor && (
+        <SellTicketForm event={sellingFor} onClose={() => setSellingFor(null)} onSuccess={() => {
+          setSellingFor(null);
+          void load();
+          notifications.success('The ticket was issued.', { title: 'Ticket saved' });
+        }}/>
+      )}
+      {ticketsFor && (
+        <TicketsModal event={ticketsFor} onClose={() => setTicketsFor(null)} onChange={load}/>
+      )}
+      {deleteEvent && (
+        <ConfirmModal
+          title="Delete event"
+          message={`Delete "${deleteEvent.name}"? Events with sold tickets cannot be deleted.`}
+          confirmLabel="Delete event"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => { void confirmDelete(); }}
+          onCancel={() => { if (!deleteBusy) setDeleteEvent(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -196,8 +237,9 @@ function EventCard({
 
       <div className="flex gap-1 flex-wrap pt-3 border-t border-bg-border/60">
         <button className="btn btn-primary !min-h-[32px] !py-1 !px-2 text-xs" onClick={onSell}
-          disabled={full || ev.status !== 'scheduled' && ev.status !== 'live'}>
-          <TicketIcon size={11}/> Sell ticket
+          disabled
+          title="Ticket issuing is disabled until each ticket is billed and paid through POS.">
+          <TicketIcon size={11}/> POS billing required
         </button>
         <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs" onClick={onViewTickets}>
           Tickets ({ev.sold})
@@ -214,6 +256,9 @@ function EventCard({
           </>
         )}
       </div>
+      <p className="mt-2 text-[11px] text-fg-muted">
+        New tickets are temporarily disabled until POS payment, invoice, shift, and GST reconciliation are connected.
+      </p>
     </div>
   );
 }
@@ -245,7 +290,10 @@ function EventForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      const base_price_minor = Math.round(parseFloat(form.price_rupees || '0') * 100);
+      const base_price_minor = parseRupeesToMinor(form.price_rupees);
+      if (base_price_minor === null) {
+        throw new Error('Ticket price must be a non-negative amount with at most two decimals.');
+      }
       const capacity = parseInt(form.capacity, 10);
       const body = {
         name: form.name.trim(),
@@ -464,9 +512,11 @@ function SellTicketForm({
 function TicketsModal({
   event, onClose, onChange,
 }: { event: EventDTO; onClose: () => void; onChange: () => void }) {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<EventTicketDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [checkingInId, setCheckingInId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -477,8 +527,18 @@ function TicketsModal({
   useEffect(() => { void load(); }, [load]);
 
   async function checkIn(t: EventTicketDTO) {
-    try { await eventsApi.checkIn(event.id, t.id); await load(); onChange(); }
-    catch (e) { alert((e as Error).message); }
+    if (checkingInId) return;
+    setCheckingInId(t.id);
+    try {
+      await eventsApi.checkIn(event.id, t.id);
+      await load();
+      onChange();
+      notifications.success(`${t.ticket_no} is checked in.`, { title: 'Ticket updated' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not check in ticket' });
+    } finally {
+      setCheckingInId(null);
+    }
   }
 
   return (
@@ -518,8 +578,9 @@ function TicketsModal({
                 <td className="text-right">
                   {t.status === 'sold' && (
                     <button className="btn btn-ghost !min-h-[28px] !py-0.5 !px-2 text-xs"
-                      onClick={() => checkIn(t)}>
-                      <Check size={11}/> Check in
+                      disabled={checkingInId !== null}
+                      onClick={() => { void checkIn(t); }}>
+                      {checkingInId === t.id ? <Loader2 className="animate-spin" size={11}/> : <Check size={11}/>} Check in
                     </button>
                   )}
                 </td>

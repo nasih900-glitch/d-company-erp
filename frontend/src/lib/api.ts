@@ -23,10 +23,152 @@ const BASE_URL =
   '/api/v1';
 
 const API_TIMEOUT_MS = 20_000;
+const COOKIE_SESSION_HEADER = 'X-Session-Transport';
+const COOKIE_SESSION_SIGNED_OUT_KEY = 'dcompany_cookie_session_signed_out';
+
+/**
+ * HttpOnly refresh cookies are safe only when the browser and API are the same
+ * origin. Capacitor/file shells and deliberately separate API hosts keep the
+ * native-compatible JSON token contract instead.
+ */
+export function isSameOriginHttpApi(apiUrl: string, pageUrl: string): boolean {
+  try {
+    const page = new URL(pageUrl);
+    const resolvedApi = new URL(apiUrl, page);
+    return (
+      (page.protocol === 'http:' || page.protocol === 'https:') &&
+      resolvedApi.origin === page.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
+export const COOKIE_SESSION_MODE =
+  typeof window !== 'undefined' &&
+  isSameOriginHttpApi(BASE_URL, window.location.href);
+
+type CookieRefreshState = 'unknown' | 'available' | 'absent';
+let cookieRefreshState: CookieRefreshState = 'unknown';
+let volatileAccessToken: string | null = null;
+let volatilePricingToken: string | null = null;
+let volatilePricingExpiresAt = 0;
+let legacyRefreshForCookieMigration: string | null = null;
+
+function readStorage(key: string): string | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* storage may be unavailable */ }
+}
+
+function removeStorage(...keys: string[]): void {
+  try { keys.forEach((key) => localStorage.removeItem(key)); } catch { /* no-op */ }
+}
+
+if (COOKIE_SESSION_MODE) {
+  // One release transition may still have the former plaintext refresh token.
+  // Move it into memory immediately, erase the disk copy, then exchange it for
+  // the HttpOnly cookie during normal boot. A signed-out marker suppresses
+  // migration so a failed offline logout cannot silently sign the user back in.
+  if (readStorage(COOKIE_SESSION_SIGNED_OUT_KEY) !== '1') {
+    legacyRefreshForCookieMigration = readStorage('refresh_token');
+  }
+  removeStorage(
+    'access_token',
+    'refresh_token',
+    'pricing_token',
+    'pricing_token_expires_at',
+  );
+}
+
+export function sessionTransportHeaders(): Record<string, string> | undefined {
+  return COOKIE_SESSION_MODE ? { [COOKIE_SESSION_HEADER]: 'cookie' } : undefined;
+}
+
+export function readAccessToken(): string | null {
+  return COOKIE_SESSION_MODE ? volatileAccessToken : readStorage('access_token');
+}
+
+export function installSessionTokens(accessToken: string, refreshToken?: string): void {
+  if (!accessToken.trim()) throw new Error('The server returned an empty access token.');
+  volatileAccessToken = accessToken;
+  if (COOKIE_SESSION_MODE) {
+    cookieRefreshState = 'available';
+    legacyRefreshForCookieMigration = null;
+    removeStorage('access_token', 'refresh_token', COOKIE_SESSION_SIGNED_OUT_KEY);
+    return;
+  }
+  if (!refreshToken?.trim()) throw new Error('The server returned an empty refresh token.');
+  writeStorage('access_token', accessToken);
+  writeStorage('refresh_token', refreshToken);
+}
+
+export function clearPricingToken(): void {
+  volatilePricingToken = null;
+  volatilePricingExpiresAt = 0;
+  removeStorage('pricing_token', 'pricing_token_expires_at');
+}
+
+export function storePricingToken(token: string, expiresInSeconds: number): void {
+  if (!token.trim() || !Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+    throw new Error('The server returned an invalid pricing unlock.');
+  }
+  const expiresAt = Date.now() + expiresInSeconds * 1000;
+  volatilePricingToken = token;
+  volatilePricingExpiresAt = expiresAt;
+  if (!COOKIE_SESSION_MODE) {
+    writeStorage('pricing_token', token);
+    writeStorage('pricing_token_expires_at', String(expiresAt));
+  } else {
+    // Remove credentials left by a previous web build. Protected unlocks are
+    // intentionally memory-only and must be re-entered after a page restart.
+    removeStorage('pricing_token', 'pricing_token_expires_at');
+  }
+}
+
+export function readPricingToken(): string | null {
+  const token = COOKIE_SESSION_MODE
+    ? volatilePricingToken
+    : readStorage('pricing_token');
+  const expiresAt = COOKIE_SESSION_MODE
+    ? volatilePricingExpiresAt
+    : Number(readStorage('pricing_token_expires_at') || '0');
+  if (token && expiresAt > Date.now()) return token;
+  clearPricingToken();
+  return null;
+}
+
+export function hasActivePricingToken(): boolean {
+  return readPricingToken() !== null;
+}
+
+export function clearSessionCredentials(): void {
+  volatileAccessToken = null;
+  legacyRefreshForCookieMigration = null;
+  cookieRefreshState = 'absent';
+  removeStorage('access_token', 'refresh_token');
+  clearPricingToken();
+  if (COOKIE_SESSION_MODE) writeStorage(COOKIE_SESSION_SIGNED_OUT_KEY, '1');
+}
+
+export function hasSessionCandidate(): boolean {
+  if (!COOKIE_SESSION_MODE) return readAccessToken() !== null;
+  return (
+    cookieRefreshState !== 'absent' &&
+    readStorage(COOKIE_SESSION_SIGNED_OUT_KEY) !== '1'
+  );
+}
 
 export const api = axios.create({
   baseURL: BASE_URL,
   timeout: API_TIMEOUT_MS,
+  withCredentials: COOKIE_SESSION_MODE,
   headers: { 'Content-Type': 'application/json' },
   // FastAPI's `list[str] | None = Query(alias=...)` expects repeated plain
   // keys ("status=a&status=b"). Axios's default array serializer emits
@@ -42,7 +184,7 @@ export { BASE_URL };
 // ---------------------------------------------------------------- request side
 // Inject access token + tenant headers.
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token');
+  const token = readAccessToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   const url = String(config.url || '');
   // These two routes validate identity/terminal state. Sending an unvalidated
@@ -50,14 +192,8 @@ api.interceptors.request.use((config) => {
   const validatesContext = url.includes('/auth/') || url.includes('/settings/terminals');
   const terminalId = validatesContext ? null : readStoredTerminalId();
   if (terminalId) config.headers['X-Terminal-Id'] = terminalId;
-  const pricingToken = localStorage.getItem('pricing_token');
-  const pricingExpiresAt = Number(localStorage.getItem('pricing_token_expires_at') || '0');
-  if (pricingToken && pricingExpiresAt > Date.now()) {
-    config.headers['X-Pricing-Token'] = pricingToken;
-  } else {
-    localStorage.removeItem('pricing_token');
-    localStorage.removeItem('pricing_token_expires_at');
-  }
+  const pricingToken = readPricingToken();
+  if (pricingToken) config.headers['X-Pricing-Token'] = pricingToken;
   return config;
 });
 
@@ -89,10 +225,8 @@ function forceLogout(): void {
   // Credentials only. The terminal ID and the open-shift context are device
   // identity, not credentials — wiping them here stranded the POS behind a
   // terminal-selection prompt (2+ terminals) with an apparently vanished cart.
-  localStorage.removeItem('access_token');
-  localStorage.removeItem('refresh_token');
-  localStorage.removeItem('pricing_token');
-  localStorage.removeItem('pricing_token_expires_at');
+  clearSessionCredentials();
+  void clearBrowserRefreshCookie();
   if (forcedLogoutHandler) {
     forcedLogoutHandler();
     return;
@@ -112,7 +246,7 @@ function forceLogout(): void {
  */
 function isRefreshRejection(error: unknown): boolean {
   // Nothing left to preserve (e.g. "no refresh token") — treat as definitive.
-  if (!localStorage.getItem('refresh_token')) return true;
+  if (!COOKIE_SESSION_MODE && !readStorage('refresh_token')) return true;
   const status = axios.isAxiosError(error) ? error.response?.status : undefined;
   return status === 401 || status === 403;
 }
@@ -120,20 +254,68 @@ function isRefreshRejection(error: unknown): boolean {
 async function refreshAccessToken(): Promise<string> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
-    const refresh = localStorage.getItem('refresh_token');
-    if (!refresh) throw new Error('no refresh token');
+    const refresh = COOKIE_SESSION_MODE
+      ? legacyRefreshForCookieMigration
+      : readStorage('refresh_token');
+    if (!COOKIE_SESSION_MODE && !refresh) throw new Error('no refresh token');
     const r = await axios.post<{ access_token: string; refresh_token: string }>(
       `${BASE_URL}/auth/refresh`,
-      { refresh_token: refresh },
-      { timeout: API_TIMEOUT_MS },
+      COOKIE_SESSION_MODE
+        ? (refresh ? { refresh_token: refresh } : {})
+        : { refresh_token: refresh },
+      {
+        timeout: API_TIMEOUT_MS,
+        withCredentials: COOKIE_SESSION_MODE,
+        headers: sessionTransportHeaders(),
+      },
     );
-    localStorage.setItem('access_token', r.data.access_token);
-    localStorage.setItem('refresh_token', r.data.refresh_token);
+    installSessionTokens(r.data.access_token, r.data.refresh_token);
     return r.data.access_token;
   })().finally(() => {
     refreshPromise = null;
   });
   return refreshPromise;
+}
+
+export async function restoreSessionFromRefresh(): Promise<string> {
+  if (!COOKIE_SESSION_MODE || !hasSessionCandidate()) {
+    const error: ApiError = new Error('no browser session');
+    error.code = 'unauthorized';
+    error.status = 401;
+    throw error;
+  }
+  try {
+    return await refreshAccessToken();
+  } catch (error) {
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+    if (status === 401 || status === 403) clearSessionCredentials();
+    const enriched: ApiError = new Error(
+      axios.isAxiosError(error) ? error.message : (error as Error).message,
+    );
+    enriched.code = status ? 'unauthorized' : 'network_error';
+    enriched.status = status;
+    throw enriched;
+  }
+}
+
+/** Best-effort server-side deletion of the HttpOnly browser credential. */
+export async function clearBrowserRefreshCookie(): Promise<void> {
+  if (!COOKIE_SESSION_MODE) return;
+  try {
+    await axios.post(
+      `${BASE_URL}/auth/logout`,
+      {},
+      {
+        timeout: API_TIMEOUT_MS,
+        withCredentials: true,
+        headers: sessionTransportHeaders(),
+      },
+    );
+  } catch {
+    // Local state is still signed out and carries a non-secret suppression
+    // marker. The cookie is SameSite+HttpOnly and expires server-side; the next
+    // online login/logout attempt will replace or remove it.
+  }
 }
 
 api.interceptors.response.use(
@@ -146,7 +328,9 @@ api.interceptors.response.use(
     // we don't loop. Skip if there is no refresh token saved.
     const url = String(cfg?.url || '');
     const isAuthRoute = url.includes('/auth/login') || url.includes('/auth/refresh');
-    const hasRefresh = !!localStorage.getItem('refresh_token');
+    const hasRefresh = COOKIE_SESSION_MODE
+      ? hasSessionCandidate()
+      : !!readStorage('refresh_token');
 
     if (
       err.response?.status === 401 &&

@@ -2,13 +2,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 
+import { NotificationProvider } from '@/components/ui/Notifications';
 import KitchenScreen from './KitchenScreen';
 
 describe('KitchenScreen', () => {
   it('renders an exit control that returns to POS', () => {
     const markup = renderToStaticMarkup(
       <StaticRouter location="/kitchen">
-        <KitchenScreen />
+        <NotificationProvider>
+          <KitchenScreen />
+        </NotificationProvider>
       </StaticRouter>,
     );
 

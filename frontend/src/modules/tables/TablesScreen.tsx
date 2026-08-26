@@ -37,7 +37,9 @@ import {
   type TableCartDraft,
 } from '@/lib/retry-drafts';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard, Skeleton } from '@/components/ui/Skeleton';
 
 // Food/drink/dessert only — gaming and shisha (hookah) sessions bill
@@ -79,6 +81,7 @@ const STATUS_NEXT: Record<TableDTO['status'], TableDTO['status']> = {
 const TABLES_POLL_MS = 120_000;
 
 export default function TablesScreen() {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<TableDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +89,8 @@ export default function TablesScreen() {
   const [edit, setEdit] = useState<TableDTO | null>(null);
   const [orderFor, setOrderFor] = useState<TableDTO | null>(null);
   const [manageMode, setManageMode] = useState(false);
+  const [deleteTable, setDeleteTable] = useState<TableDTO | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -111,14 +116,30 @@ export default function TablesScreen() {
   }, []);
 
   async function cycleStatus(t: TableDTO) {
-    try { await tables.updateStatus(t.id, STATUS_NEXT[t.status]); await load(); }
-    catch (e) { alert((e as Error).message); }
+    try {
+      const nextStatus = STATUS_NEXT[t.status];
+      await tables.updateStatus(t.id, nextStatus);
+      await load();
+      notifications.success(`${t.code} is now ${nextStatus}.`, { title: 'Table status updated' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not update table' });
+    }
   }
 
-  async function onDelete(t: TableDTO) {
-    if (!confirm(`Delete table ${t.code}?`)) return;
-    try { await tables.delete(t.id); await load(); }
-    catch (e) { alert((e as Error).message); }
+  async function confirmDelete() {
+    if (!deleteTable || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await tables.delete(deleteTable.id);
+      const tableCode = deleteTable.code;
+      setDeleteTable(null);
+      await load();
+      notifications.success(`${tableCode} was removed.`, { title: 'Table deleted' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not delete table' });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   const summary = {
@@ -178,7 +199,7 @@ export default function TablesScreen() {
                     <button className="text-fg-muted hover:text-accent p-1" onClick={() => setEdit(t)}>
                       <Edit2 size={12}/>
                     </button>
-                    <button className="text-fg-muted hover:text-accent-bad p-1" onClick={() => onDelete(t)}>
+                    <button className="text-fg-muted hover:text-accent-bad p-1" onClick={() => setDeleteTable(t)}>
                       <Trash2 size={12}/>
                     </button>
                   </div>
@@ -200,10 +221,31 @@ export default function TablesScreen() {
 
       {orderFor && <TableOrderView table={orderFor}
         onClose={() => { setOrderFor(null); load(); }}/>}
-      {addOpen && <TableForm onClose={() => setAddOpen(false)}
-        onSuccess={() => { setAddOpen(false); load(); }}/>}
-      {edit && <TableForm table={edit} onClose={() => setEdit(null)}
-        onSuccess={() => { setEdit(null); load(); }}/>}
+      {addOpen && (
+        <TableForm onClose={() => setAddOpen(false)} onSuccess={() => {
+          setAddOpen(false);
+          void load();
+          notifications.success('The table was added.', { title: 'Table saved' });
+        }}/>
+      )}
+      {edit && (
+        <TableForm table={edit} onClose={() => setEdit(null)} onSuccess={() => {
+          setEdit(null);
+          void load();
+          notifications.success('The table details were updated.', { title: 'Changes saved' });
+        }}/>
+      )}
+      {deleteTable && (
+        <ConfirmModal
+          title="Delete table"
+          message={`Delete table ${deleteTable.code}? This cannot be undone.`}
+          confirmLabel="Delete table"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => { void confirmDelete(); }}
+          onCancel={() => { if (!deleteBusy) setDeleteTable(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -211,6 +253,7 @@ export default function TablesScreen() {
 type CartLine = { item: MenuItemDTO; qty: number; note: string };
 
 function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => void }) {
+  const notifications = useNotifications();
   const { me, terminalId, terminalReady } = useAuth();
   const draftKey = me?.company_id && me.branch_id && me.user_id && terminalId
     ? scopedTableCartDraftKey(
@@ -234,6 +277,7 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
   const [sending, setSending] = useState(false);
   const [sendingToPos, setSendingToPos] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState(false);
+  const [cancelPromptOpen, setCancelPromptOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -450,6 +494,9 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
       setCart([]);
       setCartDraft(null);
       if (draftKey) clearDraft(draftKey);
+      notifications.success(`Items for Table ${table.code} were sent to Kitchen.`, {
+        title: 'Kitchen ticket updated',
+      });
     } catch (e) {
       if (isAmbiguousApiError(e)) {
         setError(`${(e as Error).message} The result is unknown; use Retry Send to Kitchen to resume safely.`);
@@ -468,17 +515,20 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
     setSendingToPos(true); setError(null);
     try {
       setOrder(await pos.sendToPos(order.id));
-    } catch (e) { setError((e as Error).message); }
+      notifications.success(`Table ${table.code} is ready to select and bill in POS.`, {
+        title: 'Sent to POS',
+      });
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      notifications.error(message, { title: 'Could not send order to POS' });
+    }
     finally { setSendingToPos(false); }
   }
 
-  async function cancelOrder() {
+  async function cancelOrder(reason: string) {
     if (!order || hasLockedRetryOperation) return;
-    const reason = prompt(
-      `Why are you cancelling the open order for Table ${table.code}?\n\n`
-      + 'The reason will remain in the audit trail.',
-    );
-    if (!reason?.trim()) return;
+    if (!reason.trim()) return;
     setCancellingOrder(true); setError(null);
     try {
       await pos.voidOrder(order.id, reason.trim());
@@ -486,12 +536,21 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
       setCart([]);
       setCartDraft(null);
       if (draftKey) clearDraft(draftKey);
-    } catch (e) { setError((e as Error).message); }
+      setCancelPromptOpen(false);
+      notifications.success(`The Table ${table.code} order was cancelled with an audit reason.`, {
+        title: 'Order cancelled',
+      });
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      notifications.error(message, { title: 'Could not cancel order' });
+    }
     finally { setCancellingOrder(false); }
   }
 
   return (
-    <Modal open onClose={onClose} title={`Table ${table.code}`} size="lg">
+    <>
+      <Modal open onClose={onClose} title={`Table ${table.code}`} size="lg">
       {loading ? (
         <div className="space-y-2">
           <Skeleton className="h-4 w-1/3" />
@@ -612,7 +671,7 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
             {order?.status === 'open' && cart.length === 0 && !hasLockedRetryOperation && (
               <button className="btn btn-ghost text-accent-bad"
                 disabled={cancellingOrder || sendingToPos}
-                onClick={cancelOrder}>
+                onClick={() => setCancelPromptOpen(true)}>
                 {cancellingOrder
                   ? <Loader2 className="animate-spin" size={14}/>
                   : <Trash2 size={14}/>} Cancel order
@@ -632,7 +691,20 @@ function TableOrderView({ table, onClose }: { table: TableDTO; onClose: () => vo
           </div>
         </div>
       )}
-    </Modal>
+      </Modal>
+      {cancelPromptOpen && order && (
+        <PromptModal
+          title={`Cancel Table ${table.code} order`}
+          label="Audit reason (required). The reason remains in the audit trail."
+          placeholder="Why is this order being cancelled?"
+          confirmLabel="Cancel order"
+          danger
+          busy={cancellingOrder}
+          onSubmit={(reason) => { void cancelOrder(reason); }}
+          onCancel={() => { if (!cancellingOrder) setCancelPromptOpen(false); }}
+        />
+      )}
+    </>
   );
 }
 

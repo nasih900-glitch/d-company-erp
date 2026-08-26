@@ -1,5 +1,17 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, setForcedLogoutHandler, type ApiError } from '@/lib/api';
+import {
+  COOKIE_SESSION_MODE,
+  api,
+  clearBrowserRefreshCookie,
+  clearSessionCredentials,
+  hasSessionCandidate,
+  installSessionTokens,
+  readAccessToken,
+  restoreSessionFromRefresh,
+  sessionTransportHeaders,
+  setForcedLogoutHandler,
+  type ApiError,
+} from '@/lib/api';
 import { DEMO_MODE, DEMO_USER } from '@/lib/demo';
 import type { TerminalDTO } from '@/lib/erp-api';
 import {
@@ -80,10 +92,7 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
 // cart look lost. resolveTerminalClaim revalidates the stored terminal against
 // the server on every login, so keeping it is not a trust shortcut.
 function clearStoredSession() {
-  localStorage.removeItem('access_token');
-  localStorage.removeItem('refresh_token');
-  localStorage.removeItem('pricing_token');
-  localStorage.removeItem('pricing_token_expires_at');
+  clearSessionCredentials();
 }
 
 interface AuthState {
@@ -173,8 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let controller: AbortController | null = null;
     let timeout = 0;
 
-    const token = localStorage.getItem('access_token');
-    if (!token) {
+    if (!hasSessionCandidate()) {
       setLoading(false);
       return () => {
         cancelled = true;
@@ -186,6 +194,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       controller = active;
       timeout = window.setTimeout(() => active.abort(), budgetMs);
       try {
+        if (COOKIE_SESSION_MODE && !readAccessToken()) {
+          await restoreSessionFromRefresh();
+        }
         const r = await api.get<Me>('/auth/me', { signal: active.signal });
         const claim = await resolveTerminalClaim(r.data, active.signal);
         if (!cancelled) applyTerminalClaim(claim);
@@ -234,9 +245,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const r = await api.post<{ access_token: string; refresh_token: string }>(
       '/auth/login',
       { email: email.trim().toLowerCase(), password },
+      { headers: sessionTransportHeaders() },
     );
-    localStorage.setItem('access_token', r.data.access_token);
-    localStorage.setItem('refresh_token', r.data.refresh_token);
+    installSessionTokens(r.data.access_token, r.data.refresh_token);
     const meRes = await api.get<Me>('/auth/me');
     const claim = await resolveTerminalClaim(meRes.data);
     applyTerminalClaim(claim);
@@ -260,6 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     clearStoredSession();
+    void clearBrowserRefreshCookie();
     setTerminalId(null);
     setTerminalOptions([]);
     setTerminalIssue(null);

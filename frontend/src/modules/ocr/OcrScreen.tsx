@@ -16,6 +16,7 @@ import { inr } from '@/lib/inr';
 import {
   ocr, settings, type OcrExtractionDTO, type BranchDTO,
 } from '@/lib/erp-api';
+import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -31,6 +32,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function OcrScreen() {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<OcrExtractionDTO[]>([]);
   const [branches, setBranches] = useState<BranchDTO[]>([]);
   const [branchId, setBranchId] = useState('');
@@ -58,7 +60,9 @@ export default function OcrScreen() {
   async function handleFiles(files: FileList | null) {
     if (!files || !files.length) return;
     if (!branchId) {
-      alert('Add a branch in Settings → Branches first');
+      notifications.warning('Add a branch in Settings → Branches before uploading a receipt.', {
+        title: 'Branch required',
+      });
       return;
     }
     setUploading(true);
@@ -67,14 +71,22 @@ export default function OcrScreen() {
         await ocr.upload(file, branchId);
       }
       await load();
+      notifications.success(`${files.length} receipt${files.length === 1 ? '' : 's'} uploaded for review.`, {
+        title: 'Upload complete',
+      });
     } catch (e) {
-      alert((e as Error).message);
+      notifications.error((e as Error).message, { title: 'Receipt upload failed' });
     } finally { setUploading(false); }
   }
 
   async function decide(id: string, decision: 'approve' | 'reject') {
-    try { await ocr.verify(id, decision); await load(); }
-    catch (e) { alert((e as Error).message); }
+    try {
+      await ocr.verify(id, decision);
+      await load();
+      notifications.success(`Receipt ${decision === 'approve' ? 'approved' : 'rejected'}.`);
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Receipt review failed' });
+    }
   }
 
   return (

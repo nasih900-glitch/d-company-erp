@@ -19,7 +19,7 @@ import {
   type AccountDTO, type TrialBalanceDTO, type BalanceSheetDTO,
   type InventoryValuationDTO, type RecipeMarginDTO, type GrowthDTO,
   type TopItemDTO, type HeatmapCellDTO, type LossesDTO, type GLEntryDTO,
-  type PartnerDTO,
+  type PartnerDTO, type CostingCoverageDTO,
 } from '@/lib/erp-api';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
@@ -139,6 +139,15 @@ function GrowthTab() {
           <b>{inr(growth.current.manual_collections_minor)}</b>, previous{' '}
           <b>{inr(growth.previous.manual_collections_minor)}</b>. Order counts, average order value,
           top items, and hourly heatmap remain POS-only.
+        </div>
+      )}
+
+      {(growth.current.memberships_minor > 0 || growth.previous.memberships_minor > 0) && (
+        <div className="card mb-6 border-bg-border bg-bg-raised text-sm text-fg-muted">
+          Revenue growth includes paid memberships: current{' '}
+          <b>{inr(growth.current.memberships_minor)}</b>, previous{' '}
+          <b>{inr(growth.previous.memberships_minor)}</b>. Membership payments do not increase
+          POS order counts, average ticket, top items, or the hourly sales heatmap.
         </div>
       )}
 
@@ -269,17 +278,19 @@ function HeatmapGrid({ cells }: { cells: HeatmapCellDTO[] }) {
 function InventoryTab() {
   const [val, setVal] = useState<InventoryValuationDTO | null>(null);
   const [margin, setMargin] = useState<RecipeMarginDTO[]>([]);
+  const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
     setLoading(true); setErr(null);
     try {
-      const [v, m] = await Promise.all([
+      const [v, m, c] = await Promise.all([
         insights.inventoryValuation(),
         insights.recipeMargin(),
+        insights.costingCoverage(),
       ]);
-      setVal(v); setMargin(m);
+      setVal(v); setMargin(m); setCosting(c);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
@@ -291,6 +302,26 @@ function InventoryTab() {
 
   return (
     <div>
+      {costing && !costing.is_complete && (
+        <div className="card mb-6 border-accent-bad/50 bg-accent-bad/10 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={17} className="text-accent-bad mt-0.5 shrink-0"/>
+            <div>
+              <b>{costing.incomplete_item_count} inventory-backed menu item{costing.incomplete_item_count === 1 ? '' : 's'} cannot be fully costed.</b>{' '}
+              Their sales can understate COGS and overstate profit until the recipe and ingredient costs are complete.
+              <ul className="mt-2 list-disc pl-4 text-xs text-fg-muted space-y-1">
+                {costing.issues.slice(0, 8).map((issue) => (
+                  <li key={issue.menu_item_id}><b>{issue.name}</b> — {issue.detail}</li>
+                ))}
+              </ul>
+              {costing.issues.length > 8 && (
+                <p className="mt-1 text-xs text-fg-muted">+{costing.issues.length - 8} more items need costing.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
         <Stat label="Stock value" value={inr(val.total_valuation_minor)}/>
         <Stat label="Ingredients" value={val.lines.length.toString()}/>

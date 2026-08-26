@@ -23,13 +23,19 @@ import {
 import { LIVE_MODE } from '@/lib/demo';
 import { STATIONS, type Station as DemoStation } from '@/lib/demo-data';
 import { inr } from '@/lib/inr';
+import { hasActivePricingToken, type ApiError } from '@/lib/api';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { gaming, shifts, type GamingPackageDTO, type StationDTO } from '@/lib/erp-api';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import { createOperationKey } from '@/lib/retry-drafts';
 import { subscribeRealtime } from '@/lib/realtime';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { canOfferGamingReconciliation } from './gaming-reconciliation';
 
 const ICON: Record<StationDTO['type'], React.ReactNode> = {
   ps5:       <Gamepad2 size={22}/>,
@@ -81,6 +87,21 @@ const DURATION_PRESETS = [
 // Fallback only — real-time push is the primary mechanism.
 const GAMING_SESSIONS_POLL_MS = 120_000;
 
+type PendingExtension = {
+  station: StationDTO;
+  extension: GamingPackageDTO;
+};
+
+type PendingReconciliation = {
+  station: StationDTO;
+  targetShiftId: string;
+};
+
+type SendFailure = {
+  message: string;
+  code?: string;
+};
+
 function notifyTimerExpired(stationName: string) {
   notifyAlarm(
     `⏰ ${stationName} — time's up`,
@@ -90,6 +111,7 @@ function notifyTimerExpired(stationName: string) {
 }
 
 export default function GamingScreen() {
+  const notifications = useNotifications();
   const { me, terminalId, terminalReady } = useAuth();
   const canManageStations = true;
   const [stations, setStations] = useState<StationDTO[]>([]);
@@ -109,11 +131,19 @@ export default function GamingScreen() {
   const [pickerControllers, setPickerControllers] = useState<Record<string, number>>({});
   const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
+  const [resolvingReconciliation, setResolvingReconciliation] = useState<string | null>(null);
+  const [reconciling, setReconciling] = useState<string | null>(null);
+  const [extendingSession, setExtendingSession] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
-  const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
+  const [sendErrors, setSendErrors] = useState<Record<string, SendFailure>>({});
   // Resolved asynchronously: on the native tablet build this comes from the
   // OS via Capacitor rather than the WebView's (absent) Notification API.
   const [notifPermission, setNotifPermission] = useState<AlarmPermission>('default');
+  // Retained across a timeout, repeat tap, and even a WebView/page restart.
+  // A new key after an ambiguous response could buy the same paid extension
+  // twice. Success is the only point at which this attempt is cleared.
+  const extensionKeysRef = useRef<Record<string, string>>({});
+  const extensionBusyRef = useRef(false);
   useEffect(() => { void alarmPermission().then(setNotifPermission); }, []);
 
   // Refs so the 1s alarm-check interval (subscribed once) always sees fresh data
@@ -129,6 +159,11 @@ export default function GamingScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<StationDTO | null>(null);
   const [manageMode, setManageMode] = useState(false);
+  const [deleteStationTarget, setDeleteStationTarget] = useState<StationDTO | null>(null);
+  const [deleteStationBusy, setDeleteStationBusy] = useState(false);
+  const [pendingExtension, setPendingExtension] = useState<PendingExtension | null>(null);
+  const [pendingReconciliation, setPendingReconciliation] = useState<PendingReconciliation | null>(null);
+  const [cancelStationTarget, setCancelStationTarget] = useState<StationDTO | null>(null);
 
   async function load() {
     setLoading(true); setError(null);
@@ -229,20 +264,34 @@ export default function GamingScreen() {
     setMutedStations((m) => ({ ...m, [stationId]: !m[stationId] }));
   }
 
-  async function ensureShiftId(station: StationDTO) {
+  async function ensureShiftId(station: StationDTO, purpose: 'start' | 'reconcile' = 'start') {
     const companyId = me?.company_id;
     const branchId = me?.branch_id;
     if (!companyId || !branchId) {
-      throw new Error('This account has no branch assigned. Assign one before starting a session.');
+      throw new Error(
+        `This account has no branch assigned. Assign one before ${purpose === 'start' ? 'starting' : 'reconciling'} a session.`,
+      );
     }
     if (!terminalReady || !terminalId) {
-      throw new Error('Select the POS terminal used by this device before starting a session.');
+      throw new Error(
+        `Select the POS terminal used by this device before ${purpose === 'start' ? 'starting' : 'reconciling'} a session.`,
+      );
     }
-    return resolveRequiredOpenShift({
-      scope: { companyId, branchId, terminalId },
-      stationBranchId: station.branch_id,
-      listOpenShifts: () => shifts.list(true),
-    });
+    try {
+      return await resolveRequiredOpenShift({
+        scope: { companyId, branchId, terminalId },
+        stationBranchId: station.branch_id,
+        listOpenShifts: () => shifts.list(true),
+      });
+    } catch (error) {
+      const message = (error as Error).message;
+      if (purpose === 'reconcile' && message.startsWith('No shift is open')) {
+        throw new Error(
+          'No shift is open for this terminal. Open the correct shift from the Shifts tab, then retry this reconciliation.',
+        );
+      }
+      throw error;
+    }
   }
 
   async function startSession(
@@ -275,7 +324,7 @@ export default function GamingScreen() {
         extraControllers = r.extra_controllers;
         lockedAmountMinor = packageId ? r.amount_minor ?? null : null;
       } catch (e) {
-        alert(`Cannot start session: ${(e as Error).message}`);
+        notifications.error((e as Error).message, { title: 'Cannot start session' });
         return;
       }
     }
@@ -298,6 +347,7 @@ export default function GamingScreen() {
     setPickerControllers((p) => ({ ...p, [st.id]: 0 }));
     setSessionPhone((p) => ({ ...p, [st.id]: '' }));
     setCustomDurationFor(null);
+    notifications.success(`${st.name} session started.`, { title: 'Session running' });
   }
 
   async function setStationTimer(st: StationDTO, minutes: number | null) {
@@ -306,7 +356,10 @@ export default function GamingScreen() {
     const timerEndsAt = minutes ? s.start_at + minutes * 60000 : null;
     if (LIVE_MODE && s.backend_session_id) {
       try { await gaming.setSessionTimer(s.backend_session_id, minutes); }
-      catch (e) { alert(`Could not update timer: ${(e as Error).message}`); return; }
+      catch (e) {
+        notifications.error((e as Error).message, { title: 'Could not update timer' });
+        return;
+      }
     }
     setSessions((map) => ({
       ...map,
@@ -331,8 +384,29 @@ export default function GamingScreen() {
   async function extendPackageSession(st: StationDTO, extensionPackageId: string) {
     const s = sessions[st.id];
     if (!s?.backend_session_id) return;
+    if (extensionBusyRef.current) return;
+    extensionBusyRef.current = true;
+    const extension = packages.find((item) => item.id === extensionPackageId);
+    const attemptId = `${s.backend_session_id}:${extensionPackageId}`;
+    const storageKey = `dcompany:gaming-extension:${attemptId}`;
+    let idempotencyKey: string | undefined = extensionKeysRef.current[attemptId];
+    if (!idempotencyKey) {
+      try { idempotencyKey = localStorage.getItem(storageKey) || undefined; }
+      catch { /* private/locked storage: the in-memory fallback still protects repeat taps */ }
+    }
+    if (!idempotencyKey) {
+      idempotencyKey = `gaming-extension:${createOperationKey()}`;
+      extensionKeysRef.current[attemptId] = idempotencyKey;
+      try { localStorage.setItem(storageKey, idempotencyKey); }
+      catch { /* keep the in-memory key */ }
+    }
+    setExtendingSession(st.id);
     try {
-      const r = await gaming.extendSessionWithPackage(s.backend_session_id, extensionPackageId);
+      const r = await gaming.extendSessionWithPackage(
+        s.backend_session_id,
+        extensionPackageId,
+        idempotencyKey,
+      );
       setSessions((map) => ({
         ...map,
         [st.id]: {
@@ -344,8 +418,21 @@ export default function GamingScreen() {
       }));
       delete lastAlarmAtRef.current[st.id];
       setMutedStations((m) => (m[st.id] ? { ...m, [st.id]: false } : m));
+      delete extensionKeysRef.current[attemptId];
+      try { localStorage.removeItem(storageKey); }
+      catch { /* no-op */ }
+      setPendingExtension(null);
+      notifications.success(`${st.name} was extended${extension ? ` by ${extension.duration_minutes} minutes` : ''}.`, {
+        title: 'Paid extension added',
+      });
     } catch (e) {
-      alert(`Could not extend session: ${(e as Error).message}`);
+      notifications.error(
+        `${(e as Error).message}. Try the same extension again; the app will safely reuse this attempt.`,
+        { title: 'Could not confirm the extension' },
+      );
+    } finally {
+      extensionBusyRef.current = false;
+      setExtendingSession(null);
     }
   }
 
@@ -389,7 +476,10 @@ export default function GamingScreen() {
         elapsedMin = ended.billable_minutes ?? elapsedMin;
         amount = ended.amount_minor ?? amount;
       }
-      catch (e) { alert(`Stop failed: ${(e as Error).message}`); return; }
+      catch (e) {
+        notifications.error((e as Error).message, { title: 'Could not stop session' });
+        return;
+      }
       delete lastAlarmAtRef.current[st.id];
       setMutedStations((m) => (st.id in m ? { ...m, [st.id]: false } : m));
       // Keep the tile visible in a "stopped" state — staff must explicitly
@@ -398,10 +488,17 @@ export default function GamingScreen() {
         ...map,
         [st.id]: { ...s, status: 'ended', ended_minutes: elapsedMin, ended_amount_minor: amount },
       }));
+      notifications.success(
+        `${st.name} ended after ${elapsedMin} min. Send ${inr(amount)} to POS when ready to bill.`,
+        { title: 'Session stopped' },
+      );
       return;
     }
     // Demo mode has no real backend order to send to — keep the old flow.
-    alert(`Session ended\n\nStation: ${st.name}\nDuration: ${elapsedMin} min\nSession estimate: ${inr(amount)}`);
+    notifications.success(
+      `Station: ${st.name}\nDuration: ${elapsedMin} min\nSession estimate: ${inr(amount)}`,
+      { title: 'Session ended', durationMs: 8_000 },
+    );
     setSessions((map) => {
       const next = { ...map };
       delete next[st.id];
@@ -428,21 +525,73 @@ export default function GamingScreen() {
         delete next[st.id];
         return next;
       });
+      notifications.success(`${st.name} was sent to POS for billing.`, { title: 'Ready in POS' });
     } catch (e) {
-      setSendErrors((errs) => ({ ...errs, [st.id]: (e as Error).message }));
+      const message = (e as Error).message;
+      setSendErrors((errs) => ({
+        ...errs,
+        [st.id]: { message, code: (e as ApiError).code },
+      }));
+      notifications.error(message, { title: 'Could not send session to POS' });
     } finally {
       setSendingToPos(null);
     }
   }
 
-  async function cancelSession(st: StationDTO) {
+  async function prepareReconciliation(st: StationDTO) {
+    if (!me?.audit_access || resolvingReconciliation || reconciling) return;
+    setResolvingReconciliation(st.id);
+    try {
+      const targetShiftId = await ensureShiftId(st, 'reconcile');
+      setPendingReconciliation({ station: st, targetShiftId });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Cannot reconcile session' });
+    } finally {
+      setResolvingReconciliation(null);
+    }
+  }
+
+  async function reconcileToPos(
+    pending: PendingReconciliation,
+    reason: string,
+  ) {
+    const current = sessions[pending.station.id];
+    if (!current?.backend_session_id || !reason.trim()) return;
+    setReconciling(pending.station.id);
+    try {
+      const result = await gaming.reconcileToPos(
+        current.backend_session_id,
+        pending.targetShiftId,
+        reason.trim(),
+      );
+      setSessions((all) => {
+        const next = { ...all };
+        delete next[pending.station.id];
+        return next;
+      });
+      setSendErrors((all) => {
+        const next = { ...all };
+        delete next[pending.station.id];
+        return next;
+      });
+      setPendingReconciliation(null);
+      notifications.success(
+        result.already_linked
+          ? `${pending.station.name} was already waiting in POS; no duplicate bill was created.`
+          : `${pending.station.name} was reconciled to this terminal's open shift and is ready in POS.`,
+        { title: result.already_linked ? 'Already in POS' : 'Reconciliation complete' },
+      );
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not reconcile session' });
+    } finally {
+      setReconciling(null);
+    }
+  }
+
+  async function cancelSession(st: StationDTO, reason: string) {
     const current = sessions[st.id];
     if (!current?.backend_session_id) return;
-    const reason = prompt(
-      `Why are you cancelling the stopped session for ${st.name}?\n\n`
-      + 'This keeps an audit trail and removes it from billing.',
-    );
-    if (!reason?.trim()) return;
+    if (!reason.trim()) return;
     setCancelling(st.id);
     setSendErrors((errors) => {
       const next = { ...errors };
@@ -456,17 +605,36 @@ export default function GamingScreen() {
         delete next[st.id];
         return next;
       });
+      setCancelStationTarget(null);
+      notifications.success(`${st.name} was cancelled with an audit reason.`, {
+        title: 'Session cancelled',
+      });
     } catch (e) {
-      setSendErrors((errors) => ({ ...errors, [st.id]: (e as Error).message }));
+      const message = (e as Error).message;
+      setSendErrors((errors) => ({
+        ...errors,
+        [st.id]: { message, code: (e as ApiError).code },
+      }));
+      notifications.error(message, { title: 'Could not cancel session' });
     } finally {
       setCancelling(null);
     }
   }
 
-  async function deleteStation(st: StationDTO) {
-    if (!confirm(`Delete station ${st.code}?`)) return;
-    try { await gaming.deleteStation(st.id); await load(); }
-    catch (e) { alert((e as Error).message); }
+  async function confirmDeleteStation() {
+    if (!deleteStationTarget || deleteStationBusy) return;
+    setDeleteStationBusy(true);
+    try {
+      await gaming.deleteStation(deleteStationTarget.id);
+      const stationCode = deleteStationTarget.code;
+      setDeleteStationTarget(null);
+      await load();
+      notifications.success(`${stationCode} was deleted.`, { title: 'Station deleted' });
+    } catch (e) {
+      notifications.error((e as Error).message, { title: 'Could not delete station' });
+    } finally {
+      setDeleteStationBusy(false);
+    }
   }
 
   const activeCount = useMemo(
@@ -574,7 +742,7 @@ export default function GamingScreen() {
                         <Edit2 size={12}/>
                       </button>
                       <button className="text-fg-muted hover:text-accent-bad p-1"
-                        onClick={() => deleteStation(st)}>
+                        onClick={() => setDeleteStationTarget(st)}>
                         <Trash2 size={12}/>
                       </button>
                     </div>
@@ -595,26 +763,48 @@ export default function GamingScreen() {
                       </div>
                       {sendErrors[st.id] && (
                         <div className="mt-2 pt-2 border-t border-bg-border text-xs text-accent-bad flex items-center gap-1.5">
-                          <AlertCircle size={12}/> {sendErrors[st.id]}
+                          <AlertCircle size={12}/> {sendErrors[st.id].message}
                         </div>
                       )}
                     </div>
-                    <div className="grid grid-cols-[1fr_auto] gap-2">
-                      <button className="btn btn-primary"
-                        disabled={sendingToPos === st.id || cancelling === st.id}
-                        onClick={() => sendToPos(st)}>
-                        {sendingToPos === st.id
-                          ? <Loader2 className="animate-spin" size={14}/>
-                          : <Send size={14}/>} Send to POS
-                      </button>
-                      <button className="btn btn-ghost text-accent-bad"
-                        disabled={sendingToPos === st.id || cancelling === st.id}
-                        title="Cancel with an audit reason"
-                        onClick={() => cancelSession(st)}>
-                        {cancelling === st.id
-                          ? <Loader2 className="animate-spin" size={14}/>
-                          : <Ban size={14}/>} Cancel
-                      </button>
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-[1fr_auto] gap-2">
+                        <button className="btn btn-primary"
+                          disabled={sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
+                          onClick={() => sendToPos(st)}>
+                          {sendingToPos === st.id
+                            ? <Loader2 className="animate-spin" size={14}/>
+                            : <Send size={14}/>} Send to POS
+                        </button>
+                        <button className="btn btn-ghost text-accent-bad"
+                          disabled={sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
+                          title="Cancel with an audit reason"
+                          onClick={() => setCancelStationTarget(st)}>
+                          {cancelling === st.id
+                            ? <Loader2 className="animate-spin" size={14}/>
+                            : <Ban size={14}/>} Cancel
+                        </button>
+                      </div>
+                      {canOfferGamingReconciliation({
+                        auditAccess: Boolean(me?.audit_access),
+                        rejectionCode: sendErrors[st.id]?.code,
+                      }) && (
+                        <button
+                          className="btn btn-ghost w-full border-accent-gold/50 text-accent-gold"
+                          disabled={Boolean(
+                            sendingToPos === st.id
+                            || cancelling === st.id
+                            || resolvingReconciliation
+                            || reconciling,
+                          )}
+                          title="Protected-owner recovery: keep the original shift as history and create the bill on this terminal's current open shift"
+                          onClick={() => { void prepareReconciliation(st); }}
+                        >
+                          {resolvingReconciliation === st.id
+                            ? <Loader2 className="animate-spin" size={14}/>
+                            : <RefreshCw size={14}/>} Reconcile to current shift
+                        </button>
+                      )}
                     </div>
                   </>
                 ) : session ? (
@@ -667,12 +857,12 @@ export default function GamingScreen() {
                                 extensionOptions.length > 0 ? extensionOptions.map((ext) => (
                                   <button key={ext.id}
                                     className="chip text-[10px] !border-accent-gold/50 text-accent-gold hover:!border-accent-gold"
-                                    onClick={() => {
-                                      if (!confirm(`Add ${ext.name} for ${inr(ext.price_minor)}? This charges the customer's bill.`)) return;
-                                      extendPackageSession(st, ext.id);
-                                    }}
+                                    disabled={extendingSession !== null}
+                                    onClick={() => setPendingExtension({ station: st, extension: ext })}
                                     title={`Paid extension: ${ext.name} · ${inr(ext.price_minor)}`}>
-                                    +{ext.duration_minutes}m · {inr(ext.price_minor)}
+                                    {extendingSession === st.id ? (
+                                      <Loader2 size={11} className="animate-spin" />
+                                    ) : `+${ext.duration_minutes}m · ${inr(ext.price_minor)}`}
                                   </button>
                                 )) : (
                                   <span className="text-[10px] text-fg-muted">No extension for this package</span>
@@ -824,10 +1014,66 @@ export default function GamingScreen() {
         </div>
       )}
 
-      {canManageStations && addOpen && <StationForm onClose={() => setAddOpen(false)}
-        onSuccess={() => { setAddOpen(false); load(); }}/>}
-      {canManageStations && edit && <StationForm station={edit} onClose={() => setEdit(null)}
-        onSuccess={() => { setEdit(null); load(); }}/>}
+      {canManageStations && addOpen && (
+        <StationForm onClose={() => setAddOpen(false)} onSuccess={() => {
+          setAddOpen(false);
+          void load();
+          notifications.success('The gaming station was added.', { title: 'Station saved' });
+        }}/>
+      )}
+      {canManageStations && edit && (
+        <StationForm station={edit} onClose={() => setEdit(null)} onSuccess={() => {
+          setEdit(null);
+          void load();
+          notifications.success('The gaming station was updated.', { title: 'Changes saved' });
+        }}/>
+      )}
+      {pendingExtension && (
+        <ConfirmModal
+          title="Add paid extension"
+          message={`Add ${pendingExtension.extension.name} for ${inr(pendingExtension.extension.price_minor)}? This charges the customer's bill.`}
+          confirmLabel="Add extension"
+          busy={extendingSession === pendingExtension.station.id}
+          onConfirm={() => {
+            void extendPackageSession(pendingExtension.station, pendingExtension.extension.id);
+          }}
+          onCancel={() => { if (!extendingSession) setPendingExtension(null); }}
+        />
+      )}
+      {cancelStationTarget && (
+        <PromptModal
+          title={`Cancel ${cancelStationTarget.name}`}
+          label="Audit reason (required). This removes the stopped session from billing."
+          placeholder="Why is this session being cancelled?"
+          confirmLabel="Cancel session"
+          danger
+          busy={cancelling === cancelStationTarget.id}
+          onSubmit={(reason) => { void cancelSession(cancelStationTarget, reason); }}
+          onCancel={() => { if (!cancelling) setCancelStationTarget(null); }}
+        />
+      )}
+      {pendingReconciliation && (
+        <PromptModal
+          title={`Reconcile ${pendingReconciliation.station.name} to POS`}
+          label="Reason required. The original closed shift remains unchanged; this creates the held bill on this terminal's current open shift."
+          placeholder="Why did this session miss POS before the shift closed?"
+          confirmLabel="Create POS bill"
+          busy={reconciling === pendingReconciliation.station.id}
+          onSubmit={(reason) => { void reconcileToPos(pendingReconciliation, reason); }}
+          onCancel={() => { if (!reconciling) setPendingReconciliation(null); }}
+        />
+      )}
+      {deleteStationTarget && (
+        <ConfirmModal
+          title="Delete gaming station"
+          message={`Delete station ${deleteStationTarget.code}? This cannot be undone.`}
+          confirmLabel="Delete station"
+          danger
+          busy={deleteStationBusy}
+          onConfirm={() => { void confirmDeleteStation(); }}
+          onCancel={() => { if (!deleteStationBusy) setDeleteStationTarget(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -850,7 +1096,10 @@ function StationForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
-      const rate_per_hour_minor = Math.round(parseFloat(form.rate_rupees || '0') * 100);
+      const rate_per_hour_minor = parseRupeesToMinor(form.rate_rupees);
+      if (rate_per_hour_minor === null) {
+        throw new Error('Hourly rate must be a non-negative amount with at most two decimals.');
+      }
       if (isEdit) {
         await gaming.updateStation(station!.id, {
           name: form.name, rate_per_hour_minor, is_active: form.is_active,
@@ -865,9 +1114,7 @@ function StationForm({
     finally { setBusy(false); }
   }
 
-  const hasPricingUnlock =
-    !!localStorage.getItem('pricing_token') &&
-    Number(localStorage.getItem('pricing_token_expires_at') || '0') > Date.now();
+  const hasPricingUnlock = hasActivePricingToken();
 
   return (
     <Modal open onClose={onClose} title={isEdit ? `Edit ${station!.name}` : 'New gaming station'}>

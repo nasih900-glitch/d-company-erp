@@ -4,7 +4,8 @@
  *  - View the 3 default tiers (D Club Silver / Gold / Platinum) seeded
  *    at install time with sensible defaults.
  *  - Edit pricing + perks per tier.
- *  - Customers screen has the "Subscribe a customer" flow.
+ *  - Paid membership operations are currently completed by protected owners
+ *    in the Android app; the web Customers screen remains read-only for them.
  */
 import { useEffect, useState } from 'react';
 import {
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import { inr } from '@/lib/inr';
+import { parseRupeesToMinor } from '@/lib/money-input';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { memberships, type MembershipTierDTO } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
@@ -46,8 +48,9 @@ export default function MembershipsTab() {
         <div>
           <b>D Club memberships</b> — three default tiers seeded for you.
           Click <b>Edit</b> on any tier to change pricing or perks.
-          Subscribe customers from the <b>Customers</b> screen.
-          Recurring billing lands when your Razorpay keys arrive.
+          Paid membership sales, cancellations, and refunds are currently a protected-owner
+          workflow in the <b>Android app</b>; the web Customers screen does not collect them.
+          Automatic recurring billing is not enabled yet.
         </div>
       </div>
 
@@ -157,10 +160,17 @@ function TierForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
+      const monthlyPriceMinor = parseRupeesToMinor(form.monthly_rupees);
+      const annualPriceMinor = form.annual_rupees
+        ? parseRupeesToMinor(form.annual_rupees)
+        : null;
+      if (monthlyPriceMinor === null || (form.annual_rupees && annualPriceMinor === null)) {
+        throw new Error('Membership prices must use at most two decimal places.');
+      }
       await memberships.updateTier(tier.id, {
         name: form.name.trim(),
-        monthly_price_minor: Math.round(parseFloat(form.monthly_rupees) * 100),
-        annual_price_minor: form.annual_rupees ? Math.round(parseFloat(form.annual_rupees) * 100) : null,
+        monthly_price_minor: monthlyPriceMinor,
+        annual_price_minor: annualPriceMinor,
         food_discount_pct: parseFloat(form.food_pct || '0') / 100,
         gaming_discount_pct: parseFloat(form.gaming_pct || '0') / 100,
         hookah_discount_pct: parseFloat(form.hookah_pct || '0') / 100,
