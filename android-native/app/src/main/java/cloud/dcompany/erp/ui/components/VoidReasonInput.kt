@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -15,6 +16,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -39,6 +41,7 @@ import kotlinx.coroutines.launch
 internal const val VOID_REASON_MAX_LENGTH = 500
 internal const val VOID_REASON_OTHER_ID = "other"
 private val VOID_REASON_MAX_EDITOR_HEIGHT = 420.dp
+internal val VOID_REASON_COMPACT_EDITOR_HEIGHT = 120.dp
 
 internal data class VoidReasonPreset(
     val id: String,
@@ -83,6 +86,9 @@ fun VoidReasonInput(
     onPresetSelected: (String) -> Unit,
     onCustomReasonChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    compactCustomLayout: Boolean = false,
+    onExitCustomMode: () -> Unit = {},
+    compactCustomActions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val customFocus = remember { FocusRequester() }
@@ -90,7 +96,7 @@ fun VoidReasonInput(
     val coroutineScope = rememberCoroutineScope()
     val customSelected = selectedId == VOID_REASON_OTHER_ID
 
-    LaunchedEffect(customSelected) {
+    LaunchedEffect(customSelected, compactCustomLayout) {
         if (customSelected) {
             customFocus.requestFocus()
             // Some OEM IMEs ignore a show request made in the same frame that
@@ -106,68 +112,84 @@ fun VoidReasonInput(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(max = VOID_REASON_MAX_EDITOR_HEIGHT)
+            .heightIn(
+                max = if (compactCustomLayout && customSelected) {
+                    VOID_REASON_COMPACT_EDITOR_HEIGHT
+                } else {
+                    VOID_REASON_MAX_EDITOR_HEIGHT
+                },
+            )
             .verticalScroll(scrollState)
-            // Keep the inset inside the scrollable content so the custom field
-            // and recovery button can move above an open IME on short windows.
-            .imePadding(),
+            // Standard forms can consume the IME inset normally. Compact
+            // custom mode intentionally does not: its 120dp field/action body
+            // must stay deterministic even when a Dialog reports no inset,
+            // and must not scroll past its actions when an OEM does report it.
+            .then(
+                if (compactCustomLayout && customSelected) {
+                    Modifier
+                } else {
+                    Modifier.imePadding()
+                },
+            ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Choose a reason", color = Brand.ForegroundMuted)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics {
-                    contentDescription = "Cancellation reason choices"
-                    stateDescription = resolvedVoidReason(selectedId, customReason)
-                        .ifBlank { "No reason selected" }
-                },
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            VOID_REASON_PRESETS.chunked(2).forEach { rowPresets ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    rowPresets.forEach { preset ->
-                        FilterChip(
-                            selected = selectedId == preset.id,
-                            onClick = { onPresetSelected(preset.id) },
-                            label = { Text(preset.reason) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .semantics {
-                                    role = Role.RadioButton
-                                    contentDescription = "Cancellation reason: ${preset.reason}"
-                                },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Brand.Gold,
-                                selectedLabelColor = Brand.Background,
-                            ),
-                        )
-                    }
-                    if (rowPresets.size == 1) {
-                        // Keep the final preset aligned with the two-column
-                        // rows without stretching it across the whole dialog.
-                        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
-            FilterChip(
-                selected = customSelected,
-                onClick = { onPresetSelected(VOID_REASON_OTHER_ID) },
-                label = { Text("Other / add details") },
+        if (!(compactCustomLayout && customSelected)) {
+            Text("Choose a reason", color = Brand.ForegroundMuted)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics {
-                        role = Role.RadioButton
-                        contentDescription = "Cancellation reason: Other or add details"
+                        contentDescription = "Cancellation reason choices"
+                        stateDescription = resolvedVoidReason(selectedId, customReason)
+                            .ifBlank { "No reason selected" }
                     },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Brand.Gold,
-                    selectedLabelColor = Brand.Background,
-                ),
-            )
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                VOID_REASON_PRESETS.chunked(2).forEach { rowPresets ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        rowPresets.forEach { preset ->
+                            FilterChip(
+                                selected = selectedId == preset.id,
+                                onClick = { onPresetSelected(preset.id) },
+                                label = { Text(preset.reason) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .semantics {
+                                        role = Role.RadioButton
+                                        contentDescription = "Cancellation reason: ${preset.reason}"
+                                    },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Brand.Gold,
+                                    selectedLabelColor = Brand.Background,
+                                ),
+                            )
+                        }
+                        if (rowPresets.size == 1) {
+                            // Keep the final preset aligned with the two-column
+                            // rows without stretching it across the whole dialog.
+                            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+                FilterChip(
+                    selected = customSelected,
+                    onClick = { onPresetSelected(VOID_REASON_OTHER_ID) },
+                    label = { Text("Other / add details") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics {
+                            role = Role.RadioButton
+                            contentDescription = "Cancellation reason: Other or add details"
+                        },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Brand.Gold,
+                        selectedLabelColor = Brand.Background,
+                    ),
+                )
+            }
         }
 
         if (customSelected) {
@@ -175,8 +197,26 @@ fun VoidReasonInput(
                 value = customReason,
                 onValueChange = { onCustomReasonChange(limitVoidReasonInput(it)) },
                 label = { Text("Custom cancellation reason") },
-                supportingText = { Text("Required · ${customReason.length}/$VOID_REASON_MAX_LENGTH") },
-                minLines = 2,
+                supportingText = if (compactCustomLayout) {
+                    null
+                } else {
+                    { Text("Required · ${customReason.length}/$VOID_REASON_MAX_LENGTH") }
+                },
+                trailingIcon = if (compactCustomLayout) {
+                    {
+                        TextButton(
+                            onClick = {
+                                keyboard?.hide()
+                                onExitCustomMode()
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text("Presets", maxLines = 1) }
+                    }
+                } else {
+                    null
+                },
+                minLines = if (compactCustomLayout) 1 else 2,
+                maxLines = if (compactCustomLayout) 1 else Int.MAX_VALUE,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     keyboardType = KeyboardType.Text,
@@ -195,22 +235,50 @@ fun VoidReasonInput(
                         }
                     },
             )
-            OutlinedButton(
-                onClick = {
-                    customFocus.requestFocus()
-                    keyboard?.show()
-                    coroutineScope.launch {
-                        withFrameNanos { }
-                        scrollState.scrollTo(scrollState.maxValue)
+            if (compactCustomLayout && compactCustomActions != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            customFocus.requestFocus()
+                            keyboard?.show()
+                            coroutineScope.launch {
+                                withFrameNanos { }
+                                scrollState.scrollTo(scrollState.maxValue)
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .semantics {
+                                contentDescription = "Show keyboard for custom cancellation reason"
+                            },
+                    ) {
+                        Text("Keyboard", maxLines = 1)
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics {
-                        contentDescription = "Show keyboard for custom cancellation reason"
+                    compactCustomActions()
+                }
+            } else {
+                OutlinedButton(
+                    onClick = {
+                        customFocus.requestFocus()
+                        keyboard?.show()
+                        coroutineScope.launch {
+                            withFrameNanos { }
+                            scrollState.scrollTo(scrollState.maxValue)
+                        }
                     },
-            ) {
-                Text("Show keyboard")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .semantics {
+                            contentDescription = "Show keyboard for custom cancellation reason"
+                        },
+                ) {
+                    Text("Show keyboard")
+                }
             }
         }
     }

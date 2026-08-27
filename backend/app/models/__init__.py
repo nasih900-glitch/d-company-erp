@@ -18,7 +18,14 @@ from app.models.finance import (
     Partner,
     TipPayout,
 )
-from app.models.gaming import GamingBooking, GamingPackage, GamingSession, Station, Tournament
+from app.models.gaming import (
+    GamingBooking,
+    GamingPackage,
+    GamingSession,
+    GamingSessionExtension,
+    Station,
+    Tournament,
+)
 from app.models.idempotency_key import IdempotencyKey
 from app.models.india import (
     GstRateSlab,
@@ -54,15 +61,21 @@ from app.models.membership import (
     MembershipPaymentRequestResolution,
     MembershipRefund,
     MembershipRefundAttemptRecovery,
+    MembershipRefundAttemptResolution,
     MembershipRefundCashHandoff,
     MembershipRefundCompletion,
-    MembershipRefundAttemptResolution,
     MembershipRefundProviderAction,
     MembershipRefundResolution,
     MembershipRefundSettlement,
     MembershipTier,
 )
-from app.models.menu import MenuCategory, MenuItem, MenuModifier, MenuVariant
+from app.models.menu import (
+    MenuCategory,
+    MenuItem,
+    MenuModifier,
+    MenuModifierGroup,
+    MenuVariant,
+)
 from app.models.ocr import OcrExtraction, OcrUpload, OcrVerification
 from app.models.pos import (
     CustomerSpendReconciliation,
@@ -106,6 +119,7 @@ __all__ = [
     "GamingBooking",
     "GamingPackage",
     "GamingSession",
+    "GamingSessionExtension",
     "GRN",
     "GRNLine",
     "GstRateSlab",
@@ -139,6 +153,7 @@ __all__ = [
     "MenuCategory",
     "MenuItem",
     "MenuModifier",
+    "MenuModifierGroup",
     "MenuVariant",
     "OcrExtraction",
     "OcrUpload",

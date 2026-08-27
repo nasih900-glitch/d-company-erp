@@ -61,6 +61,25 @@ class ShiftRejectedOpenRecoveryDaoTest {
             ),
             emptyList(),
         )
+        assertEquals(
+            true,
+            db.gamingDao().capturePackageExtension(
+                LocalGamingPackageExtensionEntity(
+                    actionId = "66666666-6666-4666-8666-666666666666",
+                    serverSessionId = "server-gaming-dependent",
+                    localSessionId = "local-gaming-dependent",
+                    shiftId = LOCAL_ID,
+                    packageId = "extend-30",
+                    expectedPackagePriceMinor = 7_500,
+                    expectedPackageDurationMinutes = 30,
+                    expectedPackageVariant = "solo",
+                    expectedSessionTimerMinutes = 60,
+                    expectedSessionAmountMinor = 15_000,
+                    createdAtMillis = 1_600,
+                ),
+            ),
+        )
+        assertEquals(2, db.shiftDao().exactDependentRecordCount(LOCAL_ID))
 
         val result = db.shiftDao().discardVerifiedRejectedOpen(
             LOCAL_ID,

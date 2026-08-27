@@ -81,6 +81,32 @@ class CacheIsolationRoomTest {
     }
 
     @Test
+    fun unscopedRejectedGamingExtensionBlocksAccountPurgeUntilRetainedResolution() = runBlocking {
+        insertSyntheticRow(
+            "local_gaming_package_extensions",
+            unresolvedState = "rejected",
+        )
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE local_gaming_package_extensions SET shiftId = NULL, lastError = ?",
+            arrayOf("Legacy shift provenance is unavailable"),
+        )
+        val retained = dumpTable("local_gaming_package_extensions")
+        val purger = RoomScopeDataPurger(db)
+
+        assertTrue(purger.hasUnresolvedWork())
+        assertFalse(purger.purgeIfClean())
+        assertEquals(retained, dumpTable("local_gaming_package_extensions"))
+
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE local_gaming_package_extensions SET state = 'discarded', " +
+                "resolvedAtMillis = 12345, resolutionReason = 'Server proof retained'",
+        )
+        assertFalse(purger.hasUnresolvedWork())
+        assertTrue(purger.purgeIfClean())
+        assertTrue(dumpTable("local_gaming_package_extensions").isEmpty())
+    }
+
+    @Test
     fun scopeMarkerSurvivesComponentRecreationWithAllFourIdentityParts() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val scope = CacheScope("employee", "company", "branch", "terminal")
@@ -129,6 +155,7 @@ class CacheIsolationRoomTest {
     private fun cleanLocalState(table: String): String = when (table) {
         "local_shifts" -> "closed"
         "local_gaming_sessions" -> "sent"
+        "local_gaming_package_extensions" -> "confirmed"
         "local_refunds" -> "settled"
         else -> "synced"
     }

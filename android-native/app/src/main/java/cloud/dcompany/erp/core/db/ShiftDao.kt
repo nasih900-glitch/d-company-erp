@@ -294,9 +294,10 @@ interface ShiftDao {
     suspend fun markRejectedOpenPending(localId: String): Int
 
     /**
-     * Counts every local record that names this local shift identity, not just
-     * unresolved rows. A rejected open cannot be cleared while any sale,
-     * session, table bill or money workflow may still depend on its stable id.
+     * Counts every local record that still depends on this local shift
+     * identity, not just pending rows. A legacy gaming row with a confirmed
+     * server audit receipt is retained evidence but no longer depends on the
+     * shift for replay, so its terminal `legacy_resolved` state is excluded.
      */
     @Query(
         """
@@ -304,7 +305,10 @@ interface ShiftDao {
           (SELECT COUNT(*) FROM local_orders WHERE shiftId = :localShiftId) +
           (SELECT COUNT(*) FROM local_table_orders WHERE shiftId = :localShiftId) +
           (SELECT COUNT(*) FROM local_cafe_bills WHERE shiftId = :localShiftId) +
-          (SELECT COUNT(*) FROM local_gaming_sessions WHERE shiftId = :localShiftId) +
+          (SELECT COUNT(*) FROM local_gaming_sessions
+            WHERE shiftId = :localShiftId AND state != 'legacy_resolved') +
+          (SELECT COUNT(*) FROM local_gaming_package_extensions
+            WHERE shiftId = :localShiftId AND state NOT IN ('confirmed', 'discarded')) +
           (SELECT COUNT(*) FROM local_refunds WHERE shiftId = :localShiftId) +
           (SELECT COUNT(*) FROM local_subscriptions WHERE shiftId = :localShiftId) +
           (SELECT COUNT(*) FROM local_membership_refunds WHERE shiftId = :localShiftId) +

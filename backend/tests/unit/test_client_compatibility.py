@@ -10,6 +10,12 @@ from app.core.config import Settings, get_settings
 from app.core.middleware import ClientCompatibilityMiddleware
 
 
+def test_backend_defaults_fail_closed_at_first_snapshot_safe_android_build() -> None:
+    assert Settings.model_fields["android_min_supported_version_code"].default == 5
+    assert Settings.model_fields["android_latest_version_code"].default == 5
+    assert Settings.model_fields["require_native_version_headers"].default is True
+
+
 @pytest.mark.asyncio
 async def test_android_compatibility_distinguishes_required_optional_and_current(
     monkeypatch,

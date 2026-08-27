@@ -13,6 +13,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,8 +29,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -113,12 +116,17 @@ fun Panel(
         modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .fillMaxWidth()
+            .let { if (onClick != null) it.heightIn(min = 48.dp) else it }
             .clip(Radius.shapeLg)
             .background(bg)
             .border(1.dp, borderColor, Radius.shapeLg)
             .let {
                 if (onClick != null) {
-                    it.clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                    it.clickable(
+                        interactionSource = interaction,
+                        indication = LocalIndication.current,
+                        onClick = onClick,
+                    )
                 } else it
             }
             .padding(Spacing.lg),
@@ -163,7 +171,17 @@ fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radi
 
 @Composable
 fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
-    Column(modifier.fillMaxWidth().padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Loading content"
+                stateDescription = "In progress"
+                liveRegion = LiveRegionMode.Polite
+            }
+            .padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
         repeat(lines) { i ->
             ShimmerBlock(Modifier.fillMaxWidth().height(if (i == 0) 28.dp else 18.dp))
         }
@@ -172,7 +190,14 @@ fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
 
 @Composable
 fun Loading(modifier: Modifier = Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
-    CircularProgressIndicator(color = Brand.Gold)
+    CircularProgressIndicator(
+        color = Brand.Gold,
+        modifier = Modifier.semantics {
+            contentDescription = "Loading"
+            stateDescription = "In progress"
+            liveRegion = LiveRegionMode.Polite
+        },
+    )
 }
 
 @Composable
@@ -216,7 +241,7 @@ fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit, modifier
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, color = if (rejected) Brand.Danger else Brand.GoldMuted, modifier = Modifier.weight(1f))
+        Text(text, color = if (rejected) Brand.Danger else Brand.Warning, modifier = Modifier.weight(1f))
         if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
     }
 }
@@ -243,9 +268,14 @@ fun Chip(text: String, color: Color = Brand.SurfaceRaised, contentColor: Color =
 fun Field(
     label: String,
     value: String,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     singleLine: Boolean = true,
+    isError: Boolean = false,
+    supportingText: String? = null,
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
+    visualTransformation: androidx.compose.ui.text.input.VisualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
     onChange: (String) -> Unit,
 ) {
     OutlinedTextField(
@@ -254,10 +284,23 @@ fun Field(
         label = { Text(label) },
         singleLine = singleLine,
         enabled = enabled,
+        isError = isError,
         keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        visualTransformation = visualTransformation,
+        supportingText = supportingText?.let { message ->
+            {
+                Text(
+                    message,
+                    modifier = Modifier.semantics {
+                        if (isError) liveRegion = LiveRegionMode.Assertive
+                    },
+                )
+            }
+        },
         shape = Radius.shapeMd,
         colors = fieldColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     )
 }
 
@@ -325,24 +368,32 @@ fun PickerField(
 }
 
 @Composable
-fun DecimalField(value: String, onValueChange: (String) -> Unit, label: String) {
+fun DecimalField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    allowNegative: Boolean = false,
+) {
     Field(
         label = label,
         value = value,
-        onChange = { onValueChange(filterDecimal(it)) },
+        modifier = modifier,
+        onChange = { onValueChange(filterDecimal(it, allowNegative)) },
         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
         ),
     )
 }
 
-private fun filterDecimal(raw: String): String {
+private fun filterDecimal(raw: String, allowNegative: Boolean): String {
     val sb = StringBuilder()
     var dotSeen = false
-    for (c in raw) {
+    raw.forEachIndexed { index, c ->
         when {
             c.isDigit() -> sb.append(c)
             c == '.' && !dotSeen -> { dotSeen = true; sb.append(c) }
+            c == '-' && allowNegative && index == 0 -> sb.append(c)
         }
     }
     return sb.toString()
@@ -386,28 +437,40 @@ fun FormDialog(
     error: String?,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
-    width: androidx.compose.ui.unit.Dp = 480.dp,
+    width: androidx.compose.ui.unit.Dp = 520.dp,
+    confirmEnabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.width(width),
+        modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
         title = { Text(title, color = Brand.Foreground) },
         text = {
             Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                modifier = Modifier.heightIn(max = 520.dp),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                content()
-                error?.let { Text(it, color = Brand.Danger) }
+                error?.let {
+                    Text(
+                        it,
+                        color = Brand.Danger,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    content()
+                }
             }
         },
         confirmButton = {
-            PrimaryButton(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
+            PrimaryButton(onClick = onConfirm, enabled = confirmEnabled && !busy) {
+                Text(if (busy) "$confirmLabel…" else confirmLabel)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
@@ -427,23 +490,32 @@ fun ConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(0.92f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
         title = { Text(title, color = Brand.Foreground) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
+                error?.let {
+                    Text(
+                        it,
+                        color = Brand.Danger,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = onConfirm, enabled = !busy,
-                shape = Radius.shapePill,
+                shape = Radius.shapeMd,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (danger) Brand.Danger else Brand.Gold,
-                    contentColor = if (danger) Brand.Foreground else Brand.Background,
+                    contentColor = Brand.Background,
                 ),
+                modifier = Modifier.heightIn(min = 48.dp),
             ) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },

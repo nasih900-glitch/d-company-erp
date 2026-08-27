@@ -1,18 +1,23 @@
 package cloud.dcompany.erp.ui.screens.refunds
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AssignmentReturn
@@ -45,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.db.RefundState
 import cloud.dcompany.erp.core.money.minorToRupeesInput
@@ -53,6 +59,7 @@ import cloud.dcompany.erp.core.net.Order
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DataListRow
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
@@ -60,7 +67,6 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -83,63 +89,49 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
         modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        PageHeader(
-            title = "Refunds",
-            subtitle = "Shift-bound requests, guarded cash handovers, and traceable payout recovery",
-            eyebrow = "Payments & controls",
-            actions = {
-                ErpButton(
-                    text = if (state.busy) "Checking…" else "Refresh",
-                    onClick = vm::load,
-                    intent = ActionIntent.Secondary,
-                    enabled = !state.busy,
-                    busy = state.busy,
-                    leadingIcon = Icons.Default.Refresh,
+        AdaptiveStatGrid(count = 3) { index, modifier ->
+            when (index) {
+                0 -> CompactStatCard(
+                    label = "Refundable orders",
+                    value = state.orders.size.toString(),
+                    detail = "${state.orders.sumOf { it.refundableMinor }.asRupees()} available",
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                    tone = UiTone.Information,
+                    modifier = modifier,
                 )
-            },
-        )
-
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-            CompactStatCard(
-                label = "Refundable orders",
-                value = state.orders.size.toString(),
-                detail = "${state.orders.sumOf { it.refundableMinor }.asRupees()} available",
-                icon = Icons.AutoMirrored.Filled.ReceiptLong,
-                tone = UiTone.Information,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Open tasks",
-                value = state.tasks.size.toString(),
-                detail = if (state.tasks.isEmpty()) "No payout recovery pending" else "Resolve each exact task",
-                icon = Icons.AutoMirrored.Filled.AssignmentReturn,
-                tone = if (state.tasks.isEmpty()) UiTone.Success else UiTone.Warning,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Money access",
-                value = when {
-                    !state.online -> "Offline"
-                    state.canManageMoney -> "Ready"
-                    else -> "Locked"
-                },
-                detail = when {
-                    !state.online -> "Requests queue; cash payout waits"
-                    state.canManageMoney -> "Server reachable"
-                    else -> "Shift authority required"
-                },
-                icon = when {
-                    !state.online -> Icons.Default.CloudOff
-                    state.canManageMoney -> Icons.Default.Payments
-                    else -> Icons.Default.Lock
-                },
-                tone = when {
-                    !state.online -> UiTone.Warning
-                    state.canManageMoney -> UiTone.Success
-                    else -> UiTone.Danger
-                },
-                modifier = Modifier.weight(1f),
-            )
+                1 -> CompactStatCard(
+                    label = "Open tasks",
+                    value = state.tasks.size.toString(),
+                    detail = if (state.tasks.isEmpty()) "No payout recovery pending" else "Resolve each exact task",
+                    icon = Icons.AutoMirrored.Filled.AssignmentReturn,
+                    tone = if (state.tasks.isEmpty()) UiTone.Success else UiTone.Warning,
+                    modifier = modifier,
+                )
+                else -> CompactStatCard(
+                    label = "Money access",
+                    value = when {
+                        !state.online -> "Offline"
+                        state.canManageMoney -> "Ready"
+                        else -> "Locked"
+                    },
+                    detail = when {
+                        !state.online -> "Requests queue; cash payout waits"
+                        state.canManageMoney -> "Server reachable"
+                        else -> "Shift authority required"
+                    },
+                    icon = when {
+                        !state.online -> Icons.Default.CloudOff
+                        state.canManageMoney -> Icons.Default.Payments
+                        else -> Icons.Default.Lock
+                    },
+                    tone = when {
+                        !state.online -> UiTone.Warning
+                        state.canManageMoney -> UiTone.Success
+                        else -> UiTone.Danger
+                    },
+                    modifier = modifier,
+                )
+            }
         }
 
         state.moneyAccessMessage?.let { message ->
@@ -170,10 +162,13 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                 )
             },
             trailing = {
-                OperationalStatusBadge(
-                    label = if (state.online) "Online" else "Offline",
-                    tone = if (state.online) UiTone.Success else UiTone.Warning,
-                    icon = if (state.online) Icons.Default.Sync else Icons.Default.CloudOff,
+                ErpButton(
+                    text = if (state.busy) "Checking…" else "Refresh",
+                    onClick = vm::load,
+                    intent = ActionIntent.Secondary,
+                    enabled = !state.busy,
+                    busy = state.busy,
+                    leadingIcon = Icons.Default.Refresh,
                 )
             },
         )
@@ -631,9 +626,15 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
 
     AlertDialog(
         onDismissRequest = { if (!busy) vm.select(null) },
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.94f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Refund ${order.invoiceNo ?: "order"}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Collected", color = Brand.ForegroundMuted)
                     Text(order.paidMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
@@ -660,17 +661,22 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 }
 
                 Text("Payout rail", color = Brand.ForegroundMuted)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     FilterChip(
                         selected = mode == "cash",
                         onClick = { mode = "cash" },
                         label = { Text("Cash") },
+                        modifier = Modifier.weight(1f),
                         colors = refundChipColors(),
                     )
                     FilterChip(
                         selected = mode == "original",
                         onClick = { mode = "original" },
                         label = { Text("Original non-cash") },
+                        modifier = Modifier.weight(1f),
                         colors = refundChipColors(),
                     )
                 }
@@ -691,16 +697,28 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 }
 
                 Text("Reason", color = Brand.ForegroundMuted)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    REFUND_REASONS.chunked(3).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val columns = when {
+                        maxWidth >= 500.dp -> 3
+                        maxWidth >= 300.dp -> 2
+                        else -> 1
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        REFUND_REASONS.chunked(columns).forEach { row ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
                             row.forEach { (code, label) ->
                                 FilterChip(
                                     selected = reason == code,
                                     onClick = { reason = code },
                                     label = { Text(label) },
+                                    modifier = Modifier.weight(1f),
                                     colors = refundChipColors(),
                                 )
+                            }
+                            repeat(columns - row.size) { Box(Modifier.weight(1f)) }
                             }
                         }
                     }
@@ -775,9 +793,15 @@ private fun WithdrawCashDialog(
     var reason by remember(task.localId) { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(0.94f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Withdraw unpaid cash refund?") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     "Protected-owner action only. Confirm that none of ${task.amountMinor.asRupees()} reached the customer. If any cash left the drawer, cancel and settle instead.",
                 )

@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -29,15 +31,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.EventAvailable
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SyncProblem
@@ -64,14 +65,19 @@ import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.DecimalField
 import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.ConfirmDialog
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -140,7 +146,7 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: Eve
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(Spacing.md),
                         ) {
-                            CircularProgressIndicator(color = Brand.Gold)
+                            CircularProgressIndicator(color = Brand.Information)
                             Text("Loading events…", color = Brand.ForegroundMuted)
                         }
                     }
@@ -200,11 +206,29 @@ private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: Eve
 @Composable
 private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        PageHeader(
-            title = "Events",
-            subtitle = "Schedule screenings and tournaments, monitor capacity, and check in existing tickets.",
-            eyebrow = "Experiences & ticketing",
-            actions = {
+        ActionBar(
+            leading = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Event controls",
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        if (state.events.isEmpty()) {
+                            "Refresh the schedule or create the first event."
+                        } else {
+                            "${state.events.size} saved · ${state.upcoming.size} upcoming"
+                        },
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            },
+            trailing = {
                 ErpButton(
                     text = if (state.syncing) "Refreshing…" else "Refresh",
                     onClick = vm::retry,
@@ -224,7 +248,7 @@ private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAcce
         if (state.syncing) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
-                color = Brand.Gold,
+                color = Brand.Information,
                 trackColor = Brand.Surface,
             )
         }
@@ -235,39 +259,41 @@ private fun Header(state: EventsUiState, vm: EventsViewModel, access: EventsAcce
 private fun EventsSummary(state: EventsUiState) {
     val soldTickets = state.events.sumOf { it.sold }
     val pendingChanges = state.pendingTicketSales.size + state.pendingCheckIns.size
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-        CompactStatCard(
-            label = "Upcoming",
-            value = state.upcoming.size.toString(),
-            detail = "Scheduled or live",
-            icon = Icons.Default.EventAvailable,
-            tone = UiTone.Information,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = "Live now",
-            value = state.events.count { it.status == "live" }.toString(),
-            detail = "Accepting check-ins",
-            icon = Icons.Default.Schedule,
-            tone = UiTone.Success,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = "Tickets sold",
-            value = soldTickets.toString(),
-            detail = "Across saved events",
-            icon = Icons.Default.ConfirmationNumber,
-            tone = UiTone.Brand,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = "Pending sync",
-            value = pendingChanges.toString(),
-            detail = "Sales and check-ins",
-            icon = Icons.Default.SyncProblem,
-            tone = if (pendingChanges > 0) UiTone.Warning else UiTone.Neutral,
-            modifier = Modifier.weight(1f),
-        )
+    AdaptiveStatGrid(count = 4) { index, modifier ->
+        when (index) {
+            0 -> CompactStatCard(
+                label = "Upcoming",
+                value = state.upcoming.size.toString(),
+                detail = "Scheduled or live",
+                icon = Icons.Default.EventAvailable,
+                tone = UiTone.Information,
+                modifier = modifier,
+            )
+            1 -> CompactStatCard(
+                label = "Live now",
+                value = state.events.count { it.status == "live" }.toString(),
+                detail = "Accepting check-ins",
+                icon = Icons.Default.Schedule,
+                tone = UiTone.Success,
+                modifier = modifier,
+            )
+            2 -> CompactStatCard(
+                label = "Tickets sold",
+                value = soldTickets.toString(),
+                detail = "Across saved events",
+                icon = Icons.Default.ConfirmationNumber,
+                tone = UiTone.Information,
+                modifier = modifier,
+            )
+            else -> CompactStatCard(
+                label = "Pending sync",
+                value = pendingChanges.toString(),
+                detail = "Sales and check-ins",
+                icon = Icons.Default.SyncProblem,
+                tone = if (pendingChanges > 0) UiTone.Warning else UiTone.Neutral,
+                modifier = modifier,
+            )
+        }
     }
 }
 
@@ -340,7 +366,7 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
     val soldFraction = if (event.capacity > 0) event.sold.toFloat() / event.capacity else 0f
     val progressColor = when {
         soldFraction >= 0.9f -> Brand.Danger
-        soldFraction >= 0.6f -> Brand.Gold
+        soldFraction >= 0.6f -> Brand.Warning
         else -> Brand.Good
     }
     SectionCard(elevated = true) {
@@ -372,7 +398,8 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
             Text(
                 event.baseTicketPriceMinor.asRupees(),
                 style = MaterialTheme.typography.titleLarge,
-                color = Brand.Gold,
+                color = Brand.Foreground,
+                fontWeight = FontWeight.SemiBold,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -389,44 +416,80 @@ private fun EventCard(event: Event, vm: EventsViewModel, access: EventsAccess) {
             trackColor = Brand.SurfaceRaised,
         )
         Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (event.status in setOf("scheduled", "live") && event.remaining > 0) {
-                Button(onClick = {}, enabled = false) { Text("POS billing required") }
-            }
-            OutlinedButton(onClick = { vm.openTickets(event) }) { Text("Tickets (${event.sold})") }
-            TextButton(
-                onClick = { vm.openEditForm(event) },
-                enabled = access.canManageEvents,
-            ) { Text("Edit") }
-            if (event.status == "scheduled") {
-                TextButton(
+        EventActionBar(event, vm, access)
+        if (event.status in setOf("scheduled", "live") && event.remaining > 0) {
+            Text(
+                "New tickets require POS payment, invoice, shift, and GST reconciliation.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.ForegroundMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EventActionBar(event: Event, vm: EventsViewModel, access: EventsAccess) {
+    ActionBar(
+        leading = {
+            ErpButton(
+                text = "Tickets (${event.sold})",
+                onClick = { vm.openTickets(event) },
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.ConfirmationNumber,
+            )
+        },
+        trailing = {
+            if (event.status == "scheduled" && access.canManageEvents) {
+                ErpButton(
+                    text = "Mark live",
                     onClick = { vm.setEventStatus(event, "live") },
-                    enabled = access.canManageEvents,
-                ) { Text("Mark live") }
+                    intent = ActionIntent.Success,
+                )
             }
+            if (access.canManageEvents) {
+                EventManagementMenu(event, vm)
+            }
+        },
+    )
+}
+
+@Composable
+private fun EventManagementMenu(event: Event, vm: EventsViewModel) {
+    var expanded by remember(event.id) { mutableStateOf(false) }
+    Box {
+        ErpButton(
+            text = "Manage",
+            onClick = { expanded = true },
+            intent = ActionIntent.Secondary,
+            leadingIcon = Icons.Default.MoreVert,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit") },
+                onClick = {
+                    expanded = false
+                    vm.openEditForm(event)
+                },
+            )
             if (event.status in setOf("scheduled", "live")) {
-                TextButton(
-                    onClick = { vm.openConfirmCancel(event) },
-                    enabled = access.canManageEvents,
-                ) {
-                    Text("Cancel", color = Brand.Danger)
-                }
+                DropdownMenuItem(
+                    text = { Text("Cancel event", color = Brand.Danger) },
+                    onClick = {
+                        expanded = false
+                        vm.openConfirmCancel(event)
+                    },
+                )
             }
             if (event.sold == 0) {
-                TextButton(
-                    onClick = { vm.openConfirmDelete(event) },
-                    enabled = access.canManageEvents,
-                ) {
-                    Text("Delete", color = Brand.Danger)
-                }
+                DropdownMenuItem(
+                    text = { Text("Delete event", color = Brand.Danger) },
+                    onClick = {
+                        expanded = false
+                        vm.openConfirmDelete(event)
+                    },
+                )
             }
         }
-        Text(
-            "New tickets are disabled until POS payment, invoice, shift, and GST " +
-                "reconciliation are connected.",
-            style = MaterialTheme.typography.labelSmall,
-            color = Brand.ForegroundMuted,
-        )
     }
 }
 
@@ -442,7 +505,7 @@ private fun ActionErrorBanner(message: String, onDismiss: () -> Unit) {
             Text("Event action not completed", color = Brand.Danger, fontWeight = FontWeight.Bold)
             Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
         }
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
+        ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
     }
 }
 
@@ -516,12 +579,21 @@ private fun EventPendingRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (actionLabel != null) {
-                TextButton(onClick = onAction, enabled = actionEnabled) { Text(actionLabel) }
+                ErpButton(
+                    text = actionLabel,
+                    onClick = onAction,
+                    enabled = actionEnabled,
+                    intent = if (actionLabel == "Remove") {
+                        ActionIntent.Destructive
+                    } else {
+                        ActionIntent.Secondary
+                    },
+                )
             }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
-            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            color = if (rejected) Brand.Danger else Brand.Warning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -535,7 +607,7 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
+        ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
     }
 }
 
@@ -551,7 +623,7 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
             Text("Couldn't refresh", color = Brand.Danger, fontWeight = FontWeight.Bold)
             Text(message, style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
         }
-        Button(onClick = onRetry) { Text("Retry") }
+        ErpButton("Retry", onRetry)
     }
 }
 
@@ -728,7 +800,7 @@ private fun TicketsDialog(
         containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = vm::closeDialog,
-        modifier = Modifier.width(560.dp),
+        modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth(0.92f),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Tickets — ${event.name}") },
         text = {
@@ -745,7 +817,9 @@ private fun TicketsDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = vm::closeDialog) { Text("Close") } },
+        confirmButton = {
+            ErpButton("Close", vm::closeDialog, intent = ActionIntent.Secondary)
+        },
     )
 }
 
@@ -778,10 +852,12 @@ private fun TicketRow(
         Text(ticket.pricePaidMinor.asRupees(), style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground)
         Spacer(Modifier.width(8.dp))
         if (ticket.status == "sold" && !pendingCheckIn) {
-            TextButton(
+            ErpButton(
+                text = "Check in",
                 onClick = { vm.checkIn(event.id, ticket) },
                 enabled = canCheckIn,
-            ) { Text("Check in") }
+                intent = ActionIntent.Success,
+            )
         }
     }
 }
@@ -794,132 +870,6 @@ private fun TicketRow(
 @Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 2.dp))
-}
-
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    body: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm, enabled = !busy,
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-            ) { Text(confirmLabel, color = Brand.Foreground) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun FormDialog(
-    title: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.width(480.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun PickerField(
-    label: String,
-    selectedLabel: String,
-    options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("▾", color = Brand.Gold)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onSelect(id) })
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DecimalField(value: String, onValueChange: (String) -> Unit, label: String) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { onValueChange(filterDecimal(it)) },
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-private fun filterDecimal(raw: String): String {
-    val sb = StringBuilder()
-    var dotSeen = false
-    for (c in raw) {
-        when {
-            c.isDigit() -> sb.append(c)
-            c == '.' && !dotSeen -> { dotSeen = true; sb.append(c) }
-        }
-    }
-    return sb.toString()
 }
 
 /** "2026-08-22T20:00" (from an HTML-datetime-local-style input) -> a full

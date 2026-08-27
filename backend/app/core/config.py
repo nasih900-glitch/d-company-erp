@@ -69,14 +69,17 @@ class Settings(BaseSettings):
     # Native release compatibility is server-controlled. Raising the minimum
     # lets operations block a build whose local schema/API contract is no
     # longer safe, without shipping another already-obsolete APK first.
-    android_min_supported_version_code: int = Field(default=1, ge=1)
-    android_latest_version_code: int = Field(default=2, ge=1)
+    # v5 is the first build that supplies the conflict-safe Gaming pricing and
+    # timer snapshots required by the current write API. Older native builds
+    # must be stopped by compatibility middleware before they reach handlers.
+    android_min_supported_version_code: int = Field(default=5, ge=1)
+    android_latest_version_code: int = Field(default=5, ge=1)
     android_update_url: AnyHttpUrl | None = None
     ios_min_supported_version_code: int = Field(default=1, ge=1)
     ios_latest_version_code: int = Field(default=1, ge=1)
     ios_update_url: AnyHttpUrl | None = None
     client_update_message: str | None = Field(default=None, max_length=500)
-    require_native_version_headers: bool = False
+    require_native_version_headers: bool = True
     # A shared Tables/Gaming bill is leased while one POS device confirms and
     # collects payment. Ten minutes covers a realistic cash/UPI interaction;
     # clients still fail closed and reacquire after expiry or any bill change.

@@ -684,6 +684,12 @@ export default function LivePOSScreen() {
   const cartQty = useMemo(() => cart.reduce((sum, line) => sum + line.qty, 0), [cart]);
 
   function add(item: MenuItemDTO) {
+    if (resumingOrder) {
+      setError(
+        'Items are locked after Send to POS. Change only the customer or authorised benefits here; edit items from Tables before sending the bill.',
+      );
+      return;
+    }
     setCart((c) => {
       const ex = c.find((l) => l.item.id === item.id);
       return ex ? c.map((l) => l.item.id === item.id ? { ...l, qty: l.qty + 1 } : l) : [...c, { item, qty: 1 }];
@@ -983,20 +989,27 @@ export default function LivePOSScreen() {
         }
       } else {
         if (retry.resumingOrderId) {
-          order = await pos.attachCustomer(
-            retry.resumingOrderId,
-            {
-              customer_name: retry.snapshot.customerName.trim() || undefined,
-              customer_phone: retry.snapshot.customerPhone.trim() || undefined,
-            },
-            `order-customer:${retry.key}`,
-          );
+          order = await pos.getOrder(retry.resumingOrderId);
           if (retry.snapshot.cart.length) {
-            order = await pos.addLines(
-                retry.resumingOrderId,
-                retry.snapshot.cart.map((line) => ({ menu_item_id: line.itemId, qty: line.qty })),
-                `resume-lines:${retry.key}`,
-              );
+            throw new Error(
+              'This sent bill has locked items. Clear the locally added items and edit the original table bill before sending it to POS again.',
+            );
+          }
+          const desiredCustomerName = retry.snapshot.customerName.trim();
+          const desiredCustomerPhone = retry.snapshot.customerPhone.trim();
+          if (
+            (order.customer_name ?? '') !== desiredCustomerName
+            || (order.customer_phone ?? '') !== desiredCustomerPhone
+          ) {
+            order = await pos.attachCustomer(
+              retry.resumingOrderId,
+              {
+                customer_name: desiredCustomerName || undefined,
+                customer_phone: desiredCustomerPhone || undefined,
+              },
+              `order-customer:${retry.key}`,
+              order.checkout_version,
+            );
           }
         } else {
           order = await pos.createOrder(
@@ -1054,13 +1067,23 @@ export default function LivePOSScreen() {
       // existed — apply it now so the confirm-payment screen already shows
       // the discounted total instead of asking the cashier to re-enter it.
       if (pendingCartDiscountMinor > 0) {
-        order = await pos.applyDiscount(order.id, pendingCartDiscountMinor, `cart-discount:${retry.key}`);
+        order = await pos.applyDiscount(
+          order.id,
+          pendingCartDiscountMinor,
+          `cart-discount:${retry.key}`,
+          order.checkout_version,
+        );
         setPendingCartDiscountMinor(0);
       }
       // Same idea as the discount above, but for points redeemed before this
       // order existed — requires a customer to already be attached.
       if (pendingCartPointsMinor > 0) {
-        order = await pos.redeemPoints(order.id, pendingCartPointsMinor / 10, `cart-points:${retry.key}`);
+        order = await pos.redeemPoints(
+          order.id,
+          pendingCartPointsMinor / 10,
+          `cart-points:${retry.key}`,
+          order.checkout_version,
+        );
         setPendingCartPointsMinor(0);
       }
       retry = await canonicalizeAndClaim(retry, order);
@@ -1329,7 +1352,13 @@ export default function LivePOSScreen() {
     setApplyingDiscount(true);
     setDiscountError(null);
     try {
-      const order = await pos.applyDiscount(targetOrderId, minor, createOperationKey());
+      const canonical = await pos.getOrder(targetOrderId);
+      const order = await pos.applyDiscount(
+        targetOrderId,
+        minor,
+        createOperationKey(),
+        canonical.checkout_version,
+      );
       if (resumingOrder && order.id === resumingOrder.id) {
         setResumingOrder(order);
       }
@@ -1406,7 +1435,13 @@ export default function LivePOSScreen() {
     setApplyingPoints(true);
     setPointsError(null);
     try {
-      const order = await pos.redeemPoints(targetOrderId, points, createOperationKey());
+      const canonical = await pos.getOrder(targetOrderId);
+      const order = await pos.redeemPoints(
+        targetOrderId,
+        points,
+        createOperationKey(),
+        canonical.checkout_version,
+      );
       if (resumingOrder && order.id === resumingOrder.id) {
         setResumingOrder(order);
       }
@@ -1436,7 +1471,13 @@ export default function LivePOSScreen() {
     setRedeemingReward(key);
     setRewardError(null);
     try {
-      const order = await pos.redeemReward(targetOrderId, key, createOperationKey());
+      const canonical = await pos.getOrder(targetOrderId);
+      const order = await pos.redeemReward(
+        targetOrderId,
+        key,
+        createOperationKey(),
+        canonical.checkout_version,
+      );
       if (resumingOrder && order.id === resumingOrder.id) {
         setResumingOrder(order);
       }
@@ -1827,7 +1868,13 @@ export default function LivePOSScreen() {
             <div className="card col-span-full text-sm text-fg-muted">No menu items match.</div>
           )}
           {filtered.map((item) => (
-            <button key={item.id} onClick={() => add(item)} className="card text-left hover:border-accent transition group p-3 sm:p-4">
+            <button
+              key={item.id}
+              onClick={() => add(item)}
+              disabled={!!resumingOrder}
+              className="card text-left hover:border-accent transition group p-3 sm:p-4 disabled:cursor-not-allowed disabled:opacity-50"
+              title={resumingOrder ? 'Sent order items are locked; edit them from Tables.' : undefined}
+            >
               <div className="break-words text-sm font-semibold">{item.name}</div>
               <div className="text-fg-muted text-xs mt-1 flex items-center justify-between">
                 <span>{inr(item.base_price_minor)}</span>
@@ -1868,7 +1915,9 @@ export default function LivePOSScreen() {
           )}
           {!cart.length && (
             <p className="text-fg-muted text-sm text-center py-8">
-              {resumingOrder ? 'Tap items to add more before billing.' : 'Tap items to build the order.'}
+              {resumingOrder
+                ? 'Items are locked after Send to POS. Customer and authorised settlement benefits can still be changed.'
+                : 'Tap items to build the order.'}
             </p>
           )}
           {cart.map((l) => (

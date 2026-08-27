@@ -30,6 +30,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,12 +51,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
@@ -76,17 +78,22 @@ private data class PendingAccessChange(
 fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var pendingChange by remember { mutableStateOf<PendingAccessChange?>(null) }
+    val customOverrideCount = remember(state.cells) { state.cells.count { it.override != null } }
 
     Column(
         Modifier.fillMaxSize().background(Brand.Background)
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        PageHeader(
-            title = "Access Control",
-            subtitle = "Role permissions for operational modules, applied against the live server immediately",
-            eyebrow = "Security & roles",
-            actions = {
+        ActionBar(
+            leading = {
+                Text(
+                    "Permission matrix controls",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            },
+            trailing = {
                 ErpButton(
                     text = if (state.loading) "Loading…" else "Refresh",
                     onClick = vm::load,
@@ -98,50 +105,52 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
             },
         )
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-            CompactStatCard(
-                label = "Configurable roles",
-                value = if (state.loading) "—" else state.roles.size.toString(),
-                detail = "Protected owner excluded",
-                icon = Icons.Default.Groups,
-                tone = UiTone.Information,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Operational modules",
-                value = if (state.loading) "—" else state.modules.size.toString(),
-                detail = "Server-authoritative scope",
-                icon = Icons.Default.ViewModule,
-                tone = UiTone.Neutral,
-                modifier = Modifier.weight(1f),
-            )
-            CompactStatCard(
-                label = "Custom overrides",
-                value = if (state.loading) "—" else state.cells.count { it.override != null }.toString(),
-                detail = if (state.busyKeys.isEmpty()) "All changes settled" else "${state.busyKeys.size} updating now",
-                icon = Icons.Default.Tune,
-                tone = if (state.busyKeys.isEmpty()) UiTone.Success else UiTone.Warning,
-                modifier = Modifier.weight(1f),
-            )
+        AdaptiveStatGrid(count = 3) { index, modifier ->
+            when (index) {
+                0 -> CompactStatCard(
+                    label = "Configurable roles",
+                    value = if (state.loading && state.roles.isEmpty()) "—" else state.roles.size.toString(),
+                    detail = "Protected owner excluded",
+                    icon = Icons.Default.Groups,
+                    tone = UiTone.Information,
+                    modifier = modifier,
+                )
+                1 -> CompactStatCard(
+                    label = "Operational modules",
+                    value = if (state.loading && state.modules.isEmpty()) "—" else state.modules.size.toString(),
+                    detail = "Server-authoritative scope",
+                    icon = Icons.Default.ViewModule,
+                    tone = UiTone.Neutral,
+                    modifier = modifier,
+                )
+                else -> CompactStatCard(
+                    label = "Custom overrides",
+                    value = if (state.loading && state.cells.isEmpty()) "—" else customOverrideCount.toString(),
+                    detail = if (state.busyKeys.isEmpty()) "All changes settled" else "${state.busyKeys.size} updating now",
+                    icon = Icons.Default.Tune,
+                    tone = if (state.busyKeys.isEmpty()) UiTone.Neutral else UiTone.Warning,
+                    modifier = modifier,
+                )
+            }
         }
 
         OperationalBanner(
             title = "Changes apply immediately",
             detail = "Each confirmed cell is saved separately. The protected owner role cannot be restricted and is intentionally absent.",
-            tone = UiTone.Warning,
+            tone = UiTone.Information,
             icon = Icons.Default.Security,
         )
 
         SectionCard(
             modifier = Modifier.weight(1f),
             title = "Role permission matrix",
-            subtitle = "Tap Allowed or Blocked to review a change. The reset icon appears only for custom overrides.",
+            subtitle = "Tap Allowed or Blocked to review a change. Swipe horizontally for every module; reset appears only for custom overrides.",
             icon = Icons.Default.Security,
             elevated = true,
             contentPadding = PaddingValues(0.dp),
         ) {
             when {
-                state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                state.loading && state.roles.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -163,15 +172,26 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
                     primaryLabel = "Try again",
                     onPrimary = vm::load,
                 )
-                else -> AccessGrid(
-                    state = state,
-                    onToggle = { cell, roleLabel, moduleLabel ->
-                        pendingChange = PendingAccessChange(cell, roleLabel, moduleLabel, reset = false)
-                    },
-                    onReset = { cell, roleLabel, moduleLabel ->
-                        pendingChange = PendingAccessChange(cell, roleLabel, moduleLabel, reset = true)
-                    },
-                )
+                else -> {
+                    if (state.loading) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Brand.Information,
+                            trackColor = Brand.SurfaceRaised,
+                        )
+                    }
+                    AccessGrid(
+                        modifier = Modifier.weight(1f),
+                        state = state,
+                        enabled = !state.loading,
+                        onToggle = { cell, roleLabel, moduleLabel ->
+                            pendingChange = PendingAccessChange(cell, roleLabel, moduleLabel, reset = false)
+                        },
+                        onReset = { cell, roleLabel, moduleLabel ->
+                            pendingChange = PendingAccessChange(cell, roleLabel, moduleLabel, reset = true)
+                        },
+                    )
+                }
             }
         }
     }
@@ -223,11 +243,21 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
 
 @Composable
 private fun AccessGrid(
+    modifier: Modifier = Modifier,
     state: AccessControlUiState,
+    enabled: Boolean,
     onToggle: (AccessCell, String, String) -> Unit,
     onReset: (AccessCell, String, String) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
+    val cellsByKey = remember(state.cells) {
+        state.cells.associateBy { it.roleCode to it.module }
+    }
+    val overrideCounts = remember(state.cells) {
+        state.cells.filter { it.override != null }.groupingBy { it.roleCode }.eachCount()
+    }
+    val roleEntries = remember(state.roles) { state.roles.entries.toList() }
+
+    Column(modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
         Row(
             modifier = Modifier.background(Brand.SurfaceRaised).heightIn(min = 54.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -255,7 +285,7 @@ private fun AccessGrid(
         PanelDivider()
 
         LazyColumn(Modifier.weight(1f)) {
-            itemsIndexed(state.roles.entries.toList(), key = { _, entry -> entry.key }) { index, (roleCode, label) ->
+            itemsIndexed(roleEntries, key = { _, entry -> entry.key }) { index, (roleCode, label) ->
                 Row(
                     modifier = Modifier.background(if (index % 2 == 0) Brand.Surface else Brand.SurfaceRaised.copy(alpha = 0.42f))
                         .heightIn(min = 68.dp),
@@ -271,22 +301,23 @@ private fun AccessGrid(
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        val overrideCount = state.cells.count { it.roleCode == roleCode && it.override != null }
+                        val overrideCount = overrideCounts[roleCode] ?: 0
                         Text(
                             if (overrideCount == 0) "Role defaults" else "$overrideCount custom override${if (overrideCount == 1) "" else "s"}",
-                            color = if (overrideCount == 0) Brand.ForegroundFaint else Brand.GoldMuted,
+                            color = if (overrideCount == 0) Brand.ForegroundFaint else Brand.ForegroundMuted,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                     state.modules.forEach { module ->
                         Box(Modifier.width(MODULE_COLUMN_WIDTH), Alignment.Center) {
-                            val cell = state.cellFor(roleCode, module)
+                            val cell = cellsByKey[roleCode to module]
                             if (cell != null) {
                                 AccessCellToggle(
                                     cell = cell,
                                     roleLabel = label,
                                     moduleLabel = MODULE_LABELS[module] ?: module,
                                     busy = "$roleCode:$module" in state.busyKeys,
+                                    enabled = enabled,
                                     onToggle = { onToggle(cell, label, MODULE_LABELS[module] ?: module) },
                                     onReset = { onReset(cell, label, MODULE_LABELS[module] ?: module) },
                                 )
@@ -308,6 +339,7 @@ private fun AccessCellToggle(
     roleLabel: String,
     moduleLabel: String,
     busy: Boolean,
+    enabled: Boolean,
     onToggle: () -> Unit,
     onReset: () -> Unit,
 ) {
@@ -318,13 +350,14 @@ private fun AccessCellToggle(
                     contentDescription = "$roleLabel, $moduleLabel access"
                     stateDescription = when {
                         busy -> "Updating"
+                        !enabled -> "Refreshing server permissions"
                         cell.allowed -> "Allowed"
                         else -> "Blocked"
                     }
                 }
                 .toggleable(
                     value = cell.allowed,
-                    enabled = !busy,
+                    enabled = enabled && !busy,
                     role = Role.Switch,
                     onValueChange = { onToggle() },
                 ),
@@ -344,11 +377,11 @@ private fun AccessCellToggle(
         // unmodified cell is just following the role's static default and
         // has nothing to reset.
         if (cell.override != null) {
-            IconButton(onClick = onReset, enabled = !busy, modifier = Modifier.size(48.dp)) {
+            IconButton(onClick = onReset, enabled = enabled && !busy, modifier = Modifier.size(48.dp)) {
                 Icon(
                     Icons.Filled.Refresh,
                     contentDescription = "Reset to default (${if (cell.defaultAllowed) "allowed" else "blocked"})",
-                    tint = Brand.GoldMuted,
+                    tint = Brand.ForegroundMuted,
                     modifier = Modifier.size(16.dp),
                 )
             }

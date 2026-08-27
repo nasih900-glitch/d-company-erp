@@ -46,8 +46,16 @@ describe('POS checkout-claim API contract', () => {
   it('submits payment with both the stable operation key and checkout claim', async () => {
     const response = {
       id: 'payment-1',
+      order_id: 'order-1',
+      shift_id: 'shift-1',
+      method: 'upi',
       amount_minor: 4_200,
+      bill_amount_minor: 4_200,
       tip_minor: 0,
+      tendered_minor: null,
+      change_minor: null,
+      ref_external: null,
+      paid_at: '2026-08-25T20:20:00Z',
       order_status: 'paid',
       invoice_no: 'INV-1',
       fiscal_year: '2026-27',

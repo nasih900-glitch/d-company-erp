@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -57,6 +59,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
@@ -74,15 +77,19 @@ import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.ConfirmDialog
 import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DecimalField
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -108,7 +115,6 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
         Modifier.fillMaxSize().background(Brand.Background).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Header(state, vm)
         if (!access.canManageInventory) ViewOnlyNotice()
 
         when {
@@ -200,27 +206,6 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
     }
 }
 
-// ------------------------------------------------------------------- chrome
-
-@Composable
-private fun Header(state: InventoryUiState, vm: InventoryViewModel) {
-    PageHeader(
-        title = "Inventory",
-        subtitle = "Ingredients, FIFO batches, supplier receipts, and low-stock control",
-        eyebrow = "Stock control",
-        actions = {
-            ErpButton(
-                text = if (state.syncing) "Refreshing" else "Refresh",
-                onClick = vm::retry,
-                enabled = !state.syncing,
-                busy = state.syncing,
-                intent = ActionIntent.Secondary,
-                leadingIcon = Icons.Default.Refresh,
-            )
-        },
-    )
-}
-
 @Composable
 private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -233,8 +218,16 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
                     icon = if (canWrite) Icons.Default.CheckCircle else Icons.Default.Inventory2,
                 )
             },
-            trailing = if (!canWrite) null else {
-                {
+            trailing = {
+                ErpButton(
+                    text = if (state.syncing) "Refreshing" else "Refresh",
+                    onClick = vm::retry,
+                    enabled = !state.syncing,
+                    busy = state.syncing,
+                    intent = ActionIntent.Quiet,
+                    leadingIcon = Icons.Default.Refresh,
+                )
+                if (canWrite) {
                     if (state.tab == InventoryTab.INGREDIENTS) {
                         ErpButton(
                             text = if (compact) "Ingredient" else "New ingredient",
@@ -319,7 +312,7 @@ private fun PendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
-            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            color = if (rejected) Brand.Danger else Brand.Warning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -351,25 +344,12 @@ private fun RefreshErrorBanner(message: String, onRetry: () -> Unit) {
 
 @Composable
 private fun StatRow(state: InventoryUiState) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxWidth < 760.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StockValueMetric(state, Modifier.weight(1f))
-                    IngredientCountMetric(state, Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    LowStockMetric(state, Modifier.weight(1f))
-                    SupplierCountMetric(state, Modifier.weight(1f))
-                }
-            }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                StockValueMetric(state, Modifier.weight(1f))
-                IngredientCountMetric(state, Modifier.weight(1f))
-                LowStockMetric(state, Modifier.weight(1f))
-                SupplierCountMetric(state, Modifier.weight(1f))
-            }
+    AdaptiveStatGrid(count = 4) { index, modifier ->
+        when (index) {
+            0 -> StockValueMetric(state, modifier)
+            1 -> IngredientCountMetric(state, modifier)
+            2 -> LowStockMetric(state, modifier)
+            else -> SupplierCountMetric(state, modifier)
         }
     }
 }
@@ -380,7 +360,7 @@ private fun StockValueMetric(state: InventoryUiState, modifier: Modifier) = Comp
     value = state.stockValueMinor.asRupees(),
     detail = "Cost value on hand",
     icon = Icons.Default.Inventory2,
-    tone = UiTone.Brand,
+    tone = UiTone.Information,
     modifier = modifier,
 )
 
@@ -692,7 +672,7 @@ private fun IngredientRowCard(
         if (ingredient.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
-                color = Brand.GoldMuted,
+                color = Brand.Warning,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -703,7 +683,7 @@ private fun IngredientRowCard(
             ) {
                 Text(
                     "Removal pending sync",
-                    color = Brand.GoldMuted,
+                    color = Brand.Warning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -712,7 +692,7 @@ private fun IngredientRowCard(
         } else if (ingredient.pendingLocalId != null) {
             Text(
                 "Not synced yet",
-                color = Brand.GoldMuted,
+                color = Brand.Information,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -774,7 +754,7 @@ private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
     val fraction = (ingredient.currentQty / denom).coerceIn(0.0, 1.0).toFloat()
     val colour = when {
         ingredient.isLow -> Brand.Danger
-        fraction < 0.4f -> Brand.Gold
+        fraction < 0.4f -> Brand.Warning
         else -> Brand.Good
     }
     Box(modifier.height(6.dp).clip(RoundedCornerShape(3.dp)).background(Brand.SurfaceRaised)) {
@@ -783,7 +763,7 @@ private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.Gold) {
+private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.Information) {
     Text(
         label,
         color = tint,
@@ -925,7 +905,7 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String) {
                 color = Brand.Foreground,
                 fontWeight = FontWeight.Bold,
             )
-            Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = Brand.Gold)
+            Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = Brand.Foreground)
         }
         Text(
             "Received ${batch.receivedAt.asDay()}" +
@@ -1102,7 +1082,7 @@ private fun SupplierRowCard(
         if (supplier.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
-                color = Brand.GoldMuted,
+                color = Brand.Warning,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -1113,7 +1093,7 @@ private fun SupplierRowCard(
             ) {
                 Text(
                     "Removal pending sync",
-                    color = Brand.GoldMuted,
+                    color = Brand.Warning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -1122,7 +1102,7 @@ private fun SupplierRowCard(
         } else if (supplier.pendingLocalId != null) {
             Text(
                 "Not synced yet",
-                color = Brand.GoldMuted,
+                color = Brand.Information,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -1178,7 +1158,7 @@ private fun EmptyState(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.width(480.dp).padding(24.dp),
+            modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(24.dp),
         ) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
             Text(body, color = Brand.ForegroundMuted)
@@ -1349,7 +1329,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         confirmLabel = "Queue receipt",
         busy = state.busy,
         error = state.formError,
-        wide = true,
+        width = 760.dp,
         onDismiss = vm::closeDialog,
         onConfirm = {
             val lineError = lines.mapIndexedNotNull { index, line ->
@@ -1487,7 +1467,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             OutlinedButton(onClick = { lines = lines + GrnLineDraft() }) { Text("Add line") }
             Text(
                 "Total ${totalMinor.asRupees()}",
-                color = Brand.Gold,
+                color = Brand.Foreground,
                 style = MaterialTheme.typography.titleLarge,
             )
         }
@@ -1593,7 +1573,7 @@ private fun AdjustDialog(
                     Text(
                         "That is more than the system thinks is on hand — the server will " +
                             "floor stock at zero.",
-                        color = Brand.GoldMuted,
+                        color = Brand.Warning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1608,163 +1588,6 @@ private fun AdjustDialog(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-}
-
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    body: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = !busy,
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-            ) { Text(confirmLabel, color = Brand.Foreground) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-/** One dialog shell so every form errors, busies and cancels the same way. */
-@Composable
-private fun FormDialog(
-    title: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    wide: Boolean = false,
-    content: @Composable () -> Unit,
-) {
-    AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
-        modifier = if (wide) Modifier.width(760.dp) else Modifier.width(480.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-                // The server's own words (or, for a local validation issue,
-                // this dialog's own words), next to the button that caused
-                // them — "SKU already exists" is actionable, "Request
-                // failed" is not.
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-// ------------------------------------------------------------------- inputs
-
-@Composable
-private fun PickerField(
-    label: String,
-    selectedLabel: String,
-    options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Column(modifier) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("▾", color = Brand.Gold)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(
-                        text = { Text(text) },
-                        onClick = {
-                            open = false
-                            onSelect(id)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DecimalField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier,
-    allowNegative: Boolean = false,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { onValueChange(filterDecimal(it, allowNegative)) },
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = modifier,
-    )
-}
-
-/**
- * Keeps a numeric field numeric. The minus sign is only ever accepted where a
- * negative is meaningful — on a waste entry it would silently invert the
- * movement and put stock *back* on the shelf.
- */
-private fun filterDecimal(raw: String, allowNegative: Boolean): String {
-    val sb = StringBuilder()
-    var dotSeen = false
-    raw.forEachIndexed { index, c ->
-        when {
-            c.isDigit() -> sb.append(c)
-            c == '.' && !dotSeen -> {
-                dotSeen = true
-                sb.append(c)
-            }
-            c == '-' && allowNegative && index == 0 -> sb.append(c)
-        }
-    }
-    return sb.toString()
 }
 
 // ------------------------------------------------------------------ helpers

@@ -6,8 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -29,6 +32,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -37,6 +44,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.theme.Radius
 
 @Composable
 fun LoginScreen(
@@ -91,6 +100,8 @@ fun LoginScreen(
                 label = { Text("Email") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                shape = Radius.shapeMd,
+                colors = fieldColors(),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next,
@@ -103,6 +114,8 @@ fun LoginScreen(
                 label = { Text("Password") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                shape = Radius.shapeMd,
+                colors = fieldColors(),
                 visualTransformation = if (showPassword) VisualTransformation.None
                     else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
@@ -112,7 +125,10 @@ fun LoginScreen(
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
 
-            TextButton(onClick = { showPassword = !showPassword }) {
+            TextButton(
+                onClick = { showPassword = !showPassword },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
                 Text(if (showPassword) "Hide password" else "Show password")
             }
 
@@ -123,6 +139,7 @@ fun LoginScreen(
                     recovery.open(email)
                 },
                 enabled = !signingIn,
+                modifier = Modifier.heightIn(min = 48.dp),
             ) {
                 Text("Forgot password?")
             }
@@ -133,8 +150,12 @@ fun LoginScreen(
                     color = Brand.Good,
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
-                TextButton(onClick = recovery::dismissSuccess) { Text("Dismiss") }
+                TextButton(
+                    onClick = recovery::dismissSuccess,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("Dismiss") }
             }
 
             if (error != null) {
@@ -143,23 +164,29 @@ fun LoginScreen(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
                 )
             }
 
             Button(
                 onClick = { submit() },
                 enabled = canSubmit,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .semantics {
+                        if (signingIn) stateDescription = "Signing in"
+                    },
             ) {
                 if (signingIn) {
                     CircularProgressIndicator(
-                        modifier = Modifier.height(20.dp),
+                        modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,
-                        color = Brand.Background,
+                        color = Brand.ForegroundMuted,
                     )
-                } else {
-                    Text("Sign in")
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
                 }
+                Text(if (signingIn) "Signing in…" else "Sign in")
             }
         }
     }

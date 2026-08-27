@@ -30,10 +30,10 @@ internal data class GamingAlarmCandidate(
 /**
  * Builds the authoritative alarm set from Room.
  *
- * A pending local start is not a session yet and has no deadline. A pending
- * stop is different: the server session remains active (and billable) until
- * the stop is confirmed, so its existing deadline must remain armed. Only a
- * server-confirmed end suppresses the alarm.
+ * A v28 pending local start is operational work captured at the employee's
+ * tap and therefore owns its local deadline before reconnect. A pending stop
+ * keeps that deadline until the exact captured end is confirmed. Only a
+ * terminal/rejected start without a usable deadline suppresses the alarm.
  */
 internal fun gamingAlarmCandidates(
     cache: List<GamingSessionCacheEntity>,
@@ -68,7 +68,8 @@ internal fun gamingAlarmCandidates(
         .filter {
             it.timerEndsAtMillis != null &&
                 (
-                    it.state == GamingSessionState.START_SYNCED ||
+                    it.state == GamingSessionState.START_PENDING ||
+                        it.state == GamingSessionState.START_SYNCED ||
                         it.state == GamingSessionState.STOP_PENDING ||
                         it.state == GamingSessionState.STOP_REJECTED
                 ) &&

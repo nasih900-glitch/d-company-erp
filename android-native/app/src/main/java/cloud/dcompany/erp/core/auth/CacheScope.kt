@@ -23,8 +23,12 @@ data class CacheScope(
 internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "menu_items",
     "menu_categories",
+    "menu_variants",
+    "menu_modifier_groups",
+    "menu_modifiers",
     "sync_meta",
     "gaming_stations",
+    "gaming_package_cache",
     "gaming_session_cache",
     "kitchen_order_cache",
     "cafe_floors",
@@ -64,6 +68,7 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_orders",
     "local_shifts",
     "local_gaming_sessions",
+    "local_gaming_package_extensions",
     "local_kitchen_advances",
     "local_table_orders",
     "local_cafe_actions",
@@ -93,6 +98,7 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_branches",
     "local_terminals",
     "local_held_order_payments",
+    "pos_receipts",
 )
 
 internal val ALL_SCOPE_TABLES = SERVER_DERIVED_CACHE_TABLES + LOCAL_DURABLE_TABLES

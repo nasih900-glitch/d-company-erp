@@ -67,6 +67,24 @@ internal fun Request.withResolvedTerminal(terminalId: String?): Request {
 }
 
 /**
+ * Applies a short-lived, caller-owned bearer without consulting or mutating
+ * the process [TokenStore]. This is deliberately separate from
+ * [ApiClient]'s normal AuthInterceptor: a protected owner may approve one
+ * quarantined legacy action while the originating staff account and its Room
+ * lease remain active. The bearer is never refreshed or persisted.
+ */
+internal fun Request.withEphemeralAuthority(
+    accessToken: String?,
+    terminalId: String?,
+): Request {
+    val scoped = withResolvedTerminal(terminalId)
+    val builder = scoped.newBuilder().removeHeader("Authorization")
+    val token = accessToken?.trim()?.takeIf(String::isNotEmpty)
+    if (token != null) builder.header("Authorization", "Bearer $token")
+    return builder.build()
+}
+
+/**
  * A failure the caller can act on. `retryable` is the important bit: the UI
  * must never tell a cashier "payment failed" when the truth is "we never heard
  * back", because those demand opposite actions at the till.
@@ -123,6 +141,39 @@ object ApiClient {
     inline fun <reified T> create(): T = createApi(T::class.java)
 
     fun <T> createApi(service: Class<T>): T = retrofit.create(service)
+
+    /**
+     * Creates an isolated, non-refreshing client for one transient authority
+     * check. It never reads or writes [tokens], [activeTerminalHeaders], or
+     * cache scope. Callers must keep the returned API and bearer in local
+     * memory only and discard both when the operation completes.
+     */
+    internal inline fun <reified T> createEphemeralAuthorityApi(
+        accessToken: String? = null,
+        terminalId: String? = null,
+    ): T = createEphemeralAuthorityApi(T::class.java, accessToken, terminalId)
+
+    internal fun <T> createEphemeralAuthorityApi(
+        service: Class<T>,
+        accessToken: String? = null,
+        terminalId: String? = null,
+    ): T {
+        val client = baseClientBuilder()
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().withEphemeralAuthority(accessToken, terminalId),
+                )
+            }
+            .addInterceptor(ErrorInterceptor(json))
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(service)
+    }
 
     private lateinit var tokens: TokenStore
     private val activeTerminalHeaders = ActiveTerminalHeaderContext()

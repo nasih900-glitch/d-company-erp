@@ -411,6 +411,7 @@ def test_confirmed_payment_rejects_a_stale_or_partial_full_settlement() -> None:
     partial_without_client_expectations = pos_router.PaymentCreate(
         method="cash",
         amount_minor=5_000,
+        tendered_minor=5_000,
     )
     with pytest.raises(BusinessRuleError, match="Split payments are not enabled"):
         pos_router._validate_confirmed_payment_balance(
@@ -521,9 +522,10 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     payment = next(entity for entity in session.added if isinstance(entity, Payment))
     assert payment.amount_minor == 11_500  # bill + tip actually collected
 
-    assert response["amount_minor"] == 11_500
-    assert response["tip_minor"] == 1_500
-    assert response["order_status"] == "paid"
+    assert response.amount_minor == 11_500
+    assert response.bill_amount_minor == 10_000
+    assert response.tip_minor == 1_500
+    assert response.order_status == "paid"
     assert stored["status_code"] == 201
 
     # A fully-settled payment must queue exactly one OrderPaid publish as a
@@ -611,6 +613,7 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         pos_router.PaymentCreate(
             method="cash",
             amount_minor=5_000,
+            tendered_minor=5_000,
             expected_order_total_minor=5_000,
             expected_due_minor=5_000,
         ),
@@ -708,6 +711,7 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
         pos_router.PaymentCreate(
             method="cash",
             amount_minor=5_000,
+            tendered_minor=6_000,
             expected_order_total_minor=5_000,
             expected_due_minor=5_000,
         ),
@@ -716,7 +720,14 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
         background_tasks,
         tenant,
     )
-    assert response["order_status"] == "paid"
+    assert response.method == "cash"
+    assert response.amount_minor == 5_000
+    assert response.bill_amount_minor == 5_000
+    assert response.tip_minor == 0
+    assert response.tendered_minor == 6_000
+    assert response.change_minor == 1_000
+    assert response.paid_at is not None
+    assert response.order_status == "paid"
 
     # Must not raise even though the bus explodes.
     await background_tasks()
@@ -873,6 +884,109 @@ async def test_customer_repricing_updates_existing_lines_and_canonical_order_tot
     assert order.discount_minor == 4_000
     assert order.tax_minor == 2_441
     assert order.round_off_minor == 0
+
+
+@pytest.mark.asyncio
+async def test_deleted_package_session_cannot_receive_hourly_membership_waiver(
+    monkeypatch,
+) -> None:
+    company_id = uuid4()
+    branch_id = uuid4()
+    item_id = uuid4()
+    order = SimpleNamespace(
+        id=uuid4(),
+        branch_id=branch_id,
+        customer_phone="9000000000",
+        place_of_supply_state_code="32",
+        delivery_via=None,
+        subtotal_minor=0,
+        discount_minor=0,
+        manual_discount_minor=0,
+        points_redeemed_minor=0,
+        cgst_minor=0,
+        sgst_minor=0,
+        igst_minor=0,
+        cess_minor=0,
+        tax_minor=0,
+        round_off_minor=0,
+        total_minor=0,
+    )
+    line = SimpleNamespace(
+        menu_item_id=item_id,
+        qty=1,
+        unit_price_minor=15_000,
+        line_total_minor=15_000,
+        discount_minor=0,
+        taxable_value_minor=12_712,
+        tax_rate=0.18,
+        cgst_minor=1_144,
+        sgst_minor=1_144,
+        igst_minor=0,
+        cess_minor=0,
+    )
+    item = SimpleNamespace(
+        id=item_id,
+        sku="SESSION-PS5",
+        type="gaming",
+        price_includes_tax=True,
+    )
+    station = SimpleNamespace(type="ps5")
+    gaming_session = SimpleNamespace(
+        package_id=None,
+        billing_mode="legacy_ambiguous",
+        package_price_minor_snapshot=None,
+        package_duration_minutes_snapshot=None,
+        package_variant_snapshot=None,
+        package_station_type_snapshot=None,
+        status="ended",
+        amount_minor=15_000,
+        billable_minutes=60,
+        rate_per_hour_minor=15_000,
+        rate_includes_tax=True,
+        tax_rate=0.18,
+    )
+    requested: dict[str, int] = {}
+
+    async def _reserve(*_args, **kwargs):
+        requested["gaming_minutes"] = kwargs["requested_gaming_minutes"]
+        return SimpleNamespace(gaming_minutes=60, hookah_count=0)
+
+    class _Pricing:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def price_time_based_line(self, **kwargs):
+            assert kwargs["amount_minor"] == 15_000
+            assert kwargs["allowance_minor"] == 0
+            return SimpleNamespace(
+                total_minor=15_000,
+                discount_minor=0,
+                taxable_minor=12_712,
+                cgst_minor=1_144,
+                sgst_minor=1_144,
+                igst_minor=0,
+            )
+
+    monkeypatch.setattr(pos_router, "reserve_membership_benefits", _reserve)
+    monkeypatch.setattr(pos_router, "OrderPricingService", _Pricing)
+    db = _Session(
+        _Result(rows=[line]),
+        _Result(rows=[item]),
+        _Result(rows=[(gaming_session, station)]),
+        _Result(),
+        _Result(),
+    )
+
+    await pos_router._reprice_unpaid_order_for_customer(
+        db,
+        order=order,
+        company_id=company_id,
+    )
+
+    assert requested["gaming_minutes"] == 0
+    assert line.line_total_minor == 15_000
+    assert line.discount_minor == 0
+    assert order.total_minor == 15_000
 
 
 def test_cancel_reason_is_trimmed_and_whitespace_only_is_rejected() -> None:
@@ -1654,7 +1768,11 @@ async def test_start_session_replay_returns_stored_response_without_recreating()
     )
 
     response = await gaming_router.start_session(
-        gaming_router.SessionStart(station_id=station.id, shift_id=shift.id),
+        gaming_router.SessionStart(
+            station_id=station.id,
+            shift_id=shift.id,
+            expected_rate_per_hour_minor=20_000,
+        ),
         session,
         request,
         tenant,

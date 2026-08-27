@@ -450,6 +450,7 @@ async def test_held_payment_requires_claim_before_any_money_is_written(monkeypat
             pos_router.PaymentCreate(
                 method="cash",
                 amount_minor=order.total_minor,
+                tendered_minor=order.total_minor,
                 expected_order_total_minor=order.total_minor,
                 expected_due_minor=order.total_minor,
             ),
@@ -519,7 +520,7 @@ async def test_valid_held_payment_consumes_claim_in_sale_transaction(monkeypatch
         grant.token,
     )
 
-    assert response["order_status"] == "paid"
+    assert response.order_status == "paid"
     assert any(isinstance(entity, Payment) for entity in session.added)
     assert session.deleted == [grant.claim]
     assert stored["status_code"] == 201

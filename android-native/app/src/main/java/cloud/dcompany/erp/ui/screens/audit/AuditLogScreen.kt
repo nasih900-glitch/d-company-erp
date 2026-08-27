@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -48,6 +49,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DataListRow
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
@@ -55,7 +58,6 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -79,95 +81,108 @@ fun AuditLogScreen(vm: AuditLogViewModel = viewModel()) {
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        PageHeader(
-            title = "Audit Log",
-            subtitle = "Protected activity history showing who acted, what changed, when, and from which device",
-            eyebrow = "Security & accountability",
-            actions = if (state.locked) null else ({
-                ErpButton(
-                    text = "Lock",
-                    onClick = vm::lock,
-                    intent = ActionIntent.Secondary,
-                    leadingIcon = Icons.Default.Lock,
-                )
-                ErpButton(
-                    text = if (state.loading) "Refreshing…" else "Refresh",
-                    onClick = vm::refresh,
-                    enabled = !state.loading && !state.loadingMore,
-                    busy = state.loading,
-                    leadingIcon = Icons.Default.Refresh,
-                )
-            }),
-        )
-
         if (state.locked) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                CompactStatCard(
-                    label = "Access",
-                    value = "Locked",
-                    detail = "Protected owner only",
-                    icon = Icons.Default.Lock,
-                    tone = UiTone.Warning,
-                    modifier = Modifier.weight(1f),
-                )
-                CompactStatCard(
-                    label = "Auto-lock",
-                    value = "10 min",
-                    detail = "Short-lived audit session",
-                    icon = Icons.Default.History,
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth()
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                AdaptiveStatGrid(count = 3) { index, modifier ->
+                    when (index) {
+                        0 -> CompactStatCard(
+                            label = "Access",
+                            value = "Locked",
+                            detail = "Protected owner only",
+                            icon = Icons.Default.Lock,
+                            tone = UiTone.Neutral,
+                            modifier = modifier,
+                        )
+                        1 -> CompactStatCard(
+                            label = "Auto-lock",
+                            value = "10 min",
+                            detail = "Short-lived audit session",
+                            icon = Icons.Default.History,
+                            tone = UiTone.Information,
+                            modifier = modifier,
+                        )
+                        else -> CompactStatCard(
+                            label = "Credential storage",
+                            value = "None",
+                            detail = "Password is never saved",
+                            icon = Icons.Default.Security,
+                            tone = UiTone.Success,
+                            modifier = modifier,
+                        )
+                    }
+                }
+                OperationalBanner(
+                    title = "Owner verification required",
+                    detail = "Re-enter the current account password. The temporary audit token stays only in memory and expires automatically.",
                     tone = UiTone.Information,
-                    modifier = Modifier.weight(1f),
-                )
-                CompactStatCard(
-                    label = "Credential storage",
-                    value = "None",
-                    detail = "Password is never saved",
                     icon = Icons.Default.Security,
-                    tone = UiTone.Success,
-                    modifier = Modifier.weight(1f),
+                )
+                AuditUnlockPanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    password = password,
+                    onPasswordChange = { password = it },
+                    unlocking = state.unlocking,
+                    error = state.unlockError,
+                    onUnlock = { vm.unlock(password) },
                 )
             }
-            OperationalBanner(
-                title = "Owner verification required",
-                detail = "Re-enter the current account password. The temporary audit token stays only in memory and expires automatically.",
-                tone = UiTone.Information,
-                icon = Icons.Default.Security,
-            )
-            AuditUnlockPanel(
-                modifier = Modifier.weight(1f),
-                password = password,
-                onPasswordChange = { password = it },
-                unlocking = state.unlocking,
-                error = state.unlockError,
-                onUnlock = { vm.unlock(password) },
-            )
         } else {
             val selectedArea = AUDIT_AREAS.firstOrNull { it.value == state.area }?.label ?: "All"
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                CompactStatCard(
-                    label = "Loaded activity",
-                    value = state.entries.size.toString(),
-                    detail = if (state.endReached) "Complete selected history" else "Older activity available",
-                    icon = Icons.AutoMirrored.Filled.FactCheck,
-                    tone = UiTone.Information,
-                    modifier = Modifier.weight(1f),
-                )
-                CompactStatCard(
-                    label = "Current area",
-                    value = selectedArea,
-                    detail = "Server-authoritative filter",
-                    icon = Icons.Default.History,
-                    tone = UiTone.Neutral,
-                    modifier = Modifier.weight(1f),
-                )
-                CompactStatCard(
-                    label = "Protection",
-                    value = "Unlocked",
-                    detail = "Locks automatically after 10 min",
-                    icon = Icons.Default.VpnKey,
-                    tone = UiTone.Success,
-                    modifier = Modifier.weight(1f),
-                )
+            ActionBar(
+                leading = {
+                    Text(
+                        "Audit session controls",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                },
+                trailing = {
+                    ErpButton(
+                        text = "Lock",
+                        onClick = vm::lock,
+                        intent = ActionIntent.Secondary,
+                        leadingIcon = Icons.Default.Lock,
+                    )
+                    ErpButton(
+                        text = if (state.loading) "Refreshing…" else "Refresh",
+                        onClick = vm::refresh,
+                        enabled = !state.loading && !state.loadingMore,
+                        busy = state.loading,
+                        leadingIcon = Icons.Default.Refresh,
+                    )
+                },
+            )
+            AdaptiveStatGrid(count = 3) { index, modifier ->
+                when (index) {
+                    0 -> CompactStatCard(
+                        label = "Loaded activity",
+                        value = state.entries.size.toString(),
+                        detail = if (state.endReached) "Complete selected history" else "Older activity available",
+                        icon = Icons.AutoMirrored.Filled.FactCheck,
+                        tone = UiTone.Information,
+                        modifier = modifier,
+                    )
+                    1 -> CompactStatCard(
+                        label = "Current area",
+                        value = selectedArea,
+                        detail = "Server-authoritative filter",
+                        icon = Icons.Default.History,
+                        tone = UiTone.Neutral,
+                        modifier = modifier,
+                    )
+                    else -> CompactStatCard(
+                        label = "Protection",
+                        value = "Unlocked",
+                        detail = "Locks automatically after 10 min",
+                        icon = Icons.Default.VpnKey,
+                        tone = UiTone.Success,
+                        modifier = modifier,
+                    )
+                }
             }
             AuditAreaFilters(selected = state.area, onSelect = vm::selectArea)
             SectionCard(

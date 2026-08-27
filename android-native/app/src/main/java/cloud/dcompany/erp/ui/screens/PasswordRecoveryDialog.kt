@@ -4,10 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +26,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 
@@ -49,10 +53,12 @@ internal fun PasswordRecoveryDialog(
 
     AlertDialog(
         onDismissRequest = onCancel,
+        modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Reset password") },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (state.stage == PasswordRecoveryStage.REQUEST) {
@@ -178,15 +184,19 @@ internal fun PasswordRecoveryDialog(
         },
         confirmButton = {
             if (state.stage == PasswordRecoveryStage.REQUEST) {
-                Button(
+                ErpButton(
+                    text = "Request approval code",
                     onClick = onRequestCode,
                     enabled = !state.busy && state.retrySecondsRemaining == 0,
-                ) { Text("Request approval code") }
+                    busy = state.busy,
+                )
             } else {
-                Button(
+                ErpButton(
+                    text = "Update password",
                     onClick = onConfirm,
                     enabled = !state.busy,
-                ) { Text("Update password") }
+                    busy = state.busy,
+                )
             }
         },
         dismissButton = {

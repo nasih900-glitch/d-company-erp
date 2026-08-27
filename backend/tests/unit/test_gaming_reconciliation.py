@@ -15,6 +15,7 @@ from app.api.v1.gaming import router as gaming_router
 from app.core.errors import (
     BusinessRuleError,
     ForbiddenError,
+    GamingBillingRepairRequiredError,
     GamingSourceShiftClosedError,
 )
 from app.core.tenant import TenantContext
@@ -103,6 +104,10 @@ def _gaming_session(tenant: TenantContext, station, source_shift, **overrides):
         "rate_per_hour_minor": 20_000,
         "amount_minor": 15_667,
         "status": "ended",
+        "timer_minutes": None,
+        "cancel_reason": None,
+        "package_id": None,
+        "extra_controllers": 0,
         "customer_name": "Cafe Guest",
         "customer_phone": None,
         "tax_rate": 0.18,
@@ -157,6 +162,63 @@ def test_reconciliation_contract_is_audit_owner_only_and_requires_a_reason() -> 
         gaming_router.SessionReconcileToPos(
             target_shift_id=uuid4(),
             reason=" x ",
+        )
+
+    assert _route_permissions(gaming_router.repair_session_billing) == (
+        "admin.audit.read",
+    )
+    assert _route_permissions(gaming_router.resolve_legacy_gaming_outbox) == (
+        "admin.audit.read",
+    )
+
+
+def test_legacy_outbox_resolution_schema_requires_traceable_evidence() -> None:
+    common = {
+        "local_action_id": uuid4(),
+        "station_id": uuid4(),
+        "captured_started_at": datetime(2026, 8, 26, 10, tzinfo=UTC),
+        "expected_rate_per_hour_minor": 20_000,
+        "reason": "Owner reviewed the retained local evidence",
+    }
+    with pytest.raises(PydanticValidationError, match="requires reference_order_id"):
+        gaming_router.LegacyOutboxResolution(
+            **common,
+            resolution="manual_bill_recorded",
+        )
+    with pytest.raises(PydanticValidationError, match="must not include"):
+        gaming_router.LegacyOutboxResolution(
+            **common,
+            resolution="confirmed_no_play",
+            reference_order_id=uuid4(),
+        )
+    with pytest.raises(PydanticValidationError, match="must not include"):
+        gaming_router.LegacyOutboxResolution(
+            **common,
+            shift_id=uuid4(),
+            resolution="server_session_recovered",
+            reference_order_id=uuid4(),
+        )
+    recovered = gaming_router.LegacyOutboxResolution(
+        **common,
+        shift_id=uuid4(),
+        resolution="server_session_recovered",
+    )
+    assert recovered.shift_id is not None
+    with pytest.raises(PydanticValidationError, match="requires expected_rate"):
+        gaming_router.LegacyOutboxResolution(
+            **{**common, "expected_rate_per_hour_minor": None},
+            resolution="confirmed_no_play",
+        )
+    with pytest.raises(PydanticValidationError, match="must not include"):
+        gaming_router.LegacyOutboxResolution(
+            **common,
+            package_id=uuid4(),
+            resolution="confirmed_no_play",
+        )
+    with pytest.raises(PydanticValidationError, match="at least 3"):
+        gaming_router.LegacyOutboxResolution(
+            **{**common, "reason": " x "},
+            resolution="confirmed_no_play",
         )
 
 
@@ -342,3 +404,110 @@ async def test_normal_send_exposes_the_closed_source_recovery_code() -> None:
     assert raised.value.code == "gaming_source_shift_closed"
     assert gaming_session.order_id is None
     assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_send_cancel_and_reconcile_fail_closed_for_missing_ended_amount() -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="closed")
+    station = _station(tenant)
+    gaming_session = _gaming_session(
+        tenant,
+        station,
+        source_shift,
+        amount_minor=None,
+    )
+
+    with pytest.raises(GamingBillingRepairRequiredError, match="Repair billing"):
+        await gaming_router.send_session_to_pos(
+            gaming_session.id,
+            _Session(_Result(gaming_session), entities={(Station, station.id): station}),
+            tenant,
+        )
+
+    open_shift = _shift(tenant, status="open")
+    gaming_session.shift_id = open_shift.id
+    with pytest.raises(GamingBillingRepairRequiredError, match="Repair billing"):
+        await gaming_router.cancel_session(
+            gaming_session.id,
+            gaming_router.SessionCancel(reason="Owner reviewed duplicate"),
+            _Session(
+                _Result(gaming_session),
+                _Result(open_shift),
+                entities={(Station, station.id): station},
+            ),
+            tenant,
+        )
+
+    gaming_session.shift_id = source_shift.id
+    with pytest.raises(GamingBillingRepairRequiredError, match="Repair billing"):
+        await gaming_router.reconcile_session_to_pos(
+            gaming_session.id,
+            gaming_router.SessionReconcileToPos(
+                target_shift_id=uuid4(),
+                reason="Recover missing bill",
+            ),
+            _Session(_Result(gaming_session), entities={(Station, station.id): station}),
+            tenant,
+        )
+
+    assert gaming_session.status == "ended"
+    assert gaming_session.amount_minor is None
+    assert gaming_session.order_id is None
+
+
+@pytest.mark.asyncio
+async def test_owner_billing_repair_is_reasoned_audited_and_idempotency_stored(
+    monkeypatch,
+) -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="closed")
+    station = _station(tenant)
+    gaming_session = _gaming_session(
+        tenant,
+        station,
+        source_shift,
+        amount_minor=None,
+    )
+    db = _Session(
+        _Result(gaming_session),
+        entities={(Station, station.id): station},
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="gaming-billing-repair:test",
+            idempotency_request_hash="same-hash",
+        )
+    )
+    stored: dict = {}
+
+    async def reserve(_session, **_kwargs):
+        return None
+
+    async def store(_session, **kwargs):
+        stored.update(kwargs)
+
+    monkeypatch.setattr(gaming_router, "check_or_reserve", reserve)
+    monkeypatch.setattr(gaming_router, "store_response", store)
+
+    response = await gaming_router.repair_session_billing(
+        gaming_session.id,
+        gaming_router.SessionBillingRepair(
+            expected_amount_minor=None,
+            amount_minor=15_667,
+            reason="Recovered from locked rate and billable minutes",
+        ),
+        db,
+        request,
+        tenant,
+    )
+
+    audit = next(row for row in db.added if isinstance(row, AuditLog))
+    assert response.amount_minor == 15_667
+    assert gaming_session.amount_minor == 15_667
+    assert audit.action == "gaming_session_billing_repair"
+    assert audit.before["amount_minor"] is None
+    assert audit.after["amount_minor"] == 15_667
+    assert audit.reason == "Recovered from locked rate and billable minutes"
+    assert stored["key"] == "gaming-billing-repair:test"
+    assert stored["status_code"] == 200

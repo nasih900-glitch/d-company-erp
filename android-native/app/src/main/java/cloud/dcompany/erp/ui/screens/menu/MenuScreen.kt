@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,12 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,10 +31,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestaurantMenu
@@ -63,9 +57,12 @@ import cloud.dcompany.erp.core.auth.MenuAccess
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
+import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -203,28 +200,12 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
 private fun MenuSummary(state: MenuUiState) {
     val available = state.allItems.count(ItemRow::isAvailable)
     val soldOut = state.allItems.size - available
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val cards: List<@Composable (Modifier) -> Unit> = listOf(
-            { modifier -> CompactStatCard("Categories", state.categories.size.toString(), modifier, "Menu groups", Icons.Filled.Category, UiTone.Brand) },
-            { modifier -> CompactStatCard("Menu items", state.allItems.size.toString(), modifier, "Configured products", Icons.Filled.RestaurantMenu, UiTone.Information) },
-            { modifier -> CompactStatCard("Available", available.toString(), modifier, "Ready for sale", Icons.Filled.Inventory2, UiTone.Success) },
-            { modifier -> CompactStatCard("Sold out", soldOut.toString(), modifier, "Unavailable at POS", Icons.Filled.Inventory2, if (soldOut > 0) UiTone.Warning else UiTone.Neutral) },
-        )
-        if (maxWidth >= 760.dp) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                cards.forEach { it(Modifier.weight(1f)) }
-            }
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                cards.chunked(2).forEach { rowCards ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    ) {
-                        rowCards.forEach { card -> card(Modifier.weight(1f)) }
-                    }
-                }
-            }
+    AdaptiveStatGrid(count = 4) { index, modifier ->
+        when (index) {
+            0 -> CompactStatCard("Categories", state.categories.size.toString(), modifier, "Menu groups", Icons.Filled.Category, UiTone.Neutral)
+            1 -> CompactStatCard("Menu items", state.allItems.size.toString(), modifier, "Configured products", Icons.Filled.RestaurantMenu, UiTone.Information)
+            2 -> CompactStatCard("Available", available.toString(), modifier, "Ready for sale", Icons.Filled.Inventory2, UiTone.Success)
+            else -> CompactStatCard("Sold out", soldOut.toString(), modifier, "Unavailable at POS", Icons.Filled.Inventory2, if (soldOut > 0) UiTone.Warning else UiTone.Neutral)
         }
     }
 }
@@ -470,18 +451,13 @@ private fun ItemRowCard(
 
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
-    }
+    OperationalBanner(
+        title = "Menu updated",
+        detail = message,
+        tone = UiTone.Success,
+        icon = Icons.Filled.CheckCircle,
+        action = { ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet) },
+    )
 }
 
 // --------------------------------------------------------------- dialogs
@@ -497,49 +473,40 @@ private fun CategoryEditorDialog(
 ) {
     var sortOrderText by rememberSaveable(editor.id) { mutableStateOf(editor.sortOrder.toString()) }
     val sortOrderValid = sortOrderText.toIntOrNull() != null
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text(if (editor.isUnsyncedDraft) "New category" else "Edit category") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = sortOrderText,
-                    onValueChange = { raw ->
-                        // Keep the operator's exact candidate visible. Validation below
-                        // rejects malformed/overflow values without silently coercing them.
-                        sortOrderText = raw
-                        sortOrderText.toIntOrNull()?.let { onChange(editor.copy(sortOrder = it)) }
-                    },
-                    label = { Text("Sort order (lower shows first)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = !sortOrderValid,
-                    supportingText = if (!sortOrderValid) {
-                        { Text("Enter a whole number, such as 0 or 10.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid && sortOrderValid) {
-                Text(if (saving) "Saving…" else "Save")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    FormDialog(
+        title = if (editor.isUnsyncedDraft) "New category" else "Edit category",
+        confirmLabel = "Save category",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        confirmEnabled = editor.valid && sortOrderValid,
+    ) {
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = sortOrderText,
+            onValueChange = { raw ->
+                // Keep the operator's exact candidate visible. Validation below
+                // rejects malformed/overflow values without silently coercing them.
+                sortOrderText = raw
+                sortOrderText.toIntOrNull()?.let { onChange(editor.copy(sortOrder = it)) }
+            },
+            label = { Text("Sort order (lower shows first)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            isError = !sortOrderValid,
+            supportingText = if (!sortOrderValid) {
+                { Text("Enter a whole number, such as 0 or 10.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -552,60 +519,49 @@ private fun ItemDetailsDialog(
     onCancel: () -> Unit,
     onSave: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text("Item details") },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.description,
-                    onValueChange = { onChange(editor.copy(description = it)) },
-                    label = { Text("Description (optional)") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                CategoryDropdown(
-                    categories = categories,
-                    selectedId = editor.categoryId,
-                    onSelect = { onChange(editor.copy(categoryId = it)) },
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Available for sale", color = Brand.Foreground)
-                    Switch(
-                        checked = editor.isAvailable,
-                        onCheckedChange = { onChange(editor.copy(isAvailable = it)) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
-                    )
-                }
-                Text(
-                    "Price, tax and HSN are edited separately (needs your password).",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
-                )
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Saving…" else "Save details")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    FormDialog(
+        title = "Item details",
+        confirmLabel = "Save details",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        width = 560.dp,
+        confirmEnabled = editor.valid,
+    ) {
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.description,
+            onValueChange = { onChange(editor.copy(description = it)) },
+            label = { Text("Description (optional)") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        CategoryDropdown(
+            categories = categories,
+            selectedId = editor.categoryId,
+            onSelect = { onChange(editor.copy(categoryId = it)) },
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Available for sale", color = Brand.Foreground)
+            Switch(
+                checked = editor.isAvailable,
+                onCheckedChange = { onChange(editor.copy(isAvailable = it)) },
+                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+            )
+        }
+        Text(
+            "Price, tax and HSN are edited separately (needs your password).",
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
+        )
+    }
 }
 
 @Composable
@@ -617,64 +573,56 @@ private fun ItemPricingDialog(
     onCancel: () -> Unit,
     onSave: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text("Price & tax") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = editor.basePriceRupees,
-                    onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
-                    label = { Text("Price (₹)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    isError = editor.basePriceMinor == null,
-                    supportingText = if (editor.basePriceMinor == null) {
-                        { Text("Enter rupees with no more than 2 decimal places.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.taxRatePercent,
-                    onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
-                    label = { Text("GST rate (%)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    isError = !editor.taxRateValid,
-                    supportingText = if (!editor.taxRateValid) {
-                        { Text("GST rate must be between 0 and 100.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.hsnCode,
-                    onValueChange = { onChange(editor.copy(hsnCode = it)) },
-                    label = { Text("HSN/SAC (optional — a default is used if blank)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Price includes tax", color = Brand.Foreground)
-                    Switch(
-                        checked = editor.priceIncludesTax,
-                        onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
-                    )
-                }
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Saving…" else "Save price")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    FormDialog(
+        title = "Price & tax",
+        confirmLabel = "Save price",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        width = 560.dp,
+        confirmEnabled = editor.valid,
+    ) {
+        OutlinedTextField(
+            value = editor.basePriceRupees,
+            onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
+            label = { Text("Price (₹)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            isError = editor.basePriceMinor == null,
+            supportingText = if (editor.basePriceMinor == null) {
+                { Text("Enter rupees with no more than 2 decimal places.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.taxRatePercent,
+            onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
+            label = { Text("GST rate (%)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            isError = !editor.taxRateValid,
+            supportingText = if (!editor.taxRateValid) {
+                { Text("GST rate must be between 0 and 100.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.hsnCode,
+            onValueChange = { onChange(editor.copy(hsnCode = it)) },
+            label = { Text("HSN/SAC (optional — a default is used if blank)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Price includes tax", color = Brand.Foreground)
+            Switch(
+                checked = editor.priceIncludesTax,
+                onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
+                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+            )
+        }
+    }
 }
 
 @Composable
@@ -687,86 +635,75 @@ private fun ItemCreateDialog(
     onCancel: () -> Unit,
     onSave: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text("New item") },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                CategoryDropdown(
-                    categories = categories,
-                    selectedId = editor.categoryId,
-                    onSelect = { onChange(editor.copy(categoryId = it)) },
-                )
-                OutlinedTextField(
-                    value = editor.sku,
-                    onValueChange = { onChange(editor.copy(sku = it)) },
-                    label = { Text("SKU") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                TypeDropdown(selected = editor.type, onSelect = { onChange(editor.copy(type = it)) })
-                OutlinedTextField(
-                    value = editor.basePriceRupees,
-                    onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
-                    label = { Text("Price (₹)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    isError = editor.basePriceMinor == null,
-                    supportingText = if (editor.basePriceMinor == null) {
-                        { Text("Enter rupees with no more than 2 decimal places.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.taxRatePercent,
-                    onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
-                    label = { Text("GST rate (%, optional)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    isError = !editor.taxRateValid,
-                    supportingText = if (!editor.taxRateValid) {
-                        { Text("GST rate must be between 0 and 100.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.hsnCode,
-                    onValueChange = { onChange(editor.copy(hsnCode = it)) },
-                    label = { Text("HSN/SAC (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.description,
-                    onValueChange = { onChange(editor.copy(description = it)) },
-                    label = { Text("Description (optional)") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Creating…" else "Create")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    FormDialog(
+        title = "New item",
+        confirmLabel = "Create item",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        width = 620.dp,
+        confirmEnabled = editor.valid,
+    ) {
+        CategoryDropdown(
+            categories = categories,
+            selectedId = editor.categoryId,
+            onSelect = { onChange(editor.copy(categoryId = it)) },
+        )
+        OutlinedTextField(
+            value = editor.sku,
+            onValueChange = { onChange(editor.copy(sku = it)) },
+            label = { Text("SKU") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TypeDropdown(selected = editor.type, onSelect = { onChange(editor.copy(type = it)) })
+        OutlinedTextField(
+            value = editor.basePriceRupees,
+            onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
+            label = { Text("Price (₹)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            isError = editor.basePriceMinor == null,
+            supportingText = if (editor.basePriceMinor == null) {
+                { Text("Enter rupees with no more than 2 decimal places.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.taxRatePercent,
+            onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
+            label = { Text("GST rate (%, optional)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            isError = !editor.taxRateValid,
+            supportingText = if (!editor.taxRateValid) {
+                { Text("GST rate must be between 0 and 100.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.hsnCode,
+            onValueChange = { onChange(editor.copy(hsnCode = it)) },
+            label = { Text("HSN/SAC (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.description,
+            onValueChange = { onChange(editor.copy(description = it)) },
+            label = { Text("Description (optional)") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

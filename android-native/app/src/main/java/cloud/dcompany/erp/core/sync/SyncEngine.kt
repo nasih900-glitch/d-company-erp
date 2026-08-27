@@ -48,6 +48,7 @@ import cloud.dcompany.erp.core.db.MembershipRefundTaskCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.IngredientCacheEntity
@@ -55,6 +56,7 @@ import cloud.dcompany.erp.core.db.IngredientWriteState
 import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
 import cloud.dcompany.erp.core.db.LocalAdjustmentEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
+import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
 import cloud.dcompany.erp.core.db.LocalGrnEntity
 import cloud.dcompany.erp.core.db.LocalGrnLineEntity
 import cloud.dcompany.erp.core.db.LocalIngredientEntity
@@ -78,6 +80,12 @@ import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuModifierEntity
+import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
+import cloud.dcompany.erp.core.db.PosReceiptSource
+import cloud.dcompany.erp.core.db.decodeModifierSelections
+import cloud.dcompany.erp.core.db.paymentReceipt
 import cloud.dcompany.erp.core.db.OnShiftEntity
 import cloud.dcompany.erp.core.db.ReportSnapshotEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
@@ -96,6 +104,7 @@ import cloud.dcompany.erp.core.db.SyncMetaEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.core.net.BackendReachability
 import cloud.dcompany.erp.core.net.backendIsOnline
 import cloud.dcompany.erp.core.net.CreateOrderRequest
@@ -116,6 +125,9 @@ import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
+import cloud.dcompany.erp.ui.screens.gaming.SessionStopBody
+import cloud.dcompany.erp.ui.screens.gaming.toPackageExtendBody
+import cloud.dcompany.erp.ui.screens.gaming.toCacheEntity
 import cloud.dcompany.erp.ui.screens.inventory.AdjustmentBody
 import cloud.dcompany.erp.ui.screens.memberships.MembershipsApi
 import cloud.dcompany.erp.ui.screens.memberships.CashMembershipRefundSettlementRequest
@@ -685,6 +697,26 @@ internal fun resourceRefreshFailureMessage(resource: String, failure: Throwable)
         "Could not refresh $label data: $serverReason. $retryGuidance"
     }
 }
+
+/** The durable action UUID itself is the server idempotency identity; never derive a mutable key. */
+internal fun packageExtensionIdempotencyKey(action: LocalGamingPackageExtensionEntity): String =
+    action.actionId
+
+internal fun packageExtensionFailureMessage(failure: Exception): String = when (failure) {
+    is ApiException -> if (failure.mustPreserveOutbox) {
+        "Paid extension confirmation is pending. Keep the session open while the original charge is checked safely."
+    } else {
+        failure.message ?: "The server refused the saved paid extension."
+    }
+    else ->
+        "Paid extension confirmation is pending because the connection ended without a response. Keep the session open."
+}
+
+internal enum class GamingStopReplayMode { CAPTURED_TIMESTAMP_BODY, LEGACY_BODYLESS }
+
+internal fun gamingStopReplayMode(endAtMillis: Long?): GamingStopReplayMode =
+    if (endAtMillis == null) GamingStopReplayMode.LEGACY_BODYLESS
+    else GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY
 
 enum class RejectedShiftOpenVerificationStatus {
     CLEARED,
@@ -1720,6 +1752,7 @@ class SyncEngine(
             // older in-flight GET cannot land after a newer confirmed write.
             withSessionResourceSerialisations(sessionLease, "gaming", "orders") {
                 val changedHeldQueue = pushGamingSessions()
+                pushGamingPackageExtensions()
                 if (changedHeldQueue && resourceAccess.canPull("orders")) {
                     pullHeldOrdersBestEffort()
                 }
@@ -2239,7 +2272,11 @@ class SyncEngine(
         // an old sync pass cannot rewrite A's recovery state after sign-out or
         // after B has replaced the workspace.
         val recoveryLease = cacheIsolation.currentLease() ?: return false
-        if (!commitToCurrentScope(recoveryLease) { dao.recoverLegacyRejectedSessions() }) return false
+        if (!commitToCurrentScope(recoveryLease) {
+                dao.recoverLegacyRejectedSessions()
+                dao.quarantineUnverifiableLegacyPackageStarts()
+            }
+        ) return false
         val shiftDao = db.shiftDao()
         val ready = dao.pushableSessions().filter { row ->
             // Only a still-unsynced start leg has a shift to wait on — a
@@ -2288,8 +2325,32 @@ class SyncEngine(
                 SessionStartBody(
                     stationId = row.stationId,
                     shiftId = resolvedShiftId,
+                    // Preserve offline start -> stop chronology. The server
+                    // validates this against the matching provenance header
+                    // below before accepting the backdated start.
+                    startedAt = Instant.ofEpochMilli(row.startedAtMillis).toString(),
                     customerPhone = row.customerPhone,
                     timerMinutes = row.timerMinutes,
+                    packageId = row.packageId,
+                    extraControllers = row.extraControllers,
+                    expectedRatePerHourMinor = requireNotNull(row.ratePerHourMinor) {
+                        "This saved gaming start has no locked hourly-rate snapshot. Refresh Gaming and capture a new start."
+                    },
+                    expectedPackagePriceMinor = row.packageId?.let {
+                        requireNotNull(row.packagePriceMinor) {
+                            "This saved package start has no locked price snapshot. Refresh Gaming and capture a new start."
+                        }
+                    },
+                    expectedPackageDurationMinutes = row.packageId?.let {
+                        requireNotNull(row.packageDurationMinutes) {
+                            "This saved package start has no locked duration snapshot. Refresh Gaming and capture a new start."
+                        }
+                    },
+                    expectedPackageVariant = row.packageId?.let {
+                        requireNotNull(row.packageVariant) {
+                            "This saved package start has no locked variant snapshot. Refresh Gaming and capture a new start."
+                        }
+                    },
                 ),
                 "gaming-session-start:${row.localId}",
                 outboxProvenanceHeaders(row.startedAtMillis, "gaming-session-start:${row.localId}"),
@@ -2299,10 +2360,21 @@ class SyncEngine(
                 localId = row.localId,
                 serverId = serverId,
                 status = started.status,
+                shiftId = started.shiftId,
                 startedAtMillis = Instant.parse(started.startAt).toEpochMilli(),
+                timerMinutes = started.timerMinutes,
                 timerEndsAtMillis = started.timerEndsAt?.let {
                     runCatching { Instant.parse(it).toEpochMilli() }.getOrNull()
                 },
+                amountMinor = started.amountMinor,
+                ratePerHourMinor = started.ratePerHourMinor,
+                packageId = started.packageId,
+                billingMode = started.billingMode,
+                packagePriceMinor = started.packagePriceMinorSnapshot,
+                packageDurationMinutes = started.packageDurationMinutesSnapshot,
+                packageVariant = started.packageVariantSnapshot,
+                packageStationTypeSnapshot = started.packageStationTypeSnapshot,
+                extraControllers = started.extraControllers,
             )
             dao.transitionSessionState(
                 row.localId,
@@ -2312,18 +2384,53 @@ class SyncEngine(
         }
         val current = dao.localSessionById(row.localId) ?: return false
         if (current.state == GamingSessionState.STOP_PENDING) {
-            val stopped = gamingApi.stop(
-                serverId,
-                "gaming-session-stop:${row.localId}",
-                outboxProvenanceHeaders(null, "gaming-session-stop:${row.localId}"),
-            )
-            dao.markSessionStopped(
-                row.localId,
-                stopped.status,
-                stopped.endAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() },
-                stopped.billableMinutes,
-                stopped.amountMinor,
-            )
+            val stopKey = "gaming-session-stop:${row.localId}"
+            val provenance = outboxProvenanceHeaders(current.endAtMillis, stopKey)
+            val stopped = when (gamingStopReplayMode(current.endAtMillis)) {
+                GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY -> gamingApi.stop(
+                    id = serverId,
+                    body = SessionStopBody(
+                        Instant.ofEpochMilli(requireNotNull(current.endAtMillis)).toString(),
+                    ),
+                    key = stopKey,
+                    provenance = provenance,
+                )
+                GamingStopReplayMode.LEGACY_BODYLESS -> gamingApi.stopLegacy(
+                    id = serverId,
+                    key = stopKey,
+                    provenance = provenance,
+                )
+            }
+            require(stopped.id == serverId) {
+                "Server Stop response did not match the saved gaming session."
+            }
+            // A protected legacy recovery may have linked an already-paid POS
+            // order before this exact captured Stop replays. Persist that as
+            // SENT immediately; exposing Payment Due would invite a duplicate
+            // charge. Otherwise retain the normal ended-unbilled workflow.
+            db.withTransaction {
+                val orderId = stopped.orderId
+                if (orderId != null) {
+                    dao.markSessionSent(
+                        row.localId,
+                        orderId,
+                        requireNotNull(stopped.amountMinor) {
+                            "Order-linked gaming session has no authoritative amount."
+                        },
+                    )
+                } else {
+                    dao.markSessionStopped(
+                        row.localId,
+                        stopped.status,
+                        stopped.endAt?.let {
+                            runCatching { Instant.parse(it).toEpochMilli() }.getOrNull()
+                        },
+                        stopped.billableMinutes,
+                        stopped.amountMinor,
+                    )
+                }
+                dao.upsertSessionCache(listOf(stopped.toCacheEntity()))
+            }
             return false
         }
         if (current.state == GamingSessionState.SEND_PENDING) {
@@ -2331,14 +2438,79 @@ class SyncEngine(
                 serverId,
                 outboxProvenanceHeaders(null, "gaming-session-send:${row.localId}"),
             )
-            dao.markSessionSent(row.localId, sent.orderId, sent.amountMinor)
+            // The server has committed the financial handoff. Persist both
+            // local overlay and visible cache in one transaction before any
+            // best-effort refresh, so a later read failure cannot resurrect
+            // Payment Due or misclassify this as a failed Stop.
+            db.withTransaction {
+                dao.markSessionSent(row.localId, sent.orderId, sent.amountMinor)
+                dao.markCachedSessionSent(serverId, sent.orderId, sent.amountMinor)
+            }
             // The successful handoff changes both shared views. Both resource
             // locks are already held, so these raw pulls do not re-enter the
             // non-reentrant serialiser.
-            pullGamingData()
+            try {
+                pullGamingData()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (refreshFailure: Exception) {
+                Log.w(
+                    "SyncEngine",
+                    "Gaming POS handoff committed; deferred board refresh failed",
+                    refreshFailure,
+                )
+            }
             return true
         }
         return false
+    }
+
+    /**
+     * Replay paid extensions from their immutable financial outbox. A lost
+     * response remains ambiguous and is retried only with the original UUID,
+     * so neither process death nor a reconnect can buy the package twice.
+     */
+    private suspend fun pushGamingPackageExtensions() {
+        val dao = db.gamingDao()
+        for (action in dao.packageExtensionsForSync()) {
+            val lease = cacheIsolation.currentLease() ?: return
+            try {
+                val updated = gamingApi.extendWithPackage(
+                    id = action.serverSessionId,
+                    body = action.toPackageExtendBody(),
+                    key = packageExtensionIdempotencyKey(action),
+                    provenance = outboxProvenanceHeaders(action.createdAtMillis, action.actionId),
+                )
+                if (!commitToCurrentScope(lease) {
+                        db.withTransaction {
+                            dao.upsertAuthoritativeSession(updated.toCacheEntity())
+                            check(dao.markPackageExtensionConfirmed(action.actionId) == 1) {
+                                "The paid extension changed state before confirmation could be committed."
+                            }
+                        }
+                    }
+                ) return
+                GamingAlarmReconciler.reconcile(DCompanyApp.instance)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val message = packageExtensionFailureMessage(failure)
+                val preserve = failure !is ApiException || failure.mustPreserveOutbox
+                if (preserve) {
+                    commitToCurrentScope(lease) {
+                        dao.markPackageExtensionAmbiguous(action.actionId, message)
+                    }
+                    sessionAwareLastError = message
+                    passHadAmbiguousFailure = true
+                    if (failure is ApiException && failure.status == 426) throw failure
+                    return
+                }
+                commitToCurrentScope(lease) {
+                    dao.markPackageExtensionRejected(action.actionId, message)
+                }
+                sessionAwareLastError = message
+            }
+        }
     }
 
     /**
@@ -2350,6 +2522,7 @@ class SyncEngine(
     private suspend fun pullGamingData() {
         val lease = cacheIsolation.currentLease() ?: return
         val stations = gamingApi.stations()
+        val packages = gamingApi.packages()
         val sessions = gamingApi.sessions()
         commitToCurrentScope(lease) {
             db.withTransaction {
@@ -2365,11 +2538,25 @@ class SyncEngine(
                         )
                     },
                 )
+                db.gamingDao().replacePackages(
+                    packages.map {
+                        GamingPackageCacheEntity(
+                            id = it.id,
+                            stationType = it.stationType,
+                            variant = it.variant,
+                            kind = it.kind,
+                            name = it.name,
+                            durationMinutes = it.durationMinutes,
+                            priceMinor = it.priceMinor,
+                        )
+                    },
+                )
                 db.gamingDao().replaceSessionCache(
                     sessions.map {
                         GamingSessionCacheEntity(
                             id = it.id,
                             stationId = it.stationId,
+                            shiftId = it.shiftId,
                             status = it.status,
                             startAtMillis = runCatching { Instant.parse(it.startAt).toEpochMilli() }
                                 .getOrDefault(System.currentTimeMillis()),
@@ -2382,6 +2569,14 @@ class SyncEngine(
                             },
                             billableMinutes = it.billableMinutes,
                             amountMinor = it.amountMinor,
+                            ratePerHourMinor = it.ratePerHourMinor,
+                            packageId = it.packageId,
+                            billingMode = it.billingMode,
+                            packagePriceMinorSnapshot = it.packagePriceMinorSnapshot,
+                            packageDurationMinutesSnapshot = it.packageDurationMinutesSnapshot,
+                            packageVariantSnapshot = it.packageVariantSnapshot,
+                            packageStationTypeSnapshot = it.packageStationTypeSnapshot,
+                            extraControllers = it.extraControllers,
                             customerName = it.customerName,
                             customerPhone = it.customerPhone,
                             orderId = it.orderId,
@@ -3062,12 +3257,13 @@ class SyncEngine(
     private suspend fun pushHeldOrderPaymentOne(row: LocalHeldOrderPaymentEntity) {
         var token = row.claimToken
         var reacquisitions = 0
+        val sourceLabel = db.heldOrderDao().orderForAlarm(row.targetOrderId)?.sourceLabel
         while (true) {
-            if (token == null) {
+            if (row.requiresCheckoutClaim && token == null) {
                 token = acquireMatchingClaimForConfirmedPayment(row)
             }
             try {
-                ApiClient.api.recordPayment(
+                val paid = ApiClient.api.recordPayment(
                     row.targetOrderId,
                     PaymentRequest(
                         method = row.method,
@@ -3083,13 +3279,30 @@ class SyncEngine(
                         HeldOrderClaimPolicy.paymentIdempotencyKey(row.localId),
                     ),
                 )
-                db.heldOrderDao().markPaymentSynced(row.localId)
+                // Fetch the authoritative post-payment order before resolving
+                // the outbox. If this GET is interrupted, the same idempotent
+                // payment replay remains pending and the receipt is never lost.
+                val finalOrder = ApiClient.api.order(row.targetOrderId)
+                db.posReceiptDao().storeAndMarkSettlementSynced(
+                    receipt = paymentReceipt(
+                        order = finalOrder,
+                        payment = paid,
+                        sourceKind = if (row.requiresCheckoutClaim) {
+                            PosReceiptSource.HELD
+                        } else {
+                            PosReceiptSource.DIRECT
+                        },
+                        sourceLabel = sourceLabel,
+                    ),
+                    localPaymentId = row.localId,
+                )
                 // The order this just paid is no longer held — drop it from
                 // the queue now rather than waiting for realtime.
                 pullHeldOrders()
                 return
             } catch (e: ApiException) {
                 if (
+                    !row.requiresCheckoutClaim ||
                     !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(e.code) ||
                     reacquisitions >= 2
                 ) {
@@ -5471,6 +5684,47 @@ class SyncEngine(
                     categories = categories.map {
                         MenuCategoryEntity(id = it.id, name = it.name, sortOrder = it.sortOrder)
                     },
+                    variants = items.flatMap { item ->
+                        item.variants.map { variant ->
+                            MenuVariantEntity(
+                                id = variant.id,
+                                menuItemId = item.id,
+                                name = variant.name,
+                                priceDeltaMinor = variant.priceDeltaMinor,
+                                sortOrder = variant.sortOrder,
+                                isActive = variant.isActive,
+                            )
+                        }
+                    },
+                    modifierGroups = items.flatMap { item ->
+                        item.modifierGroups.map { group ->
+                            MenuModifierGroupEntity(
+                                id = group.id,
+                                menuItemId = item.id,
+                                name = group.name,
+                                minSelect = group.minSelect,
+                                maxSelect = group.maxSelect,
+                                sortOrder = group.sortOrder,
+                                isActive = group.isActive,
+                            )
+                        }
+                    },
+                    modifiers = items.flatMap { item ->
+                        item.modifierGroups.flatMap { group ->
+                            group.options.map { option ->
+                            MenuModifierEntity(
+                                id = option.id,
+                                menuItemId = item.id,
+                                modifierGroupId = group.id,
+                                name = option.name,
+                                priceDeltaMinor = option.priceDeltaMinor,
+                                maxQuantity = option.maxQuantity,
+                                sortOrder = option.sortOrder,
+                                isActive = option.isActive,
+                            )
+                            }
+                        }
+                    },
                 )
                 db.syncMetaDao().put(SyncMetaEntity("menu", System.currentTimeMillis()))
             }
@@ -5575,6 +5829,9 @@ class SyncEngine(
     private suspend fun pushOne(order: LocalOrderEntity) {
         val dao = db.orderDao()
         val lines = dao.linesFor(order.localId)
+        // New captures freeze the exact amount the cashier confirmed. The
+        // estimate fallback exists only for rows created by older app builds.
+        val capturedAmountMinor = order.capturedAmountMinor ?: order.estimateMinor
         // If order.shiftId is a local shift's id, resolve it to the real
         // server id (guaranteed non-null here — pushPendingOrders only lets
         // resolved orders through). Otherwise it was already a real server
@@ -5588,9 +5845,21 @@ class SyncEngine(
             CreateOrderRequest(
                 type = order.type,
                 shiftId = resolvedShiftId,
-                lines = lines.map { OrderLineRequest(it.menuItemId, it.qty) },
+                lines = lines.map { line ->
+                    OrderLineRequest(
+                        clientLineId = line.clientLineId,
+                        menuItemId = line.menuItemId,
+                        qty = line.qty,
+                        variantId = line.variantId,
+                        modifiers = decodeModifierSelections(line.modifierSelectionsJson).map {
+                            ModifierSelectionRequest(modifierId = it.modifierId, qty = it.qty)
+                        },
+                        note = line.note,
+                    )
+                },
                 customerName = order.customerName,
                 customerPhone = order.customerPhone,
+                notes = order.orderNote,
             ),
             idempotencyKey = "order:${order.localId}",
             provenance = outboxProvenanceHeaders(order.createdAtMillis, "order:${order.localId}"),
@@ -5607,10 +5876,10 @@ class SyncEngine(
         // enabled. So a mismatch is parked for a human, with both numbers in
         // the message. The order stays open and unpaid on the server, which is
         // the honest state.
-        if (created.dueMinor != order.estimateMinor) {
+        if (created.dueMinor != capturedAmountMinor) {
             dao.markRejected(
                 order.localId,
-                "Price changed while offline: collected ${order.estimateMinor.asRupees()}, " +
+                "Price changed while offline: collected ${capturedAmountMinor.asRupees()}, " +
                     "server bill is ${created.dueMinor.asRupees()}. " +
                     "Order ${created.id.take(8)} is open and unpaid — settle the difference.",
             )
@@ -5621,7 +5890,7 @@ class SyncEngine(
             created.id,
             PaymentRequest(
                 method = order.paymentMethod,
-                amountMinor = created.dueMinor,
+                amountMinor = capturedAmountMinor,
                 tenderedMinor = order.tenderedMinor.takeIf { order.paymentMethod == "cash" },
                 expectedTotalMinor = created.totalMinor,
                 expectedDueMinor = created.dueMinor,
@@ -5631,10 +5900,16 @@ class SyncEngine(
             provenance = outboxProvenanceHeaders(order.createdAtMillis, "payment:${order.localId}"),
         )
 
-        dao.markSynced(
-            localId = order.localId,
+        val finalOrder = ApiClient.api.order(created.id)
+        db.posReceiptDao().storeAndMarkLocalSaleSynced(
+            receipt = paymentReceipt(
+                order = finalOrder,
+                payment = paid,
+                sourceKind = PosReceiptSource.OFFLINE_DIRECT,
+            ),
+            localOrderId = order.localId,
             // The order id, not the payment id — paid.id identifies the Payment.
-            serverId = created.id,
+            serverOrderId = created.id,
             invoiceNo = paid.invoiceNo,
             totalMinor = created.totalMinor,
         )

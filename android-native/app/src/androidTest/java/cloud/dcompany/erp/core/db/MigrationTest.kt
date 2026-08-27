@@ -1545,4 +1545,274 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate26To27_preservesGamingRowsAndAddsLockedBillingOwnershipSnapshots() {
+        helper.createDatabase(dbName, 26).apply {
+            execSQL(
+                "INSERT INTO gaming_session_cache " +
+                    "(id, stationId, status, startAtMillis, endAtMillis, timerMinutes, " +
+                    "timerEndsAtMillis, billableMinutes, amountMinor, customerName, customerPhone, orderId) " +
+                    "VALUES ('server-session', 'station-1', 'ended', 1000, 2000, 30, " +
+                    "31000, 30, 7500, 'Guest', '9999999999', NULL)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, customerPhone, timerMinutes, " +
+                    "startedAtMillis, state, status, endAtMillis, timerEndsAtMillis, " +
+                    "billableMinutes, amountMinor, orderId, lastError) " +
+                    "VALUES ('local-session', 'server-session', 'station-1', 'shift-1', " +
+                    "'9999999999', 30, 1000, 'ended_unbilled', 'ended', 2000, 31000, " +
+                    "30, 7500, NULL, NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 27, true, MIGRATION_26_27)
+
+        migrated.query(
+            "SELECT id, shiftId, ratePerHourMinor, packageId, extraControllers, amountMinor " +
+                "FROM gaming_session_cache WHERE id = 'server-session'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("server-session", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertEquals(0, cursor.getInt(4))
+            assertEquals(7500L, cursor.getLong(5))
+        }
+        migrated.query(
+            "SELECT localId, ratePerHourMinor, packageId, extraControllers, amountMinor " +
+                "FROM local_gaming_sessions WHERE localId = 'local-session'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("local-session", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertEquals(0, cursor.getInt(3))
+            assertEquals(7500L, cursor.getLong(4))
+        }
+        migrated.query("SELECT COUNT(*) FROM gaming_package_cache").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate27To28_preservesSessionsAndAddsImmutablePackageExtensionOutbox() {
+        helper.createDatabase(dbName, 27).apply {
+            execSQL(
+                "INSERT INTO gaming_package_cache " +
+                    "(id, stationType, variant, kind, name, durationMinutes, priceMinor) " +
+                    "VALUES ('base-60', 'ps5', 'solo', 'base', 'Solo 60 min', 60, 15000)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, customerPhone, timerMinutes, " +
+                    "startedAtMillis, state, status, endAtMillis, timerEndsAtMillis, " +
+                    "billableMinutes, amountMinor, ratePerHourMinor, packageId, " +
+                    "extraControllers, orderId, lastError) VALUES " +
+                    "('local-session', 'server-session', 'station-1', 'shift-1', " +
+                    "'9999999999', 60, 1000, 'start_synced', 'active', NULL, 61000, " +
+                    "NULL, 15000, 15000, 'base-60', 1, NULL, NULL)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, serverId, stationId, shiftId, timerMinutes, startedAtMillis, " +
+                    "state, status, endAtMillis, packageId, extraControllers) VALUES " +
+                    "('missing-package', NULL, 'station-2', 'shift-1', 45, 1500, " +
+                    "'stop_pending', 'stopping', 2500, 'base-60', 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 28, true, MIGRATION_27_28)
+
+        migrated.query(
+            "SELECT localId, packagePriceMinor, packageDurationMinutes, packageVariant, " +
+                "amountMinor, packageId, billingMode, packageStationTypeSnapshot " +
+                "FROM local_gaming_sessions WHERE localId = 'local-session'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("local-session", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertEquals(15000L, cursor.getLong(4))
+            assertEquals("base-60", cursor.getString(5))
+            assertTrue(cursor.isNull(6))
+            assertTrue(cursor.isNull(7))
+        }
+        migrated.query(
+            "SELECT billingMode, packagePriceMinorSnapshot, packageDurationMinutesSnapshot, " +
+                "packageVariantSnapshot, packageStationTypeSnapshot FROM gaming_session_cache",
+        ).use { cursor ->
+            // This fixture has no server session row, but schema validation
+            // above proves all five authoritative snapshot columns exist.
+            assertTrue(!cursor.moveToFirst())
+        }
+        migrated.query(
+            "SELECT packagePriceMinor, packageDurationMinutes, packageVariant, state, status, " +
+                "endAtMillis, lastError, legacyResolution, legacyResolutionReason, " +
+                "legacyResolutionReferenceOrderId, legacyResolutionAttemptState, " +
+                "legacyResolutionError, legacyResolutionCapturedAtMillis, legacyResolvedAtMillis, " +
+                "legacyResolvedByUserId, legacyResolutionReceiptId, " +
+                "legacyOriginalCapturedStartAtMillis, legacyOriginalCapturedStopAtMillis " +
+                "FROM local_gaming_sessions WHERE localId = 'missing-package'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertEquals(GamingSessionState.START_REJECTED, cursor.getString(3))
+            assertEquals("start_failed", cursor.getString(4))
+            assertEquals(2500L, cursor.getLong(5))
+            assertEquals(LEGACY_PACKAGE_START_REVIEW_ERROR, cursor.getString(6))
+            for (column in 7..15) assertTrue(cursor.isNull(column))
+            assertEquals(1500L, cursor.getLong(16))
+            assertEquals(2500L, cursor.getLong(17))
+        }
+
+        migrated.execSQL(
+            "INSERT INTO local_gaming_package_extensions " +
+                "(actionId, serverSessionId, localSessionId, shiftId, packageId, " +
+                "expectedPackagePriceMinor, expectedPackageDurationMinutes, " +
+                "expectedPackageVariant, expectedSessionTimerMinutes, " +
+                "expectedSessionAmountMinor, createdAtMillis, state, lastError, " +
+                "resolvedAtMillis, resolutionReason) VALUES " +
+                "('11111111-1111-4111-8111-111111111111', 'server-session', " +
+                "'local-session', 'shift-1', 'extend-30', 7500, 30, 'solo', " +
+                "60, 15000, 2000, 'ambiguous', 'response unknown', NULL, NULL)",
+        )
+        migrated.query(
+            "SELECT actionId, expectedPackagePriceMinor, expectedPackageDurationMinutes, " +
+                "expectedPackageVariant, expectedSessionTimerMinutes, " +
+                "expectedSessionAmountMinor, state, lastError, resolvedAtMillis, resolutionReason " +
+                "FROM local_gaming_package_extensions",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("11111111-1111-4111-8111-111111111111", cursor.getString(0))
+            assertEquals(7500L, cursor.getLong(1))
+            assertEquals(30, cursor.getInt(2))
+            assertEquals("solo", cursor.getString(3))
+            assertEquals(60, cursor.getInt(4))
+            assertEquals(15000L, cursor.getLong(5))
+            assertEquals(GamingPackageExtensionState.AMBIGUOUS, cursor.getString(6))
+            assertEquals("response unknown", cursor.getString(7))
+            assertTrue(cursor.isNull(8))
+            assertTrue(cursor.isNull(9))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate28To29_preservesCapturedSalesAndAddsRecoverablePosDraftSchema() {
+        helper.createDatabase(dbName, 28).apply {
+            execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, customerName, estimateMinor, paymentMethod, " +
+                    "tenderedMinor, tipMinor, createdAtMillis, syncState) VALUES " +
+                    "('sale-1', 'shift-1', 'dine_in', 'Guest', 12500, 'cash', " +
+                    "20000, 0, 1234, 'pending')",
+            )
+            execSQL(
+                "INSERT INTO local_order_lines " +
+                    "(orderLocalId, menuItemId, name, qty, unitPriceMinor) VALUES " +
+                    "('sale-1', 'item-1', 'Cold coffee', 1, 12500)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 29, true, MIGRATION_28_29)
+
+        migrated.query(
+            "SELECT localId, syncState, estimateMinor, manualDiscountMinor, updatedAtMillis, " +
+                "serverSubtotalMinor, checkoutClaimToken, discountRequestVersion, revision, " +
+                "capturedAmountMinor FROM local_orders WHERE localId = 'sale-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("sale-1", cursor.getString(0))
+            assertEquals(SyncState.PENDING, cursor.getString(1))
+            assertEquals(12500L, cursor.getLong(2))
+            assertEquals(0L, cursor.getLong(3))
+            assertEquals(1234L, cursor.getLong(4))
+            assertTrue(cursor.isNull(5))
+            assertTrue(cursor.isNull(6))
+            assertTrue(cursor.isNull(7))
+            assertEquals(0L, cursor.getLong(8))
+            assertTrue(cursor.isNull(9))
+        }
+        migrated.query(
+            "SELECT clientLineId, variantId, variantPriceDeltaMinor, modifierSelectionsJson, note " +
+                "FROM local_order_lines WHERE orderLocalId = 'sale-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals(0L, cursor.getLong(2))
+            assertEquals("[]", cursor.getString(3))
+            assertTrue(cursor.isNull(4))
+        }
+        migrated.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND " +
+                "name IN ('menu_variants', 'menu_modifiers') ORDER BY name",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("menu_modifiers", cursor.getString(0))
+            assertTrue(cursor.moveToNext())
+            assertEquals("menu_variants", cursor.getString(0))
+            assertTrue(!cursor.moveToNext())
+        }
+
+        migrated.execSQL(
+            "INSERT INTO local_shifts " +
+                "(localId, serverShiftId, terminalId, branchId, openingFloatMinor, " +
+                "openedAtMillis, state, closeResultPending) VALUES " +
+                "('closing-shift', 'server-shift', 'terminal-1', 'branch-1', 0, 2000, " +
+                "'close_pending', 0)",
+        )
+        var draftBlocked = false
+        try {
+            migrated.execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, estimateMinor, paymentMethod, tenderedMinor, " +
+                    "tipMinor, createdAtMillis, updatedAtMillis, syncState, manualDiscountMinor) VALUES " +
+                    "('late-draft', 'closing-shift', 'dine_in', 1000, '', 0, 0, 2001, 2001, 'draft', 0)",
+            )
+        } catch (e: SQLiteConstraintException) {
+            draftBlocked = e.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD)
+        }
+        assertTrue(draftBlocked)
+        migrated.close()
+    }
+
+    @Test
+    fun migrate29To30_preservesSalesAndAddsDurableReceiptHistory() {
+        helper.createDatabase(dbName, 29).apply {
+            execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, shiftId, type, estimateMinor, paymentMethod, tenderedMinor, " +
+                    "tipMinor, createdAtMillis, updatedAtMillis, syncState, manualDiscountMinor, revision) " +
+                    "VALUES ('sale-before-receipts', 'shift-1', 'dine_in', 12500, 'cash', " +
+                    "20000, 0, 1234, 1234, 'synced', 0, 4)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 30, true, MIGRATION_29_30)
+        migrated.query(
+            "SELECT syncState, revision FROM local_orders WHERE localId = 'sale-before-receipts'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(SyncState.SYNCED, cursor.getString(0))
+            assertEquals(4L, cursor.getLong(1))
+        }
+        migrated.query("SELECT COUNT(*) FROM pos_receipts").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.close()
+    }
 }

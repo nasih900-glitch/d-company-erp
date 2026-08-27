@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -78,7 +80,6 @@ import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.LoadingSkeleton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -108,29 +109,16 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
         Modifier.fillMaxSize().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Header(
-            state,
+        CustomerActionRow(
+            state = state,
             canWrite = access.canManageCustomers,
+            onQueryChange = vm::search,
+            onClearSearch = vm::clearSearch,
             onRefresh = vm::retry,
             onAdd = vm::startCreate,
         )
         if (!access.canManageCustomers) ViewOnlyNotice()
         Totals(state)
-        ActionBar(
-            leading = {
-                SearchInput(
-                    value = state.query,
-                    onValueChange = vm::search,
-                    placeholder = "Search customers by phone or name",
-                    modifier = Modifier.weight(1f),
-                )
-            },
-            trailing = if (state.query.isNotBlank()) {
-                {
-                    ErpButton("Clear", vm::clearSearch, intent = ActionIntent.Quiet)
-                }
-            } else null,
-        )
 
         state.notice?.let {
             NoticeBanner(it, vm::dismissNotice)
@@ -237,32 +225,97 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
 // ------------------------------------------------------------------ header
 
 @Composable
-private fun Header(
+private fun CustomerActionRow(
     state: CustomersUiState,
     canWrite: Boolean,
+    onQueryChange: (String) -> Unit,
+    onClearSearch: () -> Unit,
     onRefresh: () -> Unit,
     onAdd: () -> Unit,
 ) {
-    PageHeader(
-        title = "Customers",
-        subtitle = "Search profiles, review visits and manage phone-based loyalty details.",
-        eyebrow = "Loyalty & relationships",
-        actions = {
-            ErpButton(
-                text = if (state.syncing) "Refreshing…" else "Refresh",
-                onClick = onRefresh,
-                intent = ActionIntent.Secondary,
-                enabled = !state.loading && !state.syncing,
-                busy = state.syncing,
-                leadingIcon = Icons.Default.Refresh,
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 760.dp
+
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                CustomerSearchBar(state, onQueryChange, onClearSearch)
+                ActionBar(
+                    leading = {
+                        CustomerRefreshAction(state, onRefresh, Modifier.weight(1f))
+                        CustomerAddAction(canWrite, onAdd, Modifier.weight(1f))
+                    },
+                )
+            }
+        } else {
+            ActionBar(
+                leading = {
+                    SearchInput(
+                        value = state.query,
+                        onValueChange = onQueryChange,
+                        placeholder = "Search customers by phone or name",
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (state.query.isNotBlank()) {
+                        ErpButton("Clear", onClearSearch, intent = ActionIntent.Quiet)
+                    }
+                    CustomerRefreshAction(state, onRefresh)
+                    CustomerAddAction(canWrite, onAdd)
+                },
             )
-            ErpButton(
-                text = "Add customer",
-                onClick = onAdd,
-                enabled = canWrite,
-                leadingIcon = Icons.Default.PersonAdd,
+        }
+    }
+}
+
+@Composable
+private fun CustomerSearchBar(
+    state: CustomersUiState,
+    onQueryChange: (String) -> Unit,
+    onClearSearch: () -> Unit,
+) {
+    ActionBar(
+        leading = {
+            SearchInput(
+                value = state.query,
+                onValueChange = onQueryChange,
+                placeholder = "Search customers by phone or name",
+                modifier = Modifier.weight(1f),
             )
+            if (state.query.isNotBlank()) {
+                ErpButton("Clear", onClearSearch, intent = ActionIntent.Quiet)
+            }
         },
+    )
+}
+
+@Composable
+private fun CustomerRefreshAction(
+    state: CustomersUiState,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ErpButton(
+        text = if (state.syncing) "Refreshing…" else "Refresh",
+        onClick = onRefresh,
+        modifier = modifier,
+        intent = ActionIntent.Secondary,
+        enabled = !state.loading && !state.syncing,
+        busy = state.syncing,
+        leadingIcon = Icons.Default.Refresh,
+    )
+}
+
+@Composable
+private fun CustomerAddAction(
+    canWrite: Boolean,
+    onAdd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ErpButton(
+        text = "Add customer",
+        onClick = onAdd,
+        modifier = modifier,
+        enabled = canWrite,
+        leadingIcon = Icons.Default.PersonAdd,
     )
 }
 
@@ -473,14 +526,22 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
                 Text(
                     "${customer.loyaltyPoints.grouped()} pts",
                     style = MaterialTheme.typography.labelLarge,
-                    color = Brand.Gold,
+                    color = Brand.Foreground,
                     fontWeight = FontWeight.SemiBold,
                 )
-                Text(
-                    "${customer.visitCount.grouped()} visits · ${customer.totalSpentMinor.asRupees()}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${customer.visitCount.grouped()} visits · ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.ForegroundMuted,
+                    )
+                    Text(
+                        customer.totalSpentMinor.asRupees(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.Foreground,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 when {
                     customer.isRejected -> OperationalStatusBadge("Sync failed", UiTone.Danger)
                     customer.isPendingSync -> OperationalStatusBadge("Waiting to sync", UiTone.Warning)
@@ -722,7 +783,7 @@ private fun EditorDialog(
         },
         text = {
             Column(
-                Modifier.verticalScroll(rememberScrollState()),
+                Modifier.verticalScroll(rememberScrollState()).imePadding(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(
@@ -732,14 +793,17 @@ private fun EditorDialog(
                     OutlinedTextField(
                         value = editor.phone,
                         onValueChange = { onChange(editor.copy(phone = it.trim())) },
-                        label = { Text("Phone (10+ digits, +country if needed)") },
+                        label = { Text("Phone (4–20 characters)") },
                         singleLine = true,
                         enabled = editor.isUnsyncedDraft || editor.phoneUnlocked,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                         modifier = Modifier.weight(1f),
                     )
                     if (!editor.isUnsyncedDraft && !editor.phoneUnlocked) {
-                        OutlinedButton(onClick = { onChange(editor.copy(phoneUnlocked = true)) }) {
+                        OutlinedButton(
+                            onClick = { onChange(editor.copy(phoneUnlocked = true)) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
                             Text("Fix typo")
                         }
                     }
@@ -787,9 +851,15 @@ private fun EditorDialog(
                             color = Brand.Foreground,
                         )
                     }
-                    OutlinedButton(onClick = { pickingDate = true }) { Text("Pick") }
+                    OutlinedButton(
+                        onClick = { pickingDate = true },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("Pick") }
                     if (editor.birthday != null) {
-                        TextButton(onClick = { onChange(editor.copy(birthday = null)) }) {
+                        TextButton(
+                            onClick = { onChange(editor.copy(birthday = null)) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
                             Text("Clear")
                         }
                     }
@@ -836,7 +906,11 @@ private fun EditorDialog(
             )
         },
         dismissButton = {
-            TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") }
+            TextButton(
+                onClick = onCancel,
+                enabled = !saving,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Cancel") }
         },
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
@@ -875,6 +949,7 @@ private fun BirthdayPicker(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(
+                modifier = Modifier.heightIn(min = 48.dp),
                 onClick = {
                     val millis = state.selectedDateMillis
                     if (millis != null) {
@@ -885,7 +960,12 @@ private fun BirthdayPicker(
                 },
             ) { Text("Use this date") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text("Cancel") }
+        },
         colors = androidx.compose.material3.DatePickerDefaults.colors(
             containerColor = Brand.SurfaceOverlay,
         ),

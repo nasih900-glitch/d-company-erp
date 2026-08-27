@@ -193,6 +193,61 @@ class ShiftCloseSafetyDaoTest {
     }
 
     @Test
+    fun packageExtensionOutboxUsesExactShiftCloseSemantics() = runBlocking {
+        db.shiftDao().insert(openShift("shift-a"))
+        val exact = packageExtension(
+            actionId = "33333333-3333-4333-8333-333333333333",
+            serverSessionId = "session-exact",
+            shiftId = "shift-a",
+        )
+        assertTrue(db.gamingDao().capturePackageExtension(exact))
+
+        val pending = safety.blockersForExactShift("shift-a", SERVER_SHIFT, TERMINAL)
+        assertEquals(1, pending.pendingLocalCount)
+        assertEquals(0, pending.captureBlockerCount)
+        assertNull(pending.captureMessage())
+        assertNotNull(pending.serverPostMessage())
+
+        assertEquals(1, db.gamingDao().markPackageExtensionAmbiguous(exact.actionId, "response unknown"))
+        val ambiguous = safety.blockersForExactShift("shift-a", SERVER_SHIFT, TERMINAL)
+        assertEquals(1, ambiguous.attentionLocalCount)
+        assertNotNull(ambiguous.captureMessage())
+        assertEquals(
+            ShiftCloseCaptureStatus.BLOCKED,
+            safety.captureExistingClose("shift-a", TERMINAL, 0, 2_000).status,
+        )
+        assertEquals(1, db.gamingDao().markPackageExtensionRejected(exact.actionId, "price changed"))
+        assertEquals(
+            1,
+            db.gamingDao().discardRejectedPackageExtension(
+                exact.actionId,
+                "Staff refreshed the session",
+                resolvedAtMillis = 2_100,
+            ),
+        )
+        val resolved = safety.blockersForExactShift("shift-a", SERVER_SHIFT, TERMINAL)
+        assertEquals(0, resolved.pendingLocalCount)
+        assertEquals(0, resolved.attentionLocalCount)
+        assertNull(resolved.captureMessage())
+
+        // Only an imported/legacy row can be unscoped; normal capture rejects
+        // it. The close gate still fails closed if such a row exists.
+        db.gamingDao().insertPackageExtensionAction(
+            packageExtension(
+                actionId = "44444444-4444-4444-8444-444444444444",
+                serverSessionId = "session-unscoped",
+                shiftId = null,
+            ),
+        )
+        val unscoped = safety.blockersForExactShift("shift-a", SERVER_SHIFT, TERMINAL)
+        assertEquals(1, unscoped.unscopedAttentionCount)
+        assertEquals(
+            "gaming_package_extensions",
+            db.outboxSafetyDao().unresolvedGroups().single().resource,
+        )
+    }
+
+    @Test
     fun closeIntentGuardsNewSalesAndExistingGamingTransitions() = runBlocking {
         db.shiftDao().insert(openShift("shift-a"))
         assertEquals(
@@ -218,9 +273,24 @@ class ShiftCloseSafetyDaoTest {
             ),
         )
         val gamingFailure = assertThrows(SQLiteConstraintException::class.java) {
-            runBlocking { db.gamingDao().requestSessionStop("gaming-a") }
+            runBlocking {
+                db.gamingDao().requestSessionStop("gaming-a", stoppedAtMillis = 2_100)
+            }
         }
         assertTrue(gamingFailure.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD))
+
+        val extensionFailure = assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking {
+                db.gamingDao().capturePackageExtension(
+                    packageExtension(
+                        actionId = "55555555-5555-4555-8555-555555555555",
+                        serverSessionId = "session-late-extension",
+                        shiftId = "shift-a",
+                    ),
+                )
+            }
+        }
+        assertTrue(extensionFailure.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD))
     }
 
     @Test
@@ -376,6 +446,24 @@ class ShiftCloseSafetyDaoTest {
         ),
         dedupeKey = "dedupe-$actionId",
         createdAtMillis = 1_500,
+    )
+
+    private fun packageExtension(
+        actionId: String,
+        serverSessionId: String,
+        shiftId: String?,
+    ) = LocalGamingPackageExtensionEntity(
+        actionId = actionId,
+        serverSessionId = serverSessionId,
+        localSessionId = "local-$serverSessionId",
+        shiftId = shiftId,
+        packageId = "extend-30",
+        expectedPackagePriceMinor = 7_500,
+        expectedPackageDurationMinutes = 30,
+        expectedPackageVariant = "solo",
+        expectedSessionTimerMinutes = 60,
+        expectedSessionAmountMinor = 15_000,
+        createdAtMillis = 1_750,
     )
 
     private companion object {

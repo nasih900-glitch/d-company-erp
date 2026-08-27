@@ -224,6 +224,10 @@ class OrderLine(Base, TimestampMixin):
     __tablename__ = "order_lines"
     __table_args__ = (
         CheckConstraint(
+            "variant_snapshot IS NULL OR jsonb_typeof(variant_snapshot) = 'object'",
+            name="ck_order_line_variant_snapshot_object",
+        ),
+        CheckConstraint(
             "(kitchen_released_at IS NULL AND kitchen_round_no IS NULL) OR "
             "(kitchen_released_at IS NOT NULL AND kitchen_round_no IS NOT NULL "
             "AND kitchen_round_no > 0)",
@@ -293,6 +297,12 @@ class OrderLine(Base, TimestampMixin):
     variant_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("menu_variants.id", ondelete="SET NULL")
     )
+    # Immutable server-priced snapshot. ``variant_id`` may be cleared when a
+    # catalog option is deleted, but historical receipts must retain the sold
+    # name and delta.
+    variant_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    # Immutable modifier-option snapshots; never persist client-supplied names
+    # or prices here.
     modifiers: Mapped[list[dict] | None] = mapped_column(JSONB)
     qty: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
     unit_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)

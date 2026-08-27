@@ -52,8 +52,8 @@ android {
         applicationId = "cloud.dcompany.erp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "3.0.3"
+        versionCode = 5
+        versionName = "3.0.4"
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
@@ -101,6 +101,12 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    // MigrationTestHelper reads the same Room-generated history that ships in
+    // source control. Point instrumentation directly at that canonical folder
+    // so a new schema version cannot be generated successfully yet omitted
+    // from tests by a forgotten manual copy into src/androidTest/assets.
+    sourceSets.getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
 }
 
 // Room schema history — needed for MigrationTestHelper to replay old schemas

@@ -44,6 +44,7 @@ def _stored_response_body() -> dict:
     return {
         "id": str(uuid4()),
         "station_id": str(uuid4()),
+        "shift_id": str(uuid4()),
         "status": "active",
         "start_at": started_at.isoformat().replace("+00:00", "Z"),
         "end_at": None,
@@ -68,7 +69,14 @@ async def test_paid_extension_requires_idempotency_key_before_database_work() ->
     with pytest.raises(BusinessRuleError, match="Idempotency-Key"):
         await gaming_router.extend_session_with_package(
             uuid4(),
-            gaming_router.SessionExtend(package_id=uuid4()),
+            gaming_router.SessionExtend(
+                package_id=uuid4(),
+                expected_timer_minutes=60,
+                expected_amount_minor=10_000,
+                expected_package_price_minor=5_000,
+                expected_package_duration_minutes=15,
+                expected_package_variant="single",
+            ),
             _NoDatabaseSession(),
             _request(),
             _tenant(),
@@ -91,13 +99,23 @@ async def test_paid_extension_replay_returns_original_canonical_response(
 
     response = await gaming_router.extend_session_with_package(
         uuid4(),
-        gaming_router.SessionExtend(package_id=uuid4()),
+        gaming_router.SessionExtend(
+            package_id=uuid4(),
+            expected_timer_minutes=60,
+            expected_amount_minor=10_000,
+            expected_package_price_minor=5_000,
+            expected_package_duration_minutes=15,
+            expected_package_variant="single",
+        ),
         _NoDatabaseSession(),
         _request(key="gaming-extension:retry-1", request_hash="same-request-hash"),
         tenant,
     )
 
-    assert response.model_dump(mode="json") == stored_body
+    replay_body = response.model_dump(mode="json")
+    assert {key: replay_body[key] for key in stored_body} == stored_body
+    assert replay_body["billing_mode"] == "package"
+    assert replay_body["package_price_minor_snapshot"] is None
     assert seen == {
         "key": "gaming-extension:retry-1",
         "request_hash": "same-request-hash",

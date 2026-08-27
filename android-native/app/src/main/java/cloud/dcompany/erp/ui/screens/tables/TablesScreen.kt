@@ -9,13 +9,16 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -24,10 +27,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,6 +55,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.TablesAccess
 import cloud.dcompany.erp.core.db.MenuItemEntity
@@ -68,7 +70,6 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.NumericValue
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
@@ -88,18 +89,29 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
     val state by vm.state.collectAsStateWithLifecycle()
     val selectedBill = state.selectedBill
     var discardAction by remember { mutableStateOf<BlockedCafeAction?>(null) }
+    var selectedStatusId by rememberSaveable { mutableStateOf(TABLE_FILTER_ALL) }
     val billsByTable = remember(state.bills) { state.bills.associateBy(CafeBillProjection::tableId) }
+    val tableFilterOptions = remember(state.visibleTables, billsByTable) {
+        tableFilterOptions(state.visibleTables, billsByTable)
+    }
+    val filteredTables = remember(state.visibleTables, billsByTable, selectedStatusId) {
+        state.visibleTables.filter { table ->
+            selectedStatusId == TABLE_FILTER_ALL ||
+                tableOperationalFilterId(table, billsByTable[table.id]) == selectedStatusId
+        }
+    }
     SideEffect { vm.updateAccess(access) }
 
     Column(
         Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        PageHeader(
-            title = "Tables",
-            subtitle = "Open service rounds, follow kitchen progress, then hand the final bill to POS.",
-            eyebrow = "Cafe floor",
-            actions = {
+        OperationalBanner(
+            title = "Floor service workspace",
+            detail = "Open and customise service rounds here; complete payment from POS when the table is ready.",
+            tone = UiTone.Information,
+            icon = Icons.Default.TableRestaurant,
+            action = {
                 ErpButton(
                     text = if (state.busy) "Updating" else "Refresh",
                     onClick = vm::load,
@@ -161,20 +173,42 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
                         onSelect = { id -> vm.selectFloor(id.takeUnless { it == allFloorId }) },
                     )
                 }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 210.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Spacing.sm),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    items(state.visibleTables, key = { it.id }) { table ->
-                        TableTile(
-                            table = table,
-                            bill = billsByTable[table.id],
-                            enabled = !state.busy,
-                            canCreate = access.canCreateOrders,
-                        ) { vm.openTable(table) }
+                PremiumTabBar(
+                    options = tableFilterOptions,
+                    selectedId = selectedStatusId,
+                    onSelect = { selectedStatusId = it },
+                )
+                if (filteredTables.isEmpty()) {
+                    SectionCard(modifier = Modifier.weight(1f), elevated = true) {
+                        DesignedEmptyState(
+                            title = "No tables match this filter",
+                            body = "Choose another status to review the current floor without changing any table or bill.",
+                            icon = Icons.Default.TableRestaurant,
+                        )
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            ErpButton(
+                                text = "Show all tables",
+                                onClick = { selectedStatusId = TABLE_FILTER_ALL },
+                                intent = ActionIntent.Secondary,
+                            )
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 210.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Spacing.sm),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        items(filteredTables, key = { it.id }) { table ->
+                            TableTile(
+                                table = table,
+                                bill = billsByTable[table.id],
+                                enabled = !state.busy,
+                                canCreate = access.canCreateOrders,
+                            ) { vm.openTable(table) }
+                        }
                     }
                 }
             }
@@ -234,13 +268,15 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
                 )
             },
             confirmButton = {
-                Button(
+                ErpButton(
+                    text = if (state.online) "Refresh and discard" else "Reconnect first",
                     onClick = {
                         discardAction = null
                         vm.discardBlockedAction(action.actionId)
                     },
+                    intent = ActionIntent.Destructive,
                     enabled = state.online,
-                ) { Text(if (state.online) "Refresh and discard" else "Reconnect first") }
+                )
             },
             dismissButton = {
                 TextButton(onClick = { discardAction = null }) { Text("Keep saved action") }
@@ -405,28 +441,26 @@ private fun BlockedCafeActionsPanel(
     onRetry: (String) -> Unit,
     onDiscard: (BlockedCafeAction) -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth().background(Brand.DangerMuted)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        title = "Table actions needing attention (${actions.size})",
+        subtitle = "The confirmed bill is preserved. Refresh and review before retrying the saved action.",
+        icon = Icons.Default.ErrorOutline,
+        tone = UiTone.Danger,
+        elevated = true,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.md),
     ) {
         Text(
-            "Table actions needing attention (${actions.size})",
-            color = Brand.Foreground,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            "The confirmed bill is preserved. Refresh, review what changed, then retry the " +
-                "original saved action — never recreate the order.",
-            color = Brand.Foreground,
+            "Retry the original saved action — never recreate the order.",
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             items(actions, key = BlockedCafeAction::actionId) { action ->
                 Column(
-                    Modifier.width(360.dp).clip(Radius.shapeMd)
-                        .background(Brand.SurfaceRaised).padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                    Modifier.width(360.dp).clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+                        .border(1.dp, Brand.Danger.copy(alpha = 0.34f), Radius.shapeMd)
+                        .padding(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -453,20 +487,18 @@ private fun BlockedCafeActionsPanel(
                         color = Brand.Danger,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    OutlinedButton(
+                    ErpButton(
+                        text = if (!online) "Reconnect to review" else "Refresh, review & retry",
                         onClick = { onRetry(action.actionId) },
+                        intent = ActionIntent.Secondary,
                         enabled = canWrite && online,
-                    ) {
-                        Text(
-                            if (!online) "Reconnect to review" else "Refresh, review & retry",
-                        )
-                    }
-                    TextButton(
+                    )
+                    ErpButton(
+                        text = "Discard after verification",
                         onClick = { onDiscard(action) },
+                        intent = ActionIntent.Destructive,
                         enabled = canWrite && online,
-                    ) {
-                        Text("Discard after verification", color = Brand.Danger)
-                    }
+                    )
                 }
             }
         }
@@ -480,6 +512,46 @@ internal fun formatRejectedTableOrderTime(
 ): String = DateTimeFormatter.ofPattern("d MMM, HH:mm", locale)
     .withZone(zoneId)
     .format(Instant.ofEpochMilli(createdAtMillis))
+
+private const val TABLE_FILTER_ALL = "all"
+private const val TABLE_FILTER_AVAILABLE = "available"
+private const val TABLE_FILTER_OPEN = "open"
+private const val TABLE_FILTER_POS = "pos"
+private const val TABLE_FILTER_ATTENTION = "attention"
+
+private fun tableFilterOptions(
+    tables: List<CafeTable>,
+    billsByTable: Map<String, CafeBillProjection>,
+): List<TabOption> {
+    val counts = tables.groupingBy { table ->
+        tableOperationalFilterId(table, billsByTable[table.id])
+    }.eachCount()
+    return listOf(
+        TabOption(TABLE_FILTER_ALL, "All", tables.size),
+        TabOption(TABLE_FILTER_AVAILABLE, "Available", counts[TABLE_FILTER_AVAILABLE] ?: 0),
+        TabOption(TABLE_FILTER_OPEN, "Open bills", counts[TABLE_FILTER_OPEN] ?: 0),
+        TabOption(TABLE_FILTER_POS, "At POS", counts[TABLE_FILTER_POS] ?: 0),
+        TabOption(TABLE_FILTER_ATTENTION, "Needs attention", counts[TABLE_FILTER_ATTENTION] ?: 0),
+    )
+}
+
+internal fun tableOperationalFilterId(
+    table: CafeTable,
+    bill: CafeBillProjection?,
+): String {
+    val status = table.status.trim().lowercase().replace('_', ' ')
+    return when {
+        bill?.blockedActionId != null || status == "needs attention" ||
+            status == "voiding bill" -> TABLE_FILTER_ATTENTION
+        bill?.heldOrSending == true || status == "at pos" ||
+            status == "sending to pos" -> TABLE_FILTER_POS
+        bill != null || status in setOf("open", "open bill", "occupied") -> TABLE_FILTER_OPEN
+        status == "available" -> TABLE_FILTER_AVAILABLE
+        // Reserved, cleaning, merged and future server states remain visible
+        // in All without being misreported as financially open tables.
+        else -> TABLE_FILTER_ALL
+    }
+}
 
 private data class TableStatusPresentation(
     val label: String,
@@ -613,119 +685,78 @@ private fun OrderBuilder(
     }
 
     AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
+        modifier = Modifier.widthIn(max = 960.dp).fillMaxWidth(0.94f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
         onDismissRequest = requestDismiss,
         title = {
             Text(if (state.selectedBill == null) "Table ${table.code} · First round" else "Table ${table.code} · New round")
         },
         text = {
-            Row(Modifier.height(420.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("Menu", color = Brand.ForegroundMuted)
-                    Spacer(Modifier.height(6.dp))
-                    if (state.menu.isEmpty()) {
-                        Text(
-                            "No menu on this tablet yet — open POS once while online.",
-                            color = Brand.ForegroundMuted,
+            BoxWithConstraints(
+                Modifier.fillMaxWidth().heightIn(min = 340.dp, max = 560.dp),
+            ) {
+                if (maxWidth >= 700.dp) {
+                    Row(
+                        Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+                    ) {
+                        OrderMenuPanel(
+                            state = state,
+                            canWrite = canWrite,
+                            onAdd = onAdd,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                        OrderCartPanel(
+                            state = state,
+                            canWrite = canWrite,
+                            onIncrement = onIncrement,
+                            onRemove = onRemove,
+                            onNote = onNote,
+                            modifier = Modifier.width(330.dp).fillMaxHeight(),
                         )
                     }
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 130.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                } else {
+                    Column(
+                        Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     ) {
-                        items(state.menu, key = { it.id }) { item ->
-                            Column(
-                                Modifier.clip(Radius.shapeSm)
-                                    .background(Brand.SurfaceRaised)
-                                    .clickable(enabled = canWrite) { onAdd(item) }
-                                    .padding(10.dp),
-                            ) {
-                                Text(
-                                    item.name,
-                                    color = Brand.Foreground,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(item.basePriceMinor.asRupees(), color = Brand.Gold)
-                            }
-                        }
-                    }
-                }
-                Column(Modifier.width(280.dp)) {
-                    Text("Order", color = Brand.ForegroundMuted)
-                    Spacer(Modifier.height(6.dp))
-                    if (state.cart.isEmpty()) {
-                        Text("Tap a menu item to add it.", color = Brand.ForegroundMuted)
-                    }
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(state.cart, key = { it.clientLineId }) { line ->
-                            Column(
-                                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                                    .background(Brand.SurfaceRaised).padding(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        line.item.name,
-                                        color = Brand.Foreground,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        (line.item.basePriceMinor * line.qty).asRupees(),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Brand.ForegroundMuted,
-                                    )
-                                }
-                                Qty("−", enabled = canWrite) { onRemove(line.clientLineId) }
-                                Text(
-                                    "${line.qty}",
-                                    Modifier.padding(horizontal = 8.dp),
-                                    color = Brand.Foreground,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                Qty("+", enabled = canWrite) { onIncrement(line.clientLineId) }
-                                }
-                                OutlinedTextField(
-                                    value = line.note,
-                                    onValueChange = { onNote(line.clientLineId, it) },
-                                    enabled = canWrite,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("Special request (optional)") },
-                                    placeholder = { Text("e.g. no ice, less spicy") },
-                                    singleLine = true,
-                                )
-                            }
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Estimate", color = Brand.ForegroundMuted)
-                        Text(
-                            state.estimateMinor.asRupees(),
-                            color = Brand.Foreground,
-                            fontWeight = FontWeight.Bold,
+                        OrderMenuPanel(
+                            state = state,
+                            canWrite = canWrite,
+                            onAdd = onAdd,
+                            modifier = Modifier.weight(0.9f).fillMaxWidth(),
+                        )
+                        HorizontalDivider(color = Brand.BorderSubtle)
+                        OrderCartPanel(
+                            state = state,
+                            canWrite = canWrite,
+                            onIncrement = onIncrement,
+                            onRemove = onRemove,
+                            onNote = onNote,
+                            modifier = Modifier.weight(1.1f).fillMaxWidth(),
                         )
                     }
-                    Text(
-                        "This round is saved first, then released to Kitchen. Billing stays open until you choose Send to POS.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Brand.GoldMuted,
-                    )
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onSaveRound, enabled = canWrite && state.cart.isNotEmpty() && !state.busy) {
-                Text(if (state.busy) "Saving…" else "Send round to Kitchen")
-            }
+            ErpButton(
+                text = if (state.busy) "Saving…" else "Send round to Kitchen",
+                onClick = onSaveRound,
+                intent = ActionIntent.Primary,
+                enabled = canWrite && state.cart.isNotEmpty() && !state.busy,
+                busy = state.busy,
+            )
         },
-        dismissButton = { OutlinedButton(onClick = requestDismiss) { Text("Cancel") } },
+        dismissButton = {
+            ErpButton(
+                text = "Cancel",
+                onClick = requestDismiss,
+                intent = ActionIntent.Secondary,
+            )
+        },
     )
 
     if (confirmDiscard) {
@@ -741,16 +772,144 @@ private fun OrderBuilder(
                 )
             },
             confirmButton = {
-                Button(
+                ErpButton(
+                    text = "Discard round",
                     onClick = {
                         confirmDiscard = false
                         onDismiss()
                     },
-                ) { Text("Discard round") }
+                    intent = ActionIntent.Destructive,
+                )
             },
             dismissButton = {
                 TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
             },
+        )
+    }
+}
+
+@Composable
+private fun OrderMenuPanel(
+    state: TablesUiState,
+    canWrite: Boolean,
+    onAdd: (MenuItemEntity) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Text("Menu", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelLarge)
+        if (state.menu.isEmpty()) {
+            Text(
+                "No menu on this tablet yet — open POS once while online.",
+                color = Brand.ForegroundMuted,
+            )
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 130.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                items(state.menu, key = { it.id }) { item ->
+                    Column(
+                        Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(Radius.shapeSm)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeSm)
+                            .clickable(enabled = canWrite) { onAdd(item) }
+                            .padding(Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    ) {
+                        Text(
+                            item.name,
+                            color = Brand.Foreground,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            item.basePriceMinor.asRupees(),
+                            color = Brand.Foreground,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OrderCartPanel(
+    state: TablesUiState,
+    canWrite: Boolean,
+    onIncrement: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onNote: (String, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Text("Order", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelLarge)
+        if (state.cart.isEmpty()) {
+            Text("Tap a menu item to add it.", color = Brand.ForegroundMuted)
+        }
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            items(state.cart, key = { it.clientLineId }) { line ->
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                        .background(Brand.SurfaceRaised)
+                        .border(1.dp, Brand.BorderSubtle, Radius.shapeSm)
+                        .padding(Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                line.item.name,
+                                color = Brand.Foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                (line.item.basePriceMinor * line.qty).asRupees(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Brand.ForegroundMuted,
+                            )
+                        }
+                        Qty("−", enabled = canWrite) { onRemove(line.clientLineId) }
+                        Text(
+                            "${line.qty}",
+                            Modifier.padding(horizontal = Spacing.sm),
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Qty("+", enabled = canWrite) { onIncrement(line.clientLineId) }
+                    }
+                    OutlinedTextField(
+                        value = line.note,
+                        onValueChange = { onNote(line.clientLineId, it) },
+                        enabled = canWrite,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Special request (optional)") },
+                        placeholder = { Text("e.g. no ice, less spicy") },
+                        singleLine = true,
+                    )
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Estimate", color = Brand.ForegroundMuted)
+            Text(
+                state.estimateMinor.asRupees(),
+                color = Brand.Foreground,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Text(
+            "This round is saved first, then released to Kitchen. Billing stays open until you choose Send to POS.",
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
         )
     }
 }
@@ -792,6 +951,8 @@ private fun BillDialog(
     }
 
     AlertDialog(
+        modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(0.94f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
         onDismissRequest = {
@@ -815,7 +976,11 @@ private fun BillDialog(
                             bill.pendingActionCount > 0 -> "${bill.pendingActionCount} saved action(s) syncing"
                             else -> "Open · take another round or send for billing"
                         },
-                        color = if (bill.blockedActionId != null) Brand.Danger else Brand.GoldMuted,
+                        color = when {
+                            bill.blockedActionId != null -> Brand.Danger
+                            bill.pendingActionCount > 0 || bill.status == "sending_to_pos" -> Brand.Warning
+                            else -> Brand.ForegroundMuted
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -850,7 +1015,7 @@ private fun BillDialog(
                         )
                     }
                     LazyColumn(
-                        modifier = Modifier.height(360.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 440.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(bill.lines, key = CafeBillLineProjection::stableKey) { line ->
@@ -872,7 +1037,7 @@ private fun BillDialog(
                                             fontWeight = FontWeight.SemiBold,
                                         )
                                         line.note?.takeIf(String::isNotBlank)?.let { note ->
-                                            Text("Request: $note", color = Brand.GoldMuted)
+                                            Text("Request: $note", color = Brand.ForegroundMuted)
                                         }
                                         Text(
                                             buildString {
@@ -893,18 +1058,19 @@ private fun BillDialog(
                                         access.canCancelItems && bill.editable && !line.voided &&
                                         line.kitchenStatus != "served"
                                     ) {
-                                        TextButton(
+                                        ErpButton(
+                                            text = if (activeLineCount == 1) {
+                                                "Void whole bill"
+                                            } else {
+                                                "Cancel item"
+                                            },
                                             onClick = {
                                                 cancellationReasonId = null
                                                 customCancellationReason = ""
                                                 cancellingLineKey = line.stableKey
                                             },
-                                        ) {
-                                            Text(
-                                                if (activeLineCount == 1) "Void whole bill" else "Cancel item",
-                                                color = Brand.Danger,
-                                            )
-                                        }
+                                            intent = ActionIntent.Destructive,
+                                        )
                                     }
                                 }
                                 if (line.voided) {
@@ -916,7 +1082,7 @@ private fun BillDialog(
                                     if (line.kitchenCancellationPending) {
                                         Text(
                                             "Waiting for Kitchen acknowledgement",
-                                            color = Brand.GoldMuted,
+                                            color = Brand.Warning,
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                     }
@@ -936,7 +1102,7 @@ private fun BillDialog(
                             bill.confirmedTotalMinor?.let {
                                 "Last confirmed total: ${it.asRupees()}. Final pricing and tax are confirmed by the server."
                             } ?: "Final pricing and tax are confirmed by the server after this first round syncs.",
-                            color = Brand.GoldMuted,
+                            color = Brand.Warning,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -945,7 +1111,8 @@ private fun BillDialog(
         },
         confirmButton = {
             if (cancellingLine != null) {
-                Button(
+                ErpButton(
+                    text = if (cancellingWholeBill) "Void whole bill" else "Cancel item",
                     onClick = {
                         if (cancellingWholeBill) {
                             onCancelBill(cancellationReason)
@@ -954,20 +1121,27 @@ private fun BillDialog(
                         }
                         leaveCancellation()
                     },
+                    intent = ActionIntent.Destructive,
                     enabled = access.canCancelItems && bill.editable && !cancellingLine.voided &&
                         cancellingLine.kitchenStatus != "served" && cancellationReason.isNotBlank() && !busy,
-                ) { Text(if (cancellingWholeBill) "Void whole bill" else "Cancel item") }
+                    busy = busy,
+                )
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!held && bill.editable) {
-                        OutlinedButton(
+                        ErpButton(
+                            text = "Add another round",
                             onClick = onAddRound,
+                            intent = ActionIntent.Secondary,
                             enabled = access.canCreateOrders && !busy,
-                        ) { Text("Add another round") }
-                        Button(
+                        )
+                        ErpButton(
+                            text = if (busy) "Saving…" else "Send to POS",
                             onClick = onSendToPos,
+                            intent = ActionIntent.Primary,
                             enabled = access.canSendToPos && !busy,
-                        ) { Text(if (busy) "Saving…" else "Send to POS") }
+                            busy = busy,
+                        )
                     }
                 }
             }

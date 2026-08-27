@@ -122,30 +122,19 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
                 Text(
                     "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.GoldMuted,
+                    color = Brand.ForegroundMuted,
                 )
             }
 
-            if (!dashboard.hasActivity) {
-                SectionCard(
-                    title = "Today's operating picture",
-                    subtitle = "Live activity will populate this workspace as orders and sessions are recorded.",
-                    icon = Icons.Filled.Analytics,
-                ) {
-                    DesignedEmptyState(
-                        title = "No business activity today yet",
-                        body = "Revenue, order and margin insights will update automatically after the first completed transaction.",
-                        icon = Icons.AutoMirrored.Filled.TrendingUp,
-                        modifier = Modifier.height(190.dp),
-                    )
-                }
-            }
-
             val tiles = listOf(
-                KpiTile("Revenue", dashboard.revenueTotalMinor.asRupees(), null),
-                KpiTile("Orders", "${dashboard.ordersCount} (${dashboard.ticketsCount} tickets)", null),
-                KpiTile("Avg ticket", dashboard.avgTicketMinor.asRupees(), null),
-                KpiTile("Net profit today", dashboard.netProfitMinor.asRupees(), dashboard.netProfitMinor >= 0),
+                KpiTile("Revenue", dashboard.revenueTotalMinor.asRupees()),
+                KpiTile("Orders", "${dashboard.ordersCount} (${dashboard.ticketsCount} tickets)"),
+                KpiTile("Average ticket", dashboard.avgTicketMinor.asRupees()),
+                KpiTile(
+                    "Net profit today",
+                    dashboard.netProfitMinor.asRupees(),
+                    negative = dashboard.netProfitMinor < 0,
+                ),
             )
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 tiles.chunked(columns).forEach { row ->
@@ -156,6 +145,8 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
                 }
             }
 
+            RightNowCard(dashboard)
+
             if (dashboard.discountsAndPointsRedeemedMinor > 0) {
                 Text(
                     "Revenue above is already net of ${dashboard.discountsAndPointsRedeemedMinor.asRupees()} " +
@@ -163,6 +154,21 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
+            }
+
+            if (!dashboard.hasActivity) {
+                SectionCard(
+                    title = "Today's operating picture",
+                    subtitle = "The operational snapshot is ready and waiting for today's first completed transaction.",
+                    icon = Icons.Filled.Analytics,
+                ) {
+                    DesignedEmptyState(
+                        title = "No business activity yet",
+                        body = "Revenue, order and margin insights will update automatically after the first completed transaction.",
+                        icon = Icons.AutoMirrored.Filled.TrendingUp,
+                        modifier = Modifier.height(150.dp),
+                    )
+                }
             }
 
             if (dashboard.revenueStreams.isNotEmpty()) {
@@ -174,20 +180,62 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
 
-            SectionCard {
-                CardTitle("Right now")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MiniStat("Inventory value", dashboard.inventoryValueMinor.asRupees(), null)
-                    MiniStat(
-                        "Low stock",
-                        dashboard.lowStockItems.toString(),
-                        if (dashboard.lowStockItems > 0) false else null,
-                    )
-                    MiniStat("Open gaming sessions", dashboard.openSessions.toString(), null)
+@Composable
+private fun RightNowCard(dashboard: DashboardKpis) {
+    SectionCard {
+        CardTitle("Right now")
+        val stats: List<@Composable (Modifier) -> Unit> = listOf(
+            { modifier ->
+                MiniStat(
+                    "Inventory value",
+                    dashboard.inventoryValueMinor.asRupees(),
+                    good = null,
+                    modifier = modifier,
+                )
+            },
+            { modifier ->
+                MiniStat(
+                    "Low stock",
+                    dashboard.lowStockItems.toString(),
+                    good = if (dashboard.lowStockItems > 0) false else null,
+                    modifier = modifier,
+                )
+            },
+            { modifier ->
+                MiniStat(
+                    "Open gaming sessions",
+                    dashboard.openSessions.toString(),
+                    good = null,
+                    modifier = modifier,
+                )
+            },
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            when {
+                maxWidth >= 600.dp -> Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    stats.forEach { stat -> stat(Modifier.weight(1f)) }
+                }
+                maxWidth >= 360.dp -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    ) {
+                        stats.take(2).forEach { stat -> stat(Modifier.weight(1f)) }
+                    }
+                    stats.last()(Modifier.fillMaxWidth())
+                }
+                else -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    stats.forEach { stat -> stat(Modifier.fillMaxWidth()) }
                 }
             }
-            Spacer(Modifier.height(16.dp))
         }
     }
 }
@@ -253,68 +301,95 @@ private fun GrowthBody(
     state: AnalyticsUiState,
     onRetryTopItems: () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (state.growthFetchedAtMillis != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "As of ${relativeAge(state.growthFetchedAtMillis)}" +
-                        if (state.growthLoading) " · refreshing…" else "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.GoldMuted,
-                )
-                if (state.growthLoading) {
-                    Spacer(Modifier.size(8.dp))
-                    CircularProgressIndicator(Modifier.size(12.dp), color = Brand.Gold, strokeWidth = 2.dp)
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val wide = maxWidth >= 620.dp
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (state.growthFetchedAtMillis != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "As of ${relativeAge(state.growthFetchedAtMillis)}" +
+                            if (state.growthLoading) " · refreshing…" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.ForegroundMuted,
+                    )
+                    if (state.growthLoading) {
+                        Spacer(Modifier.size(8.dp))
+                        CircularProgressIndicator(Modifier.size(12.dp), color = Brand.Gold, strokeWidth = 2.dp)
+                    }
                 }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ComparisonCard(
-                Modifier.weight(1f),
-                "Revenue",
-                growth.current.revenueMinor.asRupees(),
-                growth.previous.label,
-                growth.previous.revenueMinor.asRupees(),
-                growth.revenueDeltaPct,
-            )
-            ComparisonCard(
-                Modifier.weight(1f),
-                "Orders",
-                growth.current.ordersCount.toString(),
-                growth.previous.label,
-                growth.previous.ordersCount.toString(),
-                growth.ordersDeltaPct,
-            )
-        }
-        if (growth.current.manualCollectionsMinor > 0) {
-            Text(
-                "Includes ${growth.current.manualCollectionsMinor.asRupees()} in manual collections this period.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
-            )
-        }
-        if (growth.current.membershipsMinor > 0 || growth.previous.membershipsMinor > 0) {
-            Text(
-                "Paid memberships: ${growth.current.membershipsMinor.asRupees()} this period, " +
-                    "${growth.previous.membershipsMinor.asRupees()} in ${growth.previous.label}. " +
-                    "They do not increase POS order counts or top-item totals.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
-            )
-        }
-        if (growth.current.refundsMinor > 0) {
-            Text(
-                "${growth.current.refundsMinor.asRupees()} refunded this period.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
-            )
-        }
+            if (wide) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ComparisonCard(
+                        Modifier.weight(1f),
+                        "Revenue",
+                        growth.current.revenueMinor.asRupees(),
+                        growth.previous.label,
+                        growth.previous.revenueMinor.asRupees(),
+                        growth.revenueDeltaPct,
+                    )
+                    ComparisonCard(
+                        Modifier.weight(1f),
+                        "Orders",
+                        growth.current.ordersCount.toString(),
+                        growth.previous.label,
+                        growth.previous.ordersCount.toString(),
+                        growth.ordersDeltaPct,
+                    )
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ComparisonCard(
+                        Modifier.fillMaxWidth(),
+                        "Revenue",
+                        growth.current.revenueMinor.asRupees(),
+                        growth.previous.label,
+                        growth.previous.revenueMinor.asRupees(),
+                        growth.revenueDeltaPct,
+                    )
+                    ComparisonCard(
+                        Modifier.fillMaxWidth(),
+                        "Orders",
+                        growth.current.ordersCount.toString(),
+                        growth.previous.label,
+                        growth.previous.ordersCount.toString(),
+                        growth.ordersDeltaPct,
+                    )
+                }
+            }
+            if (growth.current.manualCollectionsMinor > 0) {
+                Text(
+                    "Includes ${growth.current.manualCollectionsMinor.asRupees()} in manual collections this period.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
+            if (growth.current.membershipsMinor > 0 || growth.previous.membershipsMinor > 0) {
+                Text(
+                    "Paid memberships: ${growth.current.membershipsMinor.asRupees()} this period, " +
+                        "${growth.previous.membershipsMinor.asRupees()} in ${growth.previous.label}. " +
+                        "They do not increase POS order counts or top-item totals.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
+            if (growth.current.refundsMinor > 0) {
+                Text(
+                    "${growth.current.refundsMinor.asRupees()} refunded this period.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
 
-        TopItemsCard(state, onRetryTopItems)
-        Spacer(Modifier.height(16.dp))
+            TopItemsCard(state, onRetryTopItems)
+            Spacer(Modifier.height(16.dp))
+        }
     }
 }
 
@@ -369,7 +444,7 @@ private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
                     ) {
                         Text(
                             "${index + 1}",
-                            color = Brand.GoldMuted,
+                            color = Brand.ForegroundFaint,
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.widthIn(min = 28.dp),
                         )
@@ -390,7 +465,7 @@ private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
             Text(
                 "As of ${relativeAge(fetchedAt)}" + if (state.topItemsLoading) " · refreshing…" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+                color = Brand.ForegroundMuted,
             )
         }
     }
@@ -461,8 +536,16 @@ private fun ComparisonCard(
 }
 
 @Composable
-private fun MiniStat(label: String, value: String, good: Boolean?) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun MiniStat(
+    label: String,
+    value: String,
+    good: Boolean?,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(vertical = Spacing.xs),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Text(
             value,
             style = MaterialTheme.typography.titleLarge,
@@ -475,7 +558,7 @@ private fun MiniStat(label: String, value: String, good: Boolean?) {
 
 // ------------------------------------------------------------- shared parts
 
-private data class KpiTile(val label: String, val value: String, val good: Boolean?)
+private data class KpiTile(val label: String, val value: String, val negative: Boolean = false)
 
 @Composable
 private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
@@ -486,7 +569,7 @@ private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
             tile.value,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = when (tile.good) { null -> Brand.Foreground; true -> Brand.Good; false -> Brand.Danger },
+            color = if (tile.negative) Brand.Danger else Brand.Foreground,
         )
     }
 }

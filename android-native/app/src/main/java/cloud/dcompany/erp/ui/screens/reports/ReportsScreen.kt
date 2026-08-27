@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -165,65 +166,86 @@ private fun PeriodSelector(
     var showCalendar by remember { mutableStateOf(false) }
 
     SectionCard(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            StepButton("‹", enabled = true) { onStep(-1) }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 620.dp
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    StepButton("‹", enabled = true) { onStep(-1) }
 
-            // Tapping the label opens a calendar for the two periods where a
-            // calendar is the natural way to reach a distant date. Stepping is
-            // still there because "yesterday" is the query staff actually run.
-            val labelModifier = when (state.period) {
-                ReportPeriod.DAILY, ReportPeriod.MONTHLY ->
-                    Modifier.clickable { showCalendar = true }
-                else -> Modifier
-            }
-            Column(
-                Modifier
-                    .weight(1f)
-                    .then(labelModifier),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    selectorLabel(state),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
-                    textAlign = TextAlign.Center,
-                )
-                if (state.period == ReportPeriod.DAILY || state.period == ReportPeriod.MONTHLY) {
-                    Text(
-                        "Tap to pick",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Brand.GoldMuted,
-                    )
+                    // Tapping the label opens a calendar for the two periods where a
+                    // calendar is the natural way to reach a distant date. Stepping is
+                    // still there because "yesterday" is the query staff actually run.
+                    val labelModifier = when (state.period) {
+                        ReportPeriod.DAILY, ReportPeriod.MONTHLY ->
+                            Modifier.clickable { showCalendar = true }
+                        else -> Modifier
+                    }
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .then(labelModifier),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            selectorLabel(state),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Brand.Foreground,
+                            textAlign = TextAlign.Center,
+                        )
+                        if (state.period == ReportPeriod.DAILY || state.period == ReportPeriod.MONTHLY) {
+                            Text(
+                                "Tap to pick",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Brand.ForegroundMuted,
+                            )
+                        }
+                    }
+
+                    StepButton("›", enabled = state.canStepForward) { onStep(1) }
+
+                    if (!compact && !isCurrentPeriod(state)) {
+                        OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
+                    }
                 }
-            }
 
-            StepButton("›", enabled = state.canStepForward) { onStep(1) }
+                if (compact && !isCurrentPeriod(state)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
+                    }
+                }
 
-            if (!isCurrentPeriod(state)) {
-                OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
-            }
-        }
-
-        if (state.period == ReportPeriod.QUARTERLY) {
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QUARTER_LABELS.forEachIndexed { index, label ->
-                    val q = index + 1
-                    FilterChip(
-                        selected = state.quarter == q,
-                        enabled = canSelectFiscalQuarter(state.fiscalYear, q),
-                        onClick = { onPickQuarter(q) },
-                        label = { Text(label) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Brand.SurfaceHover,
-                            selectedLabelColor = Brand.Foreground,
-                            labelColor = Brand.ForegroundMuted,
-                        ),
-                    )
+                if (state.period == ReportPeriod.QUARTERLY) {
+                    val entries = QUARTER_LABELS.withIndex().toList()
+                    val perRow = if (compact) 2 else 4
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        entries.chunked(perRow).forEach { quarterRow ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                quarterRow.forEach { (index, label) ->
+                                    val quarter = index + 1
+                                    FilterChip(
+                                        selected = state.quarter == quarter,
+                                        enabled = canSelectFiscalQuarter(state.fiscalYear, quarter),
+                                        onClick = { onPickQuarter(quarter) },
+                                        label = { Text(label, textAlign = TextAlign.Center) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = Brand.SurfaceHover,
+                                            selectedLabelColor = Brand.Foreground,
+                                            labelColor = Brand.ForegroundMuted,
+                                        ),
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                repeat(perRow - quarterRow.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -396,28 +418,88 @@ private fun StaleReportBanner(message: String, onRetry: () -> Unit) {
 @Composable
 private fun EmptyPanel(period: ReportPeriod, label: String, refreshing: Boolean, fetchedAtMillis: Long?) {
     Column(
-        Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-            CompactStatCard("Orders", "0", Modifier.weight(1f), "No receipts", Icons.AutoMirrored.Filled.ReceiptLong, UiTone.Neutral)
-            CompactStatCard("Payments", "₹0.00", Modifier.weight(1f), "No movement", Icons.Filled.Payments, UiTone.Neutral)
-            CompactStatCard("Net revenue", "₹0.00", Modifier.weight(1f), "After tax", Icons.AutoMirrored.Filled.TrendingUp, UiTone.Neutral)
-            CompactStatCard("Net profit", "₹0.00", Modifier.weight(1f), "No activity", Icons.Filled.Assessment, UiTone.Neutral)
+        val cards: List<@Composable (Modifier) -> Unit> = listOf(
+            { modifier ->
+                CompactStatCard(
+                    "Revenue", "₹0.00", modifier, "No recorded revenue",
+                    Icons.AutoMirrored.Filled.TrendingUp, UiTone.Neutral,
+                )
+            },
+            { modifier ->
+                CompactStatCard(
+                    "Orders", "0", modifier, "No completed receipts",
+                    Icons.AutoMirrored.Filled.ReceiptLong, UiTone.Neutral,
+                )
+            },
+            { modifier ->
+                CompactStatCard(
+                    "Average ticket", "₹0.00", modifier, "No completed orders",
+                    Icons.Filled.Payments, UiTone.Neutral,
+                )
+            },
+            { modifier ->
+                CompactStatCard(
+                    "Net profit", "₹0.00", modifier, "No activity",
+                    Icons.Filled.Assessment, UiTone.Neutral,
+                )
+            },
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val columns = if (maxWidth >= 720.dp) 4 else 2
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                cards.chunked(columns).forEach { rowCards ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    ) {
+                        rowCards.forEach { card -> card(Modifier.weight(1f)) }
+                        repeat(columns - rowCards.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
         }
+        SecondaryMetricGrid(
+            listOf(
+                ReportSecondaryMetric(
+                    label = "Tickets",
+                    value = "0",
+                    detail = "No event tickets sold",
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                    tone = UiTone.Neutral,
+                ),
+                ReportSecondaryMetric(
+                    label = "Profit margin",
+                    value = "0.0%",
+                    detail = "No revenue in this period",
+                    icon = Icons.AutoMirrored.Filled.TrendingUp,
+                    tone = UiTone.Neutral,
+                ),
+                ReportSecondaryMetric(
+                    label = "Cost ratio",
+                    value = "0.0%",
+                    detail = "No costs in this period",
+                    icon = Icons.Filled.Assessment,
+                    tone = UiTone.Neutral,
+                ),
+            ),
+        )
         SectionCard(
             title = "Report result",
             subtitle = fetchedAtMillis?.let {
                 "As of ${relativeAge(it)}" + if (refreshing) " · refreshing…" else ""
             } ?: "No cached result timestamp",
             icon = Icons.Filled.Assessment,
-            modifier = Modifier.weight(1f),
         ) {
             DesignedEmptyState(
                 title = "Nothing recorded in this period",
                 body = "No sales, tickets, payments or expenses fall inside " +
                     label.ifBlank { "this period" } + ". Use the controls above to inspect another ${unitWord(period)}.",
                 icon = Icons.Filled.Assessment,
+                modifier = Modifier.height(180.dp),
             )
         }
     }
@@ -453,6 +535,7 @@ private fun ReportBody(
             ReportHeading(report, period, refreshing, fetchedAtMillis)
 
             KpiGrid(report, columns)
+            SecondaryMetrics(report)
 
             if (report.manualCollectionsMinor > 0) {
                 ManualCollectionsNotice(report.manualCollectionsMinor)
@@ -535,7 +618,7 @@ private fun ReportHeading(
             Text(
                 "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+                color = Brand.ForegroundMuted,
             )
         }
     }
@@ -554,21 +637,10 @@ private fun relativeAge(fetchedAtMillis: Long): String {
 @Composable
 private fun KpiGrid(report: ReportData, columns: Int) {
     val tiles = listOf(
-        KpiTile("Orders", report.ordersCount.toString(), null),
-        KpiTile("Tickets", report.ticketsCount.toString(), null),
-        KpiTile("Avg ticket", report.avgTicketMinor.asRupees(), null),
-        KpiTile("Net revenue", report.netRevenueMinor.asRupees(), null),
-        KpiTile(
-            "Profit margin",
-            percent(report.netProfitMinor, report.netRevenueMinor),
-            report.netProfitMinor >= 0,
-        ),
-        KpiTile(
-            "Cost ratio",
-            percent(report.totalCostsMinor, report.netRevenueMinor),
-            report.totalCostsMinor <= report.netRevenueMinor,
-        ),
-        KpiTile("Net profit", report.netProfitMinor.asRupees(), report.netProfitMinor >= 0),
+        KpiTile("Revenue", report.netRevenueMinor.asRupees()),
+        KpiTile("Orders", report.ordersCount.toString()),
+        KpiTile("Average ticket", report.avgTicketMinor.asRupees()),
+        KpiTile("Net profit", report.netProfitMinor.asRupees(), negative = report.netProfitMinor < 0),
     )
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tiles.chunked(columns).forEach { row ->
@@ -584,7 +656,7 @@ private fun KpiGrid(report: ReportData, columns: Int) {
     }
 }
 
-private data class KpiTile(val label: String, val value: String, val good: Boolean?)
+private data class KpiTile(val label: String, val value: String, val negative: Boolean = false)
 
 @Composable
 private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
@@ -599,12 +671,91 @@ private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
             tile.value,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = when (tile.good) {
-                null -> Brand.Foreground
-                true -> Brand.Good
-                false -> Brand.Danger
-            },
+            color = if (tile.negative) Brand.Danger else Brand.Foreground,
         )
+    }
+}
+
+internal data class ReportSecondaryMetric(
+    val label: String,
+    val value: String,
+    val detail: String,
+    val icon: ImageVector,
+    val tone: UiTone,
+)
+
+/**
+ * Secondary report context that was present before the visual refinement.
+ *
+ * Keeping this mapping outside the composable makes the accounting labels and
+ * ratios directly testable. All values come from the report response; this
+ * layer only formats them for display.
+ */
+internal fun reportSecondaryMetrics(report: ReportData): List<ReportSecondaryMetric> = listOf(
+    ReportSecondaryMetric(
+        label = "Tickets",
+        value = report.ticketsCount.toString(),
+        detail = "Event tickets sold",
+        icon = Icons.AutoMirrored.Filled.ReceiptLong,
+        tone = UiTone.Neutral,
+    ),
+    ReportSecondaryMetric(
+        label = "Profit margin",
+        value = percent(report.netProfitMinor, report.netRevenueMinor),
+        detail = "Net profit ÷ net revenue",
+        icon = Icons.AutoMirrored.Filled.TrendingUp,
+        tone = when {
+            report.netProfitMinor > 0 -> UiTone.Success
+            report.netProfitMinor < 0 -> UiTone.Danger
+            else -> UiTone.Neutral
+        },
+    ),
+    ReportSecondaryMetric(
+        label = "Cost ratio",
+        value = percent(report.totalCostsMinor, report.netRevenueMinor),
+        detail = "Total costs ÷ net revenue",
+        icon = Icons.Filled.Assessment,
+        tone = when {
+            report.netRevenueMinor <= 0 -> UiTone.Neutral
+            report.totalCostsMinor > report.netRevenueMinor -> UiTone.Danger
+            else -> UiTone.Success
+        },
+    ),
+)
+
+@Composable
+private fun SecondaryMetrics(report: ReportData) {
+    SecondaryMetricGrid(reportSecondaryMetrics(report))
+}
+
+@Composable
+private fun SecondaryMetricGrid(metrics: List<ReportSecondaryMetric>) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns = when {
+            maxWidth >= 720.dp -> 3
+            maxWidth >= 440.dp -> 2
+            else -> 1
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            metrics.chunked(columns).forEach { rowMetrics ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    rowMetrics.forEach { metric ->
+                        CompactStatCard(
+                            label = metric.label,
+                            value = metric.value,
+                            detail = metric.detail,
+                            icon = metric.icon,
+                            tone = metric.tone,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    repeat(columns - rowMetrics.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
     }
 }
 
@@ -615,12 +766,12 @@ private fun ManualCollectionsNotice(amountMinor: Long) {
             .fillMaxWidth()
             .clip(Radius.shapeLg)
             .background(Brand.SurfaceRaised)
-            .border(BorderStroke(1.dp, Brand.GoldMuted), Radius.shapeLg)
+            .border(BorderStroke(1.dp, Brand.Warning), Radius.shapeLg)
             .padding(16.dp),
     ) {
         Text(
             "${amountMinor.asRupees()} is unitemized manual collection.",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(4.dp))
@@ -811,32 +962,49 @@ private fun ExpensesCard(report: ReportData) {
 @Composable
 private fun BottomLine(report: ReportData) {
     SectionCard {
-        Row(Modifier.fillMaxWidth()) {
-            Summary(
-                Modifier.weight(1f),
-                "Net revenue",
-                report.netRevenueMinor.asRupees(),
-                "what's really yours before any costs",
-                Brand.Foreground,
-            )
-            Summary(
-                Modifier.weight(1f),
-                "Cost of goods + running costs",
-                report.totalCostsMinor.asRupees(),
-                if (report.depreciationMinor > 0) {
-                    "what you sold cost, what it took to run the place, and equipment wear"
-                } else {
-                    "what you sold cost, plus what it took to run the place"
-                },
-                Brand.Foreground,
-            )
-            Summary(
-                Modifier.weight(1f),
-                "Net profit",
-                report.netProfitMinor.asRupees(),
-                "your real bottom line",
-                if (report.netProfitMinor >= 0) Brand.Good else Brand.Danger,
-            )
+        val summaries: List<@Composable (Modifier) -> Unit> = listOf(
+            { modifier ->
+                Summary(
+                    modifier,
+                    "Net revenue",
+                    report.netRevenueMinor.asRupees(),
+                    "what's really yours before any costs",
+                    Brand.Foreground,
+                )
+            },
+            { modifier ->
+                Summary(
+                    modifier,
+                    "Cost of goods + running costs",
+                    report.totalCostsMinor.asRupees(),
+                    if (report.depreciationMinor > 0) {
+                        "what you sold cost, what it took to run the place, and equipment wear"
+                    } else {
+                        "what you sold cost, plus what it took to run the place"
+                    },
+                    Brand.Foreground,
+                )
+            },
+            { modifier ->
+                Summary(
+                    modifier,
+                    "Net profit",
+                    report.netProfitMinor.asRupees(),
+                    "your real bottom line",
+                    if (report.netProfitMinor < 0) Brand.Danger else Brand.Foreground,
+                )
+            },
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= 720.dp) {
+                Row(Modifier.fillMaxWidth()) {
+                    summaries.forEach { summary -> summary(Modifier.weight(1f)) }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    summaries.forEach { summary -> summary(Modifier.fillMaxWidth()) }
+                }
+            }
         }
     }
 }
@@ -957,7 +1125,7 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
         Text(
             glyph,
             style = MaterialTheme.typography.titleLarge,
-            color = if (enabled) Brand.Gold else Brand.Border,
+            color = if (enabled) Brand.Foreground else Brand.Border,
         )
     }
 }

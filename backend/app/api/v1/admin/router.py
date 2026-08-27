@@ -114,7 +114,13 @@ AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
         "Partner",
         "CapitalEntry",
     ),
-    "menu": ("MenuCategory", "MenuItem"),
+    "menu": (
+        "MenuCategory",
+        "MenuItem",
+        "MenuModifierGroup",
+        "MenuModifier",
+        "MenuVariant",
+    ),
     "operations": (
         "Table",
         "Floor",

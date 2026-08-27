@@ -158,6 +158,26 @@ export interface CheckoutClaimDTO {
   reused: boolean;
 }
 
+export interface PosPaymentDTO {
+  id: string;
+  order_id: string;
+  shift_id: string;
+  method: 'cash' | 'card' | 'upi' | 'qr' | 'wallet';
+  /** Total actually collected/banked, including tip. */
+  amount_minor: number;
+  /** Bill settlement amount before the separately recorded tip. */
+  bill_amount_minor: number;
+  tip_minor: number;
+  tendered_minor: number | null;
+  change_minor: number | null;
+  ref_external: string | null;
+  paid_at: string;
+  order_status: string;
+  invoice_no: string | null;
+  fiscal_year: string | null;
+  invoice_issued_at: string | null;
+}
+
 export interface ReceiptBusinessDTO {
   brand_name: string;
   supplier_name: string;
@@ -251,9 +271,13 @@ export const pos = {
     orderId: string,
     body: { customer_name?: string; customer_phone?: string },
     idempotencyKey: string,
+    expectedCheckoutVersion: number,
   ) =>
     api
-      .patch<OrderDTO>(`/pos/orders/${orderId}/customer`, body, {
+      .patch<OrderDTO>(`/pos/orders/${orderId}/customer`, {
+        ...body,
+        expected_checkout_version: expectedCheckoutVersion,
+      }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
@@ -263,9 +287,13 @@ export const pos = {
     orderId: string,
     manual_discount_minor: number,
     idempotencyKey: string,
+    expectedCheckoutVersion: number,
   ) =>
     api
-      .patch<OrderDTO>(`/pos/orders/${orderId}/discount`, { manual_discount_minor }, {
+      .patch<OrderDTO>(`/pos/orders/${orderId}/discount`, {
+        manual_discount_minor,
+        expected_checkout_version: expectedCheckoutVersion,
+      }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
@@ -273,9 +301,13 @@ export const pos = {
     orderId: string,
     points: number,
     idempotencyKey: string,
+    expectedCheckoutVersion: number,
   ) =>
     api
-      .patch<OrderDTO>(`/pos/orders/${orderId}/points`, { points }, {
+      .patch<OrderDTO>(`/pos/orders/${orderId}/points`, {
+        points,
+        expected_checkout_version: expectedCheckoutVersion,
+      }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
@@ -283,9 +315,13 @@ export const pos = {
     orderId: string,
     reward_key: string,
     idempotencyKey: string,
+    expectedCheckoutVersion: number,
   ) =>
     api
-      .patch<OrderDTO>(`/pos/orders/${orderId}/reward`, { reward_key }, {
+      .patch<OrderDTO>(`/pos/orders/${orderId}/reward`, {
+        reward_key,
+        expected_checkout_version: expectedCheckoutVersion,
+      }, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
@@ -313,15 +349,7 @@ export const pos = {
     checkoutClaimToken?: string,
   ) =>
     api
-      .post<{
-        id: string;
-        amount_minor: number;
-        tip_minor: number;
-        order_status: string;
-        invoice_no: string | null;
-        fiscal_year: string | null;
-        invoice_issued_at: string | null;
-      }>(
+      .post<PosPaymentDTO>(
         `/pos/orders/${orderId}/payments`,
         body,
         {
@@ -1634,16 +1662,24 @@ export interface StationDTO {
 export interface GameSessionDTO {
   id: string;
   station_id: string;
+  shift_id: string | null;
   status: 'active' | 'paused' | 'ended' | 'cancelled';
   start_at: string;
   end_at: string | null;
   timer_minutes: number | null;
   timer_ends_at: string | null;
+  paused_minutes: number;
   billable_minutes: number | null;
   amount_minor: number | null;
+  rate_per_hour_minor: number | null;
   order_id: string | null;
   cancel_reason: string | null;
+  billing_mode: 'hourly' | 'package' | 'legacy_ambiguous';
   package_id: string | null;
+  package_price_minor_snapshot: number | null;
+  package_duration_minutes_snapshot: number | null;
+  package_variant_snapshot: string | null;
+  package_station_type_snapshot: string | null;
   extra_controllers: number;
 }
 
@@ -1708,15 +1744,65 @@ export const gaming = {
   startSession: (body: {
     station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
     timer_minutes?: number; package_id?: string; extra_controllers?: number;
-  }) => api.post<GameSessionDTO>('/gaming/sessions/start', body).then((r) => r.data),
+    expected_rate_per_hour_minor: number;
+    expected_package_price_minor?: number;
+    expected_package_duration_minutes?: number;
+    expected_package_variant?: string;
+  }, idempotencyKey: string) => api.post<GameSessionDTO>('/gaming/sessions/start', body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
   setSessionTimer: (id: string, timer_minutes: number | null) =>
     api.patch<GameSessionDTO>(`/gaming/sessions/${id}/timer`, { timer_minutes }).then((r) => r.data),
-  extendSessionWithPackage: (id: string, package_id: string, idempotencyKey: string) =>
-    api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend`, { package_id }, {
+  extendSessionTimer: (
+    id: string,
+    expectedTimerMinutes: number | null,
+    additionalMinutes: number,
+    idempotencyKey: string,
+  ) => api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend-timer`, {
+    // Keep the explicit null: it is the compare-and-swap snapshot for an
+    // open timer, not an omitted optional field.
+    expected_timer_minutes: expectedTimerMinutes,
+    additional_minutes: additionalMinutes,
+  }, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
+  extendSessionWithPackage: (
+    id: string,
+    selectedPackage: Pick<
+      GamingPackageDTO,
+      'id' | 'price_minor' | 'duration_minutes' | 'variant'
+    >,
+    expectedSession: { timer_minutes: number; amount_minor: number },
+    idempotencyKey: string,
+  ) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/extend`, {
+      package_id: selectedPackage.id,
+      expected_package_price_minor: selectedPackage.price_minor,
+      expected_package_duration_minutes: selectedPackage.duration_minutes,
+      expected_package_variant: selectedPackage.variant,
+      expected_timer_minutes: expectedSession.timer_minutes,
+      expected_amount_minor: expectedSession.amount_minor,
+    }, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
-  stopSession: (id: string) =>
-    api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`).then((r) => r.data),
+  stopSession: (id: string, idempotencyKey: string) =>
+    api.post<GameSessionDTO>(`/gaming/sessions/${id}/stop`, undefined, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  repairSessionBilling: (
+    id: string,
+    amountMinor: number,
+    reason: string,
+    idempotencyKey: string,
+  ) => api.post<GameSessionDTO>(`/gaming/sessions/${id}/repair-billing`, {
+    // Explicit null is the protected compare-and-swap precondition: repair
+    // only a row whose authoritative billed amount is still absent.
+    expected_amount_minor: null,
+    amount_minor: amountMinor,
+    reason,
+  }, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
   cancelSession: (id: string, reason: string) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/cancel`, { reason }).then((r) => r.data),
   sendToPos: (id: string) =>

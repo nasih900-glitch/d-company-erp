@@ -16,9 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -108,13 +107,16 @@ fun ShiftScreen(
                     PastShiftsPanel(state, Modifier.width(350.dp))
                 }
             } else {
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                    Column(Modifier.weight(1f)) {
+                CompactShiftPanels(
+                    stateIdentity = state.open?.let(::shiftCloseUiIdentity) ?: "closed",
+                    currentPanel = {
                         if (state.open == null) OpenShiftCard(state, vm, access.canOpen)
                         else CloseShiftCard(state, vm, access.canClose, access.canOpen)
-                    }
-                    PastShiftsPanel(state, Modifier.heightIn(max = 280.dp))
-                }
+                    },
+                    historyPanel = {
+                        PastShiftsPanel(state, Modifier.heightIn(min = 280.dp, max = 320.dp))
+                    },
+                )
             }
         }
     }
@@ -168,36 +170,102 @@ fun ShiftScreen(
     }
 }
 
+/**
+ * A compact tablet cannot reserve fixed-height current-shift and history
+ * panels simultaneously. A single scroll owner keeps both complete panels
+ * reachable instead of clipping the opening input and action at 960 x 600dp.
+ */
+@Composable
+internal fun CompactShiftPanels(
+    stateIdentity: String,
+    modifier: Modifier = Modifier,
+    currentPanel: @Composable () -> Unit,
+    historyPanel: @Composable () -> Unit,
+) {
+    // A successful open/close replaces the complete current panel. Keeping the
+    // prior list offset would land staff halfway through the new panel. Keying
+    // the scroll owner to the authoritative shift identity starts each new
+    // workflow at its heading while preserving scroll during ordinary updates.
+    key(stateIdentity) {
+        LazyColumn(
+            modifier = modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            item(key = "current-shift-panel") { currentPanel() }
+            item(key = "shift-history-panel") { historyPanel() }
+        }
+    }
+}
+
 @Composable
 private fun ShiftSummaryRow(state: ShiftUiState) {
     val open = state.open
     val opener = open?.openedByName?.takeIf(String::isNotBlank)
         ?: open?.openedByEmail?.takeIf(String::isNotBlank)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-        CompactStatCard(
-            label = "Shift status",
-            value = if (open == null) "Closed" else "Open",
-            detail = if (open == null) "Billing requires a shift" else "Billing is available",
-            icon = Icons.Filled.LockClock,
-            tone = if (open == null) UiTone.Warning else UiTone.Success,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = if (open == null) "Closed shift history" else "Opened by",
-            value = if (open == null) state.history.size.toString() else (opener ?: "Verifying"),
-            detail = if (open == null) "Loaded for this terminal" else historyDateFormat.format(Date(open.openedAtMillis)),
-            icon = if (open == null) Icons.Filled.History else Icons.Filled.Person,
-            tone = UiTone.Neutral,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = if (open == null) "Opening float" else "Expected drawer",
-            value = if (open == null) "₹0.00 allowed" else (state.expectedMinor?.asRupees() ?: "Unavailable"),
-            detail = if (open == null) "Count existing drawer cash" else if (state.expectedMinor == null) "Refresh when online" else "Before final count",
-            icon = Icons.Filled.AccountBalanceWallet,
-            tone = if (open != null && state.expectedMinor == null) UiTone.Warning else UiTone.Information,
-            modifier = Modifier.weight(1f),
-        )
+    val cards: List<@Composable (Modifier) -> Unit> = listOf(
+        { modifier ->
+            CompactStatCard(
+                label = "Shift status",
+                value = if (open == null) "Closed" else "Open",
+                detail = if (open == null) "Billing requires a shift" else "Billing is available",
+                icon = Icons.Filled.LockClock,
+                tone = if (open == null) UiTone.Warning else UiTone.Success,
+                modifier = modifier,
+            )
+        },
+        { modifier ->
+            CompactStatCard(
+                label = if (open == null) "Closed shift history" else "Opened by",
+                value = if (open == null) state.history.size.toString() else (opener ?: "Verifying"),
+                detail = if (open == null) {
+                    "Loaded for this terminal"
+                } else {
+                    historyDateFormat.format(Date(open.openedAtMillis))
+                },
+                icon = if (open == null) Icons.Filled.History else Icons.Filled.Person,
+                tone = UiTone.Neutral,
+                modifier = modifier,
+            )
+        },
+        { modifier ->
+            CompactStatCard(
+                label = if (open == null) "Opening float" else "Expected drawer",
+                value = if (open == null) "₹0.00 allowed" else (state.expectedMinor?.asRupees() ?: "Unavailable"),
+                detail = if (open == null) {
+                    "Count existing drawer cash"
+                } else if (state.expectedMinor == null) {
+                    "Refresh when online"
+                } else {
+                    "Before final count"
+                },
+                icon = Icons.Filled.AccountBalanceWallet,
+                tone = if (open != null && state.expectedMinor == null) UiTone.Warning else UiTone.Information,
+                modifier = modifier,
+            )
+        },
+    )
+
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        when {
+            maxWidth >= 760.dp -> Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                cards.forEach { card -> card(Modifier.weight(1f)) }
+            }
+            maxWidth >= 520.dp -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    cards.take(2).forEach { card -> card(Modifier.weight(1f)) }
+                }
+                cards.last()(Modifier.fillMaxWidth())
+            }
+            else -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                cards.forEach { card -> card(Modifier.fillMaxWidth()) }
+            }
+        }
     }
 }
 
@@ -210,7 +278,7 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
         modifier = modifier,
     ) {
         state.historyMessage?.let { message ->
-            Text(message, color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            Text(message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
         }
         if (state.history.isEmpty()) {
             if (state.historyRefreshing) {
@@ -240,11 +308,6 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
 
 @Composable
 private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Boolean) {
-    var float by remember { mutableStateOf("") }
-    val parsedFloat = remember(float) { parseRupeesToMinor(float) }
-    val floatMinor = parsedFloat ?: 0L
-    val validFloat = float.isBlank() || parsedFloat != null
-
     state.rejectedShift?.let { rejected ->
         RejectedShiftCard(
             rejected = rejected,
@@ -258,43 +321,61 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
         Spacer(Modifier.height(14.dp))
     }
 
+    OpenShiftForm(
+        online = state.online,
+        busy = state.busy,
+        canOpen = canOpen,
+        blockedByRejectedShift = state.rejectedShift != null,
+        onOpenShift = vm::openShift,
+    )
+}
+
+/** Actual open-shift form, separated from ViewModel wiring for rendered UI tests. */
+@Composable
+internal fun OpenShiftForm(
+    online: Boolean,
+    busy: Boolean,
+    canOpen: Boolean,
+    blockedByRejectedShift: Boolean,
+    onOpenShift: (Long) -> Unit,
+) {
+    var float by remember { mutableStateOf("") }
+    val parsedFloat = remember(float) { parseRupeesToMinor(float) }
+    val floatMinor = parsedFloat ?: 0L
+    val validFloat = float.isBlank() || parsedFloat != null
+
     SectionCard(
         title = "Open this terminal's shift",
         subtitle = "Record the drawer cash before accepting the first payment.",
         icon = Icons.Filled.AccountBalanceWallet,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        ) {
+        Text(
+            "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
+            color = Brand.ForegroundMuted,
+        )
+        if (!online) {
             Text(
-                "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
-                color = Brand.ForegroundMuted,
-            )
-            if (!state.online) {
-                Text(
-                    "No connection — the shift opens safely on this tablet and synchronises when connectivity returns.",
-                    color = Brand.Information,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-            TouchMoneyEntry(
-                value = float,
-                onValueChange = { float = it },
-                label = "Opening float (₹)",
-                enabled = canOpen && !state.busy && state.rejectedShift == null,
-                presetsMinor = listOf(0L, 50_000L, 100_000L),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            ErpButton(
-                text = "Open shift with ${floatMinor.asRupees()}",
-                onClick = { vm.openShift(floatMinor) },
-                enabled = canOpen && validFloat && state.rejectedShift == null,
-                busy = state.busy,
-                modifier = Modifier.fillMaxWidth(),
+                "No connection — the shift opens safely on this tablet and synchronises when connectivity returns.",
+                color = Brand.Information,
+                style = MaterialTheme.typography.labelMedium,
             )
         }
+        TouchMoneyEntry(
+            value = float,
+            onValueChange = { float = it },
+            label = "Opening float (₹)",
+            enabled = canOpen && !busy && !blockedByRejectedShift,
+            presetsMinor = listOf(0L, 50_000L, 100_000L),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        ErpButton(
+            text = "Open shift with ${floatMinor.asRupees()}",
+            onClick = { onOpenShift(floatMinor) },
+            enabled = canOpen && validFloat && !blockedByRejectedShift,
+            busy = busy,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -316,25 +397,27 @@ private fun RejectedShiftCard(
     )
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Danger).padding(16.dp),
+            .background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.Danger, Radius.shapeLg)
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             "Couldn't open a shift",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            color = Brand.Background,
+            color = Brand.Danger,
         )
-        Text(rejected.lastError ?: "The server refused this.", color = Brand.Background)
+        Text(rejected.lastError ?: "The server refused this.", color = Brand.Foreground)
         Text(
             actions.guidance,
-            color = Brand.Background,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!online) {
             Text(
                 "A live connection is required to clear the attempt safely.",
-                color = Brand.Background,
+                color = Brand.Warning,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -430,7 +513,7 @@ private fun CloseShiftCard(
         state.moneyAccessMessage?.let { message ->
             Text(
                 message,
-                color = Brand.Gold,
+                color = Brand.Warning,
                 style = MaterialTheme.typography.labelMedium,
             )
         }
@@ -506,7 +589,7 @@ private fun CloseShiftCard(
             Text(
                 "Detailed collection and refund totals are not available from the server yet. " +
                     "Use Expected in drawer for the cash count; POS receipts can include non-cash payments.",
-                color = Brand.GoldMuted,
+                color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -538,17 +621,19 @@ private fun CloseShiftCard(
         if (closeRejected) {
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.Danger).padding(12.dp),
+                    .background(Brand.SurfaceRaised)
+                    .border(1.dp, Brand.Danger, Radius.shapeSm)
+                    .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     "Shift is still open",
-                    color = Brand.Background,
+                    color = Brand.Danger,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     shift.local?.lastError ?: "The server refused to close this shift.",
-                    color = Brand.Background,
+                    color = Brand.Foreground,
                 )
                 Text(
                     closePresentation.savedCountMessage(
@@ -558,7 +643,7 @@ private fun CloseShiftCard(
                         missing = "This older rejected close has no valid saved drawer count. Retry is " +
                             "disabled. Choose Continue shift, then count the drawer again before closing.",
                     ),
-                    color = Brand.Background,
+                    color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -664,7 +749,11 @@ private fun CloseShiftCard(
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             ErpButton(
                 text = "Refresh",
                 onClick = vm::load,
@@ -673,6 +762,7 @@ private fun CloseShiftCard(
                 intent = ActionIntent.Secondary,
                 leadingIcon = Icons.Filled.Refresh,
             )
+            Spacer(Modifier.weight(1f))
             ErpButton(
                 text = "Close shift",
                 onClick = {
@@ -683,7 +773,6 @@ private fun CloseShiftCard(
                 enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose,
                 busy = closing,
                 intent = ActionIntent.Destructive,
-                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -704,22 +793,24 @@ private fun CloseShiftCard(
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    confirmation = null
-                    val currentIdentity = vm.state.value.open?.let(::shiftCloseUiIdentity)
-                    if (activeConfirmation.isFor(currentIdentity)) {
-                        vm.closeShift(activeConfirmation.countedMinor)
-                    } else {
-                        // The dialog belonged to a shift that has since changed.
-                        // Explain the safe rejection rather than ever applying
-                        // A's count to B or silently ignoring the tap.
-                        confirmationGuardMessage =
-                            "The open shift changed while this confirmation was on screen. " +
-                            "Nothing was closed. Review the current shift and count its drawer again."
-                    }
-                }) {
-                    Text("Close shift")
-                }
+                ErpButton(
+                    text = "Close shift",
+                    intent = ActionIntent.Destructive,
+                    onClick = {
+                        confirmation = null
+                        val currentIdentity = vm.state.value.open?.let(::shiftCloseUiIdentity)
+                        if (activeConfirmation.isFor(currentIdentity)) {
+                            vm.closeShift(activeConfirmation.countedMinor)
+                        } else {
+                            // The dialog belonged to a shift that has since changed.
+                            // Explain the safe rejection rather than ever applying
+                            // A's count to B or silently ignoring the tap.
+                            confirmationGuardMessage =
+                                "The open shift changed while this confirmation was on screen. " +
+                                "Nothing was closed. Review the current shift and count its drawer again."
+                        }
+                    },
+                )
             },
             dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } },
         )
@@ -844,7 +935,7 @@ private fun HistoryRow(s: ShiftHistoryRow) {
             Text(
                 "Saved on this tablet; waiting for server history refresh.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+                color = Brand.Warning,
             )
         } else if (s.netCollectionsMinor != null) {
             Text(

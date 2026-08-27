@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -44,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.DataListRow
@@ -52,7 +54,6 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.LoadingSkeleton
 import cloud.dcompany.erp.ui.components.OperationalBanner
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -77,17 +78,8 @@ fun SettingsScreen(
 
     Column(
         Modifier.fillMaxSize().padding(Spacing.lg),
-        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        PageHeader(
-            title = "Settings",
-            subtitle = if (canManageSystem) {
-                "Manage your account, business identity, branches and tills."
-            } else {
-                "Review your account and update your sign-in password."
-            },
-            eyebrow = "Workspace",
-        )
         PremiumTabBar(
             options = visibleTabs.map { TabOption(it.name, it.label) },
             selectedId = activeTab.name,
@@ -435,6 +427,8 @@ private fun PendingBanner(
             dismissButton = {
                 TextButton(onClick = { confirmDiscard = false }) { Text("Keep it") }
             },
+            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
+            properties = DialogProperties(usePlatformDefaultWidth = false),
         )
     }
 }
@@ -548,7 +542,7 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
         containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!state.branchSaving) requestDismiss() },
-        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
+        modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(0.92f).imePadding(),
         title = { Text(if (form.isNew) "Add branch" else "Edit ${form.name}") },
         text = {
             Column(
@@ -600,6 +594,7 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
         dismissButton = {
             TextButton(onClick = requestDismiss, enabled = !state.branchSaving) { Text("Cancel") }
         },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     )
     if (confirmDiscard) {
         DestructiveConfirmationDialog(
@@ -877,6 +872,8 @@ private fun DestructiveConfirmationDialog(
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep it") }
         },
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     )
 }
 
@@ -890,5 +887,7 @@ private fun Feedback(notice: String?, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
         title = { Text("Settings") },
         text = { Text(notice) },
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(0.92f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     )
 }

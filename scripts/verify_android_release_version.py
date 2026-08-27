@@ -11,11 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
-
 DEFAULT_BUILD_FILE = Path("android-native/app/build.gradle.kts")
 DEFAULT_PRODUCTION_ENV_FILE = Path(".env.production.example")
 DEFAULT_COMPOSE_FILE = Path("docker-compose.prod.yml")
 _RELEASE_TAG = re.compile(r"v[0-9]+(?:\.[0-9]+)*(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?")
+_SNAPSHOT_SAFE_MIN_VERSION_CODE = 5
 
 
 class ReleaseVersionError(ValueError):
@@ -128,6 +128,23 @@ def _production_version_value(path: Path, pattern: re.Pattern[str], label: str) 
     return int(matches[0])
 
 
+def _production_boolean_value(
+    path: Path,
+    pattern: re.Pattern[str],
+    label: str,
+) -> bool:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ReleaseVersionError(f"cannot read {path}: {exc}") from exc
+    matches = pattern.findall(source)
+    if len(matches) != 1:
+        raise ReleaseVersionError(
+            f"expected exactly one {label} in {path}, found {len(matches)}"
+        )
+    return matches[0].lower() == "true"
+
+
 def validate_production_defaults(
     production_env_file: Path,
     compose_file: Path,
@@ -152,6 +169,53 @@ def validate_production_defaults(
         raise ReleaseVersionError(
             "production Android latest-version defaults do not match versionCode: "
             f"source={version.code}, env={env_latest}, compose={compose_latest}"
+        )
+
+    env_minimum = _production_version_value(
+        production_env_file,
+        re.compile(r"^ANDROID_MIN_SUPPORTED_VERSION_CODE=([1-9][0-9]*)$", re.MULTILINE),
+        "ANDROID_MIN_SUPPORTED_VERSION_CODE assignment",
+    )
+    compose_minimum = _production_version_value(
+        compose_file,
+        re.compile(
+            r"^\s*ANDROID_MIN_SUPPORTED_VERSION_CODE:\s*"
+            r"\$\{ANDROID_MIN_SUPPORTED_VERSION_CODE:-([1-9][0-9]*)\}\s*$",
+            re.MULTILINE,
+        ),
+        "ANDROID_MIN_SUPPORTED_VERSION_CODE fallback",
+    )
+    if env_minimum != compose_minimum:
+        raise ReleaseVersionError(
+            "production Android minimum-version defaults disagree: "
+            f"env={env_minimum}, compose={compose_minimum}"
+        )
+    if not _SNAPSHOT_SAFE_MIN_VERSION_CODE <= env_minimum <= version.code:
+        raise ReleaseVersionError(
+            "production Android minimum version must preserve the conflict-safe "
+            "Gaming contract: "
+            f"required>={_SNAPSHOT_SAFE_MIN_VERSION_CODE}, "
+            f"configured={env_minimum}, latest={version.code}"
+        )
+
+    env_requires_headers = _production_boolean_value(
+        production_env_file,
+        re.compile(r"^REQUIRE_NATIVE_VERSION_HEADERS=(true|false)$", re.MULTILINE),
+        "REQUIRE_NATIVE_VERSION_HEADERS assignment",
+    )
+    compose_requires_headers = _production_boolean_value(
+        compose_file,
+        re.compile(
+            r"^\s*REQUIRE_NATIVE_VERSION_HEADERS:\s*"
+            r"\$\{REQUIRE_NATIVE_VERSION_HEADERS:-(true|false)\}\s*$",
+            re.MULTILINE,
+        ),
+        "REQUIRE_NATIVE_VERSION_HEADERS fallback",
+    )
+    if not env_requires_headers or not compose_requires_headers:
+        raise ReleaseVersionError(
+            "production must require native version headers so pre-header Android "
+            "builds cannot bypass the compatibility gate"
         )
 
 

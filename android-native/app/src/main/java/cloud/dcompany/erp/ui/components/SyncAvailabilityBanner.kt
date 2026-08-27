@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -61,29 +62,42 @@ internal fun syncAvailabilityCopy(problem: SyncAvailabilityProblem): SyncAvailab
 @Composable
 internal fun SyncAvailabilityBanner(problem: SyncAvailabilityProblem) {
     val copy = syncAvailabilityCopy(problem) ?: return
+    val (background, foreground, icon) = when (problem) {
+        SyncAvailabilityProblem.NO_NETWORK -> Triple(
+            Brand.WarningMuted,
+            Brand.Warning,
+            Icons.Filled.CloudOff,
+        )
+        SyncAvailabilityProblem.SERVER_UNREACHABLE -> Triple(
+            Brand.DangerMuted,
+            Brand.Danger,
+            Icons.Filled.Error,
+        )
+        SyncAvailabilityProblem.NONE -> return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Brand.GoldMuted)
+            .background(background)
             .semantics { liveRegion = LiveRegionMode.Polite }
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = Icons.Filled.CloudOff,
+            imageVector = icon,
             contentDescription = null,
-            tint = Brand.Background,
+            tint = foreground,
         )
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Text(
                 copy.title,
-                color = Brand.Background,
+                color = foreground,
                 style = MaterialTheme.typography.labelLarge,
             )
             Text(
                 copy.detail,
-                color = Brand.Background,
+                color = foreground,
                 style = MaterialTheme.typography.labelSmall,
             )
         }

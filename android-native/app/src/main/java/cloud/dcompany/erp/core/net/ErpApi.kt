@@ -5,6 +5,8 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.HeaderMap
+import retrofit2.http.HTTP
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -64,6 +66,29 @@ interface ErpApi {
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Order
 
+    @PATCH("pos/orders/{id}/customer")
+    suspend fun updateOrderCustomer(
+        @Path("id") id: String,
+        @Body body: OrderCustomerUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
+    @PATCH("pos/orders/{id}/discount")
+    suspend fun updateOrderDiscount(
+        @Path("id") id: String,
+        @Body body: OrderDiscountUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
+    @HTTP(method = "DELETE", path = "pos/orders/{id}", hasBody = true)
+    suspend fun voidOrder(
+        @Path("id") id: String,
+        @Body body: VoidOrderRequest,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    )
+
     @POST("pos/orders/{id}/checkout-claim")
     suspend fun acquireCheckoutClaim(
         @Path("id") id: String,
@@ -90,7 +115,7 @@ interface ErpApi {
     suspend fun finalizeZeroTotalOrder(
         @Path("id") id: String,
         @Header("Idempotency-Key") idempotencyKey: String,
-        @Header("X-Checkout-Claim") checkoutClaimToken: String,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String?,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): ZeroTotalFinalizationResult
 

@@ -32,6 +32,7 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import Floor, MenuItem, Order, OrderLine, Table
+from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
 
 router = APIRouter()
 
@@ -56,6 +57,8 @@ class KitchenLineDTO(BaseModel):
     name: str
     type: str  # food/drink/dessert only
     qty: float
+    variant_snapshot: OrderVariantSnapshotRead | None = None
+    modifiers: list[OrderModifierSnapshotRead] = Field(default_factory=list)
     notes: str | None = None
     released_at: datetime
     round_no: int
@@ -68,6 +71,8 @@ class KitchenCancellationDTO(BaseModel):
     name: str
     type: str
     qty: float
+    variant_snapshot: OrderVariantSnapshotRead | None = None
+    modifiers: list[OrderModifierSnapshotRead] = Field(default_factory=list)
     notes: str | None = None
     released_at: datetime
     round_no: int
@@ -434,6 +439,8 @@ async def kitchen_queue(
                         name=item.name,
                         type=item.type,
                         qty=float(line.qty),
+                        variant_snapshot=getattr(line, "variant_snapshot", None),
+                        modifiers=line.modifiers or [],
                         notes=line.note,
                         released_at=_released_at(line, o.opened_at),
                         round_no=_round_no(line),
@@ -448,6 +455,8 @@ async def kitchen_queue(
                         name=item.name,
                         type=item.type,
                         qty=float(line.qty),
+                        variant_snapshot=getattr(line, "variant_snapshot", None),
+                        modifiers=line.modifiers or [],
                         notes=line.note,
                         released_at=_released_at(line, o.opened_at),
                         round_no=_round_no(line),
@@ -576,6 +585,8 @@ async def set_kitchen_state(
                 name=mi.name,
                 type=mi.type,
                 qty=float(ol.qty),
+                variant_snapshot=getattr(ol, "variant_snapshot", None),
+                modifiers=ol.modifiers or [],
                 notes=ol.note,
                 released_at=_released_at(ol, order.opened_at),
                 round_no=_round_no(ol),

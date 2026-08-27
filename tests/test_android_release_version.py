@@ -125,10 +125,17 @@ class AndroidReleaseVersionTest(unittest.TestCase):
         self,
         env_code: int = 7,
         compose_code: int = 7,
+        env_minimum: int = 5,
+        compose_minimum: int = 5,
+        env_requires_headers: bool = True,
+        compose_requires_headers: bool = True,
     ) -> tuple[Path, Path]:
         env_file = self.root / ".env.production.example"
         env_file.write_text(
-            f"ANDROID_LATEST_VERSION_CODE={env_code}\n",
+            f"ANDROID_MIN_SUPPORTED_VERSION_CODE={env_minimum}\n"
+            f"ANDROID_LATEST_VERSION_CODE={env_code}\n"
+            "REQUIRE_NATIVE_VERSION_HEADERS="
+            f"{str(env_requires_headers).lower()}\n",
             encoding="utf-8",
         )
         compose_file = self.root / "docker-compose.prod.yml"
@@ -136,8 +143,13 @@ class AndroidReleaseVersionTest(unittest.TestCase):
             "services:\n"
             "  backend:\n"
             "    environment:\n"
+            "      ANDROID_MIN_SUPPORTED_VERSION_CODE: "
+            f"${{ANDROID_MIN_SUPPORTED_VERSION_CODE:-{compose_minimum}}}\n"
             "      ANDROID_LATEST_VERSION_CODE: "
-            f"${{ANDROID_LATEST_VERSION_CODE:-{compose_code}}}\n",
+            f"${{ANDROID_LATEST_VERSION_CODE:-{compose_code}}}\n"
+            "      REQUIRE_NATIVE_VERSION_HEADERS: "
+            "${REQUIRE_NATIVE_VERSION_HEADERS:-"
+            f"{str(compose_requires_headers).lower()}}}\n",
             encoding="utf-8",
         )
         return env_file, compose_file
@@ -155,6 +167,34 @@ class AndroidReleaseVersionTest(unittest.TestCase):
         env_file, compose_file = self.write_production_defaults(compose_code=6)
 
         with self.assertRaisesRegex(ReleaseVersionError, "env=7, compose=6"):
+            validate_production_defaults(
+                env_file,
+                compose_file,
+                AndroidVersion(code=7, name="3.1.0"),
+            )
+
+    def test_production_defaults_fail_below_snapshot_safe_minimum(self) -> None:
+        env_file, compose_file = self.write_production_defaults(
+            env_minimum=4,
+            compose_minimum=4,
+        )
+
+        with self.assertRaisesRegex(ReleaseVersionError, "required>=5"):
+            validate_production_defaults(
+                env_file,
+                compose_file,
+                AndroidVersion(code=7, name="3.1.0"),
+            )
+
+    def test_production_defaults_require_native_version_headers(self) -> None:
+        env_file, compose_file = self.write_production_defaults(
+            env_requires_headers=False,
+            compose_requires_headers=False,
+        )
+
+        with self.assertRaisesRegex(
+            ReleaseVersionError, "require native version headers"
+        ):
             validate_production_defaults(
                 env_file,
                 compose_file,

@@ -83,6 +83,33 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
+## Version 5 backend cutover
+
+Android version code 5 is the first client that sends the conflict snapshots
+required by the current Gaming start and extension write contracts. Version 4
+and older must not be allowed to reach those handlers: they would receive a
+validation error partway through an employee workflow rather than a clear
+update-required response.
+
+Treat the app and backend as one coordinated release:
+
+1. Produce, sign, and verify the version-code-5 artifact before changing the
+   server.
+2. While the old backend is still active, bring every installed older app
+   online and confirm its offline queue is empty. Do not uninstall an app with
+   pending work.
+3. Make the version-5 APK/update channel available to staff.
+4. Back up the database, apply migration `0038`, and deploy the backend with
+   `ANDROID_MIN_SUPPORTED_VERSION_CODE=5`,
+   `ANDROID_LATEST_VERSION_CODE=5`, and
+   `REQUIRE_NATIVE_VERSION_HEADERS=true` in the same maintenance window.
+5. Verify an older declared build receives HTTP 426 before a write handler,
+   then run Gaming start, timer extension, paid package extension, stop, and
+   Send to POS from version 5.
+
+Do not lower the minimum to keep an older APK operating against this backend.
+If version 5 is not ready to distribute, postpone the backend deployment too.
+
 ## Android artifacts
 
 The Android job runs release lint, JVM tests, emulator instrumentation tests,

@@ -340,6 +340,8 @@ private fun AppRoot(
                                 // background 403s for low-privilege accounts.
                                 val pos: PosViewModel = viewModel()
                                 val posState by pos.state.collectAsStateWithLifecycle()
+                                val recentPosReceipts by pos.recentReceipts.collectAsStateWithLifecycle()
+                                val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
                                 val heldFocus = operationalFocus
                                     as? OperationalNotificationTarget.HeldOrder
                                 LaunchedEffect(heldFocus?.orderId) {
@@ -347,21 +349,32 @@ private fun AppRoot(
                                 }
                                 PosScreen(
                                     state = posState,
+                                    recentReceipts = recentPosReceipts,
+                                    unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),
                                     onAccessChanged = pos::updateAccess,
                                     onAdd = pos::add,
+                                    onAddConfigured = pos::addConfigured,
                                     onRemove = pos::remove,
+                                    onIncrementLine = pos::incrementLine,
+                                    onDecrementLine = pos::decrementLine,
                                     onSelectCategory = pos::selectCategory,
                                     onClearCart = pos::clearCart,
+                                    onUpdateDraftDetails = pos::updateDraftDetails,
                                     onRefresh = pos::refresh,
+                                    onPrepareDirectCheckout = pos::prepareDirectCheckout,
+                                    onDismissDirectCheckout = pos::dismissDirectCheckout,
+                                    onConfirmDirectZero = pos::confirmDirectZero,
                                     onCapture = pos::captureSale,
                                     onRetryRejectedSale = pos::retryRejectedSale,
                                     onRetryHeldPayment = pos::retryRejectedHeldPayment,
                                     onPrepareHeldOrder = pos::prepareHeldOrderCheckout,
                                     onConfirmHeldOrder = pos::confirmHeldOrderPayment,
                                     onConfirmHeldOrderZero = pos::confirmHeldOrderZero,
+                                    onVoidOrder = pos::voidOrder,
                                     onDismissHeldOrder = pos::dismissHeldOrderCheckout,
                                     onDismissNotice = pos::dismissNotice,
+                                    onAcknowledgeReceipt = pos::acknowledgeReceipt,
                                     onFocusOldestOverdue = pos::focusOldestOverdueOrder,
                                     onSnoozeOverdue = pos::snoozeOverdueBanner,
                                     onUnmuteOverdue = pos::unmuteOverdueBanner,
@@ -377,7 +390,13 @@ private fun AppRoot(
                                 val gamingFocus = operationalFocus
                                     as? OperationalNotificationTarget.GamingSession
                                 GamingScreen(
-                                    access = permissions.gamingAccess(),
+                                    access = permissions.gamingAccess().let { granted ->
+                                        granted.copy(
+                                            canReconcileLegacySessions =
+                                                granted.canReconcileLegacySessions &&
+                                                    s.me.protectedAccess && s.me.auditAccess,
+                                        )
+                                    },
                                     focusSessionId = gamingFocus?.sessionId,
                                     focusStationId = gamingFocus?.stationId,
                                     onDismissFocus = { operationalFocus = null },

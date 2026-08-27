@@ -13,6 +13,7 @@ class OperationalAccessTest {
         val readOnly = permissions()
         assertFalse(readOnly.posAccess().canCreateAndCollect)
         assertFalse(readOnly.gamingAccess().canManageSessions)
+        assertFalse(readOnly.gamingAccess().canReconcileLegacySessions)
         assertFalse(readOnly.kitchenAccess().canAdvanceTickets)
         assertFalse(readOnly.tablesAccess().canCreateOrders)
         assertFalse(readOnly.customersAccess().canManageCustomers)
@@ -83,10 +84,18 @@ class OperationalAccessTest {
             ErpPermission.GamingTournamentManage,
         )
         assertTrue(gaming.gamingAccess().canManageSessions)
+        assertFalse(gaming.gamingAccess().canReconcileLegacySessions)
         assertEquals(
             EventsAccess(canManageEvents = true, canCheckInTickets = true),
             gaming.eventsAccess(),
         )
+
+        val protectedGaming = permissions(
+            ErpPermission.GamingWrite,
+            ErpPermission.AdminAuditRead,
+        )
+        assertTrue(protectedGaming.gamingAccess().canManageSessions)
+        assertTrue(protectedGaming.gamingAccess().canReconcileLegacySessions)
 
         val finance = permissions(ErpPermission.FinanceWrite)
         assertTrue(finance.financeAccess().canRecordExpenses)

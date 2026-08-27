@@ -7,6 +7,7 @@ object ErpPermission {
     const val PosRead = "pos.read"
     const val PosWrite = "pos.write"
     const val PosVoid = "pos.void"
+    const val PosDiscountLarge = "pos.discount.large"
     const val PosShiftOpen = "pos.shift.open"
     const val PosShiftClose = "pos.shift.close"
     const val PosRefund = "pos.refund"
@@ -40,8 +41,16 @@ data class StaffAccess(
     val canUseAttendance: Boolean,
 )
 
-data class PosAccess(val canCreateAndCollect: Boolean = false)
-data class GamingAccess(val canManageSessions: Boolean = false)
+data class PosAccess(
+    val canCreateAndCollect: Boolean = false,
+    val canVoid: Boolean = false,
+    val canApplyDiscount: Boolean = false,
+)
+data class GamingAccess(
+    val canManageSessions: Boolean = false,
+    /** UI hint only; the backend also requires protected/audit identity. */
+    val canReconcileLegacySessions: Boolean = false,
+)
 data class KitchenAccess(val canAdvanceTickets: Boolean = false)
 data class TablesAccess(
     val canCreateOrders: Boolean = false,
@@ -112,7 +121,11 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
 
     fun hasAny(vararg permissions: String): Boolean = permissions.any(::has)
 
-    fun posAccess() = PosAccess(has(ErpPermission.PosWrite))
+    fun posAccess() = PosAccess(
+        canCreateAndCollect = has(ErpPermission.PosWrite),
+        canVoid = has(ErpPermission.PosVoid),
+        canApplyDiscount = has(ErpPermission.PosDiscountLarge),
+    )
 
     fun staffAccess(): StaffAccess = StaffAccess(
         canReadDirectory = has(ErpPermission.StaffRead),
@@ -120,7 +133,10 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
         canUseAttendance = has(ErpPermission.StaffAttendanceWrite),
     )
 
-    fun gamingAccess() = GamingAccess(has(ErpPermission.GamingWrite))
+    fun gamingAccess() = GamingAccess(
+        canManageSessions = has(ErpPermission.GamingWrite),
+        canReconcileLegacySessions = has(ErpPermission.AdminAuditRead),
+    )
 
     fun kitchenAccess() = KitchenAccess(has(ErpPermission.KitchenWrite))
 
@@ -202,6 +218,7 @@ private val LEGACY_CASHIER = LEGACY_STAFF + setOf(
 
 private val LEGACY_MANAGER = LEGACY_CASHIER + setOf(
     ErpPermission.PosRefund,
+    ErpPermission.PosDiscountLarge,
     ErpPermission.InventoryRead,
     ErpPermission.InventoryWrite,
     ErpPermission.InventoryAdjustLarge,

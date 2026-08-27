@@ -1555,6 +1555,7 @@ async def main() -> int:
         )
 
         stations: dict[str, str] = {}
+        station_rates: dict[str, int] = {}
         short_station_code = f"E2E{RUN_ID[-6:].upper()}"
         for station_type, title, rate, code_suffix in [
             ("ps5", "PS5 Station", 20000, "PS5"),
@@ -1578,6 +1579,7 @@ async def main() -> int:
                 },
             )
             stations[station_type] = created["id"]
+            station_rates[station_type] = rate
         check(set(stations) == {"ps5", "vr", "simulator", "streaming", "hookah"}, "gaming stations create for all cafe session types", checks)
 
         order = http_json(
@@ -1931,6 +1933,7 @@ async def main() -> int:
                 "shift_id": shift_id,
                 "customer_name": MARKER,
                 "timer_minutes": 60,
+                "expected_rate_per_hour_minor": station_rates["ps5"],
             },
             expected=(422,),
         )
@@ -1953,6 +1956,7 @@ async def main() -> int:
                     "customer_name": MARKER,
                     "customer_phone": f"7{secrets.randbelow(10**9):09d}",
                     "timer_minutes": 60,
+                    "expected_rate_per_hour_minor": station_rates[station_type],
                 },
             )
             check(
@@ -2409,6 +2413,7 @@ async def main() -> int:
                 "station_id": stations["ps5"],
                 "shift_id": shift_id,
                 "customer_name": f"{MARKER} close blocker",
+                "expected_rate_per_hour_minor": station_rates["ps5"],
             },
         )
         stopped_unsent = http_json(

@@ -22,7 +22,14 @@ from fastapi import (
     Response,
     status,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import func, or_, select
 from sqlalchemy import inspect as sa_inspect
 
@@ -76,6 +83,8 @@ from app.models import (
     Terminal,
     User,
 )
+from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
+from app.services.gaming.billing_mode import is_package_billed
 from app.services.inventory.deduction import deduct_for_order
 from app.services.pos.checkout_claims import (
     acquire_checkout_claim,
@@ -101,6 +110,7 @@ from app.services.pos.points import (
 from app.services.pos.pricing import (
     InvoiceNumberService,
     LineRequest,
+    ModifierSelection,
     OrderPricingService,
     _round_to_rupee,
     apply_manual_discount,
@@ -130,12 +140,24 @@ _KITCHEN_LINE_STATUS_BY_ORDER_STATE = {
 
 
 # ----------- schemas -----------
+class OrderModifierSelectionCreate(BaseModel):
+    """Untrusted client selection; names and prices are resolved server-side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    modifier_id: UUID
+    qty: int = Field(default=1, strict=True, gt=0)
+
+
 class OrderLineCreate(BaseModel):
     client_line_id: UUID | None = None
     menu_item_id: UUID
     variant_id: UUID | None = None
     qty: int = Field(gt=0)
-    modifiers: list[dict] | None = None
+    modifiers: list[OrderModifierSelectionCreate] | None = Field(
+        default=None,
+        max_length=100,
+    )
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -165,7 +187,8 @@ class OrderLineRead(BaseModel):
     client_line_id: UUID | None = None
     menu_item_id: UUID
     variant_id: UUID | None = None
-    modifiers: list[dict] | None = None
+    variant_snapshot: OrderVariantSnapshotRead | None = None
+    modifiers: list[OrderModifierSnapshotRead] | None = None
     name: str
     sku: str
     hsn_or_sac: str
@@ -283,7 +306,7 @@ class CheckoutClaimRead(BaseModel):
 class PaymentCreate(BaseModel):
     method: Literal["cash", "card", "upi", "qr", "wallet"]
     amount_minor: int = Field(gt=0)
-    tendered_minor: int | None = None
+    tendered_minor: int | None = Field(default=None, ge=0)
     ref_external: str | None = Field(default=None, max_length=200)
     expected_order_total_minor: int | None = Field(default=None, ge=0)
     expected_due_minor: int | None = Field(default=None, ge=0)
@@ -294,10 +317,132 @@ class PaymentCreate(BaseModel):
     # tip is layered on afterward). See record_payment for how it is applied.
     tip_minor: int = Field(default=0, ge=0)
 
+    @model_validator(mode="after")
+    def validate_tender_contract(self) -> PaymentCreate:
+        """Keep physical tender facts unambiguous across every client.
+
+        Cash must record what the customer actually handed over, including any
+        tip. Non-cash rails have no cash tender/change concept and must not
+        smuggle one into the receipt or drawer reconciliation.
+        """
+        collected_minor = self.amount_minor + self.tip_minor
+        if self.method == "cash":
+            if self.tendered_minor is None:
+                raise ValueError("cash tendered amount is required")
+            if self.tendered_minor < collected_minor:
+                raise ValueError("cash tendered amount must cover the payment and tip")
+        elif self.tendered_minor is not None:
+            raise ValueError("cash tendered amount is only valid for cash payments")
+        return self
+
+
+class PaymentRead(BaseModel):
+    """Authoritative settlement receipt returned by a successful payment."""
+
+    id: UUID
+    order_id: UUID
+    shift_id: UUID
+    method: Literal["cash", "card", "upi", "qr", "wallet"]
+    # amount_minor is the total actually collected/banked (bill + tip), which
+    # preserves the pre-existing API meaning. bill_amount_minor makes the split
+    # explicit so receipt clients never add the tip twice.
+    amount_minor: int
+    bill_amount_minor: int
+    tip_minor: int
+    tendered_minor: int | None
+    change_minor: int | None
+    ref_external: str | None
+    paid_at: datetime
+    order_status: str
+    invoice_no: str | None
+    fiscal_year: str | None
+    invoice_issued_at: datetime | None
+
+
+async def _payment_read_from_stored_response(
+    session,
+    *,
+    body: dict,
+    order_id: UUID,
+) -> PaymentRead:
+    """Read both current and pre-receipt-grade idempotency responses safely.
+
+    A payment response can outlive an application deployment. Releases before
+    ``PaymentRead`` stored only the payment id, collected amount, tip and
+    invoice identity. Replaying one of those keys must still return the
+    already-recorded payment rather than fail in a way that tempts a cashier
+    to submit a new key. Only that exact legacy shape is reconstructed, using
+    the immutable Payment row for every missing settlement fact; other invalid
+    stored bodies remain errors instead of being guessed at.
+    """
+    try:
+        return PaymentRead.model_validate(body)
+    except ValidationError as validation_error:
+        legacy_fields = {
+            "id",
+            "amount_minor",
+            "tip_minor",
+            "order_status",
+            "invoice_no",
+            "fiscal_year",
+            "invoice_issued_at",
+        }
+        if set(body) != legacy_fields:
+            raise validation_error
+
+        try:
+            payment_id = UUID(str(body["id"]))
+            legacy_amount_minor = int(body["amount_minor"])
+            legacy_tip_minor = int(body["tip_minor"])
+        except (TypeError, ValueError) as exc:
+            raise BusinessRuleError(
+                "Payment is already recorded, but its saved receipt is invalid. "
+                "Do not collect payment again; ask a protected owner to reconcile it."
+            ) from exc
+
+        payment = (
+            await session.execute(
+                select(Payment).where(
+                    Payment.id == payment_id,
+                    Payment.order_id == order_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            payment is None
+            or legacy_amount_minor != payment.amount_minor
+            or legacy_tip_minor < 0
+            or legacy_tip_minor > payment.amount_minor
+        ):
+            raise BusinessRuleError(
+                "Payment is already recorded, but its saved receipt cannot be "
+                "reconstructed. Do not collect payment again; ask a protected "
+                "owner to reconcile it."
+            )
+
+        return PaymentRead(
+            id=payment.id,
+            order_id=payment.order_id,
+            shift_id=payment.shift_id,
+            method=payment.method,
+            amount_minor=payment.amount_minor,
+            bill_amount_minor=payment.amount_minor - legacy_tip_minor,
+            tip_minor=legacy_tip_minor,
+            tendered_minor=payment.tendered_minor,
+            change_minor=payment.change_minor,
+            ref_external=payment.ref_external,
+            paid_at=payment.paid_at,
+            order_status=str(body["order_status"]),
+            invoice_no=body["invoice_no"],
+            fiscal_year=body["fiscal_year"],
+            invoice_issued_at=body["invoice_issued_at"],
+        )
+
 
 class OrderCustomerUpdate(BaseModel):
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
     @field_validator("customer_name", "customer_phone")
     @classmethod
@@ -310,6 +455,7 @@ class OrderDiscountUpdate(BaseModel):
     # Absolute set, not an increment — re-sending the same value is a no-op,
     # and a cashier who changes their mind sends the new total, not a delta.
     manual_discount_minor: int = Field(ge=0)
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
 
 class OrderPointsRedemptionUpdate(BaseModel):
@@ -317,6 +463,7 @@ class OrderPointsRedemptionUpdate(BaseModel):
     # bill, not an increment. Requires a customer already attached to the
     # order (points belong to a specific phone number's balance).
     points: int = Field(ge=0)
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
 
 class RefundCreate(BaseModel):
@@ -1190,7 +1337,7 @@ async def _reprice_unpaid_order_for_customer(
         if gaming_session
         and station
         and station.type == "ps5"
-        and gaming_session.package_id is None
+        and not is_package_billed(gaming_session)
         else 0
     )
     requested_hookah_count = (
@@ -1233,7 +1380,7 @@ async def _reprice_unpaid_order_for_customer(
             if (
                 station.type == "ps5"
                 and benefits.gaming_minutes
-                and gaming_session.package_id is None
+                and not is_package_billed(gaming_session)
             ):
                 # A package session's amount_minor is a fixed, advertised
                 # price (see gaming/router.py) with no proportional
@@ -1350,19 +1497,20 @@ async def _source_label(session, order: Order) -> str | None:
     return row
 
 
-def _reject_unsupported_customizations(lines: list[OrderLineCreate]) -> None:
-    """Never accept a priced customization that the tax engine ignores.
-
-    Per-line preparation notes are supported end to end. Variants and priced
-    modifiers remain blocked until the menu API exposes and validates them.
-    Silently dropping either would undercharge the customer and corrupt the
-    receipt snapshot.
-    """
-    if any(line.variant_id is not None or line.modifiers for line in lines):
-        raise BusinessRuleError(
-            "Priced variants and modifiers are not enabled yet. "
-            "Use the item note for preparation instructions."
-        )
+def _pricing_line_request(line: OrderLineCreate) -> LineRequest:
+    """Translate IDs/quantities only; pricing resolves every mutable fact."""
+    return LineRequest(
+        menu_item_id=line.menu_item_id,
+        qty=int(line.qty),
+        variant_id=line.variant_id,
+        modifiers=tuple(
+            ModifierSelection(
+                modifier_id=selection.modifier_id,
+                quantity=selection.qty,
+            )
+            for selection in (line.modifiers or ())
+        ),
+    )
 
 
 def _validate_client_line_ids(lines: list[OrderLineCreate]) -> None:
@@ -1425,6 +1573,36 @@ def _require_checkout_version(order: Order, expected: int, *, operation: str) ->
                 "current_checkout_version": current,
             },
         )
+
+
+def _require_settlement_metadata_version(
+    order: Order,
+    expected: int | None,
+    *,
+    operation: str,
+) -> None:
+    """Require optimistic concurrency for shared bills awaiting settlement.
+
+    Direct, open POS orders retain backward compatibility for older clients,
+    although any client that supplies a version still receives stale-write
+    protection. A held bill is shared between operational screens and tills,
+    so accepting an unversioned customer/benefit mutation would allow one
+    cashier to overwrite a bill another cashier just reviewed.
+    """
+    if expected is None:
+        if order.status == "held":
+            raise BusinessRuleError(
+                f"Reload this shared bill before {operation}; its current checkout "
+                "version is required.",
+                details={
+                    "current_checkout_version": max(
+                        1,
+                        int(order.checkout_version or 1),
+                    )
+                },
+            )
+        return
+    _require_checkout_version(order, expected, operation=operation)
 
 
 async def _kitchen_item_ids(
@@ -1590,6 +1768,7 @@ def _order_line_read(line: OrderLine, item: MenuItem) -> OrderLineRead:
         client_line_id=getattr(line, "client_line_id", None),
         menu_item_id=line.menu_item_id,
         variant_id=line.variant_id,
+        variant_snapshot=getattr(line, "variant_snapshot", None),
         modifiers=line.modifiers,
         name=item.name,
         sku=item.sku,
@@ -1862,7 +2041,6 @@ async def create_order(
         raise BusinessRuleError("order must have at least one line")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
-    _reject_unsupported_customizations(payload.lines)
     _validate_client_line_ids(payload.lines)
 
     branch = await session.get(Branch, tenant.branch_id)
@@ -1939,10 +2117,7 @@ async def create_order(
         customer_phone=payload.customer_phone,
         place_of_supply_state_code=place_of_supply,
         delivery_via=delivery_via,
-        line_requests=[
-            LineRequest(menu_item_id=line.menu_item_id, qty=int(line.qty))
-            for line in payload.lines
-        ],
+        line_requests=[_pricing_line_request(line) for line in payload.lines],
     )
     kitchen_item_ids = await _kitchen_item_ids(
         session,
@@ -1998,8 +2173,20 @@ async def create_order(
             order_id=order.id,
             client_line_id=requested_line.client_line_id,
             menu_item_id=priced_line.menu_item_id,
-            variant_id=requested_line.variant_id,
-            modifiers=requested_line.modifiers,
+            variant_id=(
+                priced_line.variant_snapshot.id
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            variant_snapshot=(
+                priced_line.variant_snapshot.as_dict()
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            modifiers=(
+                [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots]
+                or None
+            ),
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -2072,7 +2259,6 @@ async def add_order_lines(
     if existing_response:
         return OrderRead.model_validate(existing_response["body"])
 
-    _reject_unsupported_customizations(payload.lines)
     _validate_client_line_ids(payload.lines)
 
     order = (
@@ -2133,10 +2319,7 @@ async def add_order_lines(
         customer_phone=order.customer_phone,
         place_of_supply_state_code=order.place_of_supply_state_code,
         delivery_via=order.delivery_via,
-        line_requests=[
-            LineRequest(menu_item_id=line.menu_item_id, qty=int(line.qty))
-            for line in payload.lines
-        ],
+        line_requests=[_pricing_line_request(line) for line in payload.lines],
     )
     kitchen_item_ids = await _kitchen_item_ids(
         session,
@@ -2162,8 +2345,20 @@ async def add_order_lines(
             order_id=order.id,
             client_line_id=requested_line.client_line_id,
             menu_item_id=priced_line.menu_item_id,
-            variant_id=requested_line.variant_id,
-            modifiers=requested_line.modifiers,
+            variant_id=(
+                priced_line.variant_snapshot.id
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            variant_snapshot=(
+                priced_line.variant_snapshot.as_dict()
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            modifiers=(
+                [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots]
+                or None
+            ),
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -2253,11 +2448,15 @@ async def attach_order_customer(
         terminal_id=tenant.terminal_id,
         operation="attaching a customer to an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Change the customer before "
-            "sending it for payment."
+            f"cannot change the customer on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its customer",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2306,6 +2505,7 @@ async def attach_order_customer(
             company_id=tenant.company_id,
         )
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -2362,11 +2562,15 @@ async def apply_order_discount(
         terminal_id=tenant.terminal_id,
         operation="applying a discount to an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Apply the discount before "
-            "sending it for payment."
+            f"cannot change the discount on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its discount",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2420,6 +2624,7 @@ async def apply_order_discount(
     order.total_minor = remaining_after_manual - points_result.amount_minor
 
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -2468,11 +2673,15 @@ async def redeem_points(
         terminal_id=tenant.terminal_id,
         operation="redeeming points on an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Apply points before sending "
-            "it for payment."
+            f"cannot change points on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its points redemption",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2528,6 +2737,7 @@ async def redeem_points(
     order.total_minor = remaining_after_manual - points_result.amount_minor
 
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -2540,6 +2750,7 @@ async def redeem_points(
 
 class OrderRewardRedemptionUpdate(BaseModel):
     reward_key: str
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
 
 @router.patch("/orders/{order_id}/reward", response_model=OrderRead)
@@ -2577,11 +2788,15 @@ async def redeem_reward(
         terminal_id=tenant.terminal_id,
         operation="redeeming a reward on an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Apply the reward before sending "
-            "it for payment."
+            f"cannot change a reward on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its reward redemption",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2633,6 +2848,7 @@ async def redeem_reward(
     order.total_minor = remaining_after_manual - points_result.amount_minor
 
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -3711,7 +3927,11 @@ def _schedule_order_paid_event(
     background_tasks.add_task(_publish)
 
 
-@router.post("/orders/{order_id}/payments", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/orders/{order_id}/payments",
+    response_model=PaymentRead,
+    status_code=status.HTTP_201_CREATED,
+)
 async def record_payment(
     order_id: UUID,
     payload: PaymentCreate,
@@ -3723,7 +3943,7 @@ async def record_payment(
         str | None,
         Header(alias="X-Checkout-Claim"),
     ] = None,
-) -> dict:
+) -> PaymentRead:
     if tenant.terminal_id is None:
         raise BusinessRuleError("X-Terminal-Id header required for POS writes")
     if tenant.branch_id is None:
@@ -3737,7 +3957,11 @@ async def record_payment(
         terminal_id=tenant.terminal_id,
     )
     if existing_response:
-        return existing_response["body"]
+        return await _payment_read_from_stored_response(
+            session,
+            body=existing_response["body"],
+            order_id=order_id,
+        )
 
     order = (
         await session.execute(
@@ -3805,13 +4029,6 @@ async def record_payment(
     # check (app/api/v1/reports/router.py) already expect.
     tip_minor = int(payload.tip_minor or 0)
     collected_minor = payload.amount_minor + tip_minor
-    if (
-        payload.method == "cash"
-        and payload.tendered_minor is not None
-        and payload.tendered_minor < collected_minor
-    ):
-        raise BusinessRuleError("cash tendered cannot be less than payment amount")
-
     now = datetime.now(timezone.utc)
     if tip_minor:
         order.tip_minor = int(order.tip_minor or 0) + tip_minor
@@ -3824,7 +4041,7 @@ async def record_payment(
         amount_minor=collected_minor,
         tendered_minor=payload.tendered_minor,
         change_minor=(payload.tendered_minor - collected_minor)
-        if payload.tendered_minor and payload.method == "cash"
+        if payload.tendered_minor is not None and payload.method == "cash"
         else None,
         ref_external=payload.ref_external,
         paid_at=now,
@@ -3850,17 +4067,23 @@ async def record_payment(
             method=payload.method,
             occurred_at=now,
         )
-    response = {
-        "id": str(payment.id),
-        "amount_minor": payment.amount_minor,
-        "tip_minor": tip_minor,
-        "order_status": order.status,
-        "invoice_no": order.invoice_no,
-        "fiscal_year": order.fiscal_year,
-        "invoice_issued_at": order.invoice_issued_at.isoformat()
-        if order.invoice_issued_at
-        else None,
-    }
+    response = PaymentRead(
+        id=payment.id,
+        order_id=payment.order_id,
+        shift_id=payment.shift_id,
+        method=payment.method,
+        amount_minor=payment.amount_minor,
+        bill_amount_minor=payload.amount_minor,
+        tip_minor=tip_minor,
+        tendered_minor=payment.tendered_minor,
+        change_minor=payment.change_minor,
+        ref_external=payment.ref_external,
+        paid_at=payment.paid_at,
+        order_status=order.status,
+        invoice_no=order.invoice_no,
+        fiscal_year=order.fiscal_year,
+        invoice_issued_at=order.invoice_issued_at,
+    )
     # Consumed in the same transaction as Payment + invoice finalization.  If
     # any later flush/commit fails the delete rolls back with the sale, so the
     # cashier can safely retry using the same idempotency key and claim.
@@ -3869,7 +4092,7 @@ async def record_payment(
         session,
         key=idempotency_key,
         status_code=status.HTTP_201_CREATED,
-        body=response,
+        body=response.model_dump(mode="json"),
     )
     return response
 

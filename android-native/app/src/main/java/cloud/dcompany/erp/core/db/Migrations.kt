@@ -1870,10 +1870,309 @@ val MIGRATION_25_26 = object : Migration(25, 26) {
     }
 }
 
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Preserve the server's locked session billing/ownership snapshot so
+        // rate edits and terminal changes cannot alter what Android displays
+        // or which operator actions it offers after a restart.
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `shiftId` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `ratePerHourMinor` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageId` TEXT")
+        db.execSQL(
+            "ALTER TABLE `gaming_session_cache` ADD COLUMN `extraControllers` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `ratePerHourMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageId` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_gaming_sessions` ADD COLUMN `extraControllers` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `gaming_package_cache` (
+                `id` TEXT NOT NULL,
+                `stationType` TEXT NOT NULL,
+                `variant` TEXT NOT NULL,
+                `kind` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `durationMinutes` INTEGER NOT NULL,
+                `priceMinor` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
+val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // New package starts persist their exact tap-time snapshot. Version 27
+        // had only packageId. Never reconstruct a financial request from the
+        // mutable current package cache: it may have changed after the employee
+        // tapped Start and a CAS against that newer value could silently accept
+        // a reprice. Unresolved pre-v28 package starts are retained for protected
+        // review and excluded from automatic replay.
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `billingMode` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packagePriceMinorSnapshot` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageDurationMinutesSnapshot` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageVariantSnapshot` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageStationTypeSnapshot` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packagePriceMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageDurationMinutes` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageVariant` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `billingMode` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageStationTypeSnapshot` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyOriginalCapturedStartAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyOriginalCapturedStopAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolution` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionReason` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionReferenceOrderId` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionAttemptState` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionError` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionCapturedAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolvedAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolvedByUserId` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionReceiptId` INTEGER")
+        db.execSQL(
+            """
+            UPDATE `local_gaming_sessions`
+               SET `state` = 'start_rejected',
+                   `status` = 'start_failed',
+                   `legacyOriginalCapturedStartAtMillis` = `startedAtMillis`,
+                   `legacyOriginalCapturedStopAtMillis` = `endAtMillis`,
+                   `lastError` = '${LEGACY_PACKAGE_START_REVIEW_ERROR}'
+             WHERE `serverId` IS NULL
+               AND `packageId` IS NOT NULL
+               AND `state` IN ('start_pending', 'stop_pending', 'start_rejected')
+            """.trimIndent(),
+        )
+
+        // Paid extensions are financial writes. Keep their immutable request
+        // snapshot and UUID/idempotency identity across process death and
+        // ambiguous network outcomes instead of retrying from UI memory.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_gaming_package_extensions` (
+                `actionId` TEXT NOT NULL,
+                `serverSessionId` TEXT NOT NULL,
+                `localSessionId` TEXT,
+                `shiftId` TEXT,
+                `packageId` TEXT NOT NULL,
+                `expectedPackagePriceMinor` INTEGER NOT NULL,
+                `expectedPackageDurationMinutes` INTEGER NOT NULL,
+                `expectedPackageVariant` TEXT NOT NULL,
+                `expectedSessionTimerMinutes` INTEGER NOT NULL,
+                `expectedSessionAmountMinor` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `resolvedAtMillis` INTEGER,
+                `resolutionReason` TEXT,
+                PRIMARY KEY(`actionId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_gaming_package_extensions_state` " +
+                "ON `local_gaming_package_extensions` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_gaming_package_extensions_serverSessionId` " +
+                "ON `local_gaming_package_extensions` (`serverSessionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_gaming_package_extensions_shiftId` " +
+                "ON `local_gaming_package_extensions` (`shiftId`)",
+        )
+        installShiftClosingWriteGuards(db)
+    }
+}
+
+val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `menu_variants` (
+                `id` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `priceDeltaMinor` INTEGER NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_variants_menuItemId` " +
+                "ON `menu_variants` (`menuItemId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `menu_modifier_groups` (
+                `id` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `minSelect` INTEGER NOT NULL,
+                `maxSelect` INTEGER NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_modifier_groups_menuItemId` " +
+                "ON `menu_modifier_groups` (`menuItemId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `menu_modifiers` (
+                `id` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `modifierGroupId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `priceDeltaMinor` INTEGER NOT NULL,
+                `maxQuantity` INTEGER NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_modifiers_menuItemId` " +
+                "ON `menu_modifiers` (`menuItemId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_modifiers_modifierGroupId` " +
+                "ON `menu_modifiers` (`modifierGroupId`)",
+        )
+
+        // A POS cart and its server-pricing preparation are one recoverable
+        // lifecycle. Keep the stable order/payment identity and canonical
+        // checkout snapshot in the existing durable order header rather than
+        // relying on ViewModel/SavedState memory.
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `orderNote` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_orders` ADD COLUMN `manualDiscountMinor` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `discountRequestVersion` INTEGER")
+        db.execSQL(
+            "ALTER TABLE `local_orders` ADD COLUMN `revision` INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `capturedAmountMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverSubtotalMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverDiscountMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverTaxMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverRoundOffMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverDueMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `checkoutClaimToken` TEXT")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `checkoutClaimExpiresAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `checkoutVersion` INTEGER")
+        db.execSQL(
+            "ALTER TABLE `local_orders` ADD COLUMN `updatedAtMillis` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            "UPDATE `local_orders` SET `updatedAtMillis` = `createdAtMillis` " +
+                "WHERE `updatedAtMillis` = 0",
+        )
+
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `clientLineId` TEXT")
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `variantId` TEXT")
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `variantName` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_order_lines` ADD COLUMN `variantPriceDeltaMinor` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_order_lines` ADD COLUMN `modifierSelectionsJson` " +
+                "TEXT NOT NULL DEFAULT '[]'",
+        )
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `note` TEXT")
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_order_lines_clientLineId` " +
+                "ON `local_order_lines` (`clientLineId`)",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_held_order_payments` ADD COLUMN `requiresCheckoutClaim` " +
+                "INTEGER NOT NULL DEFAULT 1",
+        )
+
+        // Replace the older pending-only local-orders guard. Draft creation,
+        // server preparation and payment capture are all new work and must be
+        // refused once shift close has started.
+        db.execSQL("DROP TRIGGER IF EXISTS `guard_local_orders_while_shift_closing`")
+        db.execSQL("DROP TRIGGER IF EXISTS `guard_local_orders_update_while_shift_closing`")
+        installShiftClosingWriteGuards(db)
+    }
+}
+
+/** Durable server-confirmed receipts and reprint history. */
+val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `pos_receipts` (
+                `receiptId` TEXT NOT NULL,
+                `orderId` TEXT NOT NULL,
+                `paymentId` TEXT,
+                `shiftId` TEXT,
+                `sourceKind` TEXT NOT NULL,
+                `sourceLabel` TEXT,
+                `customerName` TEXT,
+                `customerPhone` TEXT,
+                `orderNote` TEXT,
+                `subtotalMinor` INTEGER NOT NULL,
+                `discountMinor` INTEGER NOT NULL,
+                `taxMinor` INTEGER NOT NULL,
+                `roundOffMinor` INTEGER NOT NULL,
+                `totalMinor` INTEGER NOT NULL,
+                `dueBeforePaymentMinor` INTEGER NOT NULL,
+                `method` TEXT NOT NULL,
+                `amountMinor` INTEGER NOT NULL,
+                `billAmountMinor` INTEGER NOT NULL,
+                `tipMinor` INTEGER NOT NULL,
+                `tenderedMinor` INTEGER,
+                `changeMinor` INTEGER,
+                `refExternal` TEXT,
+                `paidAt` TEXT,
+                `orderStatus` TEXT NOT NULL,
+                `invoiceNo` TEXT,
+                `fiscalYear` TEXT,
+                `invoiceIssuedAt` TEXT,
+                `linesJson` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `acknowledgedAtMillis` INTEGER,
+                PRIMARY KEY(`receiptId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_orderId` ON `pos_receipts` (`orderId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_paymentId` ON `pos_receipts` (`paymentId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_createdAtMillis` " +
+                "ON `pos_receipts` (`createdAtMillis`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_acknowledgedAtMillis` " +
+                "ON `pos_receipts` (`acknowledgedAtMillis`)",
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
     MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
     MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
-    MIGRATION_24_25, MIGRATION_25_26,
+    MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
+    MIGRATION_29_30,
 )

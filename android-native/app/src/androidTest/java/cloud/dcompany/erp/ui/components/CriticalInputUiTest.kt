@@ -12,17 +12,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsProperties
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import org.junit.Rule
 import org.junit.Test
@@ -154,6 +158,66 @@ class CriticalInputUiTest {
             .assertTextContains("Compact window reason")
         compose.onNodeWithContentDescription("Show keyboard for custom cancellation reason")
             .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun loadingSkeletonAnnouncesThatContentIsInProgress() {
+        compose.setContent {
+            DCompanyTheme { LoadingSkeleton(lines = 3) }
+        }
+
+        compose.onNodeWithContentDescription("Loading content")
+            .assertIsDisplayed()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "In progress",
+                ),
+            )
+    }
+
+    @Test
+    fun busyButtonKeepsItsActionLabelAndReportsProgress() {
+        compose.setContent {
+            DCompanyTheme {
+                ErpButton(
+                    text = "Pay",
+                    onClick = {},
+                    busy = true,
+                )
+            }
+        }
+
+        compose.onNodeWithText("Pay…")
+            .assertIsDisplayed()
+            .assertIsNotEnabled()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Pay in progress",
+                ),
+            )
+    }
+
+    @Test
+    fun formDialogKeepsValidationErrorVisibleAboveScrollableContent() {
+        compose.setContent {
+            DCompanyTheme {
+                FormDialog(
+                    title = "Record payment",
+                    confirmLabel = "Save",
+                    busy = false,
+                    error = "Enter an amount greater than zero.",
+                    onDismiss = {},
+                    onConfirm = {},
+                ) {
+                    repeat(30) { index -> Text("Form row $index") }
+                }
+            }
+        }
+
+        compose.onNodeWithText("Enter an amount greater than zero.")
             .assertIsDisplayed()
     }
 }

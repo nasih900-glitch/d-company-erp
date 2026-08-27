@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,7 +32,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardMembership
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SyncProblem
@@ -39,6 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,12 +61,15 @@ import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.ConfirmDialog
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.LoadingSkeleton
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
@@ -95,8 +100,6 @@ private fun MembershipsContent(
         Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Header(canManage)
-
         if (!canManage) {
             ViewOnlyNotice("Membership changes are view only for this account.")
         }
@@ -200,26 +203,6 @@ private fun MembershipsContent(
 }
 
 @Composable
-private fun Header(canManage: Boolean) {
-    PageHeader(
-        title = "Memberships",
-        subtitle = if (canManage) {
-            "Find a customer, review membership status, and safely prepare renewals or refunds."
-        } else {
-            "Browse plans and review customer membership status."
-        },
-        eyebrow = "Retention & loyalty",
-        actions = {
-            OperationalStatusBadge(
-                label = if (canManage) "Management enabled" else "Read only",
-                tone = if (canManage) UiTone.Success else UiTone.Neutral,
-                icon = if (canManage) Icons.Default.CheckCircle else Icons.Default.CardMembership,
-            )
-        },
-    )
-}
-
-@Composable
 private fun MembershipSummary(state: MembershipsUiState) {
     val pendingCount = state.pendingSubscriptions.size +
         state.pendingCancellations.size +
@@ -230,31 +213,33 @@ private fun MembershipSummary(state: MembershipsUiState) {
         state.refundActions.size +
         state.legacyRefundAttempts.size
 
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-        CompactStatCard(
-            label = "Available plans",
-            value = state.tiers.size.toString(),
-            detail = "Configured membership tiers",
-            icon = Icons.Default.CardMembership,
-            tone = UiTone.Brand,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = "Search matches",
-            value = state.customers.size.toString(),
-            detail = if (state.search.isBlank()) "Enter a name or phone" else "Matching customers",
-            icon = Icons.Default.People,
-            tone = UiTone.Information,
-            modifier = Modifier.weight(1f),
-        )
-        CompactStatCard(
-            label = "Outstanding actions",
-            value = pendingCount.toString(),
-            detail = "Payment, refund or sync records",
-            icon = Icons.Default.SyncProblem,
-            tone = if (pendingCount > 0) UiTone.Warning else UiTone.Neutral,
-            modifier = Modifier.weight(1f),
-        )
+    AdaptiveStatGrid(count = 3) { index, modifier ->
+        when (index) {
+            0 -> CompactStatCard(
+                label = "Available plans",
+                value = state.tiers.size.toString(),
+                detail = "Configured membership tiers",
+                icon = Icons.Default.CardMembership,
+                tone = UiTone.Neutral,
+                modifier = modifier,
+            )
+            1 -> CompactStatCard(
+                label = "Search matches",
+                value = state.customers.size.toString(),
+                detail = if (state.search.isBlank()) "Enter a name or phone" else "Matching customers",
+                icon = Icons.Default.People,
+                tone = UiTone.Information,
+                modifier = modifier,
+            )
+            else -> CompactStatCard(
+                label = "Outstanding actions",
+                value = pendingCount.toString(),
+                detail = "Payment, refund or sync records",
+                icon = Icons.Default.SyncProblem,
+                tone = if (pendingCount > 0) UiTone.Warning else UiTone.Neutral,
+                modifier = modifier,
+            )
+        }
     }
 }
 
@@ -579,7 +564,7 @@ private fun TierCard(tier: MembershipTier) {
                 }
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(tier.monthlyPriceMinor.asRupees() + " /mo", style = MaterialTheme.typography.bodyLarge, color = Brand.Gold)
+                Text(tier.monthlyPriceMinor.asRupees() + " /mo", style = MaterialTheme.typography.bodyLarge, color = Brand.Foreground)
                 tier.annualPriceMinor?.let {
                     Text(it.asRupees() + " /yr", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
                 }
@@ -681,7 +666,7 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
             price?.let {
                 Text(
                     "Amount: ${it.asRupees()}",
-                    style = MaterialTheme.typography.bodyMedium, color = Brand.Gold,
+                    style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground,
                 )
             }
         }
@@ -720,7 +705,7 @@ private fun CompleteMembershipPaymentDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.tierName} · ${task.amountMinor.asRupees()}",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -828,7 +813,7 @@ private fun WithdrawMembershipPaymentDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.amountMinor.asRupees()} via ${task.paidVia.uppercase()}",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -939,7 +924,7 @@ private fun RefundFormDialog(
     ) {
         Text(
             "Full refund: ${sub.amountPaidMinor.asRupees()}. Benefits end after sync; the original term and payment remain in the audit trail.",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -1001,7 +986,7 @@ private fun CompleteMembershipRefundDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone ?: "Customer"} · ${task.amountMinor.asRupees()} via ${task.method.uppercase()}",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -1296,12 +1281,36 @@ private fun WithdrawCashRefundDialog(
 // ============================================================================
 @Composable
 private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: MembershipsViewModel) {
-    Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    val pendingCount = state.pendingSubscriptions.size + state.pendingCancellations.size +
+        state.pendingRefunds.size + state.paymentTasks.size + state.paymentActions.size +
+        state.refundTasks.size + state.refundActions.size + state.legacyRefundAttempts.size
+    var expanded by rememberSaveable { mutableStateOf(true) }
+
+    SectionCard(
+        title = "Pending membership changes",
+        subtitle = "$pendingCount payment, refund or sync ${if (pendingCount == 1) "record" else "records"} need review",
+        icon = Icons.Default.SyncProblem,
+        tone = UiTone.Warning,
+        elevated = true,
+        action = {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Collapse" else "Review")
+            }
+        },
     ) {
-        Text("Pending membership changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        if (!expanded) {
+            Text(
+                "Recovery records remain saved. Expand this panel before moving membership money or closing the shift.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            return@SectionCard
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
         state.refundTasks.forEach { task ->
             val legacyBlock = state.refundActions.firstOrNull { action ->
                 action.serverRefundId == task.id &&
@@ -1330,7 +1339,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 )
                 Text(
                     "Do not repeat this payout. Verify the original drawer/customer or provider evidence.",
-                    color = Brand.GoldMuted,
+                    color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Button(onClick = { vm.openLegacyRefundResolution(attempt) }) {
@@ -1437,7 +1446,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                     )
                     Text(
                         "No accounting entry has posted yet. Choose exactly what happened next.",
-                        color = Brand.GoldMuted,
+                        color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1463,6 +1472,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 )
             }
         }
+        }
     }
 }
 
@@ -1484,7 +1494,7 @@ private fun MembershipPendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else pendingText,
-            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            color = if (rejected) Brand.Danger else Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1511,7 +1521,7 @@ private fun MembershipPaymentTaskCard(
         )
         Text(
             membershipPaymentStageMessage(task.status),
-            color = Brand.GoldMuted,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         when (task.status) {
@@ -1566,7 +1576,7 @@ private fun MembershipRefundTaskCard(
         )
         Text(
             membershipRefundStageMessage(task.status),
-            color = Brand.GoldMuted,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!task.customerSpendReconciled || !task.providerEvidenceReconciled || task.evidenceTimeUntrusted) {
@@ -1634,104 +1644,3 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 // ============================================================================
 // SHARED DIALOG PIECES — business-sensitive money workflows remain local.
 // ============================================================================
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    body: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm, enabled = !busy,
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-            ) { Text(confirmLabel, color = Brand.Foreground) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun FormDialog(
-    title: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.width(480.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun PickerField(
-    label: String,
-    selectedLabel: String,
-    options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("▾", color = Brand.Gold)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onSelect(id) })
-                }
-            }
-        }
-    }
-}

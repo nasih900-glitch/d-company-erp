@@ -4,23 +4,25 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -48,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,13 +71,14 @@ import androidx.compose.material.icons.filled.SyncProblem
 import cloud.dcompany.erp.core.auth.StaffAccess
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DataListRow
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
-import cloud.dcompany.erp.ui.components.PageHeader
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
@@ -250,15 +254,27 @@ private fun Header(
     onRefresh: () -> Unit,
     onAdd: () -> Unit,
 ) {
-    PageHeader(
-        title = "Staff",
-        subtitle = if (attendanceOnly) {
-            "Clock in, clock out, and see who is working now"
-        } else {
-            "Staff logins, roles, account status, and attendance"
+    ActionBar(
+        leading = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (attendanceOnly) "Attendance controls" else "Directory controls",
+                    color = Brand.Foreground,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    if (attendanceOnly) {
+                        "Clock in, clock out, and see who is working now"
+                    } else {
+                        "Refresh access data or create a new staff login"
+                    },
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         },
-        eyebrow = "People & access",
-        actions = {
+        trailing = {
             ErpButton(
                 text = if (loading) "Refreshing" else "Refresh",
                 onClick = onRefresh,
@@ -278,25 +294,12 @@ private fun Header(
 private fun StaffSummary(state: StaffUiState) {
     val active = state.rows.count { it.status.equals("active", ignoreCase = true) }
     val suspended = state.rows.count { it.status.equals("suspended", ignoreCase = true) }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxWidth < 760.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StaffTotalMetric(state.rows.size, Modifier.weight(1f))
-                    StaffActiveMetric(active, Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StaffOnShiftMetric(state.onShift.size, Modifier.weight(1f))
-                    StaffSuspendedMetric(suspended, Modifier.weight(1f))
-                }
-            }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                StaffTotalMetric(state.rows.size, Modifier.weight(1f))
-                StaffActiveMetric(active, Modifier.weight(1f))
-                StaffOnShiftMetric(state.onShift.size, Modifier.weight(1f))
-                StaffSuspendedMetric(suspended, Modifier.weight(1f))
-            }
+    AdaptiveStatGrid(count = 4) { index, modifier ->
+        when (index) {
+            0 -> StaffTotalMetric(state.rows.size, modifier)
+            1 -> StaffActiveMetric(active, modifier)
+            2 -> StaffOnShiftMetric(state.onShift.size, modifier)
+            else -> StaffSuspendedMetric(suspended, modifier)
         }
     }
 }
@@ -327,7 +330,7 @@ private fun StaffOnShiftMetric(count: Int, modifier: Modifier) = CompactStatCard
     value = count.toString(),
     detail = "Clocked in now",
     icon = Icons.Default.AccessTime,
-    tone = if (count > 0) UiTone.Brand else UiTone.Neutral,
+    tone = if (count > 0) UiTone.Information else UiTone.Neutral,
     modifier = modifier,
 )
 
@@ -523,8 +526,7 @@ private fun StaffRowCard(
                     },
                 )
                 if (canManage && !row.pendingDelete) {
-                    ErpButton("Edit", onEdit, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Edit)
-                    StaffActionsMenu(row.isSelf, onResetPassword, onDelete)
+                    StaffActionsMenu(row.isSelf, onEdit, onResetPassword, onDelete)
                 }
             },
         )
@@ -535,7 +537,7 @@ private fun StaffRowCard(
             ) {
                 Text(
                     "Pending removal — will sync when back online",
-                    color = Brand.GoldMuted,
+                    color = Brand.Warning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -567,7 +569,7 @@ private fun StaffRowCard(
         } else if (canManage && row.pendingLocalId != null) {
             Text(
                 "Not synced yet",
-                color = Brand.GoldMuted,
+                color = Brand.Information,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -576,13 +578,23 @@ private fun StaffRowCard(
 }
 
 @Composable
-private fun StaffActionsMenu(isSelf: Boolean, onResetPassword: () -> Unit, onDelete: () -> Unit) {
+private fun StaffActionsMenu(
+    isSelf: Boolean,
+    onEdit: () -> Unit,
+    onResetPassword: () -> Unit,
+    onDelete: () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More staff actions", tint = Brand.ForegroundMuted)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit staff") },
+                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                onClick = { expanded = false; onEdit() },
+            )
             DropdownMenuItem(
                 text = { Text("Reset password") },
                 leadingIcon = { Icon(Icons.Default.LockReset, contentDescription = null) },
@@ -616,7 +628,10 @@ private fun EditDialog(
         onDismissRequest = { if (!saving) onCancel() },
         title = { Text("Edit staff") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 OutlinedTextField(
                     value = editor.name,
                     onValueChange = { onChange(editor.copy(name = it)) },
@@ -654,13 +669,20 @@ private fun EditDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onSave, enabled = editor.valid && !saving) { Text(if (saving) "Saving…" else "Save") }
+            ErpButton(
+                text = if (saving) "Saving…" else "Save",
+                onClick = onSave,
+                enabled = editor.valid && !saving,
+                busy = saving,
+            )
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     )
 }
 
@@ -710,7 +732,10 @@ private fun CreateLoginDialog(
         onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Add staff") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 if (challenge == null) {
                     OutlinedTextField(
                         value = draft.name, onValueChange = { onChange(draft.copy(name = it)) },
@@ -771,13 +796,19 @@ private fun CreateLoginDialog(
         },
         confirmButton = {
             if (challenge == null) {
-                Button(onClick = onRequestCode, enabled = draft.requestValid && !busy) {
-                    Text(if (busy) "Sending…" else "Send code")
-                }
+                ErpButton(
+                    text = if (busy) "Sending…" else "Send code",
+                    onClick = onRequestCode,
+                    enabled = draft.requestValid && !busy,
+                    busy = busy,
+                )
             } else {
-                Button(onClick = onConfirm, enabled = code.length == 6 && !busy) {
-                    Text(if (busy) "Confirming…" else "Confirm")
-                }
+                ErpButton(
+                    text = if (busy) "Confirming…" else "Confirm",
+                    onClick = onConfirm,
+                    enabled = code.length == 6 && !busy,
+                    busy = busy,
+                )
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
@@ -785,6 +816,8 @@ private fun CreateLoginDialog(
         shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     )
 }
 
@@ -806,7 +839,10 @@ private fun PasswordResetDialog(
         onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Reset password for ${draft.forName}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 if (challenge == null) {
                     Text(
                         "A 6-digit code will be sent to the company's security mailbox to confirm this reset.",
@@ -845,11 +881,19 @@ private fun PasswordResetDialog(
         },
         confirmButton = {
             if (challenge == null) {
-                Button(onClick = onRequestCode, enabled = !busy) { Text(if (busy) "Sending…" else "Send code") }
+                ErpButton(
+                    text = if (busy) "Sending…" else "Send code",
+                    onClick = onRequestCode,
+                    enabled = !busy,
+                    busy = busy,
+                )
             } else {
-                Button(onClick = onConfirm, enabled = code.length == 6 && draft.newPasswordValid && !busy) {
-                    Text(if (busy) "Confirming…" else "Confirm")
-                }
+                ErpButton(
+                    text = if (busy) "Confirming…" else "Confirm",
+                    onClick = onConfirm,
+                    enabled = code.length == 6 && draft.newPasswordValid && !busy,
+                    busy = busy,
+                )
             }
         },
         dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") } },
@@ -857,6 +901,8 @@ private fun PasswordResetDialog(
         shape = Radius.shapeLg,
         titleContentColor = Brand.Foreground,
         textContentColor = Brand.Foreground,
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     )
 }
 

@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import cloud.dcompany.erp.ui.components.UiTone
 import java.time.LocalDate
 import java.time.YearMonth
 import org.junit.Assert.assertEquals
@@ -67,6 +68,39 @@ class ReportsPresentationPolicyTest {
         assertTrue(canSelectFiscalQuarter("2025-26", 4, today))
         assertFalse(canSelectFiscalQuarter("2026-27", 3, today))
         assertFalse(canSelectFiscalQuarter("2027-28", 1, today))
+    }
+
+    @Test
+    fun `secondary report metrics preserve tickets and source-backed financial ratios`() {
+        val metrics = reportSecondaryMetrics(
+            ReportData(
+                ticketsCount = 7,
+                netRevenueMinor = 20_000,
+                netProfitMinor = 5_000,
+                cogsMinor = 4_000,
+                expenseTotalMinor = 3_000,
+                depreciationMinor = 1_000,
+            ),
+        )
+
+        assertEquals(listOf("Tickets", "Profit margin", "Cost ratio"), metrics.map { it.label })
+        assertEquals(listOf("7", "25.0%", "40.0%"), metrics.map { it.value })
+        assertEquals(
+            listOf(UiTone.Neutral, UiTone.Success, UiTone.Success),
+            metrics.map { it.tone },
+        )
+    }
+
+    @Test
+    fun `secondary ratios handle a zero revenue denominator without fake percentages`() {
+        val metrics = reportSecondaryMetrics(
+            ReportData(netRevenueMinor = 0, netProfitMinor = -500, expenseTotalMinor = 500),
+        )
+
+        assertEquals("0.0%", metrics[1].value)
+        assertEquals(UiTone.Danger, metrics[1].tone)
+        assertEquals("0.0%", metrics[2].value)
+        assertEquals(UiTone.Neutral, metrics[2].tone)
     }
 
     private fun state(report: ReportData?, error: String? = null) = ReportsUiState(

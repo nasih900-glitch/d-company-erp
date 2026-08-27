@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -152,7 +154,7 @@ fun OperationalBanner(
 ) {
     val colors = toneColors(tone)
     Row(
-        modifier.fillMaxWidth().clip(Radius.shapeMd).background(colors.container)
+        modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
             .border(1.dp, colors.border, Radius.shapeMd)
             .semantics { liveRegion = LiveRegionMode.Polite }
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
@@ -177,6 +179,7 @@ fun ErpButton(
     enabled: Boolean = true,
     busy: Boolean = false,
     leadingIcon: ImageVector? = null,
+    contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
 ) {
     val (container, content) = when (intent) {
         ActionIntent.Primary -> Brand.Gold to Brand.Background
@@ -196,17 +199,31 @@ fun ErpButton(
             disabledContainerColor = Brand.SurfaceRaised,
             disabledContentColor = Brand.Disabled,
         ),
-        modifier = modifier.heightIn(min = 48.dp),
+        contentPadding = contentPadding,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .semantics {
+                if (busy) stateDescription = "$text in progress"
+            },
     ) {
         if (busy) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = content)
+            CircularProgressIndicator(
+                Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = Brand.ForegroundMuted,
+            )
+            Spacer(Modifier.width(Spacing.sm))
         } else {
             leadingIcon?.let {
                 Icon(it, contentDescription = null, modifier = Modifier.size(19.dp))
                 Spacer(Modifier.width(Spacing.sm))
             }
-            Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1)
         }
+        Text(
+            if (busy) "$text…" else text,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+        )
     }
 }
 

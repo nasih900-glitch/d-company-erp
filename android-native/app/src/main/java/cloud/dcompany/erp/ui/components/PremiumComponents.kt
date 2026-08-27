@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -67,16 +68,48 @@ fun PageHeader(
     eyebrow: String? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        if (actions != null && maxWidth < 720.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                PageHeaderIdentity(title, subtitle, eyebrow, Modifier.fillMaxWidth())
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = actions,
+                )
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PageHeaderIdentity(title, subtitle, eyebrow, Modifier.weight(1f))
+                actions?.let {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                        content = it,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageHeaderIdentity(
+    title: String,
+    subtitle: String,
+    eyebrow: String?,
+    modifier: Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             eyebrow?.let {
                 Text(
                     it.uppercase(),
-                    color = Brand.GoldMuted,
+                    color = Brand.ForegroundFaint,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                 )
@@ -95,14 +128,6 @@ fun PageHeader(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        actions?.let {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                content = it,
-            )
-        }
-    }
 }
 
 @Composable
@@ -111,18 +136,64 @@ fun ActionBar(
     leading: @Composable RowScope.() -> Unit,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    Row(
+    BoxWithConstraints(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
             .background(Brand.Surface)
             .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
             .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        leading()
-        if (trailing != null) {
-            Spacer(Modifier.weight(1f))
-            trailing()
+        if (trailing != null && maxWidth < 640.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(Modifier.fillMaxWidth(), content = leading)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                    content = trailing,
+                )
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                leading()
+                if (trailing != null) {
+                    Spacer(Modifier.weight(1f))
+                    trailing()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdaptiveStatGrid(
+    count: Int,
+    modifier: Modifier = Modifier,
+    content: @Composable (index: Int, modifier: Modifier) -> Unit,
+) {
+    if (count <= 0) return
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val columns = when {
+            maxWidth >= 1_000.dp -> minOf(4, count)
+            count == 4 -> 2
+            maxWidth >= 720.dp -> minOf(3, count)
+            else -> minOf(2, count)
+        }
+        val rows = (count + columns - 1) / columns
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            repeat(rows) { rowIndex ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    repeat(columns) { columnIndex ->
+                        val index = rowIndex * columns + columnIndex
+                        if (index < count) content(index, Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 }
@@ -133,12 +204,21 @@ fun SectionCard(
     title: String? = null,
     subtitle: String? = null,
     icon: ImageVector? = null,
+    tone: UiTone = UiTone.Neutral,
     action: (@Composable RowScope.() -> Unit)? = null,
     elevated: Boolean = false,
     contentPadding: androidx.compose.foundation.layout.PaddingValues =
         androidx.compose.foundation.layout.PaddingValues(Spacing.lg),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val accent = when (tone) {
+        UiTone.Brand -> Brand.Gold
+        UiTone.Success -> Brand.Good
+        UiTone.Warning -> Brand.Warning
+        UiTone.Danger -> Brand.Danger
+        UiTone.Information -> Brand.Information
+        UiTone.Neutral -> Brand.ForegroundMuted
+    }
     Column(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
             .background(if (elevated) Brand.SurfaceRaised else Brand.Surface)
@@ -152,10 +232,10 @@ fun SectionCard(
             ) {
                 icon?.let {
                     Box(
-                        Modifier.size(38.dp).clip(Radius.shapeMd).background(Brand.SurfaceHover),
+                        Modifier.size(38.dp).clip(Radius.shapeMd).background(accent.copy(alpha = 0.12f)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(it, contentDescription = null, tint = Brand.GoldMuted, modifier = Modifier.size(20.dp))
+                        Icon(it, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
                     }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -229,7 +309,7 @@ fun CompactStatCard(
             detail?.let {
                 Text(
                     it,
-                    color = accent,
+                    color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -289,10 +369,13 @@ fun PremiumTabBar(
         options.forEach { option ->
             val selected = option.id == selectedId
             Row(
-                Modifier.heightIn(min = 44.dp).clip(Radius.shapeSm)
+                Modifier.heightIn(min = 48.dp).clip(Radius.shapeSm)
                     .background(if (selected) Brand.SurfaceHover else Color.Transparent)
-                    .semantics { role = Role.Tab; this.selected = selected }
-                    .clickable { onSelect(option.id) }
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = { onSelect(option.id) },
+                    )
                     .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
@@ -326,6 +409,7 @@ fun DesignedEmptyState(
     body: String,
     modifier: Modifier = Modifier,
     icon: ImageVector = Icons.Default.Inbox,
+    tone: UiTone = UiTone.Neutral,
     primaryLabel: String? = null,
     onPrimary: (() -> Unit)? = null,
     primaryEnabled: Boolean = true,
@@ -335,6 +419,15 @@ fun DesignedEmptyState(
     onSecondary: (() -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier.fillMaxWidth().heightIn(min = 240.dp)) {
+        val availableWidth = maxWidth
+        val accent = when (tone) {
+            UiTone.Brand -> Brand.Gold
+            UiTone.Success -> Brand.Good
+            UiTone.Warning -> Brand.Warning
+            UiTone.Danger -> Brand.Danger
+            UiTone.Information -> Brand.Information
+            UiTone.Neutral -> Brand.ForegroundMuted
+        }
         // Some dense dashboard cards intentionally give the shared empty state
         // less than its preferred 240dp height. Compact the internal rhythm in
         // that case instead of letting the fixed icon/padding push copy outside
@@ -354,7 +447,7 @@ fun DesignedEmptyState(
                     .border(1.dp, Brand.Border, Radius.shapeLg),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = Brand.GoldMuted, modifier = Modifier.size(iconSize))
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(iconSize))
             }
             Spacer(Modifier.height(if (compact) Spacing.sm else Spacing.lg))
             Text(
@@ -376,18 +469,41 @@ fun DesignedEmptyState(
             )
             if ((primaryLabel != null && onPrimary != null) || (secondaryLabel != null && onSecondary != null)) {
                 Spacer(Modifier.height(if (compact) Spacing.sm else Spacing.lg))
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    if (secondaryLabel != null && onSecondary != null) {
-                        ErpButton(secondaryLabel, onSecondary, intent = ActionIntent.Secondary)
+                if (availableWidth < 420.dp) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        if (primaryLabel != null && onPrimary != null) {
+                            ErpButton(
+                                text = primaryLabel,
+                                onClick = onPrimary,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = primaryEnabled,
+                                busy = primaryBusy,
+                                leadingIcon = primaryIcon,
+                            )
+                        }
+                        if (secondaryLabel != null && onSecondary != null) {
+                            ErpButton(
+                                secondaryLabel,
+                                onSecondary,
+                                modifier = Modifier.fillMaxWidth(),
+                                intent = ActionIntent.Secondary,
+                            )
+                        }
                     }
-                    if (primaryLabel != null && onPrimary != null) {
-                        ErpButton(
-                            text = primaryLabel,
-                            onClick = onPrimary,
-                            enabled = primaryEnabled,
-                            busy = primaryBusy,
-                            leadingIcon = primaryIcon,
-                        )
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        if (secondaryLabel != null && onSecondary != null) {
+                            ErpButton(secondaryLabel, onSecondary, intent = ActionIntent.Secondary)
+                        }
+                        if (primaryLabel != null && onPrimary != null) {
+                            ErpButton(
+                                text = primaryLabel,
+                                onClick = onPrimary,
+                                enabled = primaryEnabled,
+                                busy = primaryBusy,
+                                leadingIcon = primaryIcon,
+                            )
+                        }
                     }
                 }
             }
@@ -464,7 +580,16 @@ fun InfoRow(
     ) {
         icon?.let { Icon(it, contentDescription = null, tint = Brand.ForegroundFaint, modifier = Modifier.size(18.dp)) }
         Text(label, modifier = Modifier.weight(1f), color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
-        Text(value, color = valueColor, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            value,
+            modifier = Modifier.weight(1f),
+            color = valueColor,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.End,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

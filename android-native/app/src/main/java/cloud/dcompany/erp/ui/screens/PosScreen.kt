@@ -2,7 +2,6 @@ package cloud.dcompany.erp.ui.screens
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -22,9 +21,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,25 +38,31 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddShoppingCart
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RestaurantMenu
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,11 +81,19 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
+import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuModifierEntity
+import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
+import cloud.dcompany.erp.core.db.PosReceiptEntity
+import cloud.dcompany.erp.core.db.SyncState
+import cloud.dcompany.erp.core.db.decodedLines
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.checkout.OneShotHeldPaymentConfirmation
 import cloud.dcompany.erp.core.auth.PosAccess
@@ -88,6 +103,7 @@ import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.NumericValue
+import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.PrimaryButton
@@ -96,6 +112,8 @@ import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.VoidReasonInput
+import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.gaming.OperationalAlarmPermissionCard
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
@@ -109,39 +127,125 @@ import java.util.Locale
 @Composable
 fun PosScreen(
     state: PosUiState,
+    recentReceipts: List<PosReceiptEntity>,
+    unacknowledgedReceipt: PosReceiptEntity?,
     access: PosAccess,
     onAccessChanged: (PosAccess) -> Unit,
     onAdd: (MenuItemEntity) -> Unit,
+    onAddConfigured: (
+        MenuItemEntity,
+        MenuVariantEntity?,
+        List<CartModifierSelection>,
+        String?,
+    ) -> Unit,
     onRemove: (MenuItemEntity) -> Unit,
+    onIncrementLine: (String) -> Unit,
+    onDecrementLine: (String) -> Unit,
     onSelectCategory: (String?) -> Unit,
     onClearCart: () -> Unit,
+    onUpdateDraftDetails: (String?, String?, String?, Long) -> Unit,
     onRefresh: () -> Unit,
-    onCapture: (String, Long) -> Unit,
+    onPrepareDirectCheckout: () -> Unit,
+    onDismissDirectCheckout: () -> Unit,
+    onConfirmDirectZero: () -> Unit,
+    onCapture: (String, Long, DirectPaymentConfirmation) -> Unit,
     onRetryRejectedSale: (String) -> Unit,
     onRetryHeldPayment: (String) -> Unit,
     onPrepareHeldOrder: (HeldOrderCacheEntity) -> Unit,
     onConfirmHeldOrder: (String, String, Long) -> Unit,
     onConfirmHeldOrderZero: (String) -> Unit,
+    onVoidOrder: (String, String) -> Unit,
     onDismissHeldOrder: () -> Unit,
     onDismissNotice: () -> Unit,
+    onAcknowledgeReceipt: (String) -> Unit,
     onFocusOldestOverdue: () -> Unit,
     onSnoozeOverdue: () -> Unit,
     onUnmuteOverdue: () -> Unit,
     onDismissHeldFocus: () -> Unit,
 ) {
-    var showPay by remember { mutableStateOf(false) }
+    var offlinePaymentConfirmation by remember { mutableStateOf<DirectPaymentConfirmation?>(null) }
+    var showStatusDetails by rememberSaveable { mutableStateOf(false) }
+    var showHeldOrders by rememberSaveable { mutableStateOf(false) }
+    var showOrderDetails by rememberSaveable { mutableStateOf(false) }
+    var configuringItemId by rememberSaveable { mutableStateOf<String?>(null) }
+    var voidTarget by remember { mutableStateOf<PosVoidTarget?>(null) }
+    var selectedReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
+    var hiddenAutomaticReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var menuQuery by rememberSaveable { mutableStateOf("") }
     val latestDismissHeldOrder by rememberUpdatedState(onDismissHeldOrder)
-    val searchedItems = remember(state.visibleItems, menuQuery) {
-        filterPosMenuItems(state.visibleItems, menuQuery)
+    val categoryItems = remember(state.items, state.selectedCategoryId) {
+        state.selectedCategoryId?.let { selected ->
+            state.items.filter { it.categoryId == selected }
+        } ?: state.items
     }
-    SideEffect { onAccessChanged(access) }
+    val searchedItems = remember(categoryItems, menuQuery) {
+        filterPosMenuItems(categoryItems, menuQuery)
+    }
+    val overdueOrderIds = remember(state.overdueHeldOrderIds) {
+        state.overdueHeldOrderIds.toSet()
+    }
+    val heldOrderIds = remember(state.heldOrders) {
+        state.heldOrders.mapTo(mutableSetOf()) { it.id }
+    }
+    val hasOperationalAlerts = hasPosOperationalAlerts(state)
+    val configuringItem = state.items.firstOrNull { it.id == configuringItemId }
+    val visibleReceipt = unacknowledgedReceipt
+        ?.takeUnless { it.receiptId == hiddenAutomaticReceiptId }
+        ?: selectedReceiptId?.let { id -> recentReceipts.firstOrNull { it.receiptId == id } }
+    val addOrConfigure: (MenuItemEntity) -> Unit = { item ->
+        val configurable = state.variants.any { it.menuItemId == item.id && it.isActive } ||
+            state.modifierGroups.any { it.menuItemId == item.id && it.isActive }
+        if (configurable) configuringItemId = item.id else onAdd(item)
+    }
+
+    LaunchedEffect(access) { onAccessChanged(access) }
 
     LaunchedEffect(access.canCreateAndCollect, state.preparedHeldCheckout?.orderId) {
         if (!access.canCreateAndCollect) {
-            showPay = false
+            offlinePaymentConfirmation = null
             if (state.preparedHeldCheckout != null) onDismissHeldOrder()
         }
+    }
+
+    LaunchedEffect(state.online) {
+        if (state.online) offlinePaymentConfirmation = null
+    }
+
+    LaunchedEffect(
+        voidTarget?.orderId,
+        state.preparedDirectCheckout?.orderId,
+        state.preparedHeldCheckout?.orderId,
+    ) {
+        val target = voidTarget ?: return@LaunchedEffect
+        val stillPrepared = target.orderId == state.preparedDirectCheckout?.orderId ||
+            target.orderId == state.preparedHeldCheckout?.orderId
+        if (!stillPrepared && !state.checkoutBusy) voidTarget = null
+    }
+
+    val requestDirectPayment: () -> Unit = {
+        if (state.online) {
+            onPrepareDirectCheckout()
+        } else if (
+            state.draftState == SyncState.DRAFT &&
+            state.draftLocalId != null &&
+            state.draftRevision != null
+        ) {
+            offlinePaymentConfirmation = DirectPaymentConfirmation(
+                localId = state.draftLocalId,
+                revision = state.draftRevision,
+                dueMinor = state.estimatedDueMinor,
+            )
+        }
+    }
+
+    LaunchedEffect(state.focusedHeldOrderId, heldOrderIds) {
+        if (shouldRevealHeldOrderQueue(state.focusedHeldOrderId, heldOrderIds)) {
+            showHeldOrders = true
+        }
+    }
+
+    LaunchedEffect(heldOrderIds) {
+        if (heldOrderIds.isEmpty()) showHeldOrders = false
     }
 
     // Navigation, logout, or an Activity recreation can remove this screen
@@ -152,64 +256,20 @@ fun PosScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        SyncBanner(state, onRefresh)
         if (!access.canCreateAndCollect) {
             ViewOnlyNotice("POS is view only — ask a cashier or manager to create or collect an order.")
         }
-        state.shiftAccessMessage?.let { ShiftAccessBanner(it) }
-        if (state.heldOrders.isNotEmpty()) {
-            OperationalAlarmPermissionCard(contextLabel = "Held-order")
-        }
-        if (state.rejectedDirectSales.isNotEmpty()) {
-            RejectedDirectSalesStrip(
-                sales = state.rejectedDirectSales,
-                retryingIds = state.retryingRejectedSaleIds,
-                online = state.online,
-                canRetry = access.canCreateAndCollect,
-                onRetry = onRetryRejectedSale,
-            )
-        }
-        if (state.heldPaymentStatuses.isNotEmpty()) {
-            HeldPaymentStatusStrip(
-                payments = state.heldPaymentStatuses,
-                retryingIds = state.retryingHeldPaymentIds,
-                online = state.online,
-                canRetry = access.canCreateAndCollect,
-                onSyncPending = onRefresh,
-                onRetryRejected = onRetryHeldPayment,
-            )
-        }
-        if (state.heldOrders.isNotEmpty()) {
-            if (state.showOverdueBanner) {
-                OverdueHeldOrdersBanner(
-                    count = state.overdueHeldOrderIds.size,
-                    onView = onFocusOldestOverdue,
-                    onSnooze = onSnoozeOverdue,
-                )
-            } else if (
-                state.overdueHeldOrderIds.isNotEmpty() &&
-                state.overdueBannerMutedUntilMillis > 0L
-            ) {
-                SnoozedHeldOrdersNotice(
-                    count = state.overdueHeldOrderIds.size,
-                    untilMillis = state.overdueBannerMutedUntilMillis,
-                    onView = onFocusOldestOverdue,
-                    onUnmute = onUnmuteOverdue,
-                )
-            }
-            HeldOrdersStrip(
-                orders = state.heldOrders,
-                overdueOrderIds = state.overdueHeldOrderIds.toSet(),
-                focusedOrderId = state.focusedHeldOrderId,
-                preparingOrderId = state.preparingHeldOrderId,
-                enabled = state.canCollectPayment &&
-                    access.canCreateAndCollect &&
-                    !state.checkoutBusy && !state.heldSelectionBlocked &&
-                    state.preparedHeldCheckout == null,
-                onSelect = onPrepareHeldOrder,
-                onDismissFocus = onDismissHeldFocus,
-            )
-        }
+        // Keep one short, stable-height entry point for every operational
+        // warning. Permission, sync and held-order cards live in dialogs so
+        // their variable height can never displace the selling workspace.
+        PosContextBar(
+            state = state,
+            onOpenStatus = { showStatusDetails = true },
+            onOpenHeldOrders = { showHeldOrders = true },
+            onOpenLastReceipt = recentReceipts.firstOrNull()?.let { receipt ->
+                { selectedReceiptId = receipt.receiptId }
+            },
+        )
 
         if (state.menuEmpty) {
             EmptyMenuPanel(
@@ -220,56 +280,268 @@ fun PosScreen(
             return@Column
         }
 
-        BoxWithConstraints(Modifier.fillMaxSize().padding(Spacing.md)) {
-            // Preserve the fast side-by-side till workflow in portrait while
-            // giving the receipt enough room for 48dp quantity controls.
-            val cartWidth = if (maxWidth >= 900.dp) 344.dp else 304.dp
-            Row(
-                Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                ProductCatalogPanel(
-                    state = state,
-                    visibleItems = searchedItems,
-                    query = menuQuery,
-                    canWrite = access.canCreateAndCollect,
-                    onQueryChange = { menuQuery = it },
-                    onClearSearch = { menuQuery = "" },
-                    onSelectCategory = onSelectCategory,
-                    onAdd = onAdd,
-                    modifier = Modifier.weight(1f).fillMaxSize(),
-                )
-                CartPanel(
-                    state = state,
-                    canWrite = access.canCreateAndCollect,
-                    onAdd = onAdd,
-                    onRemove = onRemove,
-                    onClear = onClearCart,
-                    modifier = Modifier.width(cartWidth).fillMaxSize(),
-                ) { showPay = true }
+        BoxWithConstraints(
+            Modifier.weight(1f).fillMaxWidth().padding(Spacing.md),
+        ) {
+            val workspace = remember(maxWidth) {
+                posWorkspaceMetrics(maxWidth = maxWidth, horizontalGap = Spacing.md)
+            }
+            if (workspace.sideBySide) {
+                Row(
+                    Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    ProductCatalogPanel(
+                        categories = state.categories,
+                        items = state.items,
+                        selectedCategoryId = state.selectedCategoryId,
+                        visibleItems = searchedItems,
+                        query = menuQuery,
+                        canWrite = access.canCreateAndCollect,
+                        onQueryChange = { menuQuery = it },
+                        onClearSearch = { menuQuery = "" },
+                        onSelectCategory = onSelectCategory,
+                        onAdd = addOrConfigure,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                    )
+                    CartPanel(
+                        state = state,
+                        canWrite = access.canCreateAndCollect,
+                        canDiscount = access.canApplyDiscount,
+                        onIncrementLine = onIncrementLine,
+                        onDecrementLine = onDecrementLine,
+                        onClear = onClearCart,
+                        onEditDetails = { showOrderDetails = true },
+                        modifier = Modifier.width(requireNotNull(workspace.cartWidth)).fillMaxHeight(),
+                    ) { requestDirectPayment() }
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    ProductCatalogPanel(
+                        categories = state.categories,
+                        items = state.items,
+                        selectedCategoryId = state.selectedCategoryId,
+                        visibleItems = searchedItems,
+                        query = menuQuery,
+                        canWrite = access.canCreateAndCollect,
+                        onQueryChange = { menuQuery = it },
+                        onClearSearch = { menuQuery = "" },
+                        onSelectCategory = onSelectCategory,
+                        onAdd = addOrConfigure,
+                        modifier = Modifier.weight(1.05f).fillMaxWidth(),
+                    )
+                    CartPanel(
+                        state = state,
+                        canWrite = access.canCreateAndCollect,
+                        canDiscount = access.canApplyDiscount,
+                        onIncrementLine = onIncrementLine,
+                        onDecrementLine = onDecrementLine,
+                        onClear = onClearCart,
+                        onEditDetails = { showOrderDetails = true },
+                        modifier = Modifier.weight(0.95f).fillMaxWidth(),
+                    ) { requestDirectPayment() }
+                }
             }
         }
     }
 
-    if (showPay && access.canCreateAndCollect) {
-        PayDialog(
-            dueMinor = state.estimateMinor,
-            online = state.online,
-            // A local menu price is not authoritative enough to collect
-            // money: discounts, membership benefits, and another terminal's
-            // changes are resolved by the server. Staff can keep building the
-            // cart offline, but payment waits for a verified connection.
-            offlineAllowed = false,
-            confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
-            onDismiss = { showPay = false },
-            onConfirm = { method, tendered ->
-                showPay = false
-                onCapture(method, tendered)
+    configuringItem?.let { item ->
+        ProductConfigurationDialog(
+            item = item,
+            variants = state.variants.filter { it.menuItemId == item.id && it.isActive },
+            modifierGroups = state.modifierGroups.filter { it.menuItemId == item.id && it.isActive },
+            modifiers = state.modifiers.filter { it.menuItemId == item.id && it.isActive },
+            onDismiss = { configuringItemId = null },
+            onAdd = { variant, modifiers, note ->
+                configuringItemId = null
+                onAddConfigured(item, variant, modifiers, note)
             },
         )
     }
 
-    state.preparedHeldCheckout?.takeIf { access.canCreateAndCollect }?.let { checkout ->
+    if (showOrderDetails && state.cart.isNotEmpty()) {
+        OrderDetailsDialog(
+            state = state,
+            canDiscount = access.canApplyDiscount,
+            onDismiss = { showOrderDetails = false },
+            onSave = { name, phone, note, discount ->
+                showOrderDetails = false
+                onUpdateDraftDetails(name, phone, note, discount)
+            },
+        )
+    }
+
+    if (showStatusDetails) {
+        AlertDialog(
+            onDismissRequest = { showStatusDetails = false },
+            containerColor = Brand.SurfaceOverlay,
+            shape = Radius.shapeLg,
+            title = { Text("Status & recovery details") },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    item { OperationalAlarmPermissionCard(contextLabel = "POS") }
+                    if (hasOperationalAlerts) {
+                        item {
+                            PosOperationalAlerts(
+                                state = state,
+                                canRetry = access.canCreateAndCollect,
+                                onRefresh = onRefresh,
+                                onRetryRejectedSale = onRetryRejectedSale,
+                                onRetryHeldPayment = onRetryHeldPayment,
+                                onFocusOldestOverdue = {
+                                    showStatusDetails = false
+                                    showHeldOrders = true
+                                    onFocusOldestOverdue()
+                                },
+                                onSnoozeOverdue = onSnoozeOverdue,
+                                onUnmuteOverdue = onUnmuteOverdue,
+                            )
+                        }
+                    } else {
+                        item {
+                            Text(
+                                "No connection, sync, shift-access or payment recovery issues are currently reported.",
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showStatusDetails = false }) { Text("Close") }
+            },
+        )
+    }
+
+    if (showHeldOrders && state.heldOrders.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showHeldOrders = false },
+            containerColor = Brand.SurfaceOverlay,
+            shape = Radius.shapeLg,
+            title = {
+                Text(
+                    if (state.focusedHeldOrderId != null) {
+                        "Highlighted held order"
+                    } else {
+                        "Held orders awaiting payment"
+                    },
+                )
+            },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    item {
+                        HeldOrdersStrip(
+                            orders = state.heldOrders,
+                            overdueOrderIds = overdueOrderIds,
+                            focusedOrderId = state.focusedHeldOrderId,
+                            preparingOrderId = state.preparingHeldOrderId,
+                            enabled = state.canCollectPayment &&
+                                access.canCreateAndCollect &&
+                                !state.checkoutBusy && !state.heldSelectionBlocked &&
+                                state.preparedHeldCheckout == null &&
+                                state.draftState !in setOf(SyncState.PREPARING, SyncState.AWAITING_PAYMENT),
+                            onSelect = { order ->
+                                showHeldOrders = false
+                                onPrepareHeldOrder(order)
+                            },
+                            onDismissFocus = onDismissHeldFocus,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHeldOrders = false }) { Text("Close") }
+            },
+        )
+    }
+
+    offlinePaymentConfirmation?.takeIf { access.canCreateAndCollect && !state.online }?.let { quote ->
+        PayDialog(
+            dueMinor = quote.dueMinor,
+            online = state.online,
+            offlineAllowed = true,
+            confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+            confirmationIdentity = "${quote.localId}:${quote.revision}:${quote.dueMinor}",
+            onDismiss = { offlinePaymentConfirmation = null },
+            onConfirm = { method, tendered ->
+                offlinePaymentConfirmation = null
+                onCapture(method, tendered, quote)
+            },
+        )
+    }
+
+    state.preparedDirectCheckout
+        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.let { checkout ->
+        key(checkout.orderId) {
+            if (checkout.dueMinor == 0L && checkout.totalMinor == 0L) {
+                DirectZeroTotalCompletionDialog(
+                    checkout = checkout,
+                    online = state.online,
+                    confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                    onDismiss = onDismissDirectCheckout,
+                    onVoid = if (access.canVoid) {
+                        {
+                            voidTarget = PosVoidTarget(
+                                checkout.orderId,
+                                "Direct POS bill ${checkout.orderId.take(8)}",
+                            )
+                        }
+                    } else null,
+                    onConfirm = onConfirmDirectZero,
+                )
+            } else {
+                PayDialog(
+                    dueMinor = checkout.dueMinor,
+                    online = state.online,
+                    offlineAllowed = false,
+                    confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                    verifiedSharedOrder = true,
+                    paymentSubject = "Direct POS bill",
+                    confirmationIdentity = checkout.orderId,
+                    subtotalMinor = checkout.subtotalMinor,
+                    discountMinor = checkout.discountMinor,
+                    taxMinor = checkout.taxMinor,
+                    roundOffMinor = checkout.roundOffMinor,
+                    totalMinor = checkout.totalMinor,
+                    onDismiss = onDismissDirectCheckout,
+                    onVoid = if (access.canVoid) {
+                        {
+                            voidTarget = PosVoidTarget(
+                                checkout.orderId,
+                                "Direct POS bill ${checkout.orderId.take(8)}",
+                            )
+                        }
+                    } else null,
+                    onConfirm = { method, tendered ->
+                        onCapture(
+                            method,
+                            tendered,
+                            DirectPaymentConfirmation(
+                                localId = checkout.localId,
+                                revision = checkout.revision,
+                                dueMinor = checkout.dueMinor,
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    state.preparedHeldCheckout
+        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.let { checkout ->
         // This key resets every remembered dialog field only when the actual
         // immutable order id changes. A list reorder/removal can never reuse
         // T1's UPI selection or callback for the next held order.
@@ -286,6 +558,14 @@ fun PosScreen(
                     online = state.online,
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     onDismiss = onDismissHeldOrder,
+                    onVoid = if (access.canVoid) {
+                        {
+                            voidTarget = PosVoidTarget(
+                                checkout.orderId,
+                                checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                            )
+                        }
+                    } else null,
                     onConfirm = { onConfirmHeldOrderZero(checkout.orderId) },
                 )
             } else {
@@ -298,6 +578,14 @@ fun PosScreen(
                     paymentSubject = checkout.sourceLabel,
                     confirmationIdentity = checkout.orderId,
                     onDismiss = onDismissHeldOrder,
+                    onVoid = if (access.canVoid) {
+                        {
+                            voidTarget = PosVoidTarget(
+                                checkout.orderId,
+                                checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                            )
+                        }
+                    } else null,
                     onConfirm = { method, tendered ->
                         onConfirmHeldOrder(checkout.orderId, method, tendered)
                     },
@@ -306,7 +594,28 @@ fun PosScreen(
         }
     }
 
-    state.notice?.let { message ->
+    voidTarget?.let { target ->
+        PosVoidDialog(
+            target = target,
+            online = state.online,
+            busy = state.checkoutBusy,
+            onDismiss = { if (!state.checkoutBusy) voidTarget = null },
+            onConfirm = { reason -> onVoidOrder(target.orderId, reason) },
+        )
+    }
+
+    visibleReceipt?.let { receipt ->
+        PosReceiptDialog(
+            receipt = receipt,
+            onDismiss = {
+                hiddenAutomaticReceiptId = receipt.receiptId
+                selectedReceiptId = null
+                onAcknowledgeReceipt(receipt.receiptId)
+            },
+        )
+    }
+
+    state.notice?.takeIf { visibleReceipt == null }?.let { message ->
         AlertDialog(
             onDismissRequest = onDismissNotice,
             containerColor = Brand.SurfaceOverlay,
@@ -315,6 +624,514 @@ fun PosScreen(
             title = { Text("POS update") },
             text = { Text(message) },
         )
+    }
+}
+
+private data class PosVoidTarget(val orderId: String, val label: String)
+
+@Composable
+private fun PosReceiptDialog(
+    receipt: PosReceiptEntity,
+    onDismiss: () -> Unit,
+) {
+    val lines = remember(receipt.linesJson) { receipt.decodedLines() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(receipt.invoiceNo?.let { "Receipt · $it" } ?: "Payment receipt")
+                Text(
+                    receipt.sourceLabel ?: "POS order ${receipt.orderId.take(8)}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        },
+        text = {
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 470.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                item {
+                    OperationalBanner(
+                        title = "Payment confirmed",
+                        detail = buildString {
+                            append(receipt.method.paymentMethodLabel())
+                            receipt.paidAt?.let { append(" · $it") }
+                        },
+                        tone = UiTone.Success,
+                        icon = Icons.Default.CheckCircle,
+                    )
+                }
+                if (receipt.customerName != null || receipt.customerPhone != null) {
+                    item {
+                        Text(
+                            listOfNotNull(receipt.customerName, receipt.customerPhone).joinToString(" · "),
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                items(lines, key = { it.id ?: it.clientLineId ?: "${it.menuItemId}:${it.name}" }) { line ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .padding(Spacing.sm),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                "${line.qty.toInt().coerceAtLeast(1)} × ${line.name}",
+                                color = Brand.Foreground,
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            val options = buildList {
+                                line.variantSnapshot?.name?.takeIf(String::isNotBlank)?.let(::add)
+                                line.modifiers.orEmpty().forEach { modifier ->
+                                    add(
+                                        if (modifier.qty == 1) modifier.name
+                                        else "${modifier.name} ×${modifier.qty}",
+                                    )
+                                }
+                                line.note?.takeIf(String::isNotBlank)?.let { add("Note: $it") }
+                            }.joinToString(" · ")
+                            if (options.isNotBlank()) {
+                                Text(
+                                    options,
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                        NumericValue(
+                            value = line.lineTotalMinor.asRupees(),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .padding(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    ) {
+                        PaymentAmountRow("Subtotal", receipt.subtotalMinor)
+                        if (receipt.discountMinor > 0L) {
+                            PaymentAmountRow("Discount", -receipt.discountMinor, Brand.Good)
+                        }
+                        if (receipt.taxMinor != 0L) PaymentAmountRow("Tax", receipt.taxMinor)
+                        if (receipt.roundOffMinor != 0L) {
+                            PaymentAmountRow("Round-off", receipt.roundOffMinor)
+                        }
+                        HorizontalDivider(color = Brand.BorderSubtle)
+                        PaymentAmountRow("Total", receipt.totalMinor, emphasized = true)
+                        PaymentAmountRow("Paid", receipt.amountMinor, Brand.Good)
+                        receipt.tenderedMinor?.let { PaymentAmountRow("Cash received", it) }
+                        receipt.changeMinor?.let { PaymentAmountRow("Change", it, Brand.Good) }
+                    }
+                }
+                receipt.orderNote?.takeIf(String::isNotBlank)?.let { note ->
+                    item {
+                        Text(
+                            "Order note: $note",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                item {
+                    Text(
+                        buildString {
+                            append("Order ${receipt.orderId.take(8)}")
+                            receipt.paymentId?.let { append(" · Payment ${it.take(8)}") }
+                            receipt.fiscalYear?.let { append(" · FY $it") }
+                        },
+                        color = Brand.ForegroundFaint,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        },
+        confirmButton = { PrimaryButton(onClick = onDismiss) { Text("DONE") } },
+    )
+}
+
+@Composable
+private fun PosVoidDialog(
+    target: PosVoidTarget,
+    online: Boolean,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var selectedReasonId by rememberSaveable(target.orderId) { mutableStateOf<String?>(null) }
+    var customReason by rememberSaveable(target.orderId) { mutableStateOf("") }
+    val reason = resolvedVoidReason(selectedReasonId, customReason)
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = { Text("Void ${target.label}?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text(
+                    "This cancels the unpaid bill, keeps its audit history, and tells the kitchen that released items were cancelled.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                VoidReasonInput(
+                    selectedId = selectedReasonId,
+                    customReason = customReason,
+                    onPresetSelected = { selectedReasonId = it },
+                    onCustomReasonChange = { customReason = it },
+                )
+                if (!online) {
+                    Text(
+                        "Reconnect before voiding so the audit record and kitchen cancellation are saved together.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                if (busy) {
+                    Text(
+                        "Saving this void once. Keep this dialog open until the server confirms it.",
+                        color = Brand.Information,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            ErpButton(
+                text = if (busy) "Voiding bill" else "VOID BILL",
+                onClick = { onConfirm(reason) },
+                enabled = online && reason.isNotBlank() && !busy,
+                busy = busy,
+                intent = ActionIntent.Destructive,
+            )
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep bill") }
+        },
+    )
+}
+
+internal data class PosWorkspaceMetrics(
+    val sideBySide: Boolean,
+    val productWidth: androidx.compose.ui.unit.Dp,
+    val cartWidth: androidx.compose.ui.unit.Dp?,
+)
+
+/**
+ * Keep the checkout close to 36% of the operational workspace. The bounds stop
+ * the receipt becoming too narrow at the 960x600 target or too dominant on a
+ * larger tablet, while the returned product width makes the grid policy
+ * deterministic and JVM-testable.
+ */
+internal fun posWorkspaceMetrics(
+    maxWidth: androidx.compose.ui.unit.Dp,
+    horizontalGap: androidx.compose.ui.unit.Dp = 12.dp,
+): PosWorkspaceMetrics {
+    if (maxWidth < 720.dp) {
+        return PosWorkspaceMetrics(
+            sideBySide = false,
+            productWidth = maxWidth,
+            cartWidth = null,
+        )
+    }
+    val cartWidth = (maxWidth * 0.36f).coerceIn(300.dp, 400.dp)
+    return PosWorkspaceMetrics(
+        sideBySide = true,
+        productWidth = (maxWidth - cartWidth - horizontalGap).coerceAtLeast(0.dp),
+        cartWidth = cartWidth,
+    )
+}
+
+/** Match the explicit 3–4 column tablet contract without shrinking cards. */
+internal fun posProductColumnCount(
+    panelWidth: androidx.compose.ui.unit.Dp,
+    horizontalContentPadding: androidx.compose.ui.unit.Dp = 12.dp,
+    horizontalGap: androidx.compose.ui.unit.Dp = 8.dp,
+    minimumCardWidth: androidx.compose.ui.unit.Dp = 156.dp,
+): Int {
+    val usableWidth = (panelWidth - horizontalContentPadding * 2)
+        .coerceAtLeast(0.dp)
+    val count = ((usableWidth.value + horizontalGap.value) /
+        (minimumCardWidth.value + horizontalGap.value)).toInt()
+    return count.coerceIn(1, 4)
+}
+
+internal fun shouldRevealHeldOrderQueue(
+    focusedOrderId: String?,
+    visibleOrderIds: Set<String>,
+): Boolean = focusedOrderId != null && focusedOrderId in visibleOrderIds
+
+internal fun hasPosOperationalAlerts(state: PosUiState): Boolean =
+    !state.online || state.pendingCount > 0 || state.rejectedCount > 0 ||
+        state.shiftAccessMessage != null || state.rejectedDirectSales.isNotEmpty() ||
+        state.heldPaymentStatuses.isNotEmpty() || state.overdueHeldOrderIds.isNotEmpty()
+
+@Composable
+private fun PosContextBar(
+    state: PosUiState,
+    onOpenStatus: () -> Unit,
+    onOpenHeldOrders: () -> Unit,
+    onOpenLastReceipt: (() -> Unit)?,
+) {
+    val urgent = state.rejectedCount > 0 || state.rejectedDirectSales.isNotEmpty() ||
+        state.heldRejectedCount > 0
+    val focused = shouldRevealHeldOrderQueue(
+        state.focusedHeldOrderId,
+        state.heldOrders.mapTo(mutableSetOf()) { it.id },
+    )
+    val title = when {
+        focused -> "Held-order notification opened"
+        urgent -> "POS action required"
+        !state.online -> "POS offline"
+        state.shiftAccessMessage != null -> "Payment access needs attention"
+        state.heldOrders.isNotEmpty() -> "${state.heldOrders.size} held order${if (state.heldOrders.size == 1) "" else "s"} awaiting payment"
+        else -> "POS operational context"
+    }
+    val details = buildList {
+        if (state.pendingCount > 0) add("${state.pendingCount} pending sync")
+        if (state.rejectedCount > 0) add("${state.rejectedCount} need review")
+        if (state.overdueHeldOrderIds.isNotEmpty()) {
+            add("${state.overdueHeldOrderIds.size} overdue")
+        }
+        if (state.heldOrders.isNotEmpty()) add("held queue available")
+        if (isEmpty()) add(if (state.online) "Review alerts and Android alarm access" else "Reconnect before payment")
+    }.joinToString(" · ")
+    val tone = when {
+        urgent -> UiTone.Danger
+        !state.online || state.shiftAccessMessage != null || state.overdueHeldOrderIds.isNotEmpty() ->
+            UiTone.Warning
+        state.heldOrders.isNotEmpty() -> UiTone.Information
+        else -> UiTone.Neutral
+    }
+    val icon = when {
+        urgent -> Icons.Default.ErrorOutline
+        !state.online -> Icons.Default.WifiOff
+        state.overdueHeldOrderIds.isNotEmpty() -> Icons.Default.Schedule
+        state.heldOrders.isNotEmpty() -> Icons.Default.Sync
+        else -> Icons.Default.ShoppingCart
+    }
+
+    BoxWithConstraints(
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
+            .clip(Radius.shapeLg).background(Brand.Surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        if (maxWidth >= 620.dp) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PosContextSummary(
+                    title = title,
+                    details = details,
+                    tone = tone,
+                    icon = icon,
+                    modifier = Modifier.weight(1f),
+                )
+                ErpButton("Status & alarms", onOpenStatus, intent = ActionIntent.Secondary)
+                onOpenLastReceipt?.let {
+                    ErpButton("Last receipt", it, intent = ActionIntent.Quiet)
+                }
+                if (state.heldOrders.isNotEmpty()) {
+                    ErpButton(
+                        text = if (focused) "Review highlighted" else "Held (${state.heldOrders.size})",
+                        onClick = onOpenHeldOrders,
+                        intent = ActionIntent.Primary,
+                    )
+                }
+            }
+        } else {
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                PosContextSummary(title, details, tone, icon)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    ErpButton(
+                        "Status & alarms",
+                        onOpenStatus,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Secondary,
+                    )
+                    onOpenLastReceipt?.let {
+                        ErpButton(
+                            "Last receipt",
+                            it,
+                            modifier = Modifier.weight(1f),
+                            intent = ActionIntent.Quiet,
+                        )
+                    }
+                    if (state.heldOrders.isNotEmpty()) {
+                        ErpButton(
+                            text = if (focused) "Review" else "Held (${state.heldOrders.size})",
+                            onClick = onOpenHeldOrders,
+                            modifier = Modifier.weight(1f),
+                            intent = ActionIntent.Primary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PosContextSummary(
+    title: String,
+    details: String,
+    tone: UiTone,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = when (tone) {
+                UiTone.Danger -> Brand.Danger
+                UiTone.Warning -> Brand.Warning
+                UiTone.Information -> Brand.Information
+                else -> Brand.ForegroundMuted
+            },
+            modifier = Modifier.size(22.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                details,
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        OperationalStatusBadge(
+            label = when (tone) {
+                UiTone.Danger -> "Action required"
+                UiTone.Warning -> "Attention"
+                UiTone.Information -> "Queue"
+                else -> "Status"
+            },
+            tone = tone,
+        )
+    }
+}
+
+@Composable
+private fun PosOperationalAlerts(
+    state: PosUiState,
+    canRetry: Boolean,
+    onRefresh: () -> Unit,
+    onRetryRejectedSale: (String) -> Unit,
+    onRetryHeldPayment: (String) -> Unit,
+    onFocusOldestOverdue: () -> Unit,
+    onSnoozeOverdue: () -> Unit,
+    onUnmuteOverdue: () -> Unit,
+) {
+    val urgent = state.rejectedCount > 0 || state.rejectedDirectSales.isNotEmpty() ||
+        state.heldRejectedCount > 0
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
+            .heightIn(max = 360.dp)
+            .clip(Radius.shapeLg).background(Brand.Surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "POS status & recovery",
+                    color = Brand.Foreground,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Connection, shift access and payments already recorded on this tablet",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            OperationalStatusBadge(
+                label = when {
+                    urgent -> "Action required"
+                    !state.online -> "Offline"
+                    else -> "Attention"
+                },
+                tone = if (urgent) UiTone.Danger else UiTone.Warning,
+            )
+        }
+        HorizontalDivider(color = Brand.BorderSubtle)
+        SyncBanner(state, onRefresh)
+        state.shiftAccessMessage?.let { ShiftAccessBanner(it) }
+        if (state.rejectedDirectSales.isNotEmpty()) {
+            RejectedDirectSalesStrip(
+                sales = state.rejectedDirectSales,
+                retryingIds = state.retryingRejectedSaleIds,
+                online = state.online,
+                canRetry = canRetry,
+                onRetry = onRetryRejectedSale,
+            )
+        }
+        if (state.heldPaymentStatuses.isNotEmpty()) {
+            HeldPaymentStatusStrip(
+                payments = state.heldPaymentStatuses,
+                retryingIds = state.retryingHeldPaymentIds,
+                online = state.online,
+                canRetry = canRetry,
+                onSyncPending = onRefresh,
+                onRetryRejected = onRetryHeldPayment,
+            )
+        }
+        if (state.showOverdueBanner) {
+            OverdueHeldOrdersBanner(
+                count = state.overdueHeldOrderIds.size,
+                onView = onFocusOldestOverdue,
+                onSnooze = onSnoozeOverdue,
+            )
+        } else if (
+            state.overdueHeldOrderIds.isNotEmpty() &&
+            state.overdueBannerMutedUntilMillis > 0L
+        ) {
+            SnoozedHeldOrdersNotice(
+                count = state.overdueHeldOrderIds.size,
+                untilMillis = state.overdueBannerMutedUntilMillis,
+                onView = onFocusOldestOverdue,
+                onUnmute = onUnmuteOverdue,
+            )
+        }
     }
 }
 
@@ -330,22 +1147,18 @@ private fun SnoozedHeldOrdersNotice(
             .atZone(ZoneId.systemDefault())
             .format(DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()))
     }
-    Row(
-        Modifier.fillMaxWidth()
-            .background(Brand.SurfaceRaised)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-    ) {
-        Text(
-            "$count overdue held order${if (count == 1) "" else "s"} · banner snoozed until $until",
-            modifier = Modifier.weight(1f),
-            color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        TextButton(onClick = onView) { Text("View") }
-        TextButton(onClick = onUnmute) { Text("Unmute") }
-    }
+    OperationalBanner(
+        title = "$count overdue held order${if (count == 1) "" else "s"}",
+        detail = "Reminder snoozed until $until. The overdue orders remain in the collection queue.",
+        tone = UiTone.Warning,
+        icon = Icons.Default.Schedule,
+        action = {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton("View", onView, intent = ActionIntent.Secondary)
+                ErpButton("Unmute", onUnmute, intent = ActionIntent.Quiet)
+            }
+        },
+    )
 }
 
 @Composable
@@ -354,46 +1167,29 @@ private fun OverdueHeldOrdersBanner(
     onView: () -> Unit,
     onSnooze: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .background(Brand.Danger.copy(alpha = 0.18f))
-            .semantics { liveRegion = LiveRegionMode.Polite }
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                "$count held order${if (count == 1) "" else "s"} waiting over 15 minutes",
-                color = Brand.Foreground,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "Review the oldest bill. Snooze hides this banner for five minutes only; the overdue count stays visible.",
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-        TextButton(onClick = onView) { Text("View") }
-        TextButton(onClick = onSnooze) { Text("Snooze 5 min") }
-    }
+    OperationalBanner(
+        title = "$count held order${if (count == 1) "" else "s"} waiting over 15 minutes",
+        detail = "Review the oldest bill. Snoozing pauses this reminder for five minutes; it does not remove the order.",
+        tone = UiTone.Danger,
+        icon = Icons.Default.ErrorOutline,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        action = {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton("View oldest", onView, intent = ActionIntent.Secondary)
+                ErpButton("Snooze 5 min", onSnooze, intent = ActionIntent.Quiet)
+            }
+        },
+    )
 }
 
 @Composable
 private fun ShiftAccessBanner(message: String) {
-    Column(
-        Modifier.fillMaxWidth()
-            .background(Brand.GoldMuted)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(
-            "POS payment locked for this account",
-            color = Brand.Background,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(message, color = Brand.Background, style = MaterialTheme.typography.labelSmall)
-    }
+    OperationalBanner(
+        title = "Payment unavailable for this account",
+        detail = message,
+        tone = UiTone.Warning,
+        icon = Icons.Default.Lock,
+    )
 }
 
 /**
@@ -403,36 +1199,69 @@ private fun ShiftAccessBanner(message: String) {
  */
 @Composable
 private fun SyncBanner(state: PosUiState, onRefresh: () -> Unit) {
-    val (bg, label) = when {
+    val presentation = when {
         state.rejectedDirectSales.isNotEmpty() && state.heldRejectedCount > 0 ->
-            Brand.Danger to "${state.rejectedDirectSales.size} direct sale(s) and " +
-                "${state.heldRejectedCount} held payment(s) need manager review"
+            Triple(
+                "Payments need reconciliation",
+                "${state.rejectedDirectSales.size} direct sale(s) and ${state.heldRejectedCount} held payment(s) need manager review. Do not charge those customers again.",
+                UiTone.Danger,
+            )
         state.rejectedDirectSales.isNotEmpty() ->
-            Brand.Danger to "${state.rejectedDirectSales.size} direct sale(s) refused — " +
-                "review below; Sync now does not retry them"
+            Triple(
+                "Direct sales need review",
+                "${state.rejectedDirectSales.size} collected sale(s) were not accepted by the server. Review the original saved sales below; do not charge again.",
+                UiTone.Danger,
+            )
         state.heldRejectedCount > 0 ->
-            Brand.Danger to "${state.heldRejectedCount} held payment(s) refused — needs owner review"
+            Triple(
+                "Held payments need owner review",
+                "${state.heldRejectedCount} payment(s) were recorded on this tablet but not accepted by the server. Do not collect again.",
+                UiTone.Danger,
+            )
         !state.online && state.pendingCount > 0 ->
-            Brand.GoldMuted to "Offline · ${state.pendingCount} sale(s) saved on this tablet"
+            Triple(
+                "POS is offline",
+                "${state.pendingCount} sale(s) are saved safely on this tablet and will be sent after reconnection.",
+                UiTone.Warning,
+            )
         !state.online ->
-            Brand.GoldMuted to "Offline · sales are saved here and sent when the link returns"
+            Triple(
+                "POS is offline",
+                "You can keep building an order. Reconnect before collecting payment so the final total can be verified.",
+                UiTone.Warning,
+            )
         state.pendingCount > 0 ->
-            Brand.GoldMuted to "Sending ${state.pendingCount} saved sale(s)…"
+            Triple(
+                "Confirming saved sales",
+                "${state.pendingCount} saved sale(s) are waiting for server confirmation. Each keeps its original payment identity.",
+                UiTone.Information,
+            )
         else -> return
     }
-    val animatedBg by animateColorAsState(bg, tween(Motion.medium), label = "syncBannerBg")
-    AnimatedVisibility(visible = true, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-        Row(
-            Modifier.fillMaxWidth().background(animatedBg).padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(label, color = Brand.Background, fontWeight = FontWeight.SemiBold)
-            if (state.online && state.rejectedCount == 0 && state.pendingCount > 0) {
-                TextButton(onClick = onRefresh) { Text("Sync now", color = Brand.Background) }
+    OperationalBanner(
+        title = presentation.first,
+        detail = presentation.second,
+        tone = presentation.third,
+        icon = when {
+            presentation.third == UiTone.Danger -> Icons.Default.ErrorOutline
+            !state.online -> Icons.Default.WifiOff
+            else -> Icons.Default.Sync
+        },
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        action = if (state.online && state.rejectedCount == 0 && state.pendingCount > 0) {
+            {
+                ErpButton(
+                    text = if (state.syncing) "Confirming" else "Confirm now",
+                    onClick = onRefresh,
+                    intent = ActionIntent.Secondary,
+                    enabled = !state.syncing,
+                    busy = state.syncing,
+                )
             }
-        }
-    }
+        } else {
+            null
+        },
+    )
 }
 
 /**
@@ -450,9 +1279,10 @@ private fun RejectedDirectSalesStrip(
     onRetry: (String) -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth()
-            .background(Brand.DangerMuted)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
+            .clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.Danger.copy(alpha = 0.4f), Radius.shapeMd)
+            .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Text(
@@ -464,7 +1294,7 @@ private fun RejectedDirectSalesStrip(
         Text(
             "Payment was already captured on this tablet. Do not charge the customer again. " +
                 "Fix the server-side cause, then retry the original saved sale.",
-            color = Brand.Foreground,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -503,19 +1333,17 @@ private fun RejectedDirectSalesStrip(
                         color = Brand.Danger,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    OutlinedButton(
+                    ErpButton(
+                        text = when {
+                            retrying -> "Retrying saved sale"
+                            !online -> "Reconnect to retry"
+                            else -> "Retry after fix"
+                        },
                         onClick = { onRetry(sale.localId) },
+                        intent = ActionIntent.Secondary,
                         enabled = canRetry && online && !retrying,
-                        shape = Radius.shapePill,
-                    ) {
-                        Text(
-                            when {
-                                retrying -> "Retrying original sale…"
-                                !online -> "Reconnect to retry"
-                                else -> "Retry after fix"
-                            },
-                        )
-                    }
+                        busy = retrying,
+                    )
                 }
             }
         }
@@ -539,9 +1367,15 @@ private fun HeldPaymentStatusStrip(
 ) {
     val hasRejection = payments.any { it.state == HeldOrderPaymentState.REJECTED }
     Column(
-        Modifier.fillMaxWidth()
-            .background(if (hasRejection) Brand.DangerMuted else Brand.GoldMuted)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
+            .clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .border(
+                1.dp,
+                if (hasRejection) Brand.Danger.copy(alpha = 0.4f)
+                else Brand.Warning.copy(alpha = 0.4f),
+                Radius.shapeMd,
+            )
+            .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Text(
@@ -553,7 +1387,7 @@ private fun HeldPaymentStatusStrip(
         Text(
             "Money was already marked received for these Tables/Gaming orders. Never collect it " +
                 "again. Account switching stays locked until each saved payment is confirmed or reconciled.",
-            color = Brand.Foreground,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -591,7 +1425,7 @@ private fun HeldPaymentStatusStrip(
                     )
                     Text(
                         if (rejected) "Server refused this saved payment" else "Awaiting server confirmation",
-                        color = if (rejected) Brand.Danger else Brand.Gold,
+                        color = if (rejected) Brand.Danger else Brand.Warning,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -604,22 +1438,20 @@ private fun HeldPaymentStatusStrip(
                         color = if (rejected) Brand.Danger else Brand.ForegroundMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    OutlinedButton(
+                    ErpButton(
+                        text = when {
+                            retrying -> "Retrying saved payment"
+                            !online -> "Reconnect to retry"
+                            rejected -> "Retry after fix"
+                            else -> "Confirm with server"
+                        },
                         onClick = {
                             if (rejected) onRetryRejected(payment.localId) else onSyncPending()
                         },
+                        intent = ActionIntent.Secondary,
                         enabled = canRetry && online && !retrying,
-                        shape = Radius.shapePill,
-                    ) {
-                        Text(
-                            when {
-                                retrying -> "Retrying original payment…"
-                                !online -> "Reconnect to retry confirmation"
-                                rejected -> "Retry after fix"
-                                else -> "Retry server confirmation"
-                            },
-                        )
-                    }
+                        busy = retrying,
+                    )
                 }
             }
         }
@@ -691,15 +1523,16 @@ private fun HeldOrdersStrip(
                     Modifier.clip(Radius.shapeMd)
                         .background(
                             when {
-                                focused -> Brand.GoldMuted
+                                focused -> Brand.InformationMuted
                                 overdue -> Brand.Danger.copy(alpha = 0.16f)
                                 else -> Brand.SurfaceRaised
                             },
                         )
                         .then(
-                            if (focused) Modifier.border(2.dp, Brand.Gold, Radius.shapeMd)
+                            if (focused) Modifier.border(2.dp, Brand.Information, Radius.shapeMd)
                             else Modifier,
                         )
+                        .heightIn(min = 72.dp)
                         .clickable(enabled = enabled) { onSelect(order) }
                         .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                 ) {
@@ -710,7 +1543,7 @@ private fun HeldOrdersStrip(
                     )
                     Text(
                         if (preparingOrderId == order.id) {
-                            "Checking live bill…"
+                            "Verifying the live total — wait before selecting again"
                         } else if (overdue) {
                             "Overdue · ${order.itemsCount} item(s) · due ${order.dueMinor.asRupees()}"
                         } else {
@@ -719,6 +1552,12 @@ private fun HeldOrdersStrip(
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.ForegroundMuted,
                     )
+                    if (preparingOrderId == order.id) {
+                        OperationalStatusBadge(
+                            label = "Verifying",
+                            tone = UiTone.Information,
+                        )
+                    }
                 }
             }
         }
@@ -784,8 +1623,292 @@ private fun EmptyMenuPanel(
 }
 
 @Composable
-private fun ProductCatalogPanel(
+private fun ProductConfigurationDialog(
+    item: MenuItemEntity,
+    variants: List<MenuVariantEntity>,
+    modifierGroups: List<MenuModifierGroupEntity>,
+    modifiers: List<MenuModifierEntity>,
+    onDismiss: () -> Unit,
+    onAdd: (MenuVariantEntity?, List<CartModifierSelection>, String?) -> Unit,
+) {
+    var selectedVariantId by rememberSaveable(item.id) { mutableStateOf<String?>(null) }
+    var selectedQuantities by remember(item.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var note by rememberSaveable(item.id) { mutableStateOf("") }
+    val selectedVariant = variants.firstOrNull { it.id == selectedVariantId }
+    val selections = modifiers.mapNotNull { option ->
+        selectedQuantities[option.id]?.takeIf { it > 0 }?.let {
+            CartModifierSelection(option, it)
+        }
+    }
+    val groupError = modifierGroups.firstNotNullOfOrNull { group ->
+        val count = modifiers.filter { it.modifierGroupId == group.id }
+            .sumOf { selectedQuantities[it.id] ?: 0 }
+        when {
+            count < group.minSelect ->
+                "${group.name} requires at least ${group.minSelect} selection${if (group.minSelect == 1) "" else "s"}."
+            count > group.maxSelect ->
+                "${group.name} allows at most ${group.maxSelect} selections."
+            else -> null
+        }
+    }
+    val configuredPrice = configuredUnitPriceMinor(item, selectedVariant, selections)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Customise ${item.name}")
+                Text(
+                    "Unit price ${configuredPrice.asRupees()}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        },
+        text = {
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 440.dp).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+            ) {
+                if (variants.isNotEmpty()) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            Text("Variant", style = MaterialTheme.typography.titleSmall)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                                item {
+                                    FilterChip(
+                                        selected = selectedVariantId == null,
+                                        onClick = { selectedVariantId = null },
+                                        label = { Text("Standard") },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    )
+                                }
+                                items(variants, key = { it.id }) { variant ->
+                                    FilterChip(
+                                        selected = selectedVariantId == variant.id,
+                                        onClick = { selectedVariantId = variant.id },
+                                        label = {
+                                            Text(
+                                                if (variant.priceDeltaMinor == 0L) variant.name
+                                                else "${variant.name} · +${variant.priceDeltaMinor.asRupees()}",
+                                            )
+                                        },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                items(modifierGroups, key = { it.id }) { group ->
+                    val groupOptions = modifiers.filter { it.modifierGroupId == group.id }
+                    val selectedCount = groupOptions.sumOf { selectedQuantities[it.id] ?: 0 }
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(group.name, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    when {
+                                        group.minSelect == group.maxSelect -> "Choose ${group.minSelect}"
+                                        group.minSelect > 0 -> "Choose ${group.minSelect}–${group.maxSelect}"
+                                        else -> "Optional · up to ${group.maxSelect}"
+                                    },
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            OperationalStatusBadge(
+                                label = "$selectedCount/${group.maxSelect}",
+                                tone = if (selectedCount in group.minSelect..group.maxSelect) {
+                                    UiTone.Success
+                                } else {
+                                    UiTone.Warning
+                                },
+                            )
+                        }
+                        groupOptions.forEach { option ->
+                            val qty = selectedQuantities[option.id] ?: 0
+                            Row(
+                                Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                                    .background(Brand.SurfaceRaised)
+                                    .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                                    .padding(Spacing.sm),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(option.name, color = Brand.Foreground)
+                                    Text(
+                                        if (option.priceDeltaMinor == 0L) "Included"
+                                        else "+${option.priceDeltaMinor.asRupees()} each",
+                                        color = Brand.ForegroundMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                                QtyButton("−", enabled = qty > 0) {
+                                    selectedQuantities = selectedQuantities +
+                                        (option.id to (qty - 1).coerceAtLeast(0))
+                                }
+                                Text("$qty", fontWeight = FontWeight.Bold)
+                                QtyButton(
+                                    "+",
+                                    enabled = qty < option.maxQuantity && selectedCount < group.maxSelect,
+                                ) {
+                                    selectedQuantities = selectedQuantities + (option.id to qty + 1)
+                                }
+                            }
+                        }
+                    }
+                }
+                item {
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it.take(500) },
+                        label = { Text("Item note (optional)") },
+                        placeholder = { Text("Example: no ice, less spicy") },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                groupError?.let { message ->
+                    item { Text(message, color = Brand.Warning, style = MaterialTheme.typography.labelMedium) }
+                }
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                enabled = groupError == null,
+                onClick = { onAdd(selectedVariant, selections, note) },
+            ) { Text("ADD · ${configuredPrice.asRupees()}") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun OrderDetailsDialog(
     state: PosUiState,
+    canDiscount: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String?, String?, String?, Long) -> Unit,
+) {
+    var customerName by remember { mutableStateOf(state.customerName.orEmpty()) }
+    var customerPhone by remember { mutableStateOf(state.customerPhone.orEmpty()) }
+    var orderNote by remember { mutableStateOf(state.orderNote.orEmpty()) }
+    var discountText by remember {
+        mutableStateOf(
+            state.manualDiscountMinor.takeIf { it > 0L }?.let { minor ->
+                "${minor / 100}.${(minor % 100).toString().padStart(2, '0')}"
+            }.orEmpty(),
+        )
+    }
+    val discountMinor = if (discountText.isBlank()) 0L else parseRupeesToMinor(discountText)
+    val phoneDigits = customerPhone.filter(Char::isDigit)
+    val phoneInvalid = phoneDigits.isNotEmpty() && phoneDigits.length !in 7..20
+    val discountInvalid = discountMinor == null || discountMinor > state.estimateMinor
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = { Text("Customer, note & discount") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Text(
+                    "These details stay with this saved cart. Customer benefits and the final total are verified online before payment.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = customerName,
+                    onValueChange = { customerName = it.take(200) },
+                    label = { Text("Customer name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = customerPhone,
+                    onValueChange = { input ->
+                        customerPhone = input.filter { it.isDigit() || it == '+' }.take(20)
+                    },
+                    label = { Text("Customer phone (optional)") },
+                    supportingText = {
+                        Text(
+                            if (phoneInvalid) "Enter 7–20 digits, or leave this blank."
+                            else "Used to find loyalty or membership benefits.",
+                        )
+                    },
+                    isError = phoneInvalid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = orderNote,
+                    onValueChange = { orderNote = it.take(500) },
+                    label = { Text("Order note (optional)") },
+                    placeholder = { Text("Example: birthday table, takeaway packaging") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = discountText,
+                    onValueChange = { input ->
+                        if (input.length <= 12 && input.all { it.isDigit() || it == '.' }) {
+                            discountText = input
+                        }
+                    },
+                    enabled = canDiscount,
+                    label = { Text("Manual discount (₹)") },
+                    supportingText = {
+                        Text(
+                            when {
+                                !canDiscount -> "Manager discount permission is required."
+                                discountInvalid -> "Enter a valid amount no greater than ${state.estimateMinor.asRupees()}."
+                                else -> "The server revalidates this reduction before payment."
+                            },
+                        )
+                    },
+                    isError = canDiscount && discountInvalid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                enabled = !phoneInvalid && (!canDiscount || !discountInvalid),
+                onClick = {
+                    onSave(
+                        customerName.trim().takeIf(String::isNotEmpty),
+                        phoneDigits.takeIf(String::isNotEmpty),
+                        orderNote.trim().takeIf(String::isNotEmpty),
+                        if (canDiscount) requireNotNull(discountMinor) else state.manualDiscountMinor,
+                    )
+                },
+            ) { Text("Save details") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ProductCatalogPanel(
+    categories: List<MenuCategoryEntity>,
+    items: List<MenuItemEntity>,
+    selectedCategoryId: String?,
     visibleItems: List<MenuItemEntity>,
     query: String,
     canWrite: Boolean,
@@ -795,8 +1918,8 @@ private fun ProductCatalogPanel(
     onAdd: (MenuItemEntity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val categoryNames = remember(state.categories) {
-        state.categories.associate { category -> category.id to category.name }
+    val categoryNames = remember(categories) {
+        categories.associate { category -> category.id to category.name }
     }
     Column(
         modifier = modifier.clip(Radius.shapeLg).background(Brand.Surface)
@@ -812,7 +1935,7 @@ private fun ProductCatalogPanel(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CatalogPanelSummary(
-                        availableCount = state.items.size,
+                        availableCount = items.size,
                         shownCount = visibleItems.size,
                         modifier = Modifier.weight(1f),
                     )
@@ -829,7 +1952,7 @@ private fun ProductCatalogPanel(
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     CatalogPanelSummary(
-                        availableCount = state.items.size,
+                        availableCount = items.size,
                         shownCount = visibleItems.size,
                     )
                     SearchInput(
@@ -841,7 +1964,12 @@ private fun ProductCatalogPanel(
                 }
             }
         }
-        CategoryStrip(state = state, onSelect = onSelectCategory)
+        CategoryStrip(
+            categories = categories,
+            items = items,
+            selectedCategoryId = selectedCategoryId,
+            onSelect = onSelectCategory,
+        )
         HorizontalDivider(color = Brand.BorderSubtle)
 
         if (visibleItems.isEmpty()) {
@@ -861,22 +1989,29 @@ private fun ProductCatalogPanel(
                 modifier = Modifier.weight(1f),
             )
         } else {
-            LazyVerticalGrid(
-                modifier = Modifier.weight(1f),
-                // Adaptive rather than a fixed count, so one build fits an
-                // 8" tablet and a 12" one without tiny product targets.
-                columns = GridCells.Adaptive(minSize = 164.dp),
-                contentPadding = PaddingValues(Spacing.md),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                items(visibleItems, key = { it.id }) { item ->
-                    MenuTile(
-                        item = item,
-                        categoryName = categoryNames[item.categoryId],
-                        enabled = canWrite,
-                        modifier = Modifier.animateItem(),
-                    ) { onAdd(item) }
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val columnCount = remember(maxWidth) {
+                    posProductColumnCount(
+                        panelWidth = maxWidth,
+                        horizontalContentPadding = Spacing.md,
+                        horizontalGap = Spacing.sm,
+                    )
+                }
+                LazyVerticalGrid(
+                    modifier = Modifier.fillMaxSize(),
+                    columns = GridCells.Fixed(columnCount),
+                    contentPadding = PaddingValues(Spacing.md),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    items(visibleItems, key = { it.id }) { item ->
+                        MenuTile(
+                            item = item,
+                            categoryName = categoryNames[item.categoryId],
+                            enabled = canWrite,
+                            modifier = Modifier.animateItem(),
+                        ) { onAdd(item) }
+                    }
                 }
             }
         }
@@ -914,17 +2049,22 @@ private fun CatalogPanelSummary(
 }
 
 @Composable
-private fun CategoryStrip(state: PosUiState, onSelect: (String?) -> Unit) {
+private fun CategoryStrip(
+    categories: List<MenuCategoryEntity>,
+    items: List<MenuItemEntity>,
+    selectedCategoryId: String?,
+    onSelect: (String?) -> Unit,
+) {
     val allId = "__all_pos_categories__"
-    val options = remember(state.categories, state.items) {
+    val options = remember(categories, items) {
         buildList {
-            add(TabOption(id = allId, label = "All", count = state.items.size))
-            state.categories.forEach { category ->
+            add(TabOption(id = allId, label = "All", count = items.size))
+            categories.forEach { category ->
                 add(
                     TabOption(
                         id = category.id,
                         label = category.name,
-                        count = state.items.count { it.categoryId == category.id },
+                        count = items.count { it.categoryId == category.id },
                     ),
                 )
             }
@@ -932,7 +2072,7 @@ private fun CategoryStrip(state: PosUiState, onSelect: (String?) -> Unit) {
     }
     PremiumTabBar(
         options = options,
-        selectedId = state.selectedCategoryId ?: allId,
+        selectedId = selectedCategoryId ?: allId,
         onSelect = { selected -> onSelect(selected.takeUnless { it == allId }) },
         modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     )
@@ -1031,12 +2171,12 @@ private fun MenuTile(
                 Icon(
                     Icons.Filled.AddShoppingCart,
                     contentDescription = null,
-                    tint = if (enabled) Brand.GoldMuted else Brand.Disabled,
+                    tint = if (enabled) Brand.ForegroundMuted else Brand.Disabled,
                     modifier = Modifier.size(17.dp),
                 )
                 Text(
                     if (enabled) "Add" else "View only",
-                    color = if (enabled) Brand.GoldMuted else Brand.Disabled,
+                    color = if (enabled) Brand.ForegroundMuted else Brand.Disabled,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -1048,9 +2188,11 @@ private fun MenuTile(
 private fun CartPanel(
     state: PosUiState,
     canWrite: Boolean,
-    onAdd: (MenuItemEntity) -> Unit,
-    onRemove: (MenuItemEntity) -> Unit,
+    canDiscount: Boolean,
+    onIncrementLine: (String) -> Unit,
+    onDecrementLine: (String) -> Unit,
     onClear: () -> Unit,
+    onEditDetails: () -> Unit,
     modifier: Modifier = Modifier,
     onPay: () -> Unit,
 ) {
@@ -1078,12 +2220,23 @@ private fun CartPanel(
                 )
             }
             AnimatedVisibility(state.cart.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
-                ErpButton(
-                    text = "Clear",
-                    onClick = onClear,
-                    enabled = canWrite,
-                    intent = ActionIntent.Quiet,
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    ErpButton(
+                        text = if (
+                            state.customerPhone != null || state.orderNote != null ||
+                            state.manualDiscountMinor > 0L
+                        ) "Details ✓" else "Details",
+                        onClick = onEditDetails,
+                        enabled = canWrite && state.draftEditable,
+                        intent = ActionIntent.Secondary,
+                    )
+                    ErpButton(
+                        text = "Clear",
+                        onClick = onClear,
+                        enabled = canWrite && state.draftEditable,
+                        intent = ActionIntent.Quiet,
+                    )
+                }
             }
         }
         HorizontalDivider(color = Brand.BorderSubtle)
@@ -1104,7 +2257,7 @@ private fun CartPanel(
                 modifier = Modifier.weight(1f).padding(Spacing.md),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
-                items(state.cart, key = { it.item.id }) { line ->
+                items(state.cart, key = { it.lineId }) { line ->
                     Row(
                         Modifier.fillMaxWidth().animateItem().clip(Radius.shapeMd)
                             .background(Brand.SurfaceRaised)
@@ -1120,13 +2273,32 @@ private fun CartPanel(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            val optionLabel = buildList {
+                                line.variant?.name?.let(::add)
+                                addAll(line.modifiers.map { modifier ->
+                                    if (modifier.qty == 1) modifier.modifier.name
+                                    else "${modifier.modifier.name} ×${modifier.qty}"
+                                })
+                                line.note?.let { add("Note: $it") }
+                            }.joinToString(" · ")
+                            if (optionLabel.isNotBlank()) {
+                                Text(
+                                    optionLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.ForegroundMuted,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                             Text(
-                                (line.item.basePriceMinor * line.qty).asRupees(),
+                                line.lineTotalMinor.asRupees(),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Brand.ForegroundFaint,
                             )
                         }
-                        QtyButton("−", enabled = canWrite) { onRemove(line.item) }
+                        QtyButton("−", enabled = canWrite && state.draftEditable) {
+                            onDecrementLine(line.lineId)
+                        }
                         AnimatedContent(
                             targetState = line.qty,
                             transitionSpec = { fadeIn(tween(Motion.fast)).togetherWith(fadeOut(tween(Motion.fast))) },
@@ -1139,7 +2311,9 @@ private fun CartPanel(
                                 fontWeight = FontWeight.Bold,
                             )
                         }
-                        QtyButton("+", enabled = canWrite) { onAdd(line.item) }
+                        QtyButton("+", enabled = canWrite && state.draftEditable) {
+                            onIncrementLine(line.lineId)
+                        }
                     }
                 }
             }
@@ -1162,7 +2336,8 @@ private fun CartPanel(
                         style = MaterialTheme.typography.labelLarge,
                     )
                     Text(
-                        "Server confirms discounts and final total",
+                        if (state.online) "Server verifies the exact total before payment"
+                        else "Provisional offline total; server reconciles on reconnect",
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.ForegroundFaint,
                     )
@@ -1180,17 +2355,59 @@ private fun CartPanel(
                     )
                 }
             }
+            if (state.manualDiscountMinor > 0L) {
+                PaymentAmountRow("Manual discount", -state.manualDiscountMinor, Brand.Good)
+            } else if (!canDiscount && state.cart.isNotEmpty()) {
+                Text(
+                    "Manager permission is required for manual discounts.",
+                    color = Brand.ForegroundFaint,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
             ErpButton(
-                text = if (state.checkoutBusy) "Saving sale…"
-                else if (!canWrite) "View-only POS"
-                else if (!state.canCollectPayment) "Payment locked"
-                else "Take payment · ${state.cartCount} item${if (state.cartCount == 1) "" else "s"}",
+                text = when {
+                    state.checkoutBusy && state.preparingHeldOrderId != null -> "Verifying held bill"
+                    state.checkoutBusy -> "Recording payment once"
+                    state.preparedHeldCheckout != null -> "Finish the held bill first"
+                    state.heldSelectionBlocked -> "Finishing previous payment"
+                    !canWrite -> "View-only POS"
+                    !state.canCollectPayment -> "Payment unavailable"
+                    !state.online && state.draftState in setOf(
+                        SyncState.PREPARING,
+                        SyncState.AWAITING_PAYMENT,
+                    ) -> "RECONNECT TO FINISH BILL"
+                    state.draftState == SyncState.PREPARING -> "RESUME SERVER CHECK"
+                    state.draftState == SyncState.AWAITING_PAYMENT -> "REVIEW VERIFIED BILL"
+                    else -> "PAY · ${state.estimatedDueMinor.asRupees()}"
+                },
                 onClick = onPay,
-                enabled = canWrite && state.cart.isNotEmpty() && state.canCollectPayment,
+                enabled = canWrite && state.cart.isNotEmpty() && state.canCollectPayment &&
+                    !state.checkoutBusy && state.preparedHeldCheckout == null &&
+                    !state.heldSelectionBlocked &&
+                    (state.online || state.draftState == SyncState.DRAFT),
                 busy = state.checkoutBusy,
                 intent = ActionIntent.Primary,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
             )
+            if (state.checkoutBusy) {
+                Text(
+                    "One checkout is already in progress. Wait for its confirmation before taking another payment.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.Information,
+                )
+            }
+            if (
+                !state.online && state.draftState in setOf(
+                    SyncState.PREPARING,
+                    SyncState.AWAITING_PAYMENT,
+                )
+            ) {
+                Text(
+                    "This bill already exists on the server. Reconnect to refresh its exact total, take payment, or void it safely.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.Warning,
+                )
+            }
             if (state.cart.isNotEmpty() && !state.canCollectPayment) {
                 Text(
                     state.shiftAccessMessage ?: "Open a shift before taking payment.",
@@ -1233,7 +2450,13 @@ private fun PayDialog(
     verifiedSharedOrder: Boolean = false,
     paymentSubject: String? = null,
     confirmationIdentity: String? = null,
+    subtotalMinor: Long? = null,
+    discountMinor: Long? = null,
+    taxMinor: Long? = null,
+    roundOffMinor: Long? = null,
+    totalMinor: Long? = null,
     onDismiss: () -> Unit,
+    onVoid: (() -> Unit)? = null,
     onConfirm: (String, Long) -> Unit,
 ) {
     var method by rememberSaveable(confirmationIdentity) { mutableStateOf("cash") }
@@ -1248,7 +2471,15 @@ private fun PayDialog(
     val changeMinor = tenderedMinor - dueMinor
     val cashInvalid = method == "cash" && (parsedTenderedMinor == null || changeMinor < 0)
     val connectionRequired = !online && !offlineAllowed
-    val processing = confirmationConsumed || !confirmEnabled
+    val confirmLabel = when {
+        confirmationConsumed -> "Payment submitted once"
+        connectionRequired -> "Reconnect to continue"
+        dueMinor <= 0L -> "No payable balance"
+        method == "cash" && parsedTenderedMinor == null -> "Enter cash received"
+        method == "cash" && changeMinor < 0 -> "Cash received is below the total"
+        !confirmEnabled -> "Payment unavailable"
+        else -> "CONFIRM ${method.paymentMethodLabel().uppercase(Locale.getDefault())} · ${dueMinor.asRupees()}"
+    }
 
     AlertDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
@@ -1275,17 +2506,39 @@ private fun PayDialog(
                         color = Brand.Good,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (totalMinor != null) {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .padding(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    ) {
+                        subtotalMinor?.let { PaymentAmountRow("Subtotal", it) }
+                        discountMinor?.takeIf { it > 0L }?.let {
+                            PaymentAmountRow("Discount", -it, Brand.Good)
+                        }
+                        taxMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
+                        roundOffMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
+                        HorizontalDivider(color = Brand.BorderSubtle)
+                        PaymentAmountRow("Total", totalMinor, Brand.Foreground, emphasized = true)
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
                     listOf("cash" to "Cash", "upi" to "UPI", "card" to "Card").forEach { (id, label) ->
                         FilterChip(
                             selected = method == id,
-                            enabled = !confirmationConsumed,
+                            enabled = !confirmationConsumed && confirmEnabled,
                             onClick = { method = id },
                             label = { Text(label) },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = Radius.shapePill,
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Brand.Gold,
-                                selectedLabelColor = Brand.Background,
+                                selectedContainerColor = Brand.InformationMuted,
+                                selectedLabelColor = Brand.Foreground,
                             ),
                         )
                     }
@@ -1328,14 +2581,23 @@ private fun PayDialog(
                                 "another device, so an offline cached total is not safe to collect."
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = Brand.GoldMuted,
+                        color = Brand.Warning,
+                    )
+                }
+                if (confirmationConsumed) {
+                    Text(
+                        "This payment was submitted once. Keep the app open while the saved payment is confirmed; do not collect again.",
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                        color = Brand.Information,
+                        style = MaterialTheme.typography.labelSmall,
                     )
                 }
             }
         },
         confirmButton = {
             PrimaryButton(
-                enabled = !processing && !cashInvalid && !connectionRequired && dueMinor > 0L,
+                enabled = !confirmationConsumed && confirmEnabled && !cashInvalid &&
+                    !connectionRequired && dueMinor > 0L,
                 onClick = {
                     val consumed = oneShotConfirmation?.tryConsume(requireNotNull(confirmationIdentity))
                         ?: !confirmationConsumed
@@ -1346,10 +2608,108 @@ private fun PayDialog(
                         onConfirm(method, if (method == "cash") tenderedMinor else dueMinor)
                     }
                 },
-            ) { Text(if (processing) "Saving once…" else "Payment received") }
+            ) { Text(confirmLabel) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                onVoid?.let {
+                    TextButton(onClick = it, enabled = !confirmationConsumed) {
+                        Text("Void bill", color = Brand.Danger)
+                    }
+                }
+                TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+@Composable
+private fun PaymentAmountRow(
+    label: String,
+    amountMinor: Long,
+    valueColor: androidx.compose.ui.graphics.Color = Brand.Foreground,
+    emphasized: Boolean = false,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = if (emphasized) Brand.Foreground else Brand.ForegroundMuted,
+            style = if (emphasized) MaterialTheme.typography.titleSmall
+            else MaterialTheme.typography.bodySmall,
+            fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Normal,
+        )
+        NumericValue(
+            value = amountMinor.asRupees(),
+            style = if (emphasized) MaterialTheme.typography.titleMedium
+            else MaterialTheme.typography.bodyMedium,
+            color = valueColor,
+        )
+    }
+}
+
+@Composable
+private fun DirectZeroTotalCompletionDialog(
+    checkout: PreparedDirectCheckout,
+    online: Boolean,
+    confirmEnabled: Boolean,
+    onDismiss: () -> Unit,
+    onVoid: (() -> Unit)? = null,
+    onConfirm: () -> Unit,
+) {
+    var confirmationConsumed by remember(checkout.orderId) { mutableStateOf(false) }
+    val oneShot = remember(checkout.orderId) {
+        OneShotHeldPaymentConfirmation(checkout.orderId)
+    }
+    AlertDialog(
+        onDismissRequest = { if (!confirmationConsumed) onDismiss() },
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = { Text("Complete bill · ₹0.00 due") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text(
+                    "The server verified that discounts or customer benefits cover this bill in full.",
+                    color = Brand.Good,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                PaymentAmountRow("Subtotal", checkout.subtotalMinor)
+                if (checkout.discountMinor > 0L) {
+                    PaymentAmountRow("Discount", -checkout.discountMinor, Brand.Good)
+                }
+                PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
+                Text(
+                    "Collect no money. Completing issues the final receipt and consumes the benefit once.",
+                    color = Brand.ForegroundMuted,
+                )
+                if (!online) {
+                    Text("Reconnect before completing this bill.", color = Brand.Warning)
+                }
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                enabled = online && confirmEnabled && !confirmationConsumed,
+                onClick = {
+                    if (oneShot.tryConsume(checkout.orderId)) {
+                        confirmationConsumed = true
+                        onConfirm()
+                    }
+                },
+            ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · ₹0.00") }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                onVoid?.let {
+                    TextButton(onClick = it, enabled = !confirmationConsumed) {
+                        Text("Void bill", color = Brand.Danger)
+                    }
+                }
+                TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+            }
         },
     )
 }
@@ -1365,13 +2725,19 @@ private fun ZeroTotalCompletionDialog(
     online: Boolean,
     confirmEnabled: Boolean,
     onDismiss: () -> Unit,
+    onVoid: (() -> Unit)? = null,
     onConfirm: () -> Unit,
 ) {
     var confirmationConsumed by remember(checkout.orderId) { mutableStateOf(false) }
     val oneShotConfirmation = remember(checkout.orderId) {
         OneShotHeldPaymentConfirmation(checkout.orderId)
     }
-    val processing = confirmationConsumed || !confirmEnabled
+    val confirmLabel = when {
+        confirmationConsumed -> "Completion submitted once"
+        !online -> "Reconnect to complete"
+        !confirmEnabled -> "Completion unavailable"
+        else -> "COMPLETE BENEFIT · ₹0 DUE"
+    }
 
     AlertDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
@@ -1409,13 +2775,21 @@ private fun ZeroTotalCompletionDialog(
                             "queued or consumed until the server confirms it."
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (online) Brand.ForegroundMuted else Brand.GoldMuted,
+                    color = if (online) Brand.ForegroundMuted else Brand.Warning,
                 )
+                if (confirmationConsumed) {
+                    Text(
+                        "Completion was submitted once. Wait for server confirmation; do not repeat this action.",
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                        color = Brand.Information,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
         },
         confirmButton = {
             PrimaryButton(
-                enabled = !processing && online,
+                enabled = !confirmationConsumed && confirmEnabled && online,
                 onClick = {
                     if (oneShotConfirmation.tryConsume(checkout.orderId)) {
                         confirmationConsumed = true
@@ -1423,14 +2797,18 @@ private fun ZeroTotalCompletionDialog(
                     }
                 },
             ) {
-                Text(
-                    if (confirmationConsumed) "Completing once…"
-                    else "Complete member benefit · ₹0 due",
-                )
+                Text(confirmLabel)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                onVoid?.let {
+                    TextButton(onClick = it, enabled = !confirmationConsumed) {
+                        Text("Void bill", color = Brand.Danger)
+                    }
+                }
+                TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
+            }
         },
     )
 }
@@ -1454,7 +2832,7 @@ private fun QtyButton(label: String, enabled: Boolean, onClick: () -> Unit) {
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = Brand.Gold, fontWeight = FontWeight.Bold)
+        Text(label, color = Brand.Foreground, fontWeight = FontWeight.Bold)
     }
 }
 

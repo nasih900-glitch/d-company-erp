@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,8 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -24,16 +27,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,9 +57,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.DecimalField
 import cloud.dcompany.erp.ui.components.ErpButton
-import cloud.dcompany.erp.ui.components.PageHeader
+import cloud.dcompany.erp.ui.components.FormDialog
+import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.theme.Brand
@@ -106,7 +112,7 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    CircularProgressIndicator(color = Brand.Gold)
+                    CircularProgressIndicator(color = Brand.Information)
                     Text("Reading the books…", color = Brand.ForegroundMuted)
                 }
             }
@@ -159,25 +165,42 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
 
 @Composable
 private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
-    Column {
-        PageHeader(
-            title = "Finance",
-            subtitle = "Management P&L (receipt basis), expenses, assets and partner capital.",
-            eyebrow = "Financial control",
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            actions = {
+    Column(
+        Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+    ) {
+        ActionBar(
+            leading = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        if (state.loaded) "Financial controls" else "Loading financial records",
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Review receipt-basis figures or refresh the current books.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            },
+            trailing = {
                 ErpButton(
-                    text = "Refresh",
+                    text = if (state.loading) "Refreshing" else "Refresh",
                     onClick = onRefresh,
                     intent = ActionIntent.Secondary,
                     busy = state.loading,
+                    leadingIcon = Icons.Default.Refresh,
                 )
             },
         )
         if (state.loading && state.loaded) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
-                color = Brand.Gold,
+                color = Brand.Information,
                 trackColor = Brand.Surface,
             )
         }
@@ -207,8 +230,8 @@ private fun OverviewTab(state: FinanceUiState) {
         )
 
         if (state.periodIdle) {
-            Panel(border = Brand.GoldMuted) {
-                Text("No activity this period yet.", color = Brand.Gold, fontWeight = FontWeight.Bold)
+            Panel(border = Brand.BorderSubtle) {
+                Text("No activity this period yet.", color = Brand.Foreground, fontWeight = FontWeight.Bold)
                 Text(
                     "Take an order in POS, or record an expense in the web ERP, and real " +
                         "numbers appear here.",
@@ -224,7 +247,6 @@ private fun OverviewTab(state: FinanceUiState) {
                     "Net revenue (after GST)",
                     pl.revenueMinor.asRupees(),
                     "sales, once any GST collected is taken out",
-                    if (pl.revenueMinor > 0) Tone.Good else Tone.Default,
                 ),
                 StatSpec(
                     "Cost of goods sold",
@@ -235,9 +257,9 @@ private fun OverviewTab(state: FinanceUiState) {
                     "Gross profit",
                     pl.grossProfitMinor.asRupees(),
                     "net revenue less cost of goods sold",
-                    if (pl.grossProfitMinor < 0) Tone.Bad else Tone.Good,
+                    if (pl.grossProfitMinor < 0) Tone.Bad else Tone.Default,
                 ),
-                StatSpec("Expenses", pl.expensesMinor.asRupees(), "running costs this period", Tone.Bad),
+                StatSpec("Expenses", pl.expensesMinor.asRupees(), "running costs this period"),
                 StatSpec(
                     "Operating profit",
                     pl.netProfitMinor.asRupees(),
@@ -253,7 +275,7 @@ private fun OverviewTab(state: FinanceUiState) {
                         } else {
                             "profitable this period"
                         },
-                        if (it.burnRateMinor > 0) Tone.Bad else Tone.Good,
+                        if (it.burnRateMinor > 0) Tone.Bad else Tone.Default,
                     )
                 },
                 distributable?.let {
@@ -261,7 +283,6 @@ private fun OverviewTab(state: FinanceUiState) {
                         "Safe to distribute right now",
                         it.safeToDistributeMinor.asRupees(),
                         "after the reserve, capped by cash on hand · detail in Partners",
-                        if (it.safeToDistributeMinor > 0) Tone.Good else Tone.Default,
                     )
                 },
             ),
@@ -366,17 +387,19 @@ private fun OverviewTab(state: FinanceUiState) {
 @Composable
 private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
     if (state.expenses.isEmpty()) {
-        Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
             if (!canWrite) {
                 ViewOnlyNotice("Expenses are view only — ask an owner or manager to record one.")
             }
-            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
-                Button(onClick = vm::openExpenseForm, enabled = canWrite) { Text("New expense") }
-            }
+            ExpenseActionBar(state, canWrite, vm::openExpenseForm)
             EmptyBlock(
                 title = "No expenses recorded yet",
                 body = "Record one here, or in the web ERP (Finance → Expenses) — either " +
                     "way it shows up here, newest first.",
+                modifier = Modifier.weight(1f),
             )
         }
         return
@@ -393,19 +416,7 @@ private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             }
         }
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "${countLabel(state.expenses.size, "expense")} · Total: " +
-                        state.expenseTotalMinor.asRupees(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
-                )
-                Button(onClick = vm::openExpenseForm, enabled = canWrite) { Text("New expense") }
-            }
+            ExpenseActionBar(state, canWrite, vm::openExpenseForm)
         }
         items(state.expenses, key = { it.id }) { expense ->
             ExpenseRow(expense, state.categoryName(expense.categoryId))
@@ -414,6 +425,35 @@ private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             Note("Every expense ever recorded, newest first. Editing or deleting one still needs the web ERP.")
         }
     }
+}
+
+@Composable
+private fun ExpenseActionBar(state: FinanceUiState, canWrite: Boolean, onCreate: () -> Unit) {
+    ActionBar(
+        leading = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    countLabel(state.expenses.size, "expense"),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Recorded total ${state.expenseTotalMinor.asRupees()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
+        },
+        trailing = {
+            ErpButton(
+                text = "New expense",
+                onClick = onCreate,
+                enabled = canWrite,
+                leadingIcon = Icons.Default.Add,
+            )
+        },
+    )
 }
 
 @Composable
@@ -461,7 +501,7 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                 Text(
                     paidViaLabel(expense.paidVia),
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Gold,
+                    color = Brand.ForegroundMuted,
                 )
             }
         }
@@ -474,18 +514,20 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
 @Composable
 private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
     if (state.assets.isEmpty()) {
-        Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
             if (!canWrite) {
                 ViewOnlyNotice("Assets are view only — ask an owner to register equipment.")
             }
-            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
-                Button(onClick = vm::openAssetForm, enabled = canWrite) { Text("New asset") }
-            }
+            AssetActionBar(state, canWrite, vm::openAssetForm)
             EmptyBlock(
                 title = "No assets registered yet",
                 body = "PS5s, TVs, the projector, kitchen equipment — register one here, " +
                     "or in the web ERP (Finance → Assets). Depreciation is computed " +
                     "straight-line automatically.",
+                modifier = Modifier.weight(1f),
             )
         }
         return
@@ -502,24 +544,44 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boo
             }
         }
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    countLabel(state.assets.size, "asset"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Brand.ForegroundMuted,
-                )
-                Button(onClick = vm::openAssetForm, enabled = canWrite) { Text("New asset") }
-            }
+            AssetActionBar(state, canWrite, vm::openAssetForm)
         }
         items(state.assets, key = { it.id }) { asset -> AssetRow(asset) }
         item {
             Note("Straight-line depreciation, recomputed as of today on every load. Editing an asset still needs the web ERP.")
         }
     }
+}
+
+@Composable
+private fun AssetActionBar(state: FinanceUiState, canWrite: Boolean, onCreate: () -> Unit) {
+    ActionBar(
+        leading = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    countLabel(state.assets.size, "asset"),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Straight-line depreciation is calculated automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Brand.ForegroundMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        trailing = {
+            ErpButton(
+                text = "New asset",
+                onClick = onCreate,
+                enabled = canWrite,
+                leadingIcon = Icons.Default.Add,
+            )
+        },
+    )
 }
 
 @Composable
@@ -561,7 +623,7 @@ private fun AssetRow(asset: Asset) {
                 Text(
                     "Depreciated ${asset.accumulatedDepreciationMinor.asRupees()}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Brand.Gold,
+                    color = Brand.ForegroundMuted,
                 )
             }
         }
@@ -653,7 +715,7 @@ private fun DistributableCard(d: DistributableProfit) {
             Text(
                 d.safeToDistributeMinor.asRupees(),
                 style = MaterialTheme.typography.headlineMedium,
-                color = if (d.safeToDistributeMinor > 0) Brand.Good else Brand.Foreground,
+                color = Brand.Foreground,
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -683,7 +745,7 @@ private fun DistributableCard(d: DistributableProfit) {
                 "Limited by cash on hand, not by profit — some of what you've earned is " +
                     "currently tied up in stock or equipment.",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.Gold,
+                color = Brand.Warning,
             )
         }
         Text(
@@ -758,18 +820,18 @@ private fun PartnerCard(
                 Text(
                     share.distributableShareMinor.asRupees(),
                     style = MaterialTheme.typography.titleLarge,
-                    color = if (share.distributableShareMinor > 0) Brand.Good else Brand.Foreground,
+                    color = Brand.Foreground,
                 )
             }
         }
         Spacer(Modifier.height(10.dp))
-        OutlinedButton(
+        ErpButton(
+            text = "Record capital movement",
             onClick = onRecordCapital,
             enabled = canRecordCapital,
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Record capital movement")
-        }
+            intent = ActionIntent.Secondary,
+        )
     }
 }
 
@@ -802,18 +864,25 @@ private fun StatGrid(
     columns: Int = 3,
     surface: Color = Brand.Surface,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        stats.chunked(columns).forEach { rowStats ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                rowStats.forEach { stat ->
-                    StatCard(stat, surface, Modifier.weight(1f))
-                }
-                // Keeps the last, short row's cards the same width as the rest.
-                repeat(columns - rowStats.size) {
-                    Spacer(Modifier.weight(1f))
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val responsiveColumns = when {
+            maxWidth < 560.dp -> 1
+            maxWidth < 900.dp -> minOf(columns, 2)
+            else -> columns
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            stats.chunked(responsiveColumns).forEach { rowStats ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    rowStats.forEach { stat ->
+                        StatCard(stat, surface, Modifier.weight(1f))
+                    }
+                    // Keeps the last, short row's cards the same width as the rest.
+                    repeat(responsiveColumns - rowStats.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -877,7 +946,7 @@ private fun PlRow(
             if (less) abs(valueMinor).asRupees() else valueMinor.asRupees(),
             style = MaterialTheme.typography.bodyLarge,
             color = when {
-                less -> Brand.Danger
+                less && valueMinor != 0L -> Brand.Danger
                 valueMinor < 0 -> Brand.Danger
                 else -> Brand.Foreground
             },
@@ -954,7 +1023,7 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
 private fun ErrorBlock(message: String, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(
-            modifier = Modifier.width(420.dp).padding(24.dp),
+            modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(0.9f).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -972,10 +1041,10 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun EmptyBlock(title: String, body: String) {
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
+private fun EmptyBlock(title: String, body: String, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize(), Alignment.Center) {
         Column(
-            modifier = Modifier.width(420.dp).padding(24.dp),
+            modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(0.9f).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1048,11 +1117,18 @@ private fun FinancePendingRow(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            if (rejected) TextButton(onClick = onRetry, enabled = canRetry) { Text("Retry") }
+            if (rejected) {
+                ErpButton(
+                    text = "Retry",
+                    onClick = onRetry,
+                    enabled = canRetry,
+                    intent = ActionIntent.Secondary,
+                )
+            }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
-            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            color = if (rejected) Brand.Danger else Brand.Warning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1068,7 +1144,7 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
+        ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet)
     }
 }
 
@@ -1286,116 +1362,4 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
 // per-screen rather than promoted to a shared file (same convention as
 // InventoryModels.kt's own local Branch DTO).
 // ============================================================================
-@Composable
-private fun FormDialog(
-    title: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.width(480.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun PickerField(
-    label: String,
-    selectedLabel: String,
-    options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("▾", color = Brand.Gold)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(
-                        text = { Text(text) },
-                        onClick = {
-                            open = false
-                            onSelect(id)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DecimalField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { onValueChange(filterDecimal(it)) },
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = modifier.fillMaxWidth(),
-    )
-}
-
-private fun filterDecimal(raw: String): String {
-    val sb = StringBuilder()
-    var dotSeen = false
-    for (c in raw) {
-        when {
-            c.isDigit() -> sb.append(c)
-            c == '.' && !dotSeen -> {
-                dotSeen = true
-                sb.append(c)
-            }
-        }
-    }
-    return sb.toString()
-}
-
 private fun nowIso(): String = java.time.OffsetDateTime.now().toString()

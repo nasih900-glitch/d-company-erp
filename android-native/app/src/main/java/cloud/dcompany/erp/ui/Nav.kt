@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +81,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.R
@@ -255,7 +257,10 @@ private fun WorkspaceSidebar(
                     Text(
                         "PLAY. EAT. CONNECT.",
                         color = Brand.GoldMuted,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            letterSpacing = 0.sp,
+                        ),
                         maxLines = 1,
                     )
                 }
@@ -468,7 +473,7 @@ private fun WorkspaceHeader(
 
         if (!compact) {
             Row(
-                Modifier.widthIn(min = 280.dp, max = 380.dp).height(44.dp)
+                Modifier.widthIn(min = 280.dp, max = 380.dp).heightIn(min = 48.dp)
                     .clip(Radius.shapeMd).background(Brand.Surface)
                     .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
                     .clickable(onClick = onOpenCommand)
@@ -591,7 +596,7 @@ private fun DestinationCommandDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxWidth(0.92f).widthIn(max = 560.dp),
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
@@ -627,7 +632,7 @@ private fun DestinationCommandDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                             ) {
-                                Icon(destination.icon, contentDescription = null, tint = Brand.Gold)
+                                Icon(destination.icon, contentDescription = null, tint = Brand.ForegroundMuted)
                                 Column(Modifier.weight(1f)) {
                                     Text(destination.label, color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
                                     Text(
