@@ -8,15 +8,33 @@ app_metadata="${android_root}/app/build/outputs/apk/debug/output-metadata.json"
 test_metadata="${android_root}/app/build/outputs/apk/androidTest/debug/output-metadata.json"
 app_package='cloud.dcompany.erp'
 device_serial=''
+deep_idle_initial_state=''
 
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
 
 cleanup_alarm_environment() {
   [[ -n "${device_serial}" ]] || return 0
+  local cleanup_status=0
+  local restored_state=''
   # A failed/aborted deep-idle test must not poison subsequent CI steps.
-  adb -s "${device_serial}" shell dumpsys deviceidle unforce >/dev/null 2>&1 || true
-  adb -s "${device_serial}" shell dumpsys battery reset >/dev/null 2>&1 || true
+  adb -s "${device_serial}" shell dumpsys deviceidle unforce >/dev/null 2>&1 || cleanup_status=1
+  adb -s "${device_serial}" shell dumpsys battery reset >/dev/null 2>&1 || cleanup_status=1
+  if [[ "${deep_idle_initial_state}" == '0' ]]; then
+    adb -s "${device_serial}" shell dumpsys deviceidle disable deep >/dev/null 2>&1 || cleanup_status=1
+  fi
+  if [[ -n "${deep_idle_initial_state}" ]]; then
+    restored_state="$(read_deep_idle_enabled)" || cleanup_status=1
+    if [[ "${restored_state}" != "${deep_idle_initial_state}" ]]; then
+      echo "Deep-idle state was not restored (expected ${deep_idle_initial_state}, got ${restored_state:-unreadable})." >&2
+      cleanup_status=1
+    fi
+  fi
+  return "${cleanup_status}"
+}
+
+read_deep_idle_enabled() {
+  adb -s "${device_serial}" shell dumpsys deviceidle enabled deep | tr -d '[:space:]'
 }
 
 capture_diagnostics() {
@@ -107,6 +125,16 @@ install_alarm_test_apks() {
   adb -s "${device_serial}" shell pm clear "${app_package}" >/dev/null || return 1
   adb -s "${device_serial}" shell pm grant "${app_package}" android.permission.POST_NOTIFICATIONS || return 1
   adb -s "${device_serial}" shell appops set "${app_package}" SCHEDULE_EXACT_ALARM allow || return 1
+  # The API-35 default AOSP image can boot with deep idle disabled. Enable it
+  # only for this disposable-emulator proof, verify the controller state, and
+  # restore the original value in cleanup_alarm_environment.
+  if [[ "${deep_idle_initial_state}" == '0' ]]; then
+    adb -s "${device_serial}" shell dumpsys deviceidle enable deep || return 1
+  fi
+  [[ "$(read_deep_idle_enabled)" == '1' ]] || {
+    echo "Deep idle is not enabled after CI alarm setup." >&2
+    return 1
+  }
 }
 
 trap cleanup_alarm_environment EXIT
@@ -135,7 +163,13 @@ rm -f "${alarm_report}" "${alarm_setup_report}"
 
 if [[ "${status}" -eq 0 ]]; then
   alarm_setup_status=0
-  if ! install_alarm_test_apks 2>&1 | tee "${alarm_setup_report}"; then
+  if ! deep_idle_initial_state="$(read_deep_idle_enabled)"; then
+    echo "Could not read the emulator's initial deep-idle state." | tee "${alarm_setup_report}" >&2
+    alarm_setup_status=1
+  elif [[ "${deep_idle_initial_state}" != '0' && "${deep_idle_initial_state}" != '1' ]]; then
+    echo "Unexpected deep-idle state: ${deep_idle_initial_state:-empty}." | tee "${alarm_setup_report}" >&2
+    alarm_setup_status=1
+  elif ! install_alarm_test_apks 2>&1 | tee "${alarm_setup_report}"; then
     alarm_setup_status=1
   fi
   if [[ "${alarm_setup_status}" -ne 0 ]]; then
@@ -157,6 +191,13 @@ if [[ "${status}" -eq 0 ]]; then
 fi
 
 if [[ "${status}" -ne 0 ]]; then
+  capture_diagnostics
+fi
+
+trap - EXIT
+if ! cleanup_alarm_environment; then
+  echo "Could not restore the emulator after alarm instrumentation." >&2
+  status=1
   capture_diagnostics
 fi
 

@@ -146,13 +146,24 @@ class AlarmLifecycleDeviceTest {
         assumeTrue(Build.VERSION.SDK_INT < Build.VERSION_CODES.S || manager?.canScheduleExactAlarms() == true)
         assumeFalse((context.applicationContext as DCompanyApp).tokens.hasSession())
         OperationalAlarmRegistry.cancelAll(context)
-        val alarm = alarm(triggerAtMillis = System.currentTimeMillis() + 12_000L)
         val preferences = context.getSharedPreferences(
             "dcompany_alarm_schedule",
             Context.MODE_PRIVATE,
         )
 
         try {
+            shell("dumpsys battery unplug")
+            val idleResult = shell("dumpsys deviceidle force-idle deep")
+            assertTrue(
+                "Could not force the emulator into deep idle: ${idleResult.trim()}",
+                idleResult.contains("forced", ignoreCase = true),
+            )
+            assertEquals("IDLE", shell("dumpsys deviceidle get deep").trim())
+
+            // Enter idle before scheduling the near-term wakeup. DeviceIdleController
+            // intentionally refuses to enter deep idle when a wake-from-idle alarm is
+            // already inside its minimum-time-to-alarm window.
+            val alarm = alarm(triggerAtMillis = System.currentTimeMillis() + 12_000L)
             OperationalAlarmRegistry.reconcile(
                 context = context,
                 kind = OperationalAlarmKind.HELD_ORDER,
@@ -163,10 +174,6 @@ class AlarmLifecycleDeviceTest {
                     .getStringSet(OperationalAlarmKind.HELD_ORDER.storageKey, emptySet())
                     .orEmpty(),
             )
-
-            shell("dumpsys battery unplug")
-            val idleResult = shell("dumpsys deviceidle force-idle")
-            assumeTrue(idleResult.contains("forced", ignoreCase = true))
 
             val timeoutAt = SystemClock.elapsedRealtime() + 25_000L
             while (
