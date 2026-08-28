@@ -46,6 +46,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.ShiftAccess
@@ -863,31 +864,52 @@ internal fun DenominationCountGrid(
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val denominationRows = DENOMINATIONS.chunked(3)
     if (compactLayout) {
-        Column(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            denominationRows.forEach { rowNotes ->
-                DenominationCountRow(rowNotes, counts, onCountChange, enabled)
+        BoxWithConstraints(modifier.fillMaxWidth()) {
+            val columnCount = denominationColumnCount(maxWidth)
+            val denominationRows = DENOMINATIONS.chunked(columnCount)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                denominationRows.forEach { rowNotes ->
+                    DenominationCountRow(
+                        rowNotes = rowNotes,
+                        columnCount = columnCount,
+                        counts = counts,
+                        onCountChange = onCountChange,
+                        enabled = enabled,
+                    )
+                }
             }
         }
     } else {
+        val denominationRows = DENOMINATIONS.chunked(3)
         LazyColumn(
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(denominationRows) { rowNotes ->
-                DenominationCountRow(rowNotes, counts, onCountChange, enabled)
+                DenominationCountRow(
+                    rowNotes = rowNotes,
+                    columnCount = 3,
+                    counts = counts,
+                    onCountChange = onCountChange,
+                    enabled = enabled,
+                )
             }
         }
     }
 }
 
+/** Keep both 48dp stepper buttons and the editable count visible at compact widths. */
+internal fun denominationColumnCount(availableWidth: Dp): Int = when {
+    availableWidth >= 720.dp -> 3
+    availableWidth >= 480.dp -> 2
+    else -> 1
+}
+
 @Composable
 private fun DenominationCountRow(
     rowNotes: List<Long>,
+    columnCount: Int,
     counts: Map<Long, String>,
     onCountChange: (Long, String) -> Unit,
     enabled: Boolean,
@@ -921,7 +943,7 @@ private fun DenominationCountRow(
                 )
             }
         }
-        repeat(3 - rowNotes.size) { Spacer(Modifier.weight(1f)) }
+        repeat(columnCount - rowNotes.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 

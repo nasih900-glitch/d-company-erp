@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.shift
 
+import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftSource
@@ -11,6 +12,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShiftClosePresentationTest {
+
+    @Test
+    fun `denomination columns preserve editable stepper width on compact screens`() {
+        assertEquals(1, denominationColumnCount(320.dp))
+        assertEquals(1, denominationColumnCount(479.dp))
+        assertEquals(2, denominationColumnCount(480.dp))
+        assertEquals(2, denominationColumnCount(719.dp))
+        assertEquals(3, denominationColumnCount(720.dp))
+        assertEquals(3, denominationColumnCount(872.dp))
+    }
 
     @Test
     fun `pending close displays durable saved count instead of empty draft`() {

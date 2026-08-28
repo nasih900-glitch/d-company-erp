@@ -2069,6 +2069,19 @@ internal fun LegacyPackageResolutionDialog(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
+                if (exactAttemptLocked) {
+                    Text(
+                        "The exact saved decision is locked because the previous response may have committed. " +
+                            "Retrying uses the same request and cannot create a second receipt. " +
+                            if (requiresOwnerStepUp) {
+                                "The same protected owner who made the first attempt must approve this retry."
+                            } else {
+                                ""
+                            },
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 OperationalBanner(
                     title = if (requiresOwnerStepUp) {
                         "Protected-owner approval required"
@@ -2123,19 +2136,6 @@ internal fun LegacyPackageResolutionDialog(
                     Text(
                         "Previous attempt: $failure",
                         color = Brand.Danger,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-                if (exactAttemptLocked) {
-                    Text(
-                        "The exact saved decision is locked because the previous response may have committed. " +
-                            "Retrying uses the same request and cannot create a second receipt. " +
-                            if (requiresOwnerStepUp) {
-                                "The same protected owner who made the first attempt must approve this retry."
-                            } else {
-                                ""
-                            },
-                        color = Brand.Warning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
