@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.service.notification.StatusBarNotification
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.DCompanyApp
@@ -100,9 +101,14 @@ class AlarmLifecycleDeviceTest {
         val alarm = alarm()
         try {
             assertTrue(OperationalAlarmNotifier.post(context, alarm))
-            val posted = manager.activeNotifications.firstOrNull { it.tag == alarm.tag }
+            val posted = waitForActiveNotification(manager, alarm.tag)
             assertNotNull(posted)
             assertEquals(Notification.VISIBILITY_PRIVATE, posted?.notification?.visibility)
+            manager.cancel(alarm.tag, 0)
+            assertTrue(
+                "The posted operational alarm was not cancelled",
+                waitForNotificationCancellation(manager, alarm.tag),
+            )
         } finally {
             manager.cancel(alarm.tag, 0)
             (context.applicationContext as DCompanyApp).notificationRoutes.clearAllForScopeChange()
@@ -208,6 +214,30 @@ class AlarmLifecycleDeviceTest {
             .use { it.readText() }
     }
 
+    private fun waitForActiveNotification(
+        manager: NotificationManager,
+        tag: String,
+    ): StatusBarNotification? {
+        val timeoutAt = SystemClock.elapsedRealtime() + NOTIFICATION_STATE_TIMEOUT_MILLIS
+        do {
+            manager.activeNotifications.firstOrNull { it.tag == tag }?.let { return it }
+            SystemClock.sleep(NOTIFICATION_POLL_INTERVAL_MILLIS)
+        } while (SystemClock.elapsedRealtime() < timeoutAt)
+        return manager.activeNotifications.firstOrNull { it.tag == tag }
+    }
+
+    private fun waitForNotificationCancellation(
+        manager: NotificationManager,
+        tag: String,
+    ): Boolean {
+        val timeoutAt = SystemClock.elapsedRealtime() + NOTIFICATION_STATE_TIMEOUT_MILLIS
+        do {
+            if (manager.activeNotifications.none { it.tag == tag }) return true
+            SystemClock.sleep(NOTIFICATION_POLL_INTERVAL_MILLIS)
+        } while (SystemClock.elapsedRealtime() < timeoutAt)
+        return manager.activeNotifications.none { it.tag == tag }
+    }
+
     private fun alarm(triggerAtMillis: Long = 1_000L) = OperationalAlarmSpec(
         kind = OperationalAlarmKind.HELD_ORDER,
         tag = "held-order-alarm-device-test",
@@ -216,4 +246,9 @@ class AlarmLifecycleDeviceTest {
         body = "This bill has waited at least 15 minutes.",
         target = OperationalNotificationTarget.HeldOrder("alarm-device-test"),
     )
+
+    private companion object {
+        const val NOTIFICATION_STATE_TIMEOUT_MILLIS = 5_000L
+        const val NOTIFICATION_POLL_INTERVAL_MILLIS = 50L
+    }
 }
