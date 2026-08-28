@@ -227,7 +227,7 @@ def _fail(message: str) -> NoReturn:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--tag", required=True, help="Git release tag, for example v3.0.5"
+        "--tag", required=True, help="Git release tag, for example v3.0.6"
     )
     parser.add_argument("--build-file", type=Path, default=DEFAULT_BUILD_FILE)
     parser.add_argument(

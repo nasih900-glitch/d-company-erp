@@ -49,6 +49,8 @@ export interface MeResponse {
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];
+  /** Exact post-override permissions returned by current backends. */
+  effective_permissions?: string[];
 }
 
 export interface TokenPair {
@@ -905,6 +907,145 @@ export interface ExpenseCategoryDTO {
   name: string;
   code: string | null;
 }
+
+// =============================================================================
+// BUG REPORTS — staff submissions and the system-admin triage inbox
+// =============================================================================
+export type BugReportCategory =
+  | 'crash'
+  | 'incorrect_data'
+  | 'payment'
+  | 'sync'
+  | 'permission'
+  | 'performance'
+  | 'usability'
+  | 'other';
+
+export type BugReportSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export type BugReportStatus =
+  | 'open'
+  | 'acknowledged'
+  | 'in_progress'
+  | 'resolved'
+  | 'closed'
+  | 'rejected';
+
+export type BugReportConnectivity = 'online' | 'offline' | 'unknown';
+
+/**
+ * Deliberately allowlisted device context. The inbox never renders arbitrary
+ * diagnostic objects, tokens, request headers, or server traces.
+ */
+export interface BugReportClientContextDTO {
+  platform: string;
+  app_version: string | null;
+  version_code: number | null;
+  device_model: string | null;
+  os_version: string | null;
+  current_screen: string | null;
+  branch_id: string | null;
+  branch_name: string | null;
+  terminal_id: string | null;
+  terminal_name: string | null;
+  connectivity: BugReportConnectivity;
+  occurred_at: string | null;
+}
+
+export interface BugReportDTO {
+  id: string;
+  category: BugReportCategory;
+  severity: BugReportSeverity;
+  title: string;
+  description: string;
+  reproduction_steps: string | null;
+  expected_behavior: string | null;
+  actual_behavior: string | null;
+  client_context: BugReportClientContextDTO;
+  status: BugReportStatus;
+  internal_resolution_note: string | null;
+  reporter: {
+    user_id: string;
+    name: string;
+    email: string;
+  };
+  status_changed_at: string | null;
+  status_changed_by: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
+export interface BugReportSummaryDTO {
+  counts_by_status: Record<BugReportStatus, number>;
+  counts_by_severity: Record<BugReportSeverity, number>;
+}
+
+export interface BugReportListResponseDTO {
+  items: BugReportDTO[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: BugReportSummaryDTO;
+}
+
+export interface BugReportListParams {
+  q?: string;
+  status?: BugReportStatus;
+  severity?: BugReportSeverity;
+  category?: BugReportCategory;
+  platform?: string;
+  reporter_user_id?: string;
+  branch_id?: string;
+  terminal_id?: string;
+  created_from?: string;
+  created_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface BugReportCreateDTO {
+  category: BugReportCategory;
+  severity: BugReportSeverity;
+  title: string;
+  description: string;
+  reproduction_steps?: string | null;
+  expected_behavior?: string | null;
+  actual_behavior?: string | null;
+  client_context: {
+    platform: string;
+    app_version?: string | null;
+    version_code?: number | null;
+    device_model?: string | null;
+    os_version?: string | null;
+    current_screen?: string | null;
+    branch_id?: string | null;
+    branch_name?: string | null;
+    terminal_id?: string | null;
+    terminal_name?: string | null;
+    connectivity?: BugReportConnectivity;
+    occurred_at?: string | null;
+  };
+}
+
+export interface BugReportUpdateDTO {
+  status?: BugReportStatus;
+  internal_resolution_note?: string | null;
+}
+
+export const bugReports = {
+  submit: (body: BugReportCreateDTO, idempotencyKey: string) =>
+    api.post<BugReportDTO>('/bug-reports', body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data),
+  list: (params?: BugReportListParams, signal?: AbortSignal) =>
+    api.get<BugReportListResponseDTO>('/bug-reports', { params, signal }).then((r) => r.data),
+  get: (id: string, signal?: AbortSignal) =>
+    api.get<BugReportDTO>(`/bug-reports/${id}`, { signal }).then((r) => r.data),
+  update: (id: string, body: BugReportUpdateDTO) =>
+    api.patch<BugReportDTO>(`/bug-reports/${id}`, body).then((r) => r.data),
+};
 
 // =============================================================================
 // AUDIT — full change history

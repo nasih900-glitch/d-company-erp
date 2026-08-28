@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.0.5` |
-| Version code | `6` |
+| Version name | `3.0.6` |
+| Version code | `7` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
@@ -22,10 +22,10 @@ build.
 
 ## Release status
 
-Version `3.0.5` (`6`) is a source release candidate, not a declared production
-rollout. No final `3.0.5` APK/AAB has been built for distribution yet. Any
+Version `3.0.6` (`7`) is a source release candidate, not a declared production
+rollout. No final `3.0.6` APK/AAB has been built for distribution yet. Any
 locally signed output remains a candidate until the repository release gates
-pass. Earlier emulator evidence does not transfer to this new build: `3.0.5`
+pass. Earlier emulator evidence does not transfer to this new build: `3.0.6`
 currently has no emulator or physical-device acceptance proof. Nothing from
 this Android release preparation has deployed the backend or web ERP to
 production.

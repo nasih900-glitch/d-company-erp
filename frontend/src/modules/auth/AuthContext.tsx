@@ -34,6 +34,7 @@ interface Me {
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];
+  effective_permissions?: string[];
 }
 
 const AUTH_BOOT_TIMEOUT_MS = 8000;

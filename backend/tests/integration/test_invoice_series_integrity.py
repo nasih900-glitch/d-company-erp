@@ -100,6 +100,24 @@ def _insert_order_with_invoice(
     return order_id
 
 
+def _insert_invoice_counter(
+    connection: psycopg.Connection,
+    *,
+    branch_id: UUID,
+    last_seq: int,
+    fiscal_year: str = "2026-27",
+    series: str = "invoice",
+) -> UUID:
+    counter_id = uuid4()
+    connection.execute(
+        "INSERT INTO in_invoice_counters "
+        "(id, branch_id, fiscal_year, series, last_seq) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (counter_id, branch_id, fiscal_year, series, last_seq),
+    )
+    return counter_id
+
+
 @pytest.mark.integration
 def test_0046_rejects_ambiguous_legacy_branch_prefixes() -> None:
     with _disposable_database("erp_invoice_series_collision") as database_url:
@@ -125,6 +143,228 @@ def test_0046_rejects_ambiguous_legacy_branch_prefixes() -> None:
         output = blocked.stdout + blocked.stderr
         assert blocked.returncode != 0
         assert "branch prefixes collide within a company" in output
+
+
+@pytest.mark.integration
+def test_0046_repairs_only_history_free_deleted_branch_collision() -> None:
+    """Keep Main's live counter identity and repair the empty Airport tombstone."""
+
+    with _disposable_database("erp_invoice_series_deleted_airport") as database_url:
+        upgraded = _run_alembic(database_url, "upgrade", "0045")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            company_id, main_branch_id = _seed_branch(
+                connection,
+                company_name="D Company",
+                branch_name="Main Branch",
+                code="",
+            )
+            _, airport_branch_id = _seed_branch(
+                connection,
+                company_id=company_id,
+                company_name="D Company",
+                branch_name="Airport",
+                code="",
+            )
+            counter_id = _insert_invoice_counter(
+                connection,
+                branch_id=main_branch_id,
+                last_seq=20,
+            )
+            connection.execute(
+                "UPDATE branches SET deleted_at = %s WHERE id = %s",
+                (datetime(2026, 8, 27, 13, tzinfo=UTC), airport_branch_id),
+            )
+            airport_evidence = connection.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM in_invoice_counters WHERE branch_id = %s), "
+                "(SELECT COUNT(*) FROM orders WHERE branch_id = %s), "
+                "(SELECT COUNT(*) FROM refunds WHERE branch_id = %s), "
+                "(SELECT COUNT(*) FROM membership_payments WHERE branch_id = %s), "
+                "(SELECT COUNT(*) FROM membership_refund_settlements "
+                " WHERE branch_id = %s), "
+                "(SELECT COUNT(*) FROM shifts WHERE branch_id = %s), "
+                "(SELECT COUNT(*) FROM stations WHERE branch_id = %s)",
+                (airport_branch_id,) * 7,
+            ).fetchone()
+            assert airport_evidence == (0, 0, 0, 0, 0, 0, 0)
+            connection.commit()
+
+        migrated = _run_alembic(database_url, "upgrade", "0046")
+        assert migrated.returncode == 0, migrated.stdout + migrated.stderr
+
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            branches = dict(
+                connection.execute(
+                    "SELECT id, invoice_series_code FROM branches "
+                    "WHERE company_id = %s",
+                    (company_id,),
+                ).fetchall()
+            )
+            assert branches == {
+                main_branch_id: "MN",
+                airport_branch_id: "AI",
+            }
+            assert connection.execute(
+                "SELECT branch_id, fiscal_year, series, last_seq "
+                "FROM in_invoice_counters WHERE id = %s",
+                (counter_id,),
+            ).fetchone() == (main_branch_id, "2026-27", "invoice", 20)
+            assert connection.execute(
+                "SELECT deleted_at IS NOT NULL FROM branches WHERE id = %s",
+                (airport_branch_id,),
+            ).fetchone() == (True,)
+
+        # The old schema would derive MN for both branches again. Operational
+        # rollback must therefore keep 0046 applied instead of discarding the
+        # explicit repair.
+        blocked = _run_alembic(database_url, "downgrade", "0045")
+        output = blocked.stdout + blocked.stderr
+        assert blocked.returncode != 0
+        assert "explicit invoice series differs from branch code" in output
+
+
+@pytest.mark.integration
+def test_0046_skips_used_name_prefix_for_deleted_branch_fallback() -> None:
+    """An empty tombstone must not take a prefix owned by another counter."""
+
+    with _disposable_database("erp_invoice_series_used_fallback") as database_url:
+        upgraded = _run_alembic(database_url, "upgrade", "0045")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            company_id, main_branch_id = _seed_branch(
+                connection,
+                company_name="D Company",
+                branch_name="Main Branch",
+                code="",
+            )
+            _, used_ai_branch_id = _seed_branch(
+                connection,
+                company_id=company_id,
+                company_name="D Company",
+                branch_name="Archive Identity",
+                code="AI",
+            )
+            _, airport_branch_id = _seed_branch(
+                connection,
+                company_id=company_id,
+                company_name="D Company",
+                branch_name="Airport",
+                code="",
+            )
+            main_counter_id = _insert_invoice_counter(
+                connection,
+                branch_id=main_branch_id,
+                last_seq=20,
+            )
+            used_counter_id = _insert_invoice_counter(
+                connection,
+                branch_id=used_ai_branch_id,
+                last_seq=3,
+            )
+            connection.execute(
+                "UPDATE branches SET deleted_at = %s WHERE id IN (%s, %s)",
+                (
+                    datetime(2026, 8, 27, 13, tzinfo=UTC),
+                    used_ai_branch_id,
+                    airport_branch_id,
+                ),
+            )
+            connection.commit()
+
+        migrated = _run_alembic(database_url, "upgrade", "0046")
+        assert migrated.returncode == 0, migrated.stdout + migrated.stderr
+
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            branches = dict(
+                connection.execute(
+                    "SELECT id, invoice_series_code FROM branches "
+                    "WHERE company_id = %s",
+                    (company_id,),
+                ).fetchall()
+            )
+            assert branches == {
+                main_branch_id: "MN",
+                used_ai_branch_id: "AI",
+                airport_branch_id: "AA",
+            }
+            assert connection.execute(
+                "SELECT id, last_seq FROM in_invoice_counters "
+                "WHERE id IN (%s, %s) ORDER BY id",
+                (main_counter_id, used_counter_id),
+            ).fetchall() == sorted(
+                [(main_counter_id, 20), (used_counter_id, 3)]
+            )
+
+
+@pytest.mark.integration
+def test_0046_refuses_to_reassign_deleted_counter_owner() -> None:
+    """Soft deletion never makes a used fiscal prefix safe to renumber."""
+
+    with _disposable_database("erp_invoice_series_deleted_counter_owner") as database_url:
+        upgraded = _run_alembic(database_url, "upgrade", "0045")
+        assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            company_id, main_branch_id = _seed_branch(
+                connection,
+                company_name="D Company",
+                branch_name="Main Branch",
+                code="",
+            )
+            _, airport_branch_id = _seed_branch(
+                connection,
+                company_id=company_id,
+                company_name="D Company",
+                branch_name="Airport",
+                code="",
+            )
+            _insert_invoice_counter(
+                connection,
+                branch_id=main_branch_id,
+                last_seq=20,
+            )
+            _insert_invoice_counter(
+                connection,
+                branch_id=airport_branch_id,
+                last_seq=1,
+            )
+            connection.execute(
+                "UPDATE branches SET deleted_at = %s WHERE id = %s",
+                (datetime(2026, 8, 27, 13, tzinfo=UTC), airport_branch_id),
+            )
+            connection.commit()
+
+        blocked = _run_alembic(database_url, "upgrade", "0046")
+        output = blocked.stdout + blocked.stderr
+        assert blocked.returncode != 0
+        assert "branch prefixes collide within a company" in output
+
+        with psycopg.connect(_sync_dsn(database_url)) as connection:
+            branches = dict(
+                connection.execute(
+                    "SELECT id, code FROM branches WHERE id IN (%s, %s)",
+                    (main_branch_id, airport_branch_id),
+                ).fetchall()
+            )
+            assert branches == {
+                main_branch_id: "",
+                airport_branch_id: "",
+            }
+            counters = dict(
+                connection.execute(
+                    "SELECT branch_id, last_seq FROM in_invoice_counters "
+                    "WHERE branch_id IN (%s, %s)",
+                    (main_branch_id, airport_branch_id),
+                ).fetchall()
+            )
+            assert counters == {
+                main_branch_id: 20,
+                airport_branch_id: 1,
+            }
+            assert connection.execute(
+                "SELECT deleted_at IS NOT NULL FROM branches WHERE id = %s",
+                (airport_branch_id,),
+            ).fetchone() == (True,)
 
 
 @pytest.mark.integration

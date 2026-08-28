@@ -4,9 +4,11 @@ import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
   Wallet, ScanLine, Users, BarChart3, LogOut, Tv, Settings, Menu, X, FileText,
   ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
+  MessageSquareWarning,
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
+import { hasAdminSystemAccess } from '@/lib/admin-access';
 import { rolesLabel } from '@/lib/roles';
 import InstallButton from './InstallButton';
 import ConnectivityBanner from './ConnectivityBanner';
@@ -55,6 +57,9 @@ const NAV_GROUPS = [
     items: [
       { to: '/staff',    label: 'Staff',     Icon: Users },
       { to: '/audit',    label: 'Audit Log', Icon: ShieldCheck, protectedOnly: true },
+      {
+        to: '/bug-reports', label: 'Bug reports', Icon: MessageSquareWarning, adminSystemOnly: true,
+      },
       { to: '/settings', label: 'Settings',  Icon: Settings },
     ],
   },
@@ -74,16 +79,18 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   // backend will 403 on (see core/permissions.py's admin.audit.read carve-out).
   const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
+  const hasSystemAccess = hasAdminSystemAccess(me);
   const accessibleModules = me?.accessible_modules;
   const isVisible = useCallback(
     (item: (typeof NAV)[number]) => {
       if ('protectedOnly' in item && !hasAuditAccess) return false;
+      if ('adminSystemOnly' in item && !hasSystemAccess) return false;
       if (item.module && !isProtectedOwner && accessibleModules && !accessibleModules.includes(item.module)) {
         return false;
       }
       return true;
     },
-    [isProtectedOwner, hasAuditAccess, accessibleModules],
+    [isProtectedOwner, hasAuditAccess, hasSystemAccess, accessibleModules],
   );
   const navGroups = useMemo(
     () => NAV_GROUPS

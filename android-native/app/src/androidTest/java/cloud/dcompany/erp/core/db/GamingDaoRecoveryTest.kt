@@ -88,7 +88,7 @@ class GamingDaoRecoveryTest {
         assertEquals(GamingSessionState.SENT, sent.state)
         assertEquals("order-4", sent.orderId)
 
-        dao.requestSessionStop("stop", stoppedAtMillis = 3_000)
+        dao.requestSessionStop("stop", stoppedAtMillis = 3_000, resolvedShiftId = null)
         assertEquals(1, dao.requestSessionSend("send"))
 
         val pushable = dao.pushableSessions().associateBy { it.localId }
@@ -217,6 +217,10 @@ class GamingDaoRecoveryTest {
             serverId = null,
             state = GamingSessionState.START_PENDING,
         ).copy(
+            // The Start request was sent with this already-resolved server
+            // shift. Older SessionRead payloads omitted shift_id, so the DAO
+            // must retain this value rather than erase the action scope.
+            shiftId = "shift-server",
             packageId = "base-60",
             packagePriceMinor = 15_000,
             packageDurationMinutes = 60,
@@ -228,7 +232,7 @@ class GamingDaoRecoveryTest {
             localId = row.localId,
             serverId = "session-confirmed",
             status = "active",
-            shiftId = "shift-server",
+            shiftId = null,
             startedAtMillis = 2_000,
             timerMinutes = 60,
             timerEndsAtMillis = 62_000,
@@ -252,7 +256,14 @@ class GamingDaoRecoveryTest {
         assertEquals(15_000L, atomicallyConfirmed.packagePriceMinor)
         assertEquals(60, atomicallyConfirmed.packageDurationMinutes)
         assertEquals("solo", atomicallyConfirmed.packageVariant)
-        assertEquals(1, dao.requestSessionStop(row.localId, stoppedAtMillis = 42_000))
+        assertEquals(
+            1,
+            dao.requestSessionStop(
+                row.localId,
+                stoppedAtMillis = 42_000,
+                resolvedShiftId = "shift-server",
+            ),
+        )
         assertEquals(42_000L, dao.localSessionById(row.localId)?.endAtMillis)
 
         dao.transitionSessionState(
@@ -262,6 +273,7 @@ class GamingDaoRecoveryTest {
         )
         dao.replaceSessionCache(listOf(serverRow("session-confirmed", status = "active", amountMinor = 0)))
         assertEquals(GamingSessionState.START_SYNCED, dao.localSessionById(row.localId)?.state)
+        assertEquals("shift-server", dao.localSessionById(row.localId)?.shiftId)
     }
 
     @Test
@@ -272,8 +284,22 @@ class GamingDaoRecoveryTest {
         )
         dao.insertLocalSession(row)
 
-        assertEquals(1, dao.requestSessionStop(row.localId, stoppedAtMillis = 42_123))
-        assertEquals(0, dao.requestSessionStop(row.localId, stoppedAtMillis = 99_999))
+        assertEquals(
+            1,
+            dao.requestSessionStop(
+                row.localId,
+                stoppedAtMillis = 42_123,
+                resolvedShiftId = row.shiftId,
+            ),
+        )
+        assertEquals(
+            0,
+            dao.requestSessionStop(
+                row.localId,
+                stoppedAtMillis = 99_999,
+                resolvedShiftId = row.shiftId,
+            ),
+        )
 
         val captured = dao.localSessionById(row.localId)!!
         assertEquals(GamingSessionState.STOP_PENDING, captured.state)
@@ -312,7 +338,14 @@ class GamingDaoRecoveryTest {
             GamingSessionState.STOP_REJECTED,
             "temporary shift conflict",
         )
-        assertEquals(1, dao.requestSessionStop(row.localId, stoppedAtMillis = 99_999))
+        assertEquals(
+            1,
+            dao.requestSessionStop(
+                row.localId,
+                stoppedAtMillis = 99_999,
+                resolvedShiftId = "shift-server",
+            ),
+        )
         val retried = dao.localSessionById(row.localId)!!
         assertEquals(GamingSessionState.STOP_PENDING, retried.state)
         assertEquals("stopping", retried.status)

@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import AppShell from '@/components/layout/AppShell';
 import RequireAuth from '@/modules/auth/RequireAuth';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { hasAdminSystemAccess } from '@/lib/admin-access';
 import { LIVE_MODE } from '@/lib/demo';
 
 const Login = lazy(() => import('@/modules/auth/Login'));
@@ -16,6 +17,7 @@ const PublicMenuScreen = lazy(() => import('@/modules/public/PublicMenuScreen'))
 const KitchenScreen = lazy(() => import('@/modules/kitchen/KitchenScreen'));
 const InsightsScreen = lazy(() => import('@/modules/insights/InsightsScreen'));
 const AuditScreen = lazy(() => import('@/modules/audit/AuditScreen'));
+const BugReportsScreen = lazy(() => import('@/modules/bug-reports/BugReportsScreen'));
 const TablesScreen = lazy(() => import('@/modules/tables/TablesScreen'));
 const ReservationsScreen = lazy(() => import('@/modules/reservations/ReservationsScreen'));
 const MenuScreen = lazy(() => import('@/modules/menu/MenuScreen'));
@@ -45,6 +47,12 @@ function Screen({ children }: { children: ReactNode }) {
 function ProtectedOwnerOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
   if (demo || me?.protected_access) return <>{children}</>;
+  return <Navigate to="/pos" replace />;
+}
+
+function AdminSystemOnly({ children }: { children: ReactNode }) {
+  const { me } = useAuth();
+  if (hasAdminSystemAccess(me)) return <>{children}</>;
   return <Navigate to="/pos" replace />;
 }
 
@@ -97,6 +105,10 @@ export default function App() {
         <Route path="/customers" element={<Screen><CustomersScreen /></Screen>} />
         <Route path="/insights" element={<Screen><InsightsScreen /></Screen>} />
         <Route path="/audit" element={<Screen><ProtectedOwnerOnly><AuditScreen /></ProtectedOwnerOnly></Screen>} />
+        <Route
+          path="/bug-reports"
+          element={<Screen><AdminSystemOnly><BugReportsScreen /></AdminSystemOnly></Screen>}
+        />
         <Route path="/analytics" element={<Screen><AnalyticsScreen /></Screen>} />
         <Route path="/reports" element={<Screen><ReportsScreen /></Screen>} />
         <Route path="/settings" element={<Screen><SettingsScreen /></Screen>} />

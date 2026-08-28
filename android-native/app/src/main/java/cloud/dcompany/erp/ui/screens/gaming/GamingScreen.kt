@@ -476,6 +476,7 @@ fun GamingScreen(
                         canReconcileLegacy = access.canReconcileLegacySessions,
                         activeShiftId = state.activeShiftId,
                         activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                        online = state.online,
                         packages = state.packages,
                         hasTransferTarget = state.stations.any { candidate ->
                             candidate.id != station.id && candidate.type == station.type &&
@@ -890,6 +891,7 @@ internal fun GamingStationCard(
     canReconcileLegacy: Boolean,
     activeShiftId: String?,
     activeShiftServerConfirmed: Boolean,
+    online: Boolean = true,
     packages: List<GamingPackage>,
     hasTransferTarget: Boolean,
     onStart: () -> Unit,
@@ -919,6 +921,11 @@ internal fun GamingStationCard(
     val actionsEnabled = canWrite && !actionInProgress
     val authority = session?.authority(activeShiftId)
     val ownsSession = authority == GamingSessionAuthority.CURRENT_SHIFT
+    val canStopSession = session?.resolvedStopShiftId(
+        activeShiftId = activeShiftId,
+        activeShiftServerConfirmed = activeShiftServerConfirmed,
+        online = online,
+    ) != null
     val matchingExtensions = matchingPackageExtensions(session, station, packages)
     val alreadySettledAtPos = session?.orderId != null
     val packageBillingSnapshotMissing = session?.isPackageBilling() == true &&
@@ -998,7 +1005,15 @@ internal fun GamingStationCard(
                 Icon(stationIcon, contentDescription = null, tint = statusColor(presentation.tone), modifier = Modifier.size(23.dp))
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                StationBody(presentation, station, session, nowMillis, activeShiftId)
+                StationBody(
+                    presentation,
+                    station,
+                    session,
+                    nowMillis,
+                    activeShiftId,
+                    activeShiftServerConfirmed,
+                    online,
+                )
             }
         }
 
@@ -1086,7 +1101,7 @@ internal fun GamingStationCard(
                 ErpButton(
                     text = if (presentation.state == StationVisualState.StopFailed) "Retry stop" else "Stop & calculate",
                     onClick = { session?.let(onStop) },
-                    enabled = actionsEnabled && ownsSession,
+                    enabled = actionsEnabled && canStopSession,
                     busy = busyHere,
                     intent = ActionIntent.Destructive,
                     leadingIcon = Icons.Filled.StopCircle,
@@ -1176,7 +1191,7 @@ internal fun GamingStationCard(
             StationVisualState.Starting -> ErpButton(
                 text = "Stop & save end",
                 onClick = { session?.let(onStop) },
-                enabled = actionsEnabled && ownsSession && session?.canRequestStop() == true,
+                enabled = actionsEnabled && canStopSession && session?.canRequestStop() == true,
                 busy = busyHere,
                 intent = ActionIntent.Destructive,
                 leadingIcon = Icons.Filled.StopCircle,
@@ -1300,6 +1315,8 @@ private fun StationBody(
     session: GameSession?,
     nowMillis: Long,
     activeShiftId: String?,
+    activeShiftServerConfirmed: Boolean,
+    online: Boolean,
 ) {
     when (presentation.state) {
         StationVisualState.Available -> {
@@ -1448,7 +1465,12 @@ private fun StationBody(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                sessionAuthorityMessage(running, activeShiftId)?.let { ownership ->
+                sessionAuthorityMessage(
+                    running,
+                    activeShiftId,
+                    activeShiftServerConfirmed,
+                    online,
+                )?.let { ownership ->
                     Text(
                         ownership,
                         color = Brand.Warning,
@@ -2758,12 +2780,25 @@ internal fun estimatedCurrentAmountMinor(session: GameSession, nowMillis: Long):
     return (billableMinutes * rate + 59L) / 60L
 }
 
-internal fun sessionAuthorityMessage(session: GameSession, activeShiftId: String?): String? =
+internal fun sessionAuthorityMessage(
+    session: GameSession,
+    activeShiftId: String?,
+    activeShiftServerConfirmed: Boolean = false,
+    online: Boolean = false,
+): String? =
     when (session.authority(activeShiftId)) {
         GamingSessionAuthority.CURRENT_SHIFT -> null
         GamingSessionAuthority.NO_OPEN_SHIFT -> "Open this terminal's POS shift to manage this session."
         GamingSessionAuthority.OTHER_SHIFT -> "Managed by the POS shift or terminal that started it."
-        GamingSessionAuthority.UNKNOWN -> "Session ownership is not verified yet. Refresh Gaming."
+        GamingSessionAuthority.UNKNOWN -> if (
+            session.resolvedStopShiftId(activeShiftId, activeShiftServerConfirmed, online) != null
+        ) {
+            "This server omitted the session shift. The server will verify this terminal's confirmed open shift."
+        } else if (activeShiftServerConfirmed && !online) {
+            "The session shift could not be verified while offline. Reconnect and refresh Gaming."
+        } else {
+            "The session shift could not be verified. Refresh Gaming."
+        }
     }
 
 private fun formatElapsed(millis: Long): String {

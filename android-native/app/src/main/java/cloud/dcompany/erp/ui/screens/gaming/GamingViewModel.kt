@@ -62,6 +62,8 @@ data class GamingUiState(
     val activeShiftId: String? = null,
     /** Gaming starts are backdated, so a locally queued shift is not sufficient authority yet. */
     val activeShiftServerConfirmed: Boolean = false,
+    /** Effective ERP connectivity: validated network plus a reachable backend. */
+    val online: Boolean = false,
     /** Durable paid extensions which still require confirmation or staff review. */
     val packageExtensionActions: List<PackageExtensionActionUi> = emptyList(),
 ) {
@@ -445,6 +447,34 @@ internal fun GameSession.authority(activeShiftId: String?): GamingSessionAuthori
 }
 
 /**
+ * Resolve the shift that may own a normal Stop capture.
+ *
+ * Older deployed servers omitted `SessionRead.shift_id`. That omission must
+ * not strand an otherwise authoritative session, but it also must not turn a
+ * cross-terminal card into writable work. The compatibility path is therefore
+ * limited to a server-known session plus this tablet's server-confirmed open
+ * shift; the backend still verifies the real session/shift/terminal before it
+ * accepts the queued Stop. A known different shift always remains blocked.
+ */
+internal fun GameSession.resolvedStopShiftId(
+    activeShiftId: String?,
+    activeShiftServerConfirmed: Boolean,
+    online: Boolean,
+): String? = when (authority(activeShiftId)) {
+    GamingSessionAuthority.CURRENT_SHIFT -> shiftId
+    GamingSessionAuthority.UNKNOWN -> activeShiftId?.takeIf {
+        online && activeShiftServerConfirmed && localState in setOf(
+            null,
+            GamingSessionState.START_SYNCED,
+            GamingSessionState.STOP_REJECTED,
+        )
+    }
+    GamingSessionAuthority.OTHER_SHIFT,
+    GamingSessionAuthority.NO_OPEN_SHIFT,
+    -> null
+}
+
+/**
  * The legacy repair is best-effort startup hygiene; it must never prevent the
  * authoritative gaming pull from running. Cancellation is different: it means
  * the ViewModel is being disposed and must retain structured-concurrency
@@ -531,10 +561,11 @@ class GamingViewModel : ViewModel() {
         ) { actionState, currentShift, packageExtensions ->
             Triple(actionState, currentShift, packageExtensions)
         }),
-        db.syncMetaDao().observe("gaming"),
-    ) { stationData, cache, local, ui, meta ->
+        combine(db.syncMetaDao().observe("gaming"), appCtx.connectivity.online, ::Pair),
+    ) { stationData, cache, local, ui, syncState ->
         val (stations, packages) = stationData
         val (actionState, currentShift, packageExtensions) = ui
+        val (meta, online) = syncState
         // Overlay an in-flight local stop/send on the older server cache row;
         // otherwise a successfully stopped session still renders "active"
         // and its ENDED_UNBILLED handoff disappears until another pull.
@@ -565,6 +596,7 @@ class GamingViewModel : ViewModel() {
             activeShiftServerConfirmed = currentShift?.let { shift ->
                 shift.server != null || shift.local?.serverShiftId != null
             } == true,
+            online = online,
             packageExtensionActions = packageExtensions.map {
                 PackageExtensionActionUi(
                     actionId = it.actionId,
@@ -682,7 +714,7 @@ class GamingViewModel : ViewModel() {
                 "This session belongs to another POS shift or terminal. Use the terminal that started it, " +
                     "or ask a protected owner to reconcile it after the session ends."
             GamingSessionAuthority.UNKNOWN ->
-                "Session ownership is not verified yet. Refresh Gaming before $action."
+                "The session shift could not be verified. Refresh Gaming before $action."
         }
         error.value = message
         return false
@@ -807,7 +839,25 @@ class GamingViewModel : ViewModel() {
         if (!session.canRequestStop()) return
         if (!requireIdle()) return
         if (!requireNoPackageExtension(session, "stopping the session")) return
-        if (!requireCurrentShiftSession(session, "stopping it")) return
+        val currentState = state.value
+        val resolvedStopShiftId = session.resolvedStopShiftId(
+            activeShiftId = currentState.activeShiftId,
+            activeShiftServerConfirmed = currentState.activeShiftServerConfirmed,
+            online = currentState.online,
+        )
+        if (resolvedStopShiftId == null) {
+            if (
+                session.authority(currentState.activeShiftId) == GamingSessionAuthority.UNKNOWN &&
+                currentState.activeShiftServerConfirmed &&
+                !currentState.online
+            ) {
+                error.value =
+                    "The session shift could not be verified while offline. Reconnect and refresh Gaming before stopping it."
+                return
+            }
+            requireCurrentShiftSession(session, "stopping it")
+            return
+        }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         // Capture exactly once at the employee's tap. If the network returns
         // ten minutes later, billing still ends at this timestamp.
@@ -824,7 +874,11 @@ class GamingViewModel : ViewModel() {
                         if (existing != null) {
                             // Already an outbox row for this session (this device started
                             // it, possibly still unsynced) — just flag the stop.
-                            changed = dao.requestSessionStop(existing.localId, stoppedAtMillis) != 0
+                            changed = dao.requestSessionStop(
+                                existing.localId,
+                                stoppedAtMillis,
+                                resolvedStopShiftId,
+                            ) != 0
                         } else {
                             // A session this device only ever saw via the cache (started
                             // on another terminal). serverId is already known, so
@@ -845,7 +899,11 @@ class GamingViewModel : ViewModel() {
                                     },
                                     billableMinutes = session.billableMinutes,
                                     amountMinor = session.amountMinor,
-                                    shiftId = session.shiftId,
+                                    // Legacy APIs may omit the response field.
+                                    // The compatibility gate above allows this
+                                    // fallback only for a server-known session
+                                    // and server-confirmed current shift.
+                                    shiftId = resolvedStopShiftId,
                                     customerPhone = session.customerPhone,
                                     ratePerHourMinor = session.ratePerHourMinor,
                                     packageId = session.packageId,

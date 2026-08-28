@@ -607,7 +607,7 @@ async def delete_terminal(
     except IntegrityError as exc:
         await session.rollback()
         raise ConflictError(
-            "cannot delete terminal because it has shift, order, or audit history"
+            "cannot delete terminal because it has operational, audit, or support history"
         ) from exc
 
 

@@ -36,10 +36,18 @@ import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import {
+  canManageGamingSessions,
   canOfferGamingReconciliation,
   isGamingActiveBillingModeVerified,
   isGamingSessionOwnedByCurrentShift,
+  resolveGamingStopShiftId,
 } from './gaming-reconciliation';
+import {
+  createGamingWriteDispatcher,
+  GamingMutationButton,
+  GamingWriteOnly,
+  type GamingWriteDispatcher,
+} from './gaming-write-controls';
 import {
   PaidExtensionPersistenceError,
   clearPaidExtensionAttempt,
@@ -158,7 +166,24 @@ function notifyTimerExpired(stationName: string) {
 export default function GamingScreen() {
   const notifications = useNotifications();
   const { me, terminalId, terminalReady } = useAuth();
-  const canManageStations = true;
+  // accessible_modules includes read-only roles, so it is not sufficient for
+  // Start/Stop. Use the backend's exact post-override permission; retain the
+  // protected operational bypass for compatibility with older /auth/me.
+  const canManageStations = canManageGamingSessions({
+    liveMode: LIVE_MODE,
+    effectivePermissions: me?.effective_permissions,
+    protectedAccess: me?.protected_access,
+    roles: me?.roles,
+  });
+
+  function requireGamingWrite(actionTitle: string): GamingWriteDispatcher {
+    return createGamingWriteDispatcher(canManageStations, () => {
+      notifications.error(
+        'Gaming is view-only for this account. Ask an owner to enable the Gaming module for this role.',
+        { title: actionTitle },
+      );
+    }, gaming);
+  }
   const [stations, setStations] = useState<StationDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -508,6 +533,31 @@ export default function GamingScreen() {
     return false;
   }
 
+  function stopShiftIdFor(session: LocalSession): string | null {
+    return resolveGamingStopShiftId({
+      liveMode: LIVE_MODE,
+      currentShiftId,
+      currentShiftConfirmed: Boolean(
+        terminalReady && currentShiftId && shiftContextError === null,
+      ),
+      sessionShiftId: session.shift_id,
+      serverSessionKnown: Boolean(session.backend_session_id),
+    });
+  }
+
+  function requireStopShift(session: LocalSession): string | null {
+    const shiftId = stopShiftIdFor(session);
+    if (shiftId) return shiftId;
+    notifications.error(
+      session.shift_id && currentShiftId && session.shift_id !== currentShiftId
+        ? 'This session belongs to another terminal shift. Stop it from the terminal that owns that shift.'
+        : (shiftContextError
+            ?? 'The session shift could not be verified. Refresh Gaming and confirm this terminal has a server-confirmed open shift.'),
+      { title: 'Session shift not verified' },
+    );
+    return null;
+  }
+
   function requireVerifiedActiveBillingMode(session: LocalSession, action: string): boolean {
     if (isGamingActiveBillingModeVerified(session.billing_mode)) return true;
     notifications.error(
@@ -588,6 +638,8 @@ export default function GamingScreen() {
     pkg?: { packageId: string; extraControllers: number },
     phone = '',
   ) {
+    const write = requireGamingWrite('Cannot start session');
+    if (!write.allowed) return;
     const timerMinutes = pkg ? null : pendingDuration[st.id] ?? null;
     let backendId: string | undefined;
     let authoritativeStartAt = Date.now();
@@ -614,7 +666,7 @@ export default function GamingScreen() {
         if (pkg && !selectedPackage) {
           throw new Error('That gaming package is no longer available. Refresh Gaming and choose again.');
         }
-        const r = await gaming.startSession({
+        const r = await write.dispatch('startSession', {
           station_id: st.id,
           shift_id: shiftId,
           customer_name: customer || undefined,
@@ -684,13 +736,15 @@ export default function GamingScreen() {
   }
 
   async function setStationTimer(st: StationDTO, minutes: number | null) {
+    const write = requireGamingWrite('Cannot update timer');
+    if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s) return;
     if (!requireCurrentShiftOwnership(s, 'change its timer')) return;
     if (!requireVerifiedActiveBillingMode(s, 'change its timer')) return;
     const timerEndsAt = minutes ? s.start_at + minutes * 60000 : null;
     if (LIVE_MODE && s.backend_session_id) {
-      try { await gaming.setSessionTimer(s.backend_session_id, minutes); }
+      try { await write.dispatch('setSessionTimer', s.backend_session_id, minutes); }
       catch (e) {
         notifications.error((e as Error).message, { title: 'Could not update timer' });
         return;
@@ -706,6 +760,8 @@ export default function GamingScreen() {
   }
 
   async function extendTimer(st: StationDTO, addMinutes: number) {
+    const write = requireGamingWrite('Cannot extend timer');
+    if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s) return;
     if (!requireCurrentShiftOwnership(s, 'extend it')) return;
@@ -714,7 +770,8 @@ export default function GamingScreen() {
     if (LIVE_MODE && s.backend_session_id) {
       setExtendingSession(st.id);
       try {
-        const r = await gaming.extendSessionTimer(
+        const r = await write.dispatch(
+          'extendSessionTimer',
           s.backend_session_id,
           s.timer_minutes ?? null,
           addMinutes,
@@ -763,6 +820,8 @@ export default function GamingScreen() {
     isReplay: boolean;
     expectedReplayAttempt?: PaidExtensionAttempt;
   }) {
+    const write = requireGamingWrite('Cannot add paid extension');
+    if (!write.allowed) return;
     if (extensionBusyRef.current) return;
     extensionBusyRef.current = true;
     let persistedAttempt: PaidExtensionAttempt | null = null;
@@ -772,7 +831,8 @@ export default function GamingScreen() {
     setPaidExtensionReceiptRevision((revision) => revision + 1);
     const send = async (savedAttempt: PaidExtensionAttempt) => {
       persistedAttempt = savedAttempt;
-      return gaming.extendSessionWithPackage(
+      return write.dispatch(
+        'extendSessionWithPackage',
         savedAttempt.sessionId,
         {
           id: savedAttempt.packageId,
@@ -920,6 +980,8 @@ export default function GamingScreen() {
   }
 
   async function replayOrphanPaidExtension(attempt: PaidExtensionAttempt) {
+    const write = requireGamingWrite('Cannot replay paid extension');
+    if (!write.allowed) return;
     if (
       !me?.user_id
       || !me.company_id
@@ -948,6 +1010,8 @@ export default function GamingScreen() {
   // paid action (buy an extension package), not a free timer bump like
   // extendTimer above (which only applies to open-ended, no-package sessions).
   async function extendPackageSession(st: StationDTO, extensionPackageId: string) {
+    const write = requireGamingWrite('Cannot add paid extension');
+    if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s?.backend_session_id) return;
     if (extensionBusyRef.current) return;
@@ -1044,6 +1108,8 @@ export default function GamingScreen() {
   }
 
   function pauseSession(st: StationDTO) {
+    const write = requireGamingWrite('Cannot pause session');
+    if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s || s.status === 'paused') return;
     setSessions((map) => ({
@@ -1052,6 +1118,8 @@ export default function GamingScreen() {
     }));
   }
   function resumeSession(st: StationDTO) {
+    const write = requireGamingWrite('Cannot resume session');
+    if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s || s.status !== 'paused' || !s.pause_started_at) return;
     setSessions((map) => ({
@@ -1066,7 +1134,10 @@ export default function GamingScreen() {
   async function stopSession(st: StationDTO) {
     const s = sessions[st.id];
     if (!s) return;
-    if (!requireCurrentShiftOwnership(s, 'stop it')) return;
+    const write = requireGamingWrite('Cannot stop session');
+    if (!write.allowed) return;
+    const resolvedStopShiftId = requireStopShift(s);
+    if (!resolvedStopShiftId) return;
     if (!requireVerifiedActiveBillingMode(s, 'stop it')) return;
     if (!requirePaidExtensionResolved(s, 'stopped')) return;
     const elapsedMs = Date.now() - s.start_at - s.pausedMs;
@@ -1079,7 +1150,8 @@ export default function GamingScreen() {
     });
     if (LIVE_MODE && s.backend_session_id) {
       try {
-        const ended = await gaming.stopSession(
+        const ended = await write.dispatch(
+          'stopSession',
           s.backend_session_id,
           `gaming-session-stop:${createOperationKey()}`,
         );
@@ -1095,6 +1167,10 @@ export default function GamingScreen() {
           ...map,
           [st.id]: {
             ...s,
+            // Older APIs omitted shift_id on both Start and Stop. Retain the
+            // independently verified current-terminal shift so the resulting
+            // Payment Due row can use the normal scoped POS handoff.
+            shift_id: ended.shift_id ?? s.shift_id ?? resolvedStopShiftId,
             status: 'ended',
             ended_minutes: elapsedMin,
             ended_amount_minor: authoritativeAmount,
@@ -1128,6 +1204,8 @@ export default function GamingScreen() {
   }
 
   async function sendToPos(st: StationDTO) {
+    const write = requireGamingWrite('Cannot send session to POS');
+    if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s?.backend_session_id) return;
     if (!requireCurrentShiftOwnership(s, 'send it to POS')) return;
@@ -1140,7 +1218,7 @@ export default function GamingScreen() {
       return next;
     });
     try {
-      await gaming.sendToPos(s.backend_session_id);
+      await write.dispatch('sendToPos', s.backend_session_id);
       setSessions((map) => {
         const next = { ...map };
         delete next[st.id];
@@ -1160,6 +1238,8 @@ export default function GamingScreen() {
   }
 
   async function prepareReconciliation(st: StationDTO) {
+    const write = requireGamingWrite('Cannot reconcile session');
+    if (!write.allowed) return;
     if (!me?.audit_access || resolvingReconciliation || reconciling) return;
     const session = sessions[st.id];
     if (!session?.backend_session_id || !requirePaidExtensionResolved(session, 'reconciled')) return;
@@ -1178,12 +1258,15 @@ export default function GamingScreen() {
     pending: PendingReconciliation,
     reason: string,
   ) {
+    const write = requireGamingWrite('Cannot reconcile session');
+    if (!write.allowed) return;
     const current = sessions[pending.station.id];
     if (!current?.backend_session_id || !reason.trim()) return;
     if (!requirePaidExtensionResolved(current, 'reconciled')) return;
     setReconciling(pending.station.id);
     try {
-      const result = await gaming.reconcileToPos(
+      const result = await write.dispatch(
+        'reconcileToPos',
         current.backend_session_id,
         pending.targetShiftId,
         reason.trim(),
@@ -1213,6 +1296,8 @@ export default function GamingScreen() {
   }
 
   async function cancelSession(st: StationDTO, reason: string) {
+    const write = requireGamingWrite('Cannot cancel session');
+    if (!write.allowed) return;
     const current = sessions[st.id];
     if (!current?.backend_session_id) return;
     if (!requireCurrentShiftOwnership(current, 'cancel it')) return;
@@ -1225,7 +1310,7 @@ export default function GamingScreen() {
       return next;
     });
     try {
-      await gaming.cancelSession(current.backend_session_id, reason.trim());
+      await write.dispatch('cancelSession', current.backend_session_id, reason.trim());
       setSessions((all) => {
         const next = { ...all };
         delete next[st.id];
@@ -1248,10 +1333,12 @@ export default function GamingScreen() {
   }
 
   async function confirmDeleteStation() {
+    const write = requireGamingWrite('Cannot delete station');
+    if (!write.allowed) return;
     if (!deleteStationTarget || deleteStationBusy) return;
     setDeleteStationBusy(true);
     try {
-      await gaming.deleteStation(deleteStationTarget.id);
+      await write.dispatch('deleteStation', deleteStationTarget.id);
       const stationCode = deleteStationTarget.code;
       setDeleteStationTarget(null);
       await load();
@@ -1264,6 +1351,8 @@ export default function GamingScreen() {
   }
 
   async function repairMissingBilling(station: StationDTO, amountMinor: number, reason: string) {
+    const write = requireGamingWrite('Cannot repair session billing');
+    if (!write.allowed) return;
     const session = sessions[station.id];
     if (!me?.audit_access || !session?.backend_session_id || session.ended_amount_minor != null) {
       notifications.error(
@@ -1284,7 +1373,8 @@ export default function GamingScreen() {
     repairKeyRef.current = key;
     setRepairingBilling(station.id);
     try {
-      const repaired = await gaming.repairSessionBilling(
+      const repaired = await write.dispatch(
+        'repairSessionBilling',
         session.backend_session_id,
         amountMinor,
         normalizedReason,
@@ -1349,23 +1439,35 @@ export default function GamingScreen() {
         </div>
         <div className="flex gap-2">
           <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
-          {canManageStations && (
+          <GamingWriteOnly allowed={canManageStations}>
             <button className={`btn ${manageMode ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setManageMode(!manageMode)}>
               <Settings size={14}/> {manageMode ? 'Done' : 'Manage'}
             </button>
-          )}
-          {canManageStations && manageMode && (
+          </GamingWriteOnly>
+          <GamingWriteOnly allowed={canManageStations && manageMode}>
             <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
               <Plus size={14}/> New station
             </button>
-          )}
+          </GamingWriteOnly>
         </div>
       </header>
 
       {error && (
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
           <AlertCircle size={14}/> {error}
+        </div>
+      )}
+
+      {!canManageStations && (
+        <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <div>
+            <div className="font-semibold text-accent-gold">Gaming is view-only</div>
+            <div className="mt-1 text-fg-muted">
+              You can review stations and sessions, but this account does not have gaming.write. Ask an owner to enable the Gaming module for this role.
+            </div>
+          </div>
         </div>
       )}
 
@@ -1411,7 +1513,8 @@ export default function GamingScreen() {
                         Saved {attempt.packageDurationMinutes}-minute extension · original shift retained
                       </div>
                     </div>
-                    <button
+                    <GamingMutationButton
+                      canManageSessions={canManageStations}
                       className="btn btn-ghost !py-1.5 border-accent-gold/50 text-accent-gold"
                       disabled={extendingSession !== null}
                       onClick={() => { void replayOrphanPaidExtension(attempt); }}
@@ -1419,7 +1522,7 @@ export default function GamingScreen() {
                       {extendingSession === attempt.sessionId
                         ? <Loader2 size={12} className="animate-spin"/>
                         : <RefreshCw size={12}/>} Replay exact receipt
-                    </button>
+                    </GamingMutationButton>
                   </div>
                 ))}
               </div>
@@ -1482,6 +1585,7 @@ export default function GamingScreen() {
               ),
             );
             const sessionOwned = session ? ownsCurrentShift(session) : true;
+            const resolvedStopShiftId = session ? stopShiftIdFor(session) : null;
             const paidExtensionRecovery = session?.backend_session_id
               ? paidExtensionRecoveryBySession[session.backend_session_id]
               : undefined;
@@ -1492,9 +1596,13 @@ export default function GamingScreen() {
               hasSavedAttempt: Boolean(savedPaidExtension),
               hasRecoveryError: Boolean(paidExtensionRecoveryError),
             });
-            const sessionScopeMessage = currentShiftId
-              ? 'This session belongs to another or no-longer-current terminal shift. It is view-only here; continue it from the owning terminal.'
-              : (shiftContextError ?? 'This terminal has no verified open shift, so existing sessions are view-only.');
+            const sessionScopeMessage = !canManageStations
+              ? 'Gaming is view-only for this account. An owner can enable the Gaming module for this role.'
+              : session && !session.shift_id && resolvedStopShiftId
+              ? 'This server omitted the session shift. End session is available because this terminal has a confirmed open shift; the server will verify it before saving.'
+              : currentShiftId
+                ? 'This session belongs to another or no-longer-current terminal shift. It is view-only here; continue it from the owning terminal.'
+                : (shiftContextError ?? 'This terminal has no verified open shift, so existing sessions are view-only.');
 
             return (
               <div key={st.id} className={`card ${session ? 'border-accent/40' : ''}`}>
@@ -1525,7 +1633,7 @@ export default function GamingScreen() {
                   )}
                 </div>
 
-                {session && !sessionOwned && (
+                {session && (!sessionOwned || !canManageStations) && (
                   <div className="mb-3 rounded-lg border border-accent-gold/30 bg-accent-gold/10 p-2.5 text-xs text-accent-gold flex items-start gap-1.5">
                     <AlertCircle size={12} className="mt-0.5 shrink-0"/>
                     {sessionScopeMessage}
@@ -1546,7 +1654,8 @@ export default function GamingScreen() {
                       </div>
                     </div>
                     {savedPaidExtension && (
-                      <button
+                      <GamingMutationButton
+                        canManageSessions={canManageStations}
                         className="btn btn-ghost mt-2 w-full !py-1.5 border-accent-gold/50 text-accent-gold"
                         disabled={extendingSession !== null}
                         onClick={() => { void extendPackageSession(st, savedPaidExtension.packageId); }}
@@ -1554,7 +1663,7 @@ export default function GamingScreen() {
                         {extendingSession === st.id
                           ? <Loader2 size={12} className="animate-spin"/>
                           : <RefreshCw size={12}/>} Retry exact saved extension
-                      </button>
+                      </GamingMutationButton>
                     )}
                   </div>
                 )}
@@ -1595,27 +1704,32 @@ export default function GamingScreen() {
                     </div>
                     <div className="space-y-2">
                       <div className="grid grid-cols-[1fr_auto] gap-2">
-                        <button className="btn btn-primary"
+                        <GamingMutationButton
+                          canManageSessions={canManageStations}
+                          className="btn btn-primary"
                           disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
                           onClick={() => sendToPos(st)}>
                           {sendingToPos === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
                             : <Send size={14}/>} Send to POS
-                        </button>
-                        <button className="btn btn-ghost text-accent-bad"
+                        </GamingMutationButton>
+                        <GamingMutationButton
+                          canManageSessions={canManageStations}
+                          className="btn btn-ghost text-accent-bad"
                           disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
                           title="Cancel with an audit reason"
                           onClick={() => setCancelStationTarget(st)}>
                           {cancelling === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
                             : <Ban size={14}/>} Cancel
-                        </button>
+                        </GamingMutationButton>
                       </div>
                       {(canOfferGamingReconciliation({
                         auditAccess: Boolean(me?.audit_access),
                         rejectionCode: sendErrors[st.id]?.code,
                       }) || Boolean(me?.audit_access && !sessionOwned)) && (
-                        <button
+                        <GamingMutationButton
+                          canManageSessions={canManageStations}
                           className="btn btn-ghost w-full border-accent-gold/50 text-accent-gold"
                           disabled={Boolean(
                             sendingToPos === st.id
@@ -1630,10 +1744,11 @@ export default function GamingScreen() {
                           {resolvingReconciliation === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
                             : <RefreshCw size={14}/>} Reconcile to current shift
-                        </button>
+                        </GamingMutationButton>
                       )}
                       {billingMissing && me?.audit_access && (
-                        <button
+                        <GamingMutationButton
+                          canManageSessions={canManageStations}
                           className="btn btn-ghost w-full border-accent-bad/50 text-accent-bad"
                           disabled={paidExtensionLifecycleBlocked || repairingBilling !== null}
                           onClick={() => {
@@ -1644,7 +1759,7 @@ export default function GamingScreen() {
                           {repairingBilling === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
                             : <AlertCircle size={14}/>} Owner repair billing
-                        </button>
+                        </GamingMutationButton>
                       )}
                     </div>
                   </>
@@ -1708,7 +1823,9 @@ export default function GamingScreen() {
                                 <span className="text-[10px] text-accent-gold">Owner review required</span>
                               ) : session.billing_mode === 'package' ? (
                                 extensionOptions.length > 0 ? extensionOptions.map((ext) => (
-                                  <button key={ext.id}
+                                  <GamingMutationButton
+                                    canManageSessions={canManageStations}
+                                    key={ext.id}
                                     className="chip text-[10px] !border-accent-gold/50 text-accent-gold hover:!border-accent-gold"
                                     disabled={Boolean(
                                       extendingSession !== null
@@ -1734,22 +1851,26 @@ export default function GamingScreen() {
                                     ) : savedPaidExtension?.packageId === ext.id
                                       ? `Retry +${ext.duration_minutes}m`
                                       : `+${ext.duration_minutes}m · ${inr(ext.price_minor)}`}
-                                  </button>
+                                  </GamingMutationButton>
                                 )) : (
                                   <span className="text-[10px] text-fg-muted">No extension for this package</span>
                                 )
                               ) : (
                                 <>
-                                  <button className="chip text-[10px] hover:border-accent"
+                                  <GamingMutationButton
+                                    canManageSessions={canManageStations}
+                                    className="chip text-[10px] hover:border-accent"
                                     disabled={!sessionOwned || paidExtensionLifecycleBlocked || extendingSession !== null}
                                     onClick={() => { void extendTimer(st, 15); }} title="Add 15 minutes">
                                     +15m
-                                  </button>
-                                  <button className="text-fg-muted hover:text-accent-bad p-0.5"
+                                  </GamingMutationButton>
+                                  <GamingMutationButton
+                                    canManageSessions={canManageStations}
+                                    className="text-fg-muted hover:text-accent-bad p-0.5"
                                     disabled={!sessionOwned || paidExtensionLifecycleBlocked || extendingSession !== null}
                                     onClick={() => setStationTimer(st, null)} title="Clear timer">
                                     <X size={13}/>
-                                  </button>
+                                  </GamingMutationButton>
                                 </>
                               )}
                             </div>
@@ -1763,11 +1884,14 @@ export default function GamingScreen() {
                           ) : (
                             <div className="flex gap-1">
                               {[30, 60, 120].map((m) => (
-                                <button key={m} className="chip text-[10px] hover:border-accent"
+                                <GamingMutationButton
+                                  canManageSessions={canManageStations}
+                                  key={m}
+                                  className="chip text-[10px] hover:border-accent"
                                   disabled={!sessionOwned || paidExtensionLifecycleBlocked || extendingSession !== null}
                                   onClick={() => { void extendTimer(st, m); }}>
                                   +{m >= 60 ? `${m / 60}h` : `${m}m`}
-                                </button>
+                                </GamingMutationButton>
                               ))}
                             </div>
                           )}
@@ -1776,19 +1900,29 @@ export default function GamingScreen() {
                     </div>
                     <div className="flex gap-2">
                       {!LIVE_MODE && (session.status === 'active' ? (
-                        <button className="btn btn-ghost flex-1" onClick={() => pauseSession(st)}>
+                        <GamingMutationButton
+                          canManageSessions={canManageStations}
+                          className="btn btn-ghost flex-1"
+                          onClick={() => pauseSession(st)}
+                        >
                           <Pause size={14}/> Pause
-                        </button>
+                        </GamingMutationButton>
                       ) : (
-                        <button className="btn btn-ghost flex-1" onClick={() => resumeSession(st)}>
+                        <GamingMutationButton
+                          canManageSessions={canManageStations}
+                          className="btn btn-ghost flex-1"
+                          onClick={() => resumeSession(st)}
+                        >
                           <PlayCircle size={14}/> Resume
-                        </button>
+                        </GamingMutationButton>
                       ))}
-                      <button className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
-                        disabled={!sessionOwned || legacyBillingAmbiguous || paidExtensionLifecycleBlocked}
+                      <GamingMutationButton
+                        canManageSessions={canManageStations}
+                        className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
+                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || paidExtensionLifecycleBlocked}
                         onClick={() => stopSession(st)}>
                         <Square size={14}/> End session
-                      </button>
+                      </GamingMutationButton>
                     </div>
                   </>
                 ) : variantsFor(st.type).length > 0 ? (() => {
@@ -1801,12 +1935,14 @@ export default function GamingScreen() {
                     <>
                       <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
                         className="input !py-1.5 text-xs w-full mb-2"
+                        disabled={!canManageStations}
                         value={phone}
                         onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
                       {variants.length > 1 && (
                         <div className="flex items-center gap-1.5 mb-2">
                           {variants.map((v) => (
                             <button key={v}
+                              disabled={!canManageStations}
                               className={`chip text-[11px] capitalize ${variant === v ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                               onClick={() => {
                                 setPickerVariant((s) => ({ ...s, [st.id]: v }));
@@ -1822,7 +1958,9 @@ export default function GamingScreen() {
                       )}
                       <div className="grid grid-cols-1 gap-1.5 mb-2">
                         {tiers.map((tier) => (
-                          <button key={tier.id}
+                          <GamingMutationButton
+                            canManageSessions={canManageStations}
+                            key={tier.id}
                             className="btn btn-ghost !justify-between !py-1.5 text-xs"
                             onClick={() => startSession(st, '', { packageId: tier.id, extraControllers: showControllerStepper ? controllers : 0 }, phone)}
                             disabled={!st.is_active || !packageStartRecoveryReady}
@@ -1836,7 +1974,7 @@ export default function GamingScreen() {
                                 tier.duration_minutes,
                               ))}
                             </span>
-                          </button>
+                          </GamingMutationButton>
                         ))}
                       </div>
                       {!packageStartRecoveryReady && (
@@ -1850,11 +1988,13 @@ export default function GamingScreen() {
                           <span>Extra controllers (₹30/hr, min ₹30)</span>
                           <div className="flex items-center gap-2">
                             <button className="chip !px-2 text-[11px]"
+                              disabled={!canManageStations}
                               onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.max(0, controllers - 1) }))}>
                               −
                             </button>
                             <span className="w-4 text-center font-mono">{controllers}</span>
                             <button className="chip !px-2 text-[11px]"
+                              disabled={!canManageStations}
                               onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.min(6, controllers + 1) }))}>
                               +
                             </button>
@@ -1867,17 +2007,20 @@ export default function GamingScreen() {
                   <>
                     <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
                       className="input !py-1.5 text-xs w-full mb-2"
+                      disabled={!canManageStations}
                       value={phone}
                       onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
                     <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                       {DURATION_PRESETS.map((p) => (
                         <button key={p.label}
+                          disabled={!canManageStations}
                           className={`chip text-[11px] ${(pendingDuration[st.id] ?? null) === p.minutes && customDurationFor !== st.id ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                           onClick={() => { setPendingDuration((s) => ({ ...s, [st.id]: p.minutes })); setCustomDurationFor(null); }}>
                           {p.label}
                         </button>
                       ))}
                       <button
+                        disabled={!canManageStations}
                         className={`chip text-[11px] ${customDurationFor === st.id ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                         onClick={() => setCustomDurationFor(customDurationFor === st.id ? null : st.id)}>
                         Custom
@@ -1887,6 +2030,7 @@ export default function GamingScreen() {
                       <div className="flex items-center gap-2 mb-2">
                         <input type="number" min={1} max={1440} placeholder="minutes"
                           className="input !py-1.5 text-sm flex-1"
+                          disabled={!canManageStations}
                           value={pendingDuration[st.id] ?? ''}
                           onChange={(e) => setPendingDuration((s) => ({
                             ...s, [st.id]: e.target.value ? Math.max(1, Math.min(1440, Number(e.target.value))) : null,
@@ -1894,11 +2038,14 @@ export default function GamingScreen() {
                         <span className="text-xs text-fg-muted">min</span>
                       </div>
                     )}
-                    <button className="btn btn-primary w-full" onClick={() => startSession(st, '', undefined, phone)}
+                    <GamingMutationButton
+                      canManageSessions={canManageStations}
+                      className="btn btn-primary w-full"
+                      onClick={() => startSession(st, '', undefined, phone)}
                       disabled={!st.is_active}>
                       <Play size={14}/> Start session
                       {pendingDuration[st.id] ? ` · ${pendingDuration[st.id]}m` : ''}
-                    </button>
+                    </GamingMutationButton>
                   </>
                 )}
               </div>
@@ -1907,91 +2054,102 @@ export default function GamingScreen() {
         </div>
       )}
 
-      {canManageStations && addOpen && (
-        <StationForm onClose={() => setAddOpen(false)} onSuccess={() => {
-          setAddOpen(false);
-          void load();
-          notifications.success('The gaming station was added.', { title: 'Station saved' });
-        }}/>
-      )}
-      {canManageStations && edit && (
-        <StationForm station={edit} onClose={() => setEdit(null)} onSuccess={() => {
-          setEdit(null);
-          void load();
-          notifications.success('The gaming station was updated.', { title: 'Changes saved' });
-        }}/>
-      )}
-      {pendingExtension && (
-        <ConfirmModal
-          title="Add paid extension"
-          message={(() => {
-            const session = sessions[pendingExtension.station.id];
-            const surcharge = extraControllerSurchargeMinor(
-              session?.extra_controllers ?? 0,
-              pendingExtension.extension.duration_minutes,
-            );
-            const total = pendingExtension.extension.price_minor + surcharge;
-            return surcharge > 0
-              ? `Add ${pendingExtension.extension.name} for ${inr(total)} (${inr(pendingExtension.extension.price_minor)} package + ${inr(surcharge)} controller surcharge)? This charges the customer's bill.`
-              : `Add ${pendingExtension.extension.name} for ${inr(total)}? This charges the customer's bill.`;
-          })()}
-          confirmLabel="Add extension"
-          busy={extendingSession === pendingExtension.station.id}
-          onConfirm={() => {
-            void extendPackageSession(pendingExtension.station, pendingExtension.extension.id);
-          }}
-          onCancel={() => { if (!extendingSession) setPendingExtension(null); }}
-        />
-      )}
-      {cancelStationTarget && (
-        <PromptModal
-          title={`Cancel ${cancelStationTarget.name}`}
-          label="Audit reason (required). This removes the stopped session from billing."
-          placeholder="Why is this session being cancelled?"
-          confirmLabel="Cancel session"
-          danger
-          busy={cancelling === cancelStationTarget.id}
-          onSubmit={(reason) => { void cancelSession(cancelStationTarget, reason); }}
-          onCancel={() => { if (!cancelling) setCancelStationTarget(null); }}
-        />
-      )}
-      {pendingReconciliation && (
-        <PromptModal
-          title={`Reconcile ${pendingReconciliation.station.name} to POS`}
-          label="Reason required. The original closed shift remains unchanged; this creates the held bill on this terminal's current open shift."
-          placeholder="Why did this session miss POS before the shift closed?"
-          confirmLabel="Create POS bill"
-          busy={reconciling === pendingReconciliation.station.id}
-          onSubmit={(reason) => { void reconcileToPos(pendingReconciliation, reason); }}
-          onCancel={() => { if (!reconciling) setPendingReconciliation(null); }}
-        />
-      )}
-      {repairStationTarget && (
-        <BillingRepairModal
-          station={repairStationTarget}
-          busy={repairingBilling === repairStationTarget.id}
-          onSubmit={(amountMinor, reason) => {
-            void repairMissingBilling(repairStationTarget, amountMinor, reason);
-          }}
-          onCancel={() => {
-            if (!repairingBilling) {
-              repairKeyRef.current = null;
-              setRepairStationTarget(null);
-            }
-          }}
-        />
-      )}
-      {deleteStationTarget && (
-        <ConfirmModal
-          title="Delete gaming station"
-          message={`Delete station ${deleteStationTarget.code}? This cannot be undone.`}
-          confirmLabel="Delete station"
-          danger
-          busy={deleteStationBusy}
-          onConfirm={() => { void confirmDeleteStation(); }}
-          onCancel={() => { if (!deleteStationBusy) setDeleteStationTarget(null); }}
-        />
-      )}
+      <GamingWriteOnly allowed={canManageStations}>
+        {addOpen && (
+          <StationForm
+            canManageSessions={canManageStations}
+            onClose={() => setAddOpen(false)}
+            onSuccess={() => {
+              setAddOpen(false);
+              void load();
+              notifications.success('The gaming station was added.', { title: 'Station saved' });
+            }}
+          />
+        )}
+        {edit && (
+          <StationForm
+            canManageSessions={canManageStations}
+            station={edit}
+            onClose={() => setEdit(null)}
+            onSuccess={() => {
+              setEdit(null);
+              void load();
+              notifications.success('The gaming station was updated.', { title: 'Changes saved' });
+            }}
+          />
+        )}
+        {pendingExtension && (
+          <ConfirmModal
+            title="Add paid extension"
+            message={(() => {
+              const session = sessions[pendingExtension.station.id];
+              const surcharge = extraControllerSurchargeMinor(
+                session?.extra_controllers ?? 0,
+                pendingExtension.extension.duration_minutes,
+              );
+              const total = pendingExtension.extension.price_minor + surcharge;
+              return surcharge > 0
+                ? `Add ${pendingExtension.extension.name} for ${inr(total)} (${inr(pendingExtension.extension.price_minor)} package + ${inr(surcharge)} controller surcharge)? This charges the customer's bill.`
+                : `Add ${pendingExtension.extension.name} for ${inr(total)}? This charges the customer's bill.`;
+            })()}
+            confirmLabel="Add extension"
+            busy={extendingSession === pendingExtension.station.id}
+            onConfirm={() => {
+              void extendPackageSession(pendingExtension.station, pendingExtension.extension.id);
+            }}
+            onCancel={() => { if (!extendingSession) setPendingExtension(null); }}
+          />
+        )}
+        {cancelStationTarget && (
+          <PromptModal
+            title={`Cancel ${cancelStationTarget.name}`}
+            label="Audit reason (required). This removes the stopped session from billing."
+            placeholder="Why is this session being cancelled?"
+            confirmLabel="Cancel session"
+            danger
+            busy={cancelling === cancelStationTarget.id}
+            onSubmit={(reason) => { void cancelSession(cancelStationTarget, reason); }}
+            onCancel={() => { if (!cancelling) setCancelStationTarget(null); }}
+          />
+        )}
+        {pendingReconciliation && (
+          <PromptModal
+            title={`Reconcile ${pendingReconciliation.station.name} to POS`}
+            label="Reason required. The original closed shift remains unchanged; this creates the held bill on this terminal's current open shift."
+            placeholder="Why did this session miss POS before the shift closed?"
+            confirmLabel="Create POS bill"
+            busy={reconciling === pendingReconciliation.station.id}
+            onSubmit={(reason) => { void reconcileToPos(pendingReconciliation, reason); }}
+            onCancel={() => { if (!reconciling) setPendingReconciliation(null); }}
+          />
+        )}
+        {repairStationTarget && (
+          <BillingRepairModal
+            station={repairStationTarget}
+            busy={repairingBilling === repairStationTarget.id}
+            onSubmit={(amountMinor, reason) => {
+              void repairMissingBilling(repairStationTarget, amountMinor, reason);
+            }}
+            onCancel={() => {
+              if (!repairingBilling) {
+                repairKeyRef.current = null;
+                setRepairStationTarget(null);
+              }
+            }}
+          />
+        )}
+        {deleteStationTarget && (
+          <ConfirmModal
+            title="Delete gaming station"
+            message={`Delete station ${deleteStationTarget.code}? This cannot be undone.`}
+            confirmLabel="Delete station"
+            danger
+            busy={deleteStationBusy}
+            onConfirm={() => { void confirmDeleteStation(); }}
+            onCancel={() => { if (!deleteStationBusy) setDeleteStationTarget(null); }}
+          />
+        )}
+      </GamingWriteOnly>
     </div>
   );
 }
@@ -2073,8 +2231,13 @@ function BillingRepairModal({
 
 // ---------------------------------------------------------------- StationForm
 function StationForm({
-  station, onClose, onSuccess,
-}: { station?: StationDTO; onClose: () => void; onSuccess: () => void }) {
+  station, canManageSessions, onClose, onSuccess,
+}: {
+  station?: StationDTO;
+  canManageSessions: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
   const isEdit = !!station;
   const [form, setForm] = useState({
     code: station?.code ?? '',
@@ -2087,18 +2250,23 @@ function StationForm({
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); setBusy(true); setErr(null);
+    e.preventDefault();
+    const write = createGamingWriteDispatcher(canManageSessions, () => {
+      setErr('Gaming is view-only for this account. Ask an owner to enable the Gaming module.');
+    }, gaming);
+    if (!write.allowed) return;
+    setBusy(true); setErr(null);
     try {
       const rate_per_hour_minor = parseRupeesToMinor(form.rate_rupees);
       if (rate_per_hour_minor === null) {
         throw new Error('Hourly rate must be a non-negative amount with at most two decimals.');
       }
       if (isEdit) {
-        await gaming.updateStation(station!.id, {
+        await write.dispatch('updateStation', station!.id, {
           name: form.name, rate_per_hour_minor, is_active: form.is_active,
         });
       } else {
-        await gaming.createStation({
+        await write.dispatch('createStation', {
           code: form.code, name: form.name, type: form.type, rate_per_hour_minor,
         });
       }
@@ -2154,7 +2322,7 @@ function StationForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={!canManageSessions || busy}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : null}
             {isEdit ? 'Save' : 'Create'}
           </button>

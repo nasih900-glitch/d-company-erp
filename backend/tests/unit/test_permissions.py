@@ -307,6 +307,47 @@ async def test_protected_access_never_leaks_admin_audit_read() -> None:
     assert await _has_permission(None, co_owner, "staff.write") is True
 
 
+async def test_gaming_stop_permission_keeps_partner_and_owner_boundaries() -> None:
+    """Normal session Stop is a gaming.write operation, not an audit repair.
+
+    A company may explicitly delegate the Gaming module to a partner, while a
+    default read-only partner and ordinary service staff remain unable to
+    mutate sessions. Owners, co-owners and gaming supervisors keep their
+    normal operational access; co-owner access still cannot cross the hard
+    audit/system boundary.
+    """
+    partner = _tenant(protected_access=False, roles=("partner",))
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=None),
+    ):
+        assert await _has_permission(None, partner, "gaming.write") is False
+
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=True),
+    ):
+        assert await _has_permission(None, partner, "gaming.write") is True
+        # Module delegation never turns a partner into the protected auditor.
+        assert await _has_permission(None, partner, "admin.audit.read") is False
+        assert await _has_permission(None, partner, "admin.system") is False
+
+    staff = _tenant(protected_access=False, roles=("staff",))
+    owner = _tenant(protected_access=False, roles=("owner",))
+    gaming_supervisor = _tenant(protected_access=False, roles=("gaming_supervisor",))
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=None),
+    ):
+        assert await _has_permission(None, staff, "gaming.write") is False
+        assert await _has_permission(None, owner, "gaming.write") is True
+        assert await _has_permission(None, gaming_supervisor, "gaming.write") is True
+
+    co_owner = _tenant(protected_access=True, audit_access=False, roles=("co_owner",))
+    assert await _has_permission(None, co_owner, "gaming.write") is True
+    assert await _has_permission(None, co_owner, "admin.audit.read") is False
+
+
 async def test_audit_access_grants_admin_audit_read_regardless_of_role() -> None:
     super_owner = _tenant(protected_access=True, audit_access=True, roles=("super_owner",))
     assert await _has_permission(None, super_owner, "admin.audit.read") is True

@@ -2,8 +2,8 @@
 
 > Evidence boundary: this document records the earlier `3.0.4` (`5`) Android
 > snapshot. Material fixes were made before the source identity moved to
-> `3.0.5` (`6`), so none of the emulator, instrumentation, signed-build, or
-> performance results below count as `3.0.5` acceptance evidence. The new
+> `3.0.6` (`7`), so none of the emulator, instrumentation, signed-build, or
+> performance results below count as `3.0.6` acceptance evidence. The new
 > candidate still requires its own automated, emulator, and physical-device
 > gates and has not been deployed to production.
 
@@ -32,22 +32,22 @@
 
 ## Phase 1 completion gate — global UI
 
-Status: **PASS** on the current Android source at the emulator/tablet proof layer.
+Status: **PASS** on the recorded Android `3.0.4` / code-5 source snapshot at the emulator proof layer.
 
-- Re-inspected every accessible module in the current authenticated release build at 2560x1600 px / 320 dpi (1280x800 dp). The final captures are in `/tmp/d-company-erp-final-completion-2026-08-26/phase1-after/`.
+- Re-inspected every accessible module in the authenticated `3.0.4` / code-5 release build at 2560x1600 px / 320 dpi (1280x800 dp). The final captures are in `/tmp/d-company-erp-final-completion-2026-08-26/phase1-after/`.
 - Re-inspected Shift in portrait at 1600x2560 px / 320 dpi and confirmed all denomination controls and close-shift actions remain reachable.
 - Re-inspected Login at 1920x1200 px / 320 dpi (960x600 dp) with the software keyboard closed and open. Email/password inputs remain focusable, the form scrolls, the visible action area is reachable, and the password field has an IME Done submission path.
 - Corrected destructive-action contrast, warning/error connectivity semantics, neutral informational notices, normal-money colouring, tabular numerals, the undersized brand tagline, loading announcements, and busy-action feedback.
 - Consolidated the duplicated Events, Finance, Inventory, and Memberships form/confirmation/picker primitives into the shared UI system. Shared dialogs are width-capped, keyboard-aware, scrollable, and keep validation errors visible.
-- Current-source validation: debug and Android-test Kotlin compilation, all JVM tests, signed release assembly, and release lint all passed together.
-- Current-source focused instrumentation at 960x600 dp: 10/10 tests passed for money entry, touch-only numeric entry, void reasons, compact dialogs, visible validation, loading/busy semantics, and Gaming start/void dialog input reachability.
+- Code-5 snapshot validation: debug and Android-test Kotlin compilation, all JVM tests, signed release assembly, and release lint all passed together.
+- Code-5 focused instrumentation at 960x600 dp: 10/10 tests passed for money entry, touch-only numeric entry, void reasons, compact dialogs, visible validation, loading/busy semantics, and Gaming start/void dialog input reachability.
 - `git diff --check` is clean and no duplicate private `FormDialog`, `ConfirmDialog`, `PickerField`, or `DecimalField` definitions remain in screen files.
 
 Accessibility boundary: automated Compose semantics and contrast checks passed, but TalkBack exploration with a blind/low-vision operator and physical-tablet OEM behaviour remain device acceptance work. They are not represented as emulator-certified.
 
 ## Phase 2 completion gate — Gaming
 
-Status: **PASS** on current source, the disposable PostgreSQL/Redis backend, and the API-35 emulator at 1920x1200 px / 320 dpi (960x600 dp).
+Status: **PASS** on the recorded `3.0.4` / code-5 source snapshot, the disposable PostgreSQL/Redis backend, and the API-35 emulator at 1920x1200 px / 320 dpi (960x600 dp).
 
 - Payment-due cards use a neutral surface, compact amber state, white amount, restrained Void, and dominant gold Send to POS. Available cards use green state and a restrained start action. Active cards prioritise the timer and current estimate while keeping extension/transfer secondary and stop destructive.
 - Proved a timed hourly session, free timer extension, authoritative stop billing, Send-to-POS failure retention, same-owner recovery, and successful retry without losing or duplicating the session.
@@ -71,7 +71,7 @@ Status: **PASS** on current source, the disposable PostgreSQL/Redis backend, and
 
 - JVM suite: 405 tests passed with no failures.
 - Android instrumentation: 116 tests reported OK; 114 executed and passed, with two environment-assumption skips for notification posting and exact-alarm deep-idle delivery.
-- Latest current-source Phase 1 focused instrumentation: 10 tests passed with no failures.
+- Recorded code-5 Phase 1 focused instrumentation: 10 tests passed with no failures.
 - Release lint: no errors; baseline warnings remain documented.
 - Release build: successful for version 3.0.4 (versionCode 5).
 - Reference comparison and responsive capture sets were opened and visually inspected after the final implementation, not treated as screenshot-only evidence.

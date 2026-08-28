@@ -2631,7 +2631,11 @@ class SyncEngine(
                 localId = row.localId,
                 serverId = serverId,
                 status = started.status,
-                shiftId = started.shiftId,
+                // Older deployed APIs omitted SessionRead.shift_id. The
+                // request used this exact server-resolved shift, so retain it
+                // instead of turning a confirmed local lifecycle into an
+                // unscoped, permanently view-only session.
+                shiftId = started.shiftId ?: resolvedShiftId,
                 startedAtMillis = Instant.parse(started.startAt).toEpochMilli(),
                 timerMinutes = started.timerMinutes,
                 timerEndsAtMillis = started.timerEndsAt?.let {

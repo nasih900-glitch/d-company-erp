@@ -345,6 +345,7 @@ fun PickerField(
     selectedLabel: String,
     options: List<Pair<String, String>>,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onSelect: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -361,21 +362,21 @@ fun PickerField(
                         contentDescription = "$label, $selectedLabel"
                         stateDescription = if (open) "Expanded" else "Collapsed"
                     }
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
+                    .clickable(enabled = enabled && options.isNotEmpty()) { open = true }
                     .padding(horizontal = Spacing.md, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
+                    color = if (!enabled || options.isEmpty()) Brand.Disabled else Brand.Foreground,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
-                    tint = Brand.Gold,
+                    tint = if (enabled) Brand.Gold else Brand.Disabled,
                     modifier = Modifier.graphicsLayer { rotationZ = rotation },
                 )
             }

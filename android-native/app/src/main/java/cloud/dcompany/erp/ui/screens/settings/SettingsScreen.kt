@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.DataListRow
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
@@ -69,8 +71,15 @@ fun SettingsScreen(
     canManageSystem: Boolean,
     onPasswordChanged: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
+    bugReportVm: BugReportViewModel = viewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
+    val app = DCompanyApp.instance
+    val terminal by app.terminalStore.activeValidatedTerminal.collectAsStateWithLifecycle()
+    val effectiveOnline by app.connectivity.online.collectAsStateWithLifecycle()
+    val networkValidated by app.connectivity.networkValidated.collectAsStateWithLifecycle()
+    val reportConnectivity = bugReportConnectivity(effectiveOnline, networkValidated)
     LaunchedEffect(state.passwordChanged) {
         if (state.passwordChanged) onPasswordChanged()
     }
@@ -96,13 +105,38 @@ fun SettingsScreen(
             contentAlignment = Alignment.TopCenter,
         ) {
             when (activeTab) {
-                SettingsTab.Account -> AccountTab(state, vm)
+                SettingsTab.Account -> AccountTab(state, vm, bugReportVm::open)
                 SettingsTab.Company -> CompanyTab(state, vm)
                 SettingsTab.Branches -> BranchesTab(state, vm)
                 SettingsTab.Terminals -> TerminalsTab(state, vm)
             }
         }
     }
+
+    BugReportDialog(
+        state = bugReportState,
+        connectivity = reportConnectivity,
+        onCategoryChange = bugReportVm::categoryChanged,
+        onSeverityChange = bugReportVm::severityChanged,
+        onTitleChange = bugReportVm::titleChanged,
+        onDescriptionChange = bugReportVm::descriptionChanged,
+        onReproductionStepsChange = bugReportVm::reproductionStepsChanged,
+        onExpectedBehaviorChange = bugReportVm::expectedBehaviorChanged,
+        onActualBehaviorChange = bugReportVm::actualBehaviorChanged,
+        onSubmit = {
+            bugReportVm.submit(
+                currentAndroidBugReportContext(
+                    currentScreen = "Settings",
+                    branchId = state.me?.branchId,
+                    branchName = state.me?.branchName,
+                    terminalId = terminal?.terminalId,
+                    terminalName = terminal?.terminalName,
+                    connectivity = reportConnectivity,
+                ),
+            )
+        },
+        onDismiss = bugReportVm::dismiss,
+    )
 }
 
 @Composable
@@ -146,22 +180,27 @@ private fun NewPasswordField(
 }
 
 @Composable
-private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
+private fun AccountTab(
+    state: SettingsUiState,
+    vm: SettingsViewModel,
+    onReportProblem: () -> Unit,
+) {
     var code by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
 
-    when (settingsReadPresentation(state.me != null, state.meLoading, state.meError)) {
-        SettingsReadPresentation.INITIAL_LOADING -> Loading()
-        SettingsReadPresentation.BLOCKING_ERROR ->
-            Retry(state.meError ?: "Could not load your account.", vm::loadMe)
-        SettingsReadPresentation.FRESH,
-        SettingsReadPresentation.REFRESHING,
-        SettingsReadPresentation.STALE -> Column(
-            Modifier.widthIn(max = 980.dp).fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        ) {
+    Column(
+        Modifier.widthIn(max = 980.dp).fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        when (settingsReadPresentation(state.me != null, state.meLoading, state.meError)) {
+            SettingsReadPresentation.INITIAL_LOADING -> Loading()
+            SettingsReadPresentation.BLOCKING_ERROR ->
+                Retry(state.meError ?: "Could not load your account.", vm::loadMe)
+            SettingsReadPresentation.FRESH,
+            SettingsReadPresentation.REFRESHING,
+            SettingsReadPresentation.STALE -> {
             if (state.meError != null) {
                 RefreshStatusBanner(
                     title = "Saved account details",
@@ -241,6 +280,24 @@ private fun AccountTab(state: SettingsUiState, vm: SettingsViewModel) {
                 }
                 state.accountError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
+            }
+        }
+        SectionCard(
+            title = "Help & feedback",
+            subtitle = "Send a problem directly to the ERP web inbox for review.",
+            icon = Icons.Default.BugReport,
+            tone = UiTone.Information,
+        ) {
+            Text(
+                "Describe what went wrong and the app will include only safe device, version, branch, till, screen, and connectivity details.",
+                color = Brand.ForegroundMuted,
+            )
+            ErpButton(
+                text = "Report a problem",
+                onClick = onReportProblem,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.BugReport,
+            )
         }
     }
 

@@ -127,7 +127,7 @@ interface GamingDao {
 
     @Query(
         "UPDATE local_gaming_sessions SET state = :state, stationId = :stationId, " +
-            "shiftId = :shiftId, customerPhone = :customerPhone, timerMinutes = :timerMinutes, " +
+            "shiftId = COALESCE(:shiftId, shiftId), customerPhone = :customerPhone, timerMinutes = :timerMinutes, " +
             "startedAtMillis = :startedAtMillis, status = :status, endAtMillis = :endAtMillis, " +
             "timerEndsAtMillis = :timerEndsAtMillis, billableMinutes = :billableMinutes, " +
             "amountMinor = :amountMinor, ratePerHourMinor = :ratePerHourMinor, " +
@@ -272,7 +272,8 @@ interface GamingDao {
 
     @Query(
         "UPDATE local_gaming_sessions SET serverId = :serverId, " +
-            "status = CASE WHEN state = 'stop_pending' THEN 'stopping' ELSE :status END, shiftId = :shiftId, " +
+            "status = CASE WHEN state = 'stop_pending' THEN 'stopping' ELSE :status END, " +
+            "shiftId = COALESCE(:shiftId, shiftId), " +
             "startedAtMillis = :startedAtMillis, timerMinutes = :timerMinutes, " +
             "timerEndsAtMillis = :timerEndsAtMillis, amountMinor = :amountMinor, " +
             "ratePerHourMinor = :ratePerHourMinor, packageId = :packageId, billingMode = :billingMode, " +
@@ -303,7 +304,8 @@ interface GamingDao {
 
     /** Applies a direct online transfer/extension response to both read layers. */
     @Query(
-        "UPDATE local_gaming_sessions SET stationId = :stationId, shiftId = :shiftId, status = :status, " +
+        "UPDATE local_gaming_sessions SET stationId = :stationId, " +
+            "shiftId = COALESCE(:shiftId, shiftId), status = :status, " +
             "timerMinutes = :timerMinutes, timerEndsAtMillis = :timerEndsAtMillis, " +
             "amountMinor = :amountMinor, ratePerHourMinor = :ratePerHourMinor, packageId = :packageId, " +
             "billingMode = :billingMode, packagePriceMinor = :packagePriceMinor, " +
@@ -337,11 +339,16 @@ interface GamingDao {
 
     @Query(
         "UPDATE local_gaming_sessions SET state = 'stop_pending', status = 'stopping', " +
+            "shiftId = COALESCE(shiftId, :resolvedShiftId), " +
             "endAtMillis = CASE WHEN state = 'stop_rejected' THEN endAtMillis ELSE :stoppedAtMillis END, " +
             "lastError = NULL " +
             "WHERE localId = :localId AND state IN ('start_pending', 'start_synced', 'stop_rejected')",
     )
-    suspend fun requestSessionStop(localId: String, stoppedAtMillis: Long): Int
+    suspend fun requestSessionStop(
+        localId: String,
+        stoppedAtMillis: Long,
+        resolvedShiftId: String?,
+    ): Int
 
     @Query(
         "UPDATE local_gaming_sessions SET state = 'ended_unbilled', status = :status, " +

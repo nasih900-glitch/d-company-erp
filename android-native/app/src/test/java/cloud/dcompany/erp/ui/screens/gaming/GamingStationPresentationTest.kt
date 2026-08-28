@@ -8,6 +8,7 @@ import cloud.dcompany.erp.ui.components.VOID_REASON_OTHER_ID
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -485,6 +486,87 @@ class GamingStationPresentationTest {
         assertEquals(
             GamingSessionAuthority.UNKNOWN,
             session(status = "active", shiftId = null).authority("shift-1"),
+        )
+    }
+
+    @Test
+    fun `legacy missing shift stop uses only a server confirmed current terminal shift`() {
+        val exact = session(status = "active", shiftId = "shift-current")
+        assertEquals(
+            "shift-current",
+            exact.resolvedStopShiftId(
+                activeShiftId = "shift-current",
+                activeShiftServerConfirmed = false,
+                online = false,
+            ),
+        )
+
+        // localState=null identifies a row pulled from the server cache. The
+        // synced/rejected states cover pre-fix local rows whose old response
+        // erased the shift. All are server-known, but the compatibility
+        // fallback is safe only after this terminal's open shift has also been
+        // confirmed by the server.
+        val oldServerPayload = session(status = "active", shiftId = null, localState = null)
+        for (serverKnownState in listOf(
+            null,
+            GamingSessionState.START_SYNCED,
+            GamingSessionState.STOP_REJECTED,
+        )) {
+            assertEquals(
+                "shift-current",
+                session(
+                    status = "active",
+                    shiftId = null,
+                    localState = serverKnownState,
+                ).resolvedStopShiftId(
+                    activeShiftId = "shift-current",
+                    activeShiftServerConfirmed = true,
+                    online = true,
+                ),
+            )
+        }
+        assertNull(
+            oldServerPayload.resolvedStopShiftId(
+                activeShiftId = "shift-current",
+                activeShiftServerConfirmed = false,
+                online = true,
+            ),
+        )
+        assertNull(
+            oldServerPayload.resolvedStopShiftId(
+                activeShiftId = "shift-current",
+                activeShiftServerConfirmed = true,
+                online = false,
+            ),
+        )
+
+        // A known different source shift is never reclassified as current,
+        // and an unsynced local Start cannot pretend to be server-known.
+        assertNull(
+            session(status = "active", shiftId = "shift-other")
+                .resolvedStopShiftId(
+                    "shift-current",
+                    activeShiftServerConfirmed = true,
+                    online = true,
+                ),
+        )
+        assertNull(
+            session(
+                status = "starting",
+                shiftId = null,
+                localState = GamingSessionState.START_PENDING,
+            ).resolvedStopShiftId(
+                "shift-current",
+                activeShiftServerConfirmed = true,
+                online = true,
+            ),
+        )
+        assertNull(
+            oldServerPayload.resolvedStopShiftId(
+                activeShiftId = null,
+                activeShiftServerConfirmed = true,
+                online = true,
+            ),
         )
     }
 

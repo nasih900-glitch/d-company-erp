@@ -274,7 +274,11 @@ class ShiftCloseSafetyDaoTest {
         )
         val gamingFailure = assertThrows(SQLiteConstraintException::class.java) {
             runBlocking {
-                db.gamingDao().requestSessionStop("gaming-a", stoppedAtMillis = 2_100)
+                db.gamingDao().requestSessionStop(
+                    "gaming-a",
+                    stoppedAtMillis = 2_100,
+                    resolvedShiftId = "shift-a",
+                )
             }
         }
         assertTrue(gamingFailure.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD))
