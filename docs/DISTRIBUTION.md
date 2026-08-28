@@ -83,41 +83,36 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version 5 compatibility floor and version 7 candidate
+## Version 8 compatibility floor and candidate
 
-Android version code 5 is the first client that sends the conflict snapshots
-required by the current Gaming start and extension write contracts. Version 4
-and older must not be allowed to reach those handlers: they would receive a
-validation error partway through an employee workflow rather than a clear
-update-required response.
-
-The next source candidate is version `3.0.6` with version code 7. Version code 6
-has already been observed in production, so reusing it for changed source would
-break reliable upgrade identity. Version 5 therefore remains the minimum
-supported code, versions 5 and 6 remain safe during the transition, and version
-7 becomes latest only when the coordinated release below is ready.
+Version `3.0.7` with version code 8 introduces authoritative terminal purposes
+(`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming Area to Cafe POS
+handoff. Older Android clients do not understand that contract and can select
+the wrong local shift or attempt an invalid local handoff. They must therefore
+receive a clear update-required response before an operational write reaches a
+handler; version code 8 is both the minimum supported and latest code for this
+coordinated release.
 
 Treat the app and backend as one coordinated release:
 
-1. Produce, sign, and verify the version-code-7 artifact before changing the
+1. Produce, sign, and verify the version-code-8 artifact before changing the
    server or advertising it to installed clients.
 2. While the old backend is still active, bring every installed older app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Make the version-7 APK/update channel available to staff.
+3. Make the version-8 APK/update channel available to staff.
 4. Back up the database, complete the deployment preflight, and run
    `alembic upgrade head`; for this candidate, verify the database reaches
-   revision `0051` before starting the backend. Deploy with
-   `ANDROID_MIN_SUPPORTED_VERSION_CODE=5`,
-   `ANDROID_LATEST_VERSION_CODE=7`, and
+   revision `0052` before starting the backend. Deploy with
+   `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
+   `ANDROID_LATEST_VERSION_CODE=8`, and
    `REQUIRE_NATIVE_VERSION_HEADERS=true` in the same maintenance window.
-5. Verify version 4 receives HTTP 426 before a write handler, versions 5 and 6
-   remain supported with an update available, and version 7 is current. Then run
-   Gaming start, timer extension, paid package extension, stop, and Send to POS
-   from version 7.
+5. Verify version 7 and older receive HTTP 426 before a write handler and
+   version 8 is current. Then run Gaming start, timer extension, paid package
+   extension, stop, and the explicit Cafe POS handoff from version 8.
 
 Do not lower the minimum to keep an older APK operating against this backend.
-If version 7 is not ready to distribute, do not advertise it as latest or deploy
+If version 8 is not ready to distribute, do not advertise it as latest or deploy
 the matching production compatibility configuration.
 
 ## Android artifacts

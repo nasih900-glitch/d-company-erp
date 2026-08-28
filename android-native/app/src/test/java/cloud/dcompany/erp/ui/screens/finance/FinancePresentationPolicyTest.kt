@@ -85,4 +85,40 @@ class FinancePresentationPolicyTest {
         assertTrue(incomplete.warningDetail.contains("profit may be overstated"))
         assertFalse(incomplete.warningDetail.contains("profit may be understated"))
     }
+
+    @Test
+    fun collectionAndTipTotalsExcludeVoidedEvidence() {
+        fun collection(id: String, method: String, amount: Long, voided: Boolean) =
+            ManualCollection(
+                id = id,
+                companyId = "company",
+                branchId = "shop",
+                businessDate = "2026-08-28",
+                method = method,
+                amountMinor = amount,
+                sourceKind = "manual_daily",
+                sourceRef = "ref-$id",
+                idempotencyKey = "key-$id",
+                createdBy = "user",
+                createdAt = "2026-08-28T12:00:00Z",
+                isVoided = voided,
+            )
+        val totals = manualCollectionTotals(
+            listOf(
+                collection("cash", "cash", 21_000, false),
+                collection("upi", "upi", 162_000, false),
+                collection("void", "cash", 99_000, true),
+            ),
+        )
+
+        assertTrue(totals.totalMinor == 183_000L)
+        assertTrue(totals.cashMinor == 21_000L)
+        assertTrue(totals.upiMinor == 162_000L)
+        assertTrue(totals.activeCount == 2)
+        assertTrue(totals.voidedCount == 1)
+        assertTrue(
+            defaultManualCollectionReference("2026-08-28", "upi") ==
+                "Daily collection 2026-08-28 UPI",
+        )
+    }
 }

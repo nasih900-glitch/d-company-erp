@@ -14,20 +14,37 @@ from sqlalchemy.dialects import postgresql
 from app.api.v1.gaming import router as gaming_router
 from app.core.errors import (
     BusinessRuleError,
+    ConflictError,
     ForbiddenError,
     GamingBillingRepairRequiredError,
     GamingSourceShiftClosedError,
+    NotFoundError,
 )
 from app.core.tenant import TenantContext
-from app.models import AuditLog, Order, OrderLine, Shift, Station
+from app.models import (
+    AuditLog,
+    GamingSession,
+    Order,
+    OrderLine,
+    Shift,
+    Station,
+    Terminal,
+)
 
 
 class _Result:
-    def __init__(self, scalar=None) -> None:
+    def __init__(self, scalar=None, rows=None) -> None:
         self.scalar = scalar
+        self.rows = rows or []
 
     def scalar_one_or_none(self):
         return self.scalar
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.rows
 
 
 class _Session:
@@ -73,6 +90,7 @@ def _shift(tenant: TenantContext, *, status: str, terminal_id: UUID | None = Non
         branch_id=tenant.branch_id,
         terminal_id=terminal_id or tenant.terminal_id,
         opened_by=tenant.user_id,
+        opened_at=datetime(2026, 8, 26, 9, tzinfo=UTC),
         status=status,
     )
 
@@ -87,6 +105,21 @@ def _station(tenant: TenantContext):
         tax_rate=0.18,
         sac_code="999692",
         rate_includes_tax=True,
+    )
+
+
+def _terminal(
+    tenant: TenantContext,
+    *,
+    purpose: str,
+    terminal_id: UUID | None = None,
+    name: str | None = None,
+):
+    return SimpleNamespace(
+        id=terminal_id or tenant.terminal_id,
+        branch_id=tenant.branch_id,
+        name=name or ("Cafe POS" if purpose == "cafe_pos" else "Gaming Area"),
+        purpose=purpose,
     )
 
 
@@ -175,6 +208,369 @@ def test_reconciliation_contract_is_audit_owner_only_and_requires_a_reason() -> 
     assert _route_permissions(gaming_router.resolve_legacy_gaming_outbox) == (
         "admin.audit.read",
     )
+
+
+def test_normal_cross_terminal_contract_requires_gaming_and_pos_access() -> None:
+    expected = ("gaming.write", "pos.read")
+    assert _route_permissions(gaming_router.list_session_pos_target_shifts) == expected
+    assert _route_permissions(gaming_router.handoff_session_to_pos) == expected
+
+
+@pytest.mark.asyncio
+async def test_target_shift_list_is_explicit_and_same_branch_only() -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="open")
+    target_shift = _shift(tenant, status="open", terminal_id=uuid4())
+    station = _station(tenant)
+    gaming_session = _gaming_session(tenant, station, source_shift)
+    source_terminal = _terminal(tenant, purpose="gaming")
+    target_terminal = _terminal(
+        tenant,
+        terminal_id=target_shift.terminal_id,
+        purpose="cafe_pos",
+        name="Cafe POS",
+    )
+    target_opener = SimpleNamespace(
+        id=target_shift.opened_by,
+        name="Rafi",
+    )
+    session = _Session(
+        _Result(rows=[(target_shift, target_terminal, target_opener)]),
+        entities={
+            (GamingSession, gaming_session.id): gaming_session,
+            (Station, station.id): station,
+            (Shift, source_shift.id): source_shift,
+            (Terminal, source_terminal.id): source_terminal,
+        },
+    )
+
+    response = await gaming_router.list_session_pos_target_shifts(
+        gaming_session.id,
+        session,
+        tenant,
+    )
+
+    assert response == [
+        gaming_router.PosTargetShiftRead(
+            shift_id=target_shift.id,
+            terminal_id=target_terminal.id,
+            terminal_name="Cafe POS",
+            opened_by=target_opener.id,
+            opened_by_name="Rafi",
+            opened_at=target_shift.opened_at,
+        )
+    ]
+    compiled = str(session.statements[0].compile(dialect=postgresql.dialect()))
+    assert "shifts.company_id" in compiled
+    assert "shifts.branch_id" in compiled
+    assert "shifts.status" in compiled
+    assert "shifts.terminal_id !=" in compiled
+    assert "terminals.purpose IN" in compiled
+    assert "users.company_id" in compiled
+
+
+@pytest.mark.asyncio
+async def test_open_source_session_handoff_preserves_source_and_targets_pos_drawer(
+    monkeypatch,
+) -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="open")
+    target_shift = _shift(tenant, status="open", terminal_id=uuid4())
+    station = _station(tenant)
+    gaming_session = _gaming_session(tenant, station, source_shift)
+    original_source_shift_id = gaming_session.shift_id
+    source_terminal = _terminal(tenant, purpose="gaming")
+    target_terminal = _terminal(
+        tenant,
+        terminal_id=target_shift.terminal_id,
+        purpose="cafe_pos",
+        name="Cafe POS",
+    )
+    _install_order_dependencies(monkeypatch)
+    session = _Session(
+        _Result(gaming_session),
+        _Result(rows=[source_shift, target_shift]),
+        entities={
+            (Station, station.id): station,
+            (Shift, source_shift.id): source_shift,
+            (Terminal, source_terminal.id): source_terminal,
+            (Terminal, target_terminal.id): target_terminal,
+        },
+    )
+
+    response = await gaming_router.handoff_session_to_pos(
+        gaming_session.id,
+        gaming_router.SessionPosHandoff(target_shift_id=target_shift.id),
+        session,
+        tenant,
+    )
+
+    order = next(row for row in session.added if isinstance(row, Order))
+    audit = next(row for row in session.added if isinstance(row, AuditLog))
+    assert gaming_session.shift_id == original_source_shift_id == source_shift.id
+    assert gaming_session.order_id == order.id
+    assert order.shift_id == target_shift.id
+    assert order.terminal_id == target_shift.terminal_id
+    assert order.branch_id == source_shift.branch_id
+    assert order.status == "held"
+    assert response == gaming_router.SessionPosHandoffRead(
+        order_id=order.id,
+        amount_minor=15_700,
+        source_shift_id=source_shift.id,
+        source_terminal_id=source_shift.terminal_id,
+        target_shift_id=target_shift.id,
+        target_terminal_id=target_shift.terminal_id,
+        already_linked=False,
+    )
+    assert audit.action == "gaming_session_handoff_to_pos"
+    assert audit.before == {
+        "source_shift_id": str(source_shift.id),
+        "source_terminal_id": str(source_shift.terminal_id),
+        "order_id": None,
+    }
+    assert audit.after == {
+        "source_shift_id": str(source_shift.id),
+        "source_terminal_id": str(source_shift.terminal_id),
+        "target_shift_id": str(target_shift.id),
+        "target_terminal_id": str(target_shift.terminal_id),
+        "order_id": str(order.id),
+    }
+    assert audit.reason == "Explicit cross-terminal Gaming to POS handoff"
+    shift_lock = str(session.statements[1].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" in shift_lock
+    assert "ORDER BY shifts.id" in shift_lock
+    assert session.statements[1].get_execution_options()["populate_existing"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_overrides", "message"),
+    [
+        ({"status": "closed"}, "not open"),
+        ({"branch_id": uuid4()}, "different branch"),
+        ({"company_id": uuid4()}, "not found"),
+    ],
+)
+async def test_handoff_rejects_ineligible_target_without_creating_an_order(
+    monkeypatch,
+    target_overrides,
+    message,
+) -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="open")
+    target_shift = _shift(tenant, status="open", terminal_id=uuid4())
+    for field, value in target_overrides.items():
+        setattr(target_shift, field, value)
+    station = _station(tenant)
+    gaming_session = _gaming_session(tenant, station, source_shift)
+    source_terminal = _terminal(tenant, purpose="gaming")
+    _install_order_dependencies(monkeypatch)
+    session = _Session(
+        _Result(gaming_session),
+        _Result(rows=[source_shift, target_shift]),
+        entities={
+            (Station, station.id): station,
+            (Shift, source_shift.id): source_shift,
+            (Terminal, source_terminal.id): source_terminal,
+        },
+    )
+
+    with pytest.raises((BusinessRuleError, NotFoundError), match=message):
+        await gaming_router.handoff_session_to_pos(
+            gaming_session.id,
+            gaming_router.SessionPosHandoff(target_shift_id=target_shift.id),
+            session,
+            tenant,
+        )
+
+    assert gaming_session.shift_id == source_shift.id
+    assert gaming_session.order_id is None
+    assert not any(isinstance(row, (Order, OrderLine, AuditLog)) for row in session.added)
+
+
+@pytest.mark.asyncio
+async def test_handoff_rejects_closed_source_or_same_terminal_target() -> None:
+    tenant = _tenant()
+    station = _station(tenant)
+
+    for source_status, target_terminal_id, message in (
+        ("closed", uuid4(), "Shift is closed"),
+        ("open", tenant.terminal_id, "another terminal"),
+    ):
+        source_shift = _shift(tenant, status=source_status)
+        target_shift = _shift(
+            tenant,
+            status="open",
+            terminal_id=target_terminal_id,
+        )
+        gaming_session = _gaming_session(tenant, station, source_shift)
+        source_terminal = _terminal(tenant, purpose="gaming")
+        session = _Session(
+            _Result(gaming_session),
+            _Result(rows=[source_shift, target_shift]),
+            entities={
+                (Station, station.id): station,
+                (Shift, source_shift.id): source_shift,
+                (Terminal, source_terminal.id): source_terminal,
+            },
+        )
+
+        with pytest.raises(BusinessRuleError, match=message):
+            await gaming_router.handoff_session_to_pos(
+                gaming_session.id,
+                gaming_router.SessionPosHandoff(target_shift_id=target_shift.id),
+                session,
+                tenant,
+            )
+        assert gaming_session.order_id is None
+        assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_handoff_retry_is_exact_target_idempotent_and_conflicts_elsewhere() -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="closed")
+    station = _station(tenant)
+    existing_order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=uuid4(),
+        shift_id=uuid4(),
+        total_minor=15_700,
+    )
+    gaming_session = _gaming_session(
+        tenant,
+        station,
+        source_shift,
+        order_id=existing_order.id,
+    )
+    entities = {
+        (Station, station.id): station,
+        (Shift, source_shift.id): source_shift,
+        (Order, existing_order.id): existing_order,
+    }
+
+    response = await gaming_router.handoff_session_to_pos(
+        gaming_session.id,
+        gaming_router.SessionPosHandoff(target_shift_id=existing_order.shift_id),
+        _Session(_Result(gaming_session), entities=entities),
+        tenant,
+    )
+    assert response.already_linked is True
+    assert response.order_id == existing_order.id
+    assert response.source_shift_id == source_shift.id
+    assert response.target_shift_id == existing_order.shift_id
+
+    retry_session = _Session(_Result(gaming_session), entities=entities)
+    with pytest.raises(ConflictError, match="different POS shift"):
+        await gaming_router.handoff_session_to_pos(
+            gaming_session.id,
+            gaming_router.SessionPosHandoff(target_shift_id=uuid4()),
+            retry_session,
+            tenant,
+        )
+    assert retry_session.added == []
+    assert retry_session.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_handoff_rejects_a_gaming_only_destination() -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="open")
+    target_shift = _shift(tenant, status="open", terminal_id=uuid4())
+    station = _station(tenant)
+    gaming_session = _gaming_session(tenant, station, source_shift)
+    source_terminal = _terminal(tenant, purpose="gaming")
+    target_terminal = _terminal(
+        tenant,
+        terminal_id=target_shift.terminal_id,
+        purpose="gaming",
+        name="Second Gaming Area",
+    )
+    db = _Session(
+        _Result(gaming_session),
+        _Result(rows=[source_shift, target_shift]),
+        entities={
+            (Station, station.id): station,
+            (Shift, source_shift.id): source_shift,
+            (Terminal, source_terminal.id): source_terminal,
+            (Terminal, target_terminal.id): target_terminal,
+        },
+    )
+
+    with pytest.raises(BusinessRuleError, match="cannot receive POS bills"):
+        await gaming_router.handoff_session_to_pos(
+            gaming_session.id,
+            gaming_router.SessionPosHandoff(target_shift_id=target_shift.id),
+            db,
+            tenant,
+        )
+
+    assert gaming_session.order_id is None
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_gaming_only_terminal_must_handoff_instead_of_local_send() -> None:
+    tenant = _tenant()
+    source_shift = _shift(tenant, status="open")
+    station = _station(tenant)
+    gaming_session = _gaming_session(tenant, station, source_shift)
+    source_terminal = _terminal(tenant, purpose="gaming")
+    db = _Session(
+        _Result(gaming_session),
+        _Result(source_shift),
+        entities={
+            (Station, station.id): station,
+            (Terminal, source_terminal.id): source_terminal,
+        },
+    )
+
+    with pytest.raises(BusinessRuleError, match="cross-terminal.*handoff"):
+        await gaming_router.send_session_to_pos(gaming_session.id, db, tenant)
+
+    assert gaming_session.order_id is None
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_cafe_pos_terminal_cannot_start_a_gaming_session(monkeypatch) -> None:
+    tenant = _tenant()
+    station = _station(tenant)
+    station.is_active = True
+    cafe_terminal = _terminal(tenant, purpose="cafe_pos")
+
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(gaming_router, "check_or_reserve", reserve)
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="gaming-start-purpose-contract",
+            idempotency_request_hash="same-request",
+        ),
+        headers={},
+    )
+    db = _Session(
+        _Result(station),
+        entities={(Terminal, cafe_terminal.id): cafe_terminal},
+    )
+
+    with pytest.raises(BusinessRuleError, match="Cafe POS.*cannot start gaming"):
+        await gaming_router.start_session(
+            gaming_router.SessionStart(
+                station_id=station.id,
+                shift_id=uuid4(),
+                expected_rate_per_hour_minor=20_000,
+            ),
+            db,
+            request,
+            tenant,
+        )
+
+    assert db.added == []
+    assert len(db.statements) == 1
 
 
 def test_legacy_outbox_resolution_schema_requires_traceable_evidence() -> None:

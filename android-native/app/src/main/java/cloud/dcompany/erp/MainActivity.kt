@@ -46,7 +46,6 @@ import cloud.dcompany.erp.ui.TerminalChangeUiState
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.allowedDestinations
-import cloud.dcompany.erp.ui.canManageMemberships
 import cloud.dcompany.erp.ui.canManageSystemSettings
 import cloud.dcompany.erp.ui.workspaceLocationLabel
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
@@ -61,6 +60,7 @@ import cloud.dcompany.erp.ui.screens.kitchen.KitchenScreen
 import cloud.dcompany.erp.ui.screens.menu.MenuScreen
 import cloud.dcompany.erp.ui.screens.refunds.RefundsScreen
 import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
+import cloud.dcompany.erp.ui.screens.reservations.ReservationsScreen
 import cloud.dcompany.erp.ui.screens.tables.TablesScreen
 import cloud.dcompany.erp.ui.screens.settings.SettingsScreen
 import cloud.dcompany.erp.ui.screens.staff.StaffScreen
@@ -415,6 +415,9 @@ private fun AppRoot(
                                 )
                             }
                             Destination.Tables -> TablesScreen(access = permissions.tablesAccess())
+                            Destination.Reservations -> ReservationsScreen(
+                                access = permissions.reservationsAccess(),
+                            )
                             Destination.Kitchen -> KitchenScreen(
                                 access = permissions.kitchenAccess(),
                                 onExit = {
@@ -444,7 +447,7 @@ private fun AppRoot(
                             Destination.Finance -> FinanceScreen(access = permissions.financeAccess())
                             Destination.Events -> EventsScreen(access = permissions.eventsAccess())
                             Destination.Memberships -> MembershipsScreen(
-                                canManage = canManageMemberships(s.me),
+                                access = permissions.membershipAccess(s.me),
                             )
                             Destination.Refunds -> RefundsScreen()
                             Destination.AuditLog -> AuditLogScreen()

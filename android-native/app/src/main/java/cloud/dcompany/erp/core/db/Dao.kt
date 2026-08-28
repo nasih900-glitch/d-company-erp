@@ -430,7 +430,7 @@ interface SyncMetaDao {
         LocalKitchenCancellationAckEntity::class,
         PosReceiptEntity::class,
     ],
-    version = 35,
+    version = 36,
     exportSchema = true,
 )
 @TypeConverters(

@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.ZoneId
@@ -23,12 +24,12 @@ internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsCo
         confirmLabel = "Discard changes",
     )
     is DestructiveSettingsAction.DiscardBranchForm -> SettingsConfirmation(
-        title = if (action.isNew) "Discard new branch?" else "Discard branch edits?",
+        title = if (action.isNew) "Discard new shop?" else "Discard shop edits?",
         body = if (action.isNew) {
-            "The unsaved branch setup for ${action.branchName.ifBlank { "this branch" }} will be lost."
+            "The unsaved shop setup for ${action.branchName.ifBlank { "this shop" }} will be lost."
         } else {
             "Unsaved hours, licence, tax and address edits for " +
-                "${action.branchName.ifBlank { "this branch" }} will be lost."
+                "${action.branchName.ifBlank { "this shop" }} will be lost."
         },
         confirmLabel = "Discard edits",
     )
@@ -45,7 +46,8 @@ internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsCo
  * guessed — a wrong name here fails at runtime, not compile time:
  *
  *   CompanyRead / CompanyUpdate / BranchRead / BranchCreate / BranchUpdate /
- *   TerminalRead / TerminalCreate   backend/app/api/v1/settings/router.py
+ *   TerminalRead / TerminalCreate / TerminalUpdate
+ *                                   backend/app/api/v1/settings/router.py
  *   OtpChallengeResponse / PasswordResetConfirm / AccountActionResponse
  *                                   backend/app/api/v1/auth/router.py
  *
@@ -136,6 +138,8 @@ data class TerminalDto(
     val id: String,
     @SerialName("branch_id") val branchId: String,
     val name: String,
+    /** Absent only on an older server; that legacy contract behaved as hybrid. */
+    val purpose: String = TerminalPurpose.HYBRID,
     @SerialName("device_id") val deviceId: String? = null,
     @SerialName("last_seen_at") val lastSeenAt: String? = null,
 )
@@ -144,8 +148,77 @@ data class TerminalDto(
 data class TerminalCreateBody(
     @SerialName("branch_id") val branchId: String,
     val name: String,
+    val purpose: String,
     @SerialName("device_id") val deviceId: String? = null,
 )
+
+@Serializable
+data class TerminalUpdateBody(
+    val name: String? = null,
+    val purpose: String? = null,
+    /** Empty string is intentional: the backend normalizes it to null/clear. */
+    @SerialName("device_id") val deviceId: String? = null,
+)
+
+data class TerminalEditForm(
+    val id: String,
+    val branchId: String,
+    val originalName: String,
+    val name: String,
+    val purpose: String,
+    val originalPurpose: String = purpose,
+    val deviceId: String,
+)
+
+fun TerminalDto.toEditForm() = TerminalEditForm(
+    id = id,
+    branchId = branchId,
+    originalName = name,
+    name = name,
+    purpose = purpose,
+    deviceId = deviceId.orEmpty(),
+)
+
+fun TerminalEditForm.validate(): String? {
+    if (name.isBlank()) return "Give the till a name."
+    if (name.trim().length > 100) return "Till name must be 100 characters or fewer."
+    if (!TerminalPurpose.isKnown(purpose)) return "Choose how this terminal will be used."
+    return terminalDeviceIdError(deviceId)
+}
+
+fun TerminalEditForm.toBody() = TerminalUpdateBody(
+    name = name.trim(),
+    purpose = purpose,
+    // Send blank explicitly so the backend clears a removed device binding.
+    deviceId = deviceId.trim(),
+)
+
+internal data class TerminalPurposeOption(
+    val id: String,
+    val label: String,
+    val description: String,
+)
+
+internal val terminalPurposeOptions = listOf(
+    TerminalPurposeOption(
+        id = TerminalPurpose.CAFE_POS,
+        label = "Cafe POS",
+        description = "Takes food payments and receives bills from Gaming Area.",
+    ),
+    TerminalPurposeOption(
+        id = TerminalPurpose.GAMING,
+        label = "Gaming Area",
+        description = "Starts gaming sessions and must hand completed bills to an open Cafe POS shift.",
+    ),
+    TerminalPurposeOption(
+        id = TerminalPurpose.HYBRID,
+        label = "Hybrid",
+        description = "Runs both Gaming and POS locally on this same terminal.",
+    ),
+)
+
+internal fun terminalPurposeLabel(purpose: String): String =
+    terminalPurposeOptions.firstOrNull { it.id == purpose }?.label ?: "Unknown purpose"
 
 @Serializable
 data class OtpChallengeDto(
@@ -325,8 +398,8 @@ fun BranchDto.toForm() = BranchForm(
 )
 
 fun BranchForm.validate(): String? {
-    if (name.isBlank()) return "Branch name cannot be empty."
-    if (name.trim().length > 200) return "Branch name must be 200 characters or fewer."
+    if (name.isBlank()) return "Shop name cannot be empty."
+    if (name.trim().length > 200) return "Shop name must be 200 characters or fewer."
     if (code.trim().length > 10) return "Short code must be 10 characters or fewer."
     if (!isValidInvoiceSeries(invoiceSeriesCode)) {
         return "Invoice series must be exactly two letters or digits, for example MN."
@@ -355,7 +428,7 @@ fun BranchForm.validate(): String? {
     }
     val gstin = branchGstin.trim()
     if (gstin.isNotEmpty() && gstin.length != 15) {
-        return "Branch GSTIN must be exactly 15 characters."
+        return "Shop GSTIN must be exactly 15 characters."
     }
     return null
 }

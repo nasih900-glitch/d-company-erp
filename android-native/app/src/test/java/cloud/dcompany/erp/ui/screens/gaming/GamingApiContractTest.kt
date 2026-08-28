@@ -11,8 +11,55 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.http.GET
+import retrofit2.http.POST
 
 class GamingApiContractTest {
+
+    @Test
+    fun `cross-terminal handoff contract keeps the explicit target and provenance receipt`() {
+        val encoded = ApiClient.json.encodeToString(
+            SessionPosHandoffBody(targetShiftId = "target-shift"),
+        )
+        val body = ApiClient.json.parseToJsonElement(encoded).jsonObject
+        assertEquals(JsonPrimitive("target-shift"), body["target_shift_id"])
+
+        val result = ApiClient.json.decodeFromString<SessionPosHandoffResult>(
+            """{
+              "order_id":"order-1","amount_minor":15750,
+              "source_shift_id":"gaming-shift","source_terminal_id":"gaming-terminal",
+              "target_shift_id":"cafe-shift","target_terminal_id":"cafe-terminal",
+              "already_linked":true
+            }""".trimIndent(),
+        )
+        assertEquals("gaming-shift", result.sourceShiftId)
+        assertEquals("cafe-shift", result.targetShiftId)
+        assertTrue(result.alreadyLinked)
+    }
+
+    @Test
+    fun `gaming API exposes the explicit target list and handoff routes`() {
+        val listMethod = GamingApi::class.java.getDeclaredMethod(
+            "posTargetShifts",
+            String::class.java,
+            kotlin.coroutines.Continuation::class.java,
+        )
+        val handoffMethod = GamingApi::class.java.getDeclaredMethod(
+            "handoffToPos",
+            String::class.java,
+            SessionPosHandoffBody::class.java,
+            kotlin.coroutines.Continuation::class.java,
+        )
+
+        assertEquals(
+            "gaming/sessions/{id}/pos-target-shifts",
+            listMethod.getAnnotation(GET::class.java)?.value,
+        )
+        assertEquals(
+            "gaming/sessions/{id}/handoff-to-pos",
+            handoffMethod.getAnnotation(POST::class.java)?.value,
+        )
+    }
 
     @Test
     fun `open timer extension keeps its required null concurrency snapshot on the wire`() {

@@ -37,7 +37,6 @@ from app.models import (
     MembershipRefundProviderAction,
     MembershipTier,
     Shift,
-    Terminal,
     User,
 )
 
@@ -152,12 +151,7 @@ def _seed_base(session: Session) -> _Seed:
     session.add(company)
     session.flush()
     branch = _insert_schema_0034_branch(session, company_id=company.id)
-    terminal = Terminal(
-        id=uuid4(),
-        branch_id=branch.id,
-        name="Guard terminal",
-        device_id=f"membership-guard-{uuid4()}",
-    )
+    terminal_id = uuid4()
     owner = User(
         id=uuid4(),
         company_id=company.id,
@@ -191,13 +185,27 @@ def _seed_base(session: Session) -> _Seed:
     )
     session.add_all([owner, customer, tier])
     session.flush()
-    session.add(terminal)
-    session.flush()
+    # The current Terminal ORM includes ``purpose`` from revision 0052, while
+    # these rollback proofs intentionally hold PostgreSQL at 0034/0035/0046.
+    # Insert only columns that existed at those historical boundaries so the
+    # test continues to exercise the target migration instead of failing on
+    # deliberate model/schema skew.
+    session.execute(
+        text(
+            "INSERT INTO terminals (id, branch_id, name, device_id) "
+            "VALUES (:id, :branch_id, 'Guard terminal', :device_id)"
+        ),
+        {
+            "id": terminal_id,
+            "branch_id": branch.id,
+            "device_id": f"membership-guard-{uuid4()}",
+        },
+    )
     shift = Shift(
         id=uuid4(),
         company_id=company.id,
         branch_id=branch.id,
-        terminal_id=terminal.id,
+        terminal_id=terminal_id,
         opened_by=owner.id,
         opened_at=now - timedelta(minutes=5),
         opening_float_minor=500_000,
@@ -209,7 +217,7 @@ def _seed_base(session: Session) -> _Seed:
     return _Seed(
         company_id=company.id,
         branch_id=branch.id,
-        terminal_id=terminal.id,
+        terminal_id=terminal_id,
         owner_id=owner.id,
         customer_id=customer.id,
         tier_id=tier.id,

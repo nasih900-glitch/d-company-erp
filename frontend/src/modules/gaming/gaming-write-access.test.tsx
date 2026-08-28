@@ -34,6 +34,7 @@ vi.mock('@/modules/auth/AuthContext', () => ({
     },
     terminalId: null,
     terminalReady: false,
+    terminalOptions: [],
   }),
 }));
 
@@ -117,6 +118,7 @@ describe('gaming write access boundary', () => {
     dispatcher.dispatch('repairSessionBilling', 'session-1', 10_000, 'Verified bill', 'repair-key');
     dispatcher.dispatch('cancelSession', 'session-1', 'Customer left');
     dispatcher.dispatch('sendToPos', 'session-1');
+    dispatcher.dispatch('handoffToPos', 'session-1', 'target-shift-1');
     dispatcher.dispatch('reconcileToPos', 'session-1', 'shift-2', 'Recovered bill');
 
     expect(denied).toHaveBeenCalledOnce();

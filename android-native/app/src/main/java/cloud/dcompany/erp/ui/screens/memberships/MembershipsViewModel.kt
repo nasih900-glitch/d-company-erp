@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.EffectivePermissions
-import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.CustomerMembershipCacheEntity
 import cloud.dcompany.erp.core.db.CustomerMembershipHistoryCacheEntity
@@ -26,6 +25,8 @@ import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
 import cloud.dcompany.erp.core.db.MembershipWriteState
 import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.ShiftResolutionPolicy
+import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
+import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
@@ -143,8 +144,15 @@ internal fun membershipMoneyOfflineMessage(
 }
 
 internal fun canManageMembershipMoney(profile: MeResponse?): Boolean =
-    profile?.protectedAccess == true &&
-        EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+    profile?.let { EffectivePermissions.from(it).membershipAccess(it).canManageMoney } == true
+
+internal fun canRecoverLegacyMembershipEvidence(profile: MeResponse?): Boolean =
+    profile?.let {
+        EffectivePermissions.from(it).membershipAccess(it).canRecoverLegacyEvidence
+    } == true
+
+internal const val MEMBERSHIP_AUDIT_CONTROL_MESSAGE =
+    "Older-app membership recovery is read only for this account. Ask the Audit Control owner to verify the original drawer/provider evidence; do not repeat any collection or payout."
 
 internal fun membershipPaymentStageMessage(status: String): String = when (status) {
     MembershipPaymentTaskStatus.ACCEPTED_PAYMENT_DUE ->
@@ -459,6 +467,10 @@ class MembershipsViewModel : ViewModel() {
     }
 
     fun openLegacyRefundResolution(attempt: MembershipRefundAttemptCacheEntity) {
+        if (!canRecoverLegacyMembershipEvidence(appCtx.shiftCache.profile.value)) {
+            notice.value = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
+            return
+        }
         dialog.value = MembershipsDialog.ResolveLegacyRefund(attempt)
     }
 
@@ -859,6 +871,15 @@ class MembershipsViewModel : ViewModel() {
     fun retryPaymentAction(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            val action = db.membershipPaymentDao().actionById(actionId)
+            if (
+                action != null &&
+                membershipPaymentActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyMembershipEvidence(appCtx.shiftCache.profile.value)
+            ) {
+                notice.value = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
+                return@launch
+            }
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipPaymentDao().retryAction(actionId)
                 }
@@ -1419,8 +1440,8 @@ class MembershipsViewModel : ViewModel() {
                 var captureError: String? = null
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) commit@{
                         val profile = appCtx.shiftCache.profile.value
-                        if (!canManageMembershipMoney(profile)) {
-                            captureError = "Only a protected owner can resolve legacy refund evidence."
+                        if (!canRecoverLegacyMembershipEvidence(profile)) {
+                            captureError = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
                             return@commit
                         }
                         val terminalId = appCtx.terminalStore.terminalId()
@@ -1513,6 +1534,15 @@ class MembershipsViewModel : ViewModel() {
     fun retryRefundAction(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            val action = db.membershipRefundMoneyDao().actionById(actionId)
+            if (
+                action != null &&
+                membershipRefundActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyMembershipEvidence(appCtx.shiftCache.profile.value)
+            ) {
+                notice.value = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
+                return@launch
+            }
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipRefundMoneyDao().retryAction(actionId)
                 }

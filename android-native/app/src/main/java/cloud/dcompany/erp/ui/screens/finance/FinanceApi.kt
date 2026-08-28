@@ -21,12 +21,11 @@ import retrofit2.http.Query
  *
  * Every endpoint below is behind the same `finance.read`/`finance.write`/
  * `finance.partner.write`/`finance.assets.write` permissions the backend
- * enforces — this app shows every write affordance optimistically and lets a
- * 403 land as a rejected outbox row with the server's own message, rather
- * than trying to pre-derive fine-grained permission state from the
- * module-level `accessible_modules` list `/auth/me` returns (which cannot
- * distinguish "can read finance" from "can write assets" anyway). The base
- * URL already ends in /api/v1/, hence the relative paths.
+ * enforces. Expense/asset/capital creates use the durable outbox; manual
+ * collections and tip payouts are deliberately live-only because they alter
+ * revenue or settle money owed to staff. Those live writes are protected by
+ * an exact-request recovery checkpoint and the server's idempotency/audit
+ * contract. The base URL already ends in /api/v1/, hence the relative paths.
  */
 interface FinanceApi {
 
@@ -62,6 +61,49 @@ interface FinanceApi {
         @Header("Idempotency-Key") key: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Expense
+
+    /** Immutable off-POS collection register. Reads may be cached, but every
+     * create/void is a live, audited server operation. */
+    @GET("finance/manual-collections")
+    suspend fun manualCollections(
+        @Query("include_voided") includeVoided: Boolean = true,
+        @Query("limit") limit: Int = 500,
+    ): List<ManualCollection>
+
+    @POST("finance/manual-collections")
+    suspend fun createManualCollection(
+        @Body body: ManualCollectionCreate,
+        @Header("Idempotency-Key") key: String,
+    ): ManualCollection
+
+    @POST("finance/manual-collections/{collection_id}/void")
+    suspend fun voidManualCollection(
+        @Path("collection_id") collectionId: String,
+        @Body body: FinanceVoidRequest,
+    ): ManualCollection
+
+    /** The only supported way to clear money already posted to Tips Payable. */
+    @GET("finance/tip-payouts")
+    suspend fun tipPayouts(
+        @Query("include_voided") includeVoided: Boolean = true,
+        @Query("limit") limit: Int = 500,
+    ): List<TipPayout>
+
+    @POST("finance/tip-payouts")
+    suspend fun createTipPayout(
+        @Body body: TipPayoutCreate,
+        @Header("Idempotency-Key") key: String,
+    ): TipPayout
+
+    @POST("finance/tip-payouts/{payout_id}/void")
+    suspend fun voidTipPayout(
+        @Path("payout_id") payoutId: String,
+        @Body body: FinanceVoidRequest,
+    ): TipPayout
+
+    /** Supplies the live Tips Payable balance used to prevent over-payout. */
+    @GET("accounting/trial-balance")
+    suspend fun trialBalance(): TrialBalance
 
     @GET("finance/partners")
     suspend fun partners(): List<Partner>

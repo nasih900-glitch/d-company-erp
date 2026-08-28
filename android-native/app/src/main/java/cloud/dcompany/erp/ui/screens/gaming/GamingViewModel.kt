@@ -9,6 +9,7 @@ import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
@@ -408,6 +409,95 @@ internal fun gamingStartShiftBlockMessage(
     else -> null
 }
 
+internal enum class GamingPosRoute { LOCAL, CROSS_TERMINAL, BLOCKED }
+
+/** Purpose is authoritative; neither a terminal count nor an editable name may route money. */
+internal fun gamingPosRoute(terminalPurpose: String?): GamingPosRoute = when (terminalPurpose) {
+    TerminalPurpose.CAFE_POS,
+    TerminalPurpose.HYBRID,
+    -> GamingPosRoute.LOCAL
+    TerminalPurpose.GAMING -> GamingPosRoute.CROSS_TERMINAL
+    else -> GamingPosRoute.BLOCKED
+}
+
+internal fun gamingStartTerminalBlockMessage(terminalPurpose: String?): String? = when (terminalPurpose) {
+    TerminalPurpose.CAFE_POS ->
+        "This tablet is set to Cafe POS. Use Change terminal and select Gaming Area before starting a session."
+    TerminalPurpose.GAMING,
+    TerminalPurpose.HYBRID,
+    -> null
+    else ->
+        "This tablet's terminal purpose is not recognised. Reconnect and ask an owner to verify Terminal settings."
+}
+
+data class PosTargetSelectionUi(
+    val session: GameSession,
+    val serverSessionId: String,
+    val sourceTerminalId: String,
+    val targets: List<PosTargetShift>,
+)
+
+internal fun posTargetListError(
+    targets: List<PosTargetShift>,
+    sourceTerminalId: String,
+): String? = when {
+    targets.isEmpty() ->
+        "No eligible Cafe POS shift is open. Ask the Cafe POS cashier to open a shift, then retry. " +
+            "This ended bill remains saved in Gaming."
+    targets.any {
+        it.shiftId.isBlank() || it.terminalId.isBlank() || it.terminalId == sourceTerminalId ||
+            it.terminalName.isBlank() || it.openedByName.isBlank()
+    } ->
+        "The receiving till list could not be verified. This ended bill remains saved in Gaming; refresh and try again."
+    targets.distinctBy(PosTargetShift::shiftId).size != targets.size ->
+        "The receiving till list contained duplicate shifts. This ended bill remains saved in Gaming; refresh and try again."
+    else -> null
+}
+
+internal fun canConfirmPosTargetSelection(
+    selectedShiftId: String?,
+    targets: List<PosTargetShift>,
+): Boolean = !selectedShiftId.isNullOrBlank() && targets.any { it.shiftId == selectedShiftId }
+
+internal fun posHandoffResponseError(
+    session: GameSession,
+    sourceTerminalId: String,
+    target: PosTargetShift,
+    result: SessionPosHandoffResult,
+): String? = when {
+    result.orderId.isBlank() || result.amountMinor <= 0L ->
+        "The server did not return a complete held-order receipt."
+    session.shiftId.isNullOrBlank() || result.sourceShiftId != session.shiftId ->
+        "The server receipt did not preserve the gaming session's source shift."
+    result.sourceTerminalId != sourceTerminalId ->
+        "The server receipt did not match this Gaming Area terminal."
+    result.targetShiftId != target.shiftId || result.targetTerminalId != target.terminalId ->
+        "The server receipt did not match the selected Cafe POS shift."
+    else -> null
+}
+
+internal fun posTargetLoadFailureMessage(failure: ApiException): String = when {
+    failure.status == null ->
+        "Reconnect to load open Cafe POS shifts. This ended bill remains saved in Gaming."
+    failure.status == 401 || failure.status == 403 ->
+        "This account cannot choose a Cafe POS shift. Ask an owner to verify Gaming and POS access. " +
+            "This ended bill remains saved in Gaming."
+    else ->
+        "Could not load Cafe POS shifts: ${failure.message ?: "refresh Gaming and try again."} " +
+            "This ended bill remains saved in Gaming."
+}
+
+internal fun posHandoffFailureMessage(
+    failure: ApiException,
+    terminalName: String,
+): String = if (failure.isAmbiguous) {
+    "The response from $terminalName was lost. This bill remains visible in Gaming. " +
+        "Retry the same shift; the server will return the linked order without creating a duplicate."
+} else {
+    "Could not send to $terminalName: ${failure.message ?: "the selected shift is no longer eligible."} " +
+        "This ended bill remains saved in Gaming; reopen Send to POS to refresh the shift list."
+}
+
 internal fun calculateCapturedTimerEndsAtMillis(startedAtMillis: Long, timerMinutes: Int?): Long? {
     if (timerMinutes == null) return null
     return runCatching {
@@ -516,12 +606,17 @@ class GamingViewModel : ViewModel() {
     private val resolvedShift = db.shiftDao().observeResolvedOpenShift(
         appCtx.terminalStore.terminalIdFlow,
     )
+    /** Validated, persisted purpose is part of the same terminal authority as X-Terminal-Id. */
+    val activeTerminal: StateFlow<ValidatedTerminalDisplay?> =
+        appCtx.terminalStore.activeValidatedTerminal
 
     private val busyStationId = MutableStateFlow<String?>(null)
     private val error = MutableStateFlow<String?>(null)
     private val notice = MutableStateFlow<String?>(null)
     private val refreshing = MutableStateFlow(true)
     private val refreshError = MutableStateFlow<String?>(null)
+    private val _posTargetSelection = MutableStateFlow<PosTargetSelectionUi?>(null)
+    val posTargetSelection: StateFlow<PosTargetSelectionUi?> = _posTargetSelection
     @Volatile private var access = GamingAccess()
 
     private data class ScreenState(
@@ -735,6 +830,10 @@ class GamingViewModel : ViewModel() {
         }
         if (state.value.activeFor(station.id) != null) {
             error.value = "This station already has a session to finish, send to POS, or cancel first."
+            return
+        }
+        gamingStartTerminalBlockMessage(activeTerminal.value?.purpose)?.let { message ->
+            error.value = message
             return
         }
         val currentState = state.value
@@ -1263,13 +1362,36 @@ class GamingViewModel : ViewModel() {
         }
     }
 
-    /** Explicit second leg: stopping computes the bill; this creates the POS order. */
+    /**
+     * Explicit second leg: stopping computes the bill; terminal purpose decides
+     * whether the bill stays on this drawer or needs an explicit Cafe POS shift.
+     */
     fun sendToPos(session: GameSession) {
         if (!requireWrite()) return
         if (!session.canSendToPos()) return
         if (!requireIdle()) return
         if (!requireNoPackageExtension(session, "sending the bill to POS")) return
         if (!requireCurrentShiftSession(session, "sending it to POS")) return
+        val terminal = activeTerminal.value ?: run {
+            error.value =
+                "This tablet has no verified terminal purpose. Reconnect and confirm its Terminal setting; " +
+                    "the ended bill remains saved in Gaming."
+            return
+        }
+        _posTargetSelection.value = null
+        when (gamingPosRoute(terminal.purpose)) {
+            GamingPosRoute.LOCAL -> queueLocalPosSend(session)
+            GamingPosRoute.CROSS_TERMINAL -> prepareCrossTerminalPosSend(session, terminal)
+            GamingPosRoute.BLOCKED -> {
+                error.value =
+                    "This tablet's terminal purpose is not recognised. Ask an owner to correct it in Settings. " +
+                        "The ended bill remains saved in Gaming."
+            }
+        }
+    }
+
+    /** Preserve the established durable/offline outbox for Cafe POS and Hybrid terminals. */
+    private fun queueLocalPosSend(session: GameSession) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busyStationId.value = session.stationId
         error.value = null
@@ -1323,6 +1445,184 @@ class GamingViewModel : ViewModel() {
                 busyStationId.value = null
             }
         }
+    }
+
+    /** Gaming-only terminals must choose a live backend-eligible receiving shift. */
+    private fun prepareCrossTerminalPosSend(
+        session: GameSession,
+        terminal: ValidatedTerminalDisplay,
+    ) {
+        if (!state.value.online) {
+            error.value =
+                "Reconnect to load open Cafe POS shifts. This ended bill remains saved in Gaming."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        busyStationId.value = session.stationId
+        error.value = null
+        notice.value = null
+        viewModelScope.launch {
+            try {
+                val local = db.gamingDao().localSessionByEitherId(session.id)
+                val serverSessionId = local?.serverId ?: session.id.takeIf { local == null }
+                if (serverSessionId == null) {
+                    error.value =
+                        "This stopped session is still waiting for server confirmation. Keep it in Gaming, " +
+                            "wait for Sync, then try Send to POS again."
+                    return@launch
+                }
+                val targets = gamingApi.posTargetShifts(serverSessionId)
+                posTargetListError(targets, terminal.terminalId)?.let { message ->
+                    error.value = message
+                    return@launch
+                }
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        _posTargetSelection.value = PosTargetSelectionUi(
+                            session = session,
+                            serverSessionId = serverSessionId,
+                            sourceTerminalId = terminal.terminalId,
+                            targets = targets.sortedWith(
+                                compareBy(String.CASE_INSENSITIVE_ORDER, PosTargetShift::terminalName)
+                                    .thenBy(PosTargetShift::openedAt)
+                                    .thenBy(PosTargetShift::shiftId),
+                            ),
+                        )
+                    }
+                ) return@launch
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: ApiException) {
+                error.value = posTargetLoadFailureMessage(failure)
+                // Another terminal may already have completed the same bill.
+                // A refresh removes it only when the authoritative order link exists.
+                if (failure.message?.contains("already sent", ignoreCase = true) == true) {
+                    try {
+                        appCtx.sync.refresh("gaming")
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (refreshFailure: Exception) {
+                        Log.w(
+                            "GamingViewModel",
+                            "Could not refresh an already-linked Gaming handoff",
+                            refreshFailure,
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                error.value =
+                    "Could not verify open Cafe POS shifts. This ended bill remains saved in Gaming; " +
+                        "check the connection and try again."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    /**
+     * Confirm exactly one target from the current picker. The ended row is not
+     * moved to SEND_PENDING: only a validated server receipt hides it, so every
+     * timeout/refusal remains visible and safely retryable.
+     */
+    fun handoffToPos(targetShiftId: String) {
+        val selection = _posTargetSelection.value ?: return
+        val target = selection.targets.firstOrNull { it.shiftId == targetShiftId } ?: run {
+            error.value = "Choose one of the open Cafe POS shifts shown in this dialog."
+            return
+        }
+        val session = selection.session
+        if (!requireWrite()) return
+        if (!session.canSendToPos()) return
+        if (!requireIdle()) return
+        if (!requireNoPackageExtension(session, "sending the bill to POS")) return
+        if (!requireCurrentShiftSession(session, "sending it to POS")) return
+        val active = activeTerminal.value
+        if (
+            active == null || active.terminalId != selection.sourceTerminalId ||
+            gamingPosRoute(active.purpose) != GamingPosRoute.CROSS_TERMINAL
+        ) {
+            _posTargetSelection.value = null
+            error.value =
+                "This tablet's verified terminal changed. The bill remains in Gaming; reopen Send to POS " +
+                    "after confirming the correct Gaming Area terminal."
+            return
+        }
+        if (!state.value.online) {
+            error.value =
+                "Reconnect before sending this bill to ${target.terminalName}. It remains saved in Gaming."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        busyStationId.value = session.stationId
+        error.value = null
+        notice.value = null
+        viewModelScope.launch {
+            try {
+                val result = gamingApi.handoffToPos(
+                    id = selection.serverSessionId,
+                    body = SessionPosHandoffBody(targetShiftId = target.shiftId),
+                )
+                posHandoffResponseError(
+                    session = session,
+                    sourceTerminalId = selection.sourceTerminalId,
+                    target = target,
+                    result = result,
+                )?.let { mismatch ->
+                    error.value =
+                        "$mismatch The ended bill remains visible; refresh Gaming and contact support before retrying."
+                    return@launch
+                }
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val dao = db.gamingDao()
+                        db.withTransaction {
+                            dao.localSessionByEitherId(session.id)?.let { local ->
+                                dao.markSessionSent(local.localId, result.orderId, result.amountMinor)
+                            }
+                            dao.markCachedSessionSent(
+                                selection.serverSessionId,
+                                result.orderId,
+                                result.amountMinor,
+                            )
+                        }
+                        _posTargetSelection.value = null
+                        GamingAlarmReconciler.reconcile(appCtx)
+                    }
+                ) return@launch
+                notice.value = if (result.alreadyLinked) {
+                    "This bill was already waiting at ${target.terminalName}; no duplicate order was created."
+                } else {
+                    "Bill sent to ${target.terminalName}. ${target.openedByName}'s open shift will receive it in POS."
+                }
+                try {
+                    appCtx.sync.refresh("gaming")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (refreshFailure: Exception) {
+                    Log.w(
+                        "GamingViewModel",
+                        "Cross-terminal POS handoff committed; deferred Gaming refresh failed",
+                        refreshFailure,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: ApiException) {
+                error.value = posHandoffFailureMessage(failure, target.terminalName)
+                // Ambiguous responses keep the exact selected shift visible so
+                // retry exercises backend natural idempotency. A definitive
+                // refusal reloads eligibility on the next Send tap.
+                if (!failure.isAmbiguous) _posTargetSelection.value = null
+            } catch (_: Exception) {
+                error.value =
+                    "The result from ${target.terminalName} could not be verified. This bill remains visible " +
+                        "in Gaming; retry this same shift when connected so no duplicate can be created."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    fun dismissPosTargetSelection() {
+        if (busyStationId.value == null) _posTargetSelection.value = null
     }
 
     /** Reminder-only +time for non-package sessions; final billing stays elapsed-time based. */

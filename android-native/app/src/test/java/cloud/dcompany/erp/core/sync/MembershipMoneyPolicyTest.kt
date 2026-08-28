@@ -4,6 +4,9 @@ import cloud.dcompany.erp.core.db.MembershipPaymentActionKind
 import cloud.dcompany.erp.core.db.MembershipPaymentTaskStatus
 import cloud.dcompany.erp.core.db.MembershipRefundActionKind
 import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
+import cloud.dcompany.erp.core.db.MembershipMoneyActionState
+import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
+import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -121,6 +124,68 @@ class MembershipMoneyPolicyTest {
             paymentStageSatisfied(
                 MembershipPaymentActionKind.LEGACY_PROBE,
                 MembershipPaymentTaskStatus.SETTLED,
+            ),
+        )
+    }
+
+    @Test
+    fun `legacy payment and refund actions are reserved for Audit Control`() {
+        assertTrue(
+            membershipPaymentActionRequiresAuditControl(
+                MembershipPaymentActionKind.LEGACY_PROBE,
+                MembershipMoneyActionState.PENDING,
+            ),
+        )
+        assertTrue(
+            membershipPaymentActionRequiresAuditControl(
+                MembershipPaymentActionKind.LEGACY_RESOLVE,
+                MembershipMoneyActionState.AMBIGUOUS,
+            ),
+        )
+        assertTrue(
+            membershipRefundActionRequiresAuditControl(
+                MembershipRefundActionKind.LEGACY_REGISTER,
+                MembershipMoneyActionState.PENDING,
+            ),
+        )
+        assertTrue(
+            membershipRefundActionRequiresAuditControl(
+                MembershipRefundActionKind.LEGACY_RECONCILE_SERVER,
+                MembershipMoneyActionState.PENDING,
+            ),
+        )
+        assertTrue(
+            membershipRefundActionRequiresAuditControl(
+                MembershipRefundActionKind.LEGACY_RESOLVE,
+                MembershipMoneyActionState.AMBIGUOUS,
+            ),
+        )
+    }
+
+    @Test
+    fun `ordinary money actions remain available while quarantined evidence escalates`() {
+        assertFalse(
+            membershipPaymentActionRequiresAuditControl(
+                MembershipPaymentActionKind.PREPARE,
+                MembershipMoneyActionState.PENDING,
+            ),
+        )
+        assertFalse(
+            membershipRefundActionRequiresAuditControl(
+                MembershipRefundActionKind.ACCEPT,
+                MembershipMoneyActionState.PENDING,
+            ),
+        )
+        assertTrue(
+            membershipPaymentActionRequiresAuditControl(
+                MembershipPaymentActionKind.COMPLETE,
+                MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
+            ),
+        )
+        assertTrue(
+            membershipRefundActionRequiresAuditControl(
+                MembershipRefundActionKind.COMPLETE_PROVIDER,
+                MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
             ),
         )
     }

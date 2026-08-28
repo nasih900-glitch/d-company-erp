@@ -21,17 +21,13 @@ import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
-  finance, insights, settings, reports,
-  type ExpenseDTO, type PartnerDTO, type BranchDTO, type ExpenseCategoryDTO,
+  finance, insights, pos, settings, reports,
+  type ExpenseDTO, type PartnerDTO, type BranchReferenceDTO, type ExpenseCategoryDTO,
   type CapitalEntryDTO, type ReportDataDTO, type PartnerPLReportDTO,
   type BusinessMetricsDTO, type DistributableProfitReportDTO,
   type CostingCoverageDTO,
 } from '@/lib/erp-api';
-import {
-  DEFAULT_BUSINESS_TIMEZONE,
-  dateISOInTimeZone,
-  rupeesToMinor,
-} from '@/lib/manual-collections';
+import { rupeesToMinor } from '@/lib/manual-collections';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
@@ -95,19 +91,16 @@ function OverviewTab() {
   async function load() {
     setLoading(true); setErr(null);
     try {
-      const [company, businessMetrics, costingCoverage] = await Promise.all([
-        settings.getCompany(),
+      const [receiptIdentity, daily, businessMetrics, costingCoverage] = await Promise.all([
+        pos.receiptBusiness().catch(() => null),
+        reports.daily(),
         finance.businessMetrics(),
         insights.costingCoverage(),
       ]);
-      const daily = await reports.daily(dateISOInTimeZone(
-        new Date(),
-        company.timezone || DEFAULT_BUSINESS_TIMEZONE,
-      ));
       setData(daily);
       setMetrics(businessMetrics);
       setCosting(costingCoverage);
-      setGstRegistered(company.gst_registration_type !== 'unregistered');
+      setGstRegistered(receiptIdentity?.gst_registration_type !== 'unregistered');
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
@@ -301,7 +294,7 @@ function ExpensesTab() {
   const notifications = useNotifications();
   const [rows, setRows] = useState<ExpenseDTO[]>([]);
   const [cats, setCats] = useState<ExpenseCategoryDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -314,7 +307,7 @@ function ExpensesTab() {
       const [r, c, b] = await Promise.all([
         finance.listExpenses(),
         settings.listExpenseCategories(),
-        settings.listBranches(),
+        finance.listBranches(),
       ]);
       setRows(r); setCats(c); setBranches(b);
     } catch (e) { setErr((e as Error).message); }
@@ -364,7 +357,7 @@ function ExpensesTab() {
           <AlertCircle size={14} className="mt-0.5"/>
           <div>
             You need at least one branch and one expense category before adding expenses.
-            {!branches.length && <> Add a branch in <b>Settings → Branches</b>.</>}
+            {!branches.length && <> Ask the protected owner to check your shop access.</>}
           </div>
         </div>
       )}
@@ -474,7 +467,7 @@ function ExpenseForm({
   cats, branches, onClose, onSuccess,
 }: {
   cats: ExpenseCategoryDTO[];
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   onClose: () => void;
   onSuccess: () => void;
 }) {

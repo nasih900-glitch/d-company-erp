@@ -69,13 +69,12 @@ class Settings(BaseSettings):
     # Native release compatibility is server-controlled. Raising the minimum
     # lets operations block a build whose local schema/API contract is no
     # longer safe, without shipping another already-obsolete APK first.
-    # v5 is the first build that supplies the conflict-safe Gaming pricing and
-    # timer snapshots required by the current write API, so it remains the
-    # minimum. v7 is the next distributed candidate after material app fixes;
-    # v6 remains supported so an employee can finish and sync an existing shift.
-    # Older native builds must be stopped before they reach write handlers.
-    android_min_supported_version_code: int = Field(default=5, ge=1)
-    android_latest_version_code: int = Field(default=7, ge=1)
+    # v8 is the first build that understands authoritative terminal purposes
+    # and the explicit Gaming Area -> Cafe POS handoff. Older clients can route
+    # a bill to the wrong local shift, so they must be stopped before reaching
+    # operational write handlers.
+    android_min_supported_version_code: int = Field(default=8, ge=1)
+    android_latest_version_code: int = Field(default=8, ge=1)
     android_update_url: AnyHttpUrl | None = None
     ios_min_supported_version_code: int = Field(default=1, ge=1)
     ios_latest_version_code: int = Field(default=1, ge=1)

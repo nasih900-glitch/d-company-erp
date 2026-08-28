@@ -6,11 +6,15 @@ import cloud.dcompany.erp.core.net.MeResponse
 
 /** Membership money writes require both server permission and protected-owner identity. */
 fun canManageMemberships(profile: MeResponse): Boolean =
-    profile.protectedAccess && EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+    EffectivePermissions.from(profile).membershipAccess(profile).canManageMoney
+
+/** Legacy attempt/evidence recovery is Audit Control, not ordinary owner work. */
+fun canRecoverMembershipEvidence(profile: MeResponse): Boolean =
+    EffectivePermissions.from(profile).membershipAccess(profile).canRecoverLegacyEvidence
 
 /** Settings management follows the same server permission as its write endpoints. */
 fun canManageSystemSettings(profile: MeResponse): Boolean =
-    EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+    EffectivePermissions.from(profile).has(ErpPermission.SettingsManage)
 
 /** The minimum server permission needed for each Android destination. */
 fun allowedDestinations(profile: MeResponse): List<Destination> {
@@ -20,6 +24,10 @@ fun allowedDestinations(profile: MeResponse): List<Destination> {
             Destination.Pos -> permissions.has(ErpPermission.PosRead)
             Destination.Gaming -> permissions.has(ErpPermission.GamingRead)
             Destination.Tables -> permissions.has(ErpPermission.TablesRead)
+            Destination.Reservations -> permissions.hasAny(
+                ErpPermission.TablesRead,
+                ErpPermission.GamingRead,
+            )
             Destination.Kitchen -> permissions.has(ErpPermission.KitchenRead)
             Destination.Shift -> permissions.hasAny(
                 ErpPermission.PosShiftOpen,

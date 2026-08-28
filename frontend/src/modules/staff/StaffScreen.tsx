@@ -27,6 +27,7 @@ import Modal from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { buildStaffAccessPatch, canChangeStaffAccess } from './staff-edit-policy';
 
 const ROLE_COLOR: Record<string, string> = {
   super_owner: 'border-accent-gold/70 text-accent-gold',
@@ -150,6 +151,12 @@ export default function StaffScreen() {
             <UserCard
               key={u.id}
               user={u}
+              canChangeAccess={canChangeStaffAccess({
+                callerUserId: me?.user_id ?? null,
+                targetUserId: u.id,
+                targetRoles: u.roles,
+                callerHasAuditAccess: Boolean(me?.audit_access),
+              })}
               onEdit={() => setEditUser(u)}
               onPassword={() => setPwdUser(u)}
               onToggle={() => onToggleStatus(u)}
@@ -177,6 +184,7 @@ export default function StaffScreen() {
           user={editUser}
           roles={roles}
           currentUserId={me?.user_id ?? null}
+          canManageOwnerAccess={Boolean(me?.audit_access)}
           onClose={() => setEditUser(null)}
           onSuccess={() => {
             setEditUser(null);
@@ -336,9 +344,10 @@ function formatClockTime(iso: string): string {
 
 // ---------------------------------------------------------------- UserCard
 function UserCard({
-  user, onEdit, onPassword, onToggle, onDelete,
+  user, canChangeAccess, onEdit, onPassword, onToggle, onDelete,
 }: {
   user: UserDTO;
+  canChangeAccess: boolean;
   onEdit: () => void;
   onPassword: () => void;
   onToggle: () => void;
@@ -374,20 +383,25 @@ function UserCard({
         <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs" onClick={onPassword}>
           <KeyRound size={11}/> Password
         </button>
-        <button
-          className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
-          onClick={onToggle}
-        >
-          {user.status === 'active'
-            ? <><ShieldOff size={11}/> Suspend</>
-            : <><ShieldCheck size={11}/> Activate</>}
-        </button>
-        <button
-          className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad ml-auto"
-          onClick={onDelete}
-        >
-          <Trash2 size={11}/>
-        </button>
+        {canChangeAccess && (
+          <>
+            <button
+              className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+              onClick={onToggle}
+            >
+              {user.status === 'active'
+                ? <><ShieldOff size={11}/> Suspend</>
+                : <><ShieldCheck size={11}/> Activate</>}
+            </button>
+            <button
+              className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad ml-auto"
+              aria-label={`Delete ${user.name}`}
+              onClick={onDelete}
+            >
+              <Trash2 size={11}/>
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -482,22 +496,29 @@ function AddUserModal({
 
 // ---------------------------------------------------------------- Edit
 function EditUserModal({
-  user, roles, currentUserId, onClose, onSuccess,
+  user, roles, currentUserId, canManageOwnerAccess, onClose, onSuccess,
 }: {
   user: UserDTO;
   roles: RoleDTO[];
   currentUserId: string | null;
+  canManageOwnerAccess: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const protectedOwner = user.id === currentUserId;
+  const isSelf = user.id === currentUserId;
+  const originalRoleCode = user.roles[0] ?? 'cashier';
+  const isOwner = user.roles.some((role) => (
+    role === 'owner' || role === 'co_owner' || role === 'super_owner'
+  ));
+  const accessChangesLocked = isSelf || (isOwner && !canManageOwnerAccess);
   const roleOptions = roles.filter((role) => role.code !== 'super_owner');
   const [form, setForm] = useState({
     name: user.name,
     phone: user.phone ?? '',
-    role_code: user.roles[0] ?? 'cashier',
+    role_code: originalRoleCode,
     status: user.status,
   });
+  const [roleSelectionChanged, setRoleSelectionChanged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -505,11 +526,18 @@ function EditUserModal({
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
+      const accessPatch = buildStaffAccessPatch({
+        originalRoleCode,
+        selectedRoleCode: form.role_code,
+        roleSelectionChanged,
+        originalStatus: user.status,
+        selectedStatus: form.status,
+        accessChangesLocked,
+      });
       await staff.updateUser(user.id, {
         name: form.name.trim(),
-        phone: form.phone.trim() || undefined,
-        role_code: protectedOwner ? undefined : form.role_code,
-        status: form.status,
+        phone: form.phone.trim() || null,
+        ...accessPatch,
       });
       onSuccess();
     } catch (e) {
@@ -532,11 +560,19 @@ function EditUserModal({
             onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
         </Field>
         <Field label="Role">
-          {protectedOwner ? (
-            <input className="input" value="Owner" disabled/>
+          {accessChangesLocked ? (
+            <input
+              className="input"
+              value={roleOptions.find((role) => role.code === originalRoleCode)?.name
+                ?? roleLabel(originalRoleCode)}
+              disabled
+            />
           ) : (
             <select className="input" value={form.role_code}
-              onChange={(e) => setForm({ ...form, role_code: e.target.value })}>
+              onChange={(e) => {
+                setRoleSelectionChanged(true);
+                setForm({ ...form, role_code: e.target.value });
+              }}>
               {roleOptions.map((r) => (
                 <option key={r.code} value={r.code}>{r.name}</option>
               ))}
@@ -544,12 +580,23 @@ function EditUserModal({
           )}
         </Field>
         <Field label="Status">
-          <select className="input" value={form.status}
-            onChange={(e) => setForm({ ...form, status: e.target.value as 'active' | 'suspended' })}>
-            <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
-          </select>
+          {accessChangesLocked ? (
+            <input className="input" value={form.status === 'active' ? 'Active' : 'Suspended'} disabled/>
+          ) : (
+            <select className="input" value={form.status}
+              onChange={(e) => setForm({ ...form, status: e.target.value as 'active' | 'suspended' })}>
+              <option value="active">Active</option>
+              <option value="suspended">Suspended</option>
+            </select>
+          )}
         </Field>
+        {accessChangesLocked && (
+          <p className="text-xs text-fg-muted">
+            {isSelf
+              ? 'Role and status are locked on your own account.'
+              : 'Only the protected owner can change access for an owner account.'}
+          </p>
+        )}
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>

@@ -243,7 +243,7 @@ async def test_standard_owner_reaches_operational_modules_but_not_protected_admi
         assert response.status_code == 200, f"{path}: {response.text}"
 
     settings = await client.get("/api/v1/settings/company", headers=headers)
-    assert settings.status_code == 403
+    assert settings.status_code == 200
 
     audit = await client.post(
         "/api/v1/admin/audit/unlock",

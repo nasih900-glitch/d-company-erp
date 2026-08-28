@@ -1,6 +1,6 @@
 [project]
 name = "d-company-erp-backend"
-version = "3.0.6"
+version = "3.0.7"
 description = "D Company ERP — backend (FastAPI, SQLAlchemy, PostgreSQL)"
 requires-python = ">=3.11"
 dependencies = [

@@ -5,8 +5,7 @@ import Modal from '@/components/ui/Modal';
 import {
   accounting,
   finance,
-  settings,
-  type BranchDTO,
+  type BranchReferenceDTO,
   type TipPayoutDTO,
   type TipPayoutMethod,
 } from '@/lib/erp-api';
@@ -23,7 +22,7 @@ const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
 export default function TipPayoutsTab() {
   const { me } = useAuth();
   const [rows, setRows] = useState<TipPayoutDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [tipsPayableBalance, setTipsPayableBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -36,7 +35,7 @@ export default function TipPayoutsTab() {
     try {
       const [payouts, branchRows, trialBalance] = await Promise.all([
         finance.listTipPayouts({ include_voided: true, limit: 500 }),
-        settings.listBranches(),
+        finance.listBranches(),
         accounting.trialBalance(),
       ]);
       setRows(payouts);
@@ -103,7 +102,7 @@ export default function TipPayoutsTab() {
 
       {!branches.length && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
-          Add a branch in <b>Settings → Branches</b> before recording a payout.
+          No shop is available for this payout. Ask the protected owner to check your shop access.
         </div>
       )}
       {err && <ErrorRow text={err}/>}
@@ -251,7 +250,7 @@ function TipPayoutForm({
   onClose,
   onSuccess,
 }: {
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   defaultBranchId: string;
   tipsPayableBalance: number | null;
   onClose: () => void;

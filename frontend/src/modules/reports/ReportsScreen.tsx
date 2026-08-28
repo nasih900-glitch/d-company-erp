@@ -20,11 +20,10 @@ import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   analytics as analyticsApi,
   insights,
+  pos,
   reports as reportsApi,
-  settings,
-  type BranchDTO,
-  type CompanyDTO,
   type CostingCoverageDTO,
+  type ReceiptBusinessDTO,
 } from '@/lib/erp-api';
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
 import { useAuth } from '@/modules/auth/AuthContext';
@@ -146,8 +145,7 @@ export default function ReportsScreen() {
   const [taxError, setTaxError] = useState<string | null>(null);
   const [loading, setLoading] = useState(LIVE_MODE);
   const [error, setError] = useState<string | null>(null);
-  const [company, setCompany] = useState<CompanyDTO | null>(null);
-  const [branch, setBranch] = useState<BranchDTO | null>(null);
+  const [receiptIdentity, setReceiptIdentity] = useState<ReceiptBusinessDTO | null>(null);
   const [timezoneReady, setTimezoneReady] = useState(!LIVE_MODE);
   const [exportingPeriod, setExportingPeriod] = useState(false);
   const [exportingGstr1, setExportingGstr1] = useState(false);
@@ -201,16 +199,15 @@ export default function ReportsScreen() {
   useEffect(() => {
     if (!LIVE_MODE) return;
     let cancelled = false;
-    Promise.all([settings.getCompany(), settings.listBranches()])
-      .then(([companyData, branches]) => {
+    pos.receiptBusiness()
+      .then((identity) => {
         if (cancelled) return;
         const businessToday = dateISOInTimeZone(
           new Date(),
-          companyData.timezone || DEFAULT_BUSINESS_TIMEZONE,
+          identity.timezone || DEFAULT_BUSINESS_TIMEZONE,
         );
         const businessDate = parseISODate(businessToday);
-        setCompany(companyData);
-        setBranch(branches[0] ?? null);
+        setReceiptIdentity(identity);
         setOnDate(businessToday);
         setWeekDate(businessToday);
         setMonth(businessToday.slice(0, 7));
@@ -221,8 +218,7 @@ export default function ReportsScreen() {
       })
       .catch(() => {
         if (cancelled) return;
-        setCompany(null);
-        setBranch(null);
+        setReceiptIdentity(null);
         setTimezoneReady(true);
       });
     return () => { cancelled = true; };
@@ -305,16 +301,16 @@ export default function ReportsScreen() {
       {/* Print-only header */}
       <div className="hidden print:block mb-4">
         <h1 className="text-2xl font-bold text-black">
-          {LIVE_MODE ? (company?.legal_name || company?.name || 'D Company') : COMPANY.name}
+          {LIVE_MODE ? (receiptIdentity?.supplier_name || receiptIdentity?.brand_name || 'D Company') : COMPANY.name}
         </h1>
         <p className="text-xs text-black/70">
-          {LIVE_MODE ? (branch?.address || 'Business address not configured') : COMPANY.address}
+          {LIVE_MODE ? (receiptIdentity?.address || 'Business address not configured') : COMPANY.address}
         </p>
-        {LIVE_MODE && (branch?.branch_gstin || company?.gstin) && (
-          <p className="text-xs text-black/70">GSTIN: {branch?.branch_gstin || company?.gstin}</p>
+        {LIVE_MODE && receiptIdentity?.gstin && (
+          <p className="text-xs text-black/70">GSTIN: {receiptIdentity.gstin}</p>
         )}
-        {LIVE_MODE && branch?.fssai_license_no && (
-          <p className="text-xs text-black/70">FSSAI: {branch.fssai_license_no}</p>
+        {LIVE_MODE && receiptIdentity?.fssai_license_no && (
+          <p className="text-xs text-black/70">FSSAI: {receiptIdentity.fssai_license_no}</p>
         )}
         {!LIVE_MODE && <p className="text-xs text-black/70">Sample report - not for filing</p>}
       </div>

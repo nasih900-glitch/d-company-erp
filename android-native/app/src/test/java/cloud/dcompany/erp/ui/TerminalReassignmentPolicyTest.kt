@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -89,7 +90,7 @@ class TerminalReassignmentPolicyTest {
 
     @Test
     fun `workspace label uses verified branch name and exact terminal`() {
-        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a")
+        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
             "Main Cafe · Till Front",
@@ -104,7 +105,7 @@ class TerminalReassignmentPolicyTest {
 
     @Test
     fun `legacy profile hides internal branch id but keeps exact terminal`() {
-        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a")
+        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
             "Assigned branch · Till Front",
@@ -119,7 +120,7 @@ class TerminalReassignmentPolicyTest {
 
     @Test
     fun `workspace label ignores detached name when branch is unassigned`() {
-        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a")
+        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
             "Branch not assigned · Till name pending verification",
@@ -134,7 +135,7 @@ class TerminalReassignmentPolicyTest {
 
     @Test
     fun `workspace label never displays terminal metadata from another branch`() {
-        val display = ValidatedTerminalDisplay("till-1", "Other shop", "branch-b")
+        val display = ValidatedTerminalDisplay("till-1", "Other shop", "branch-b", TerminalPurpose.HYBRID)
 
         assertEquals(
             "Main Cafe · Till name pending verification",

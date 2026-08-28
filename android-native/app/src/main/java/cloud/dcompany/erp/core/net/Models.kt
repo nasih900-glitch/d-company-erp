@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.net
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -69,6 +70,8 @@ data class Terminal(
     val id: String,
     val name: String,
     @SerialName("branch_id") val branchId: String,
+    /** Absent only on a pre-purpose server; migration-compatible local behavior is hybrid. */
+    val purpose: String = TerminalPurpose.HYBRID,
 )
 
 @Serializable

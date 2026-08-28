@@ -118,8 +118,8 @@ them as distributable clients.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The next source candidate is `3.0.6` (`7`), but
-`v3.0.6` must not be tagged until its final gates pass. The workflow tests and
+`.github/workflows/release.yml`. The next source candidate is `3.0.7` (`8`), but
+`v3.0.7` must not be tagged until its final gates pass. The workflow tests and
 signs the native Android build, then attaches only verified signed Android
 artifacts to the GitHub Release.
 

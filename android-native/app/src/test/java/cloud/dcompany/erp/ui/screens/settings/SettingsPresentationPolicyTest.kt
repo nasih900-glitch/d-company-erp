@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -7,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.http.PATCH
 
 class SettingsPresentationPolicyTest {
 
@@ -18,6 +21,62 @@ class SettingsPresentationPolicyTest {
         assertEquals(
             "Tablet device ID must be 100 characters or fewer.",
             terminalDeviceIdError("x".repeat(101)),
+        )
+    }
+
+    @Test
+    fun `terminal edit validates and preserves explicit device unbinding`() {
+        val valid = TerminalEditForm(
+            id = "terminal-a",
+            branchId = "branch-a",
+            originalName = "Main Terminal",
+            name = " Cafe POS ",
+            purpose = TerminalPurpose.CAFE_POS,
+            deviceId = " ",
+        )
+
+        assertNull(valid.validate())
+        assertEquals("Cafe POS", valid.toBody().name)
+        assertEquals(TerminalPurpose.CAFE_POS, valid.toBody().purpose)
+        assertEquals("", valid.toBody().deviceId)
+        assertTrue(json.encodeToString(valid.toBody()).contains("\"device_id\":\"\""))
+        assertEquals(
+            "Give the till a name.",
+            valid.copy(name = "   ").validate(),
+        )
+        assertEquals(
+            "Choose how this terminal will be used.",
+            valid.copy(purpose = "future-purpose").validate(),
+        )
+    }
+
+    @Test
+    fun `legacy terminal decode defaults to hybrid but writes send explicit purpose`() {
+        val legacy = json.decodeFromString<TerminalDto>(
+            """{"id":"terminal-a","branch_id":"branch-a","name":"Old till"}""",
+        )
+        val create = TerminalCreateBody(
+            branchId = "branch-a",
+            name = "Gaming Area",
+            purpose = TerminalPurpose.GAMING,
+        )
+
+        assertEquals(TerminalPurpose.HYBRID, legacy.purpose)
+        assertTrue(json.encodeToString(create).contains("\"purpose\":\"gaming\""))
+    }
+
+    @Test
+    fun `settings API patches the existing terminal identity`() {
+        val method = SettingsApi::class.java.getDeclaredMethod(
+            "updateTerminal",
+            String::class.java,
+            TerminalUpdateBody::class.java,
+            kotlin.coroutines.Continuation::class.java,
+        )
+
+        assertEquals(
+            "settings/terminals/{id}",
+            method.getAnnotation(PATCH::class.java)?.value,
         )
     }
 

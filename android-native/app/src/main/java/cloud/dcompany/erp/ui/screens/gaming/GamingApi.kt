@@ -147,6 +147,37 @@ data class SessionPosResult(
     @SerialName("amount_minor") val amountMinor: Long,
 )
 
+/** An open POS shift on another terminal which can explicitly receive this bill. */
+@Serializable
+data class PosTargetShift(
+    @SerialName("shift_id") val shiftId: String,
+    @SerialName("terminal_id") val terminalId: String,
+    @SerialName("terminal_name") val terminalName: String,
+    @SerialName("opened_by") val openedBy: String,
+    @SerialName("opened_by_name") val openedByName: String,
+    @SerialName("opened_at") val openedAt: String,
+)
+
+@Serializable
+data class SessionPosHandoffBody(
+    @SerialName("target_shift_id") val targetShiftId: String,
+)
+
+/**
+ * The source fields prove Gaming provenance stayed on the originating drawer;
+ * the target fields identify the held order's collection drawer.
+ */
+@Serializable
+data class SessionPosHandoffResult(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("source_shift_id") val sourceShiftId: String,
+    @SerialName("source_terminal_id") val sourceTerminalId: String,
+    @SerialName("target_shift_id") val targetShiftId: String,
+    @SerialName("target_terminal_id") val targetTerminalId: String,
+    @SerialName("already_linked") val alreadyLinked: Boolean,
+)
+
 @Serializable
 data class SessionCancelBody(val reason: String)
 
@@ -284,6 +315,20 @@ interface GamingApi {
         @Path("id") id: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): SessionPosResult
+
+    /** Live, permission-scoped destinations; an empty list never authorises fallback. */
+    @GET("gaming/sessions/{id}/pos-target-shifts")
+    suspend fun posTargetShifts(@Path("id") id: String): List<PosTargetShift>
+
+    /**
+     * Natural idempotency: retrying the same session/target returns the linked
+     * order with already_linked=true instead of creating another held order.
+     */
+    @POST("gaming/sessions/{id}/handoff-to-pos")
+    suspend fun handoffToPos(
+        @Path("id") id: String,
+        @Body body: SessionPosHandoffBody,
+    ): SessionPosHandoffResult
 
     /** Protected-owner recovery for an ended session whose source shift closed. */
     @POST("gaming/sessions/{id}/reconcile-to-pos")

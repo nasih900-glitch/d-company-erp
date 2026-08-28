@@ -27,7 +27,6 @@ from app.models import (
     PosRefundProviderPayoutStart,
     PosRefundRequest,
     Shift,
-    Terminal,
     User,
 )
 
@@ -50,6 +49,31 @@ def _insert_legacy_branch(
         {"id": branch_id, "company_id": company_id},
     )
     return SimpleNamespace(id=branch_id)
+
+
+def _insert_legacy_terminal(
+    session: Session,
+    *,
+    branch_id,
+    name: str,
+    device_id: str,
+) -> SimpleNamespace:
+    """Insert only terminal columns present before revision 0052."""
+
+    terminal_id = uuid4()
+    session.execute(
+        text(
+            "INSERT INTO terminals (id, branch_id, name, device_id) "
+            "VALUES (:id, :branch_id, :name, :device_id)"
+        ),
+        {
+            "id": terminal_id,
+            "branch_id": branch_id,
+            "name": name,
+            "device_id": device_id,
+        },
+    )
+    return SimpleNamespace(id=terminal_id)
 
 
 def _insert_legacy_order(
@@ -239,8 +263,8 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                 session.add(company)
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
-                terminal = Terminal(
-                    id=uuid4(),
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Guard terminal",
                     device_id=f"guard-{uuid4()}",
@@ -263,8 +287,6 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                 # FK order explicit so this test proves the migration rather
                 # than SQLAlchemy's unit-of-work dependency heuristics.
                 session.add_all([owner, customer])
-                session.flush()
-                session.add(terminal)
                 session.flush()
                 now = datetime.now(UTC)
                 shift = Shift(
@@ -339,8 +361,8 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                 session.add(company)
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
-                terminal = Terminal(
-                    id=uuid4(),
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Orphan provider terminal",
                     device_id=f"orphan-provider-{uuid4()}",
@@ -355,9 +377,6 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                 )
                 session.add(owner)
                 session.flush()
-                session.add(terminal)
-                session.flush()
-
                 now = datetime.now(UTC)
                 shift = Shift(
                     id=uuid4(),
@@ -450,8 +469,8 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
                 session.add(company)
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
-                terminal = Terminal(
-                    id=uuid4(),
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Legacy LTV terminal",
                     device_id=f"legacy-ltv-{uuid4()}",
@@ -472,8 +491,6 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
                     total_spent_minor=10_000,
                 )
                 session.add_all([owner, customer])
-                session.flush()
-                session.add(terminal)
                 session.flush()
                 now = datetime.now(UTC)
                 shift = Shift(
@@ -648,8 +665,8 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                 session.add(company)
                 session.flush()
                 branch = _insert_legacy_branch(session, company_id=company.id)
-                terminal = Terminal(
-                    id=uuid4(),
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Guard terminal",
                     device_id=f"guard-0036-{uuid4()}",
@@ -670,9 +687,6 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                 )
                 session.add_all([owner, customer])
                 session.flush()
-                session.add(terminal)
-                session.flush()
-
                 now = datetime.now(UTC)
                 shift = Shift(
                     id=uuid4(),

@@ -2340,6 +2340,24 @@ val MIGRATION_34_35 = object : Migration(34, 35) {
     }
 }
 
+/**
+ * Add explicit operational purpose without reclassifying installed tills.
+ *
+ * `hybrid` exactly preserves the historical all-in-one Gaming/POS behavior.
+ * Owners can then deliberately mark separate Cafe POS and Gaming Area tills;
+ * no migration may infer financial routing from an editable terminal name.
+ */
+val MIGRATION_35_36 = object : Migration(35, 36) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `terminal_cache` ADD COLUMN `purpose` TEXT NOT NULL DEFAULT 'hybrid'",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_terminals` ADD COLUMN `purpose` TEXT NOT NULL DEFAULT 'hybrid'",
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2347,5 +2365,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
     MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
     MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
-    MIGRATION_34_35,
+    MIGRATION_34_35, MIGRATION_35_36,
 )

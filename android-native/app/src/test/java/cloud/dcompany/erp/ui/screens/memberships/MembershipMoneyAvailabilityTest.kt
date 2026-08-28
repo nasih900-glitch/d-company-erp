@@ -91,10 +91,10 @@ class MembershipMoneyAvailabilityTest {
     }
 
     @Test
-    fun moneyActionsRequireBothProtectedScopeAndAdminSystemPermission() {
+    fun moneyActionsRequireBothProtectedScopeAndMembershipPermission() {
         val unprotectedAdmin = profile(
             protectedAccess = false,
-            effectivePermissions = listOf(ErpPermission.AdminSystem),
+            effectivePermissions = listOf(ErpPermission.MembershipsManage),
         )
         val protectedWithoutPermission = profile(
             protectedAccess = true,
@@ -102,12 +102,60 @@ class MembershipMoneyAvailabilityTest {
         )
         val protectedAdmin = profile(
             protectedAccess = true,
+            effectivePermissions = listOf(ErpPermission.MembershipsManage),
+        )
+        val protectedSystemOnly = profile(
+            protectedAccess = true,
             effectivePermissions = listOf(ErpPermission.AdminSystem),
         )
 
         assertFalse(canManageMembershipMoney(unprotectedAdmin))
         assertFalse(canManageMembershipMoney(protectedWithoutPermission))
         assertTrue(canManageMembershipMoney(protectedAdmin))
+        assertFalse(canManageMembershipMoney(protectedSystemOnly))
+    }
+
+    @Test
+    fun coOwnerKeepsOrdinaryMembershipMoneyWithoutAuditRecoveryAuthority() {
+        val coOwner = profile(
+            protectedAccess = true,
+            auditAccess = false,
+            effectivePermissions = listOf(ErpPermission.MembershipsManage),
+        )
+        val auditBitWithoutServerPermission = profile(
+            protectedAccess = true,
+            auditAccess = true,
+            effectivePermissions = listOf(ErpPermission.MembershipsManage),
+        )
+        val systemPermissionWithoutAuditIdentity = profile(
+            protectedAccess = true,
+            auditAccess = false,
+            effectivePermissions = listOf(
+                ErpPermission.MembershipsManage,
+                ErpPermission.AdminSystem,
+            ),
+        )
+        val auditOwner = profile(
+            protectedAccess = true,
+            auditAccess = true,
+            effectivePermissions = listOf(
+                ErpPermission.MembershipsManage,
+                ErpPermission.AdminSystem,
+            ),
+        )
+
+        assertTrue(canManageMembershipMoney(coOwner))
+        assertFalse(canRecoverLegacyMembershipEvidence(coOwner))
+        assertFalse(canRecoverLegacyMembershipEvidence(auditBitWithoutServerPermission))
+        assertFalse(canRecoverLegacyMembershipEvidence(systemPermissionWithoutAuditIdentity))
+        assertTrue(canRecoverLegacyMembershipEvidence(auditOwner))
+    }
+
+    @Test
+    fun deniedLegacyRecoveryCopyExplainsEscalationAndPreventsDuplicateMoney() {
+        assertTrue(MEMBERSHIP_AUDIT_CONTROL_MESSAGE.contains("read only"))
+        assertTrue(MEMBERSHIP_AUDIT_CONTROL_MESSAGE.contains("Audit Control owner"))
+        assertTrue(MEMBERSHIP_AUDIT_CONTROL_MESSAGE.contains("do not repeat"))
     }
 
     @Test
@@ -145,6 +193,7 @@ class MembershipMoneyAvailabilityTest {
 
     private fun profile(
         protectedAccess: Boolean,
+        auditAccess: Boolean = false,
         effectivePermissions: List<String>,
     ) = MeResponse(
         userId = "owner-1",
@@ -152,6 +201,7 @@ class MembershipMoneyAvailabilityTest {
         name = "Owner",
         roles = listOf("co_owner"),
         protectedAccess = protectedAccess,
+        auditAccess = auditAccess,
         companyId = "company-1",
         branchId = "branch-1",
         effectivePermissions = effectivePermissions,

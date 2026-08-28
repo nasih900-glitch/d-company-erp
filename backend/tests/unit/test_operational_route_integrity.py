@@ -18,12 +18,13 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.dialects import postgresql
 
 from app.api.v1.gaming import router as gaming_router
+from app.api.v1.memberships import router as memberships_router
 from app.api.v1.pos import router as pos_router
 from app.core.errors import BusinessRuleError, ConflictError, ForbiddenError
 from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
 from app.events.events import OrderPaid
-from app.models import Branch, Order, OrderLine, Payment, Station, Table
+from app.models import Branch, Order, OrderLine, Payment, Station, Table, Terminal
 
 
 class _Result:
@@ -105,6 +106,27 @@ def test_table_bill_routes_enforce_required_domain_permissions() -> None:
     assert "pos.void" not in ROLE_PERMISSIONS["staff"]
     assert "pos.void" in ROLE_PERMISSIONS["cashier"]
     assert "pos.void" in ROLE_PERMISSIONS["manager"]
+
+
+def test_membership_operations_do_not_widen_legacy_evidence_controls() -> None:
+    """Co-owners can sell/refund memberships, but not rewrite recovery evidence."""
+    assert _route_permissions(memberships_router.prepare_membership_payment) == (
+        "memberships.manage",
+    )
+    assert _route_permissions(memberships_router.refund_membership) == (
+        "memberships.manage",
+    )
+
+    protected_support_endpoints = (
+        memberships_router.resolve_rejected_membership_payment_attempt,
+        memberships_router.register_rejected_membership_refund_attempt,
+        memberships_router.list_rejected_membership_refund_attempts,
+        memberships_router.resolve_rejected_membership_refund_attempt,
+        memberships_router.reconcile_membership_evidence,
+        memberships_router.list_membership_evidence_reconciliations,
+    )
+    for endpoint in protected_support_endpoints:
+        assert _route_permissions(endpoint) == ("admin.system",)
 
 
 @pytest.mark.asyncio
@@ -1549,10 +1571,18 @@ async def test_session_send_uses_the_sessions_original_shift(monkeypatch) -> Non
         type="gaming",
         hsn_code="999692",
     )
+    terminal = SimpleNamespace(
+        id=tenant.terminal_id,
+        branch_id=tenant.branch_id,
+        purpose="hybrid",
+    )
     session = _Session(
         _Result(scalar=gaming_session),
         _Result(scalar=original_shift),
-        entities={(Station, station.id): station},
+        entities={
+            (Station, station.id): station,
+            (Terminal, terminal.id): terminal,
+        },
     )
 
     async def _menu_item(_session, *, company_id, station):

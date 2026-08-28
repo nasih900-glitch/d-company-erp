@@ -4,11 +4,11 @@
  * Tabs:
  *   - Account     change your own password
  *   - Company     name, GSTIN, PAN, timezone
- *   - Branches    list + create + edit branches; per-branch FSSAI + GSTIN
+ *   - Shop        one operational location plus its terminals
  *   - Pricing     menu, gaming, events, memberships
  *   - Sheets      (existing Google Sheets integration wizard)
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { User, Building2, Sheet, Store, Crown, IndianRupee, ShieldCheck } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
@@ -28,14 +28,34 @@ export default function SettingsScreen() {
   // co_owner (protected_access=true, audit_access=false) must not see this
   // tab, so it keys off audit_access specifically, not protected_access.
   const hasAuditAccess = Boolean(demo || me?.audit_access);
+  const effectivePermissions = new Set(me?.effective_permissions ?? []);
+  const canManageSettings = Boolean(
+    demo || me?.protected_access || effectivePermissions.has('settings.manage'),
+  );
+  const canManageMemberships = Boolean(
+    demo || me?.protected_access || effectivePermissions.has('memberships.manage'),
+  );
   const [tab, setTab] = useState<Tab>('account');
+
+  useEffect(() => {
+    const tabAllowed = (
+      tab === 'account'
+      || (tab === 'memberships' && canManageMemberships)
+      || (tab === 'access' && hasAuditAccess)
+      || (
+        (['company', 'branches', 'pricing', 'sheets'] as Tab[]).includes(tab)
+        && canManageSettings
+      )
+    );
+    if (!tabAllowed) setTab('account');
+  }, [tab, canManageMemberships, canManageSettings, hasAuditAccess]);
 
   return (
     <div>
       <header className="mb-6">
         <h2 className="text-2xl font-bold">Settings</h2>
         <p className="text-fg-muted text-sm">
-          Personal account, company profile, branches, pricing, integrations.
+          Your account and, when authorised, shop, terminals, pricing, and integrations.
         </p>
       </header>
 
@@ -43,21 +63,27 @@ export default function SettingsScreen() {
         <TabBtn active={tab === 'account'}  onClick={() => setTab('account')}>
           <User size={14}/> Account
         </TabBtn>
-        <TabBtn active={tab === 'company'}  onClick={() => setTab('company')}>
-          <Building2 size={14}/> Company
-        </TabBtn>
-        <TabBtn active={tab === 'branches'} onClick={() => setTab('branches')}>
-          <Store size={14}/> Branches
-        </TabBtn>
-        <TabBtn active={tab === 'pricing'} onClick={() => setTab('pricing')}>
-          <IndianRupee size={14}/> Pricing
-        </TabBtn>
-        <TabBtn active={tab === 'memberships'} onClick={() => setTab('memberships')}>
-          <Crown size={14}/> Memberships
-        </TabBtn>
-        <TabBtn active={tab === 'sheets'}   onClick={() => setTab('sheets')}>
-          <Sheet size={14}/> Google Sheets
-        </TabBtn>
+        {canManageSettings && (
+          <>
+            <TabBtn active={tab === 'company'} onClick={() => setTab('company')}>
+              <Building2 size={14}/> Company
+            </TabBtn>
+            <TabBtn active={tab === 'branches'} onClick={() => setTab('branches')}>
+              <Store size={14}/> Shop &amp; terminals
+            </TabBtn>
+            <TabBtn active={tab === 'pricing'} onClick={() => setTab('pricing')}>
+              <IndianRupee size={14}/> Pricing
+            </TabBtn>
+            <TabBtn active={tab === 'sheets'} onClick={() => setTab('sheets')}>
+              <Sheet size={14}/> Google Sheets
+            </TabBtn>
+          </>
+        )}
+        {canManageMemberships && (
+          <TabBtn active={tab === 'memberships'} onClick={() => setTab('memberships')}>
+            <Crown size={14}/> Memberships
+          </TabBtn>
+        )}
         {hasAuditAccess && (
           <TabBtn active={tab === 'access'} onClick={() => setTab('access')}>
             <ShieldCheck size={14}/> Access Control
@@ -66,11 +92,11 @@ export default function SettingsScreen() {
       </div>
 
       {tab === 'account'     && <AccountTab/>}
-      {tab === 'company'     && <CompanyTab/>}
-      {tab === 'branches'    && <BranchesTab/>}
-      {tab === 'pricing'     && <PricingTab/>}
-      {tab === 'memberships' && <MembershipsTab/>}
-      {tab === 'sheets'      && <SheetsTab/>}
+      {tab === 'company' && canManageSettings && <CompanyTab/>}
+      {tab === 'branches' && canManageSettings && <BranchesTab/>}
+      {tab === 'pricing' && canManageSettings && <PricingTab/>}
+      {tab === 'memberships' && canManageMemberships && <MembershipsTab/>}
+      {tab === 'sheets' && canManageSettings && <SheetsTab/>}
       {tab === 'access' && hasAuditAccess && <AccessControlTab/>}
     </div>
   );

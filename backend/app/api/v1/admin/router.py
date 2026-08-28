@@ -231,7 +231,7 @@ async def unlock_pricing(
     payload: AuditUnlockRequest,
     request: Request,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> PricingUnlockResponse:
     """Require the current user's password before pricing can be changed."""
     user = (

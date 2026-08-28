@@ -47,6 +47,8 @@ import cloud.dcompany.erp.core.db.MembershipPaymentTaskStatus
 import cloud.dcompany.erp.core.db.MembershipRefundActionKind
 import cloud.dcompany.erp.core.db.MembershipRefundTaskCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
+import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
+import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
@@ -4753,6 +4755,39 @@ class SyncEngine(
             val categoriesDeferred = async {
                 optionalFinanceReference("expense categories") { financeApi.expenseCategories() }
             }
+            val manualCollectionsDeferred = async {
+                optionalFinanceReference("manual collections") {
+                    financeApi.manualCollections().also { rows ->
+                        lease.scope.branchId?.let { expectedBranch ->
+                            rows.forEach { row ->
+                                verifyBranchScopedPayload(
+                                    expectedBranch,
+                                    row.branchId,
+                                    "manual collection",
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            val tipPayoutsDeferred = async {
+                optionalFinanceReference("tip payouts") {
+                    financeApi.tipPayouts().also { rows ->
+                        lease.scope.branchId?.let { expectedBranch ->
+                            rows.forEach { row ->
+                                verifyBranchScopedPayload(
+                                    expectedBranch,
+                                    row.branchId,
+                                    "tip payout",
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            val trialBalanceDeferred = async {
+                optionalFinanceReference("Tips Payable balance") { financeApi.trialBalance() }
+            }
 
             val freshPl = plDeferred.await()
             val freshMetrics = metricsDeferred.await()
@@ -4761,6 +4796,9 @@ class SyncEngine(
             val freshCosting = costingDeferred.await()
             val freshBranches = branchesDeferred.await()
             val freshCategories = categoriesDeferred.await()
+            val freshManualCollections = manualCollectionsDeferred.await()
+            val freshTipPayouts = tipPayoutsDeferred.await()
+            val freshTrialBalance = trialBalanceDeferred.await()
             val fetchedAt = System.currentTimeMillis()
 
             commitToCurrentScope(lease) {
@@ -4825,12 +4863,42 @@ class SyncEngine(
                             ),
                         )
                     }
+                    freshManualCollections.value?.let {
+                        snapshots.put(
+                            ReportSnapshotEntity(
+                                cacheScope.key(FinanceSnapshotKeys.MANUAL_COLLECTIONS),
+                                ApiClient.json.encodeToString(it),
+                                fetchedAt,
+                            ),
+                        )
+                    }
+                    freshTipPayouts.value?.let {
+                        snapshots.put(
+                            ReportSnapshotEntity(
+                                cacheScope.key(FinanceSnapshotKeys.TIP_PAYOUTS),
+                                ApiClient.json.encodeToString(it),
+                                fetchedAt,
+                            ),
+                        )
+                    }
+                    freshTrialBalance.value?.let {
+                        snapshots.put(
+                            ReportSnapshotEntity(
+                                cacheScope.key(FinanceSnapshotKeys.TRIAL_BALANCE),
+                                ApiClient.json.encodeToString(it),
+                                fetchedAt,
+                            ),
+                        )
+                    }
                 }
             }
             return@coroutineScope listOfNotNull(
                 "branches".takeIf { freshBranches.failure != null },
                 "expense categories".takeIf { freshCategories.failure != null },
                 "inventory costing status".takeIf { freshCosting.failure != null },
+                "manual collections".takeIf { freshManualCollections.failure != null },
+                "tip payouts".takeIf { freshTipPayouts.failure != null },
+                "Tips Payable balance".takeIf { freshTrialBalance.failure != null },
             )
         }
     }
@@ -5092,8 +5160,14 @@ class SyncEngine(
 
     private fun canAccessMembershipMoney(): Boolean {
         val profile = DCompanyApp.instance.shiftCache.profile.value ?: return false
-        return profile.protectedAccess &&
-            EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+        return EffectivePermissions.from(profile).membershipAccess(profile).canManageMoney
+    }
+
+    private fun canAccessMembershipLegacyRecovery(): Boolean {
+        val profile = DCompanyApp.instance.shiftCache.profile.value ?: return false
+        return EffectivePermissions.from(profile)
+            .membershipAccess(profile)
+            .canRecoverLegacyEvidence
     }
 
     /**
@@ -5206,8 +5280,18 @@ class SyncEngine(
 
     private suspend fun pushMembershipPaymentActions() {
         if (!canAccessMembershipMoney()) return
+        val canRecoverLegacyEvidence = canAccessMembershipLegacyRecovery()
         val dao = db.membershipPaymentDao()
         for (action in dao.pushableActions()) {
+            if (
+                membershipPaymentActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyEvidence
+            ) {
+                // Keep the immutable row quarantined for the Audit Control
+                // owner. A co-owner's ordinary membership sync must continue
+                // without calling the admin.system endpoint or rewriting it.
+                continue
+            }
             val existing = action.serverRequestId?.let { dao.taskById(it) }
                 ?: dao.taskByClientActionId(action.rootClientActionId)
             if (existing != null && paymentActionSatisfied(action, existing)) {
@@ -5497,25 +5581,17 @@ class SyncEngine(
 
     private suspend fun pullMembershipRefundStateBestEffort(): Boolean {
         if (!canAccessMembershipMoney()) return false
-        return try {
-            val lease = cacheIsolation.currentLease() ?: return false
-            val terminalId = lease.scope.terminalId ?: return false
-            val branchId = lease.scope.branchId ?: return false
+        val lease = cacheIsolation.currentLease() ?: return false
+        val terminalId = lease.scope.terminalId ?: return false
+        val branchId = lease.scope.branchId ?: return false
+        val ordinaryTasksCommitted = try {
             val tasks = requireCompleteTaskList(
                 membershipsApi.refundTasks(unresolved = true, limit = 200),
                 limit = 200,
                 resource = "membership refund tasks",
             )
-            val attempts = requireCompleteTaskList(
-                membershipsApi.refundAttempts(unresolved = true, limit = 200),
-                limit = 200,
-                resource = "legacy membership refund recovery tasks",
-            )
             if (tasks.any { it.status !in MembershipRefundTaskStatus.known }) {
                 error("Membership refund tasks contain a status this app does not understand. Update the app before moving money.")
-            }
-            if (attempts.any { it.status !in setOf("unresolved", "resolved") }) {
-                error("Legacy refund recovery contains an unknown status. Update the app before resolving it.")
             }
             val fetchedAt = System.currentTimeMillis()
             commitToCurrentScope(lease) {
@@ -5523,10 +5599,6 @@ class SyncEngine(
                     db.membershipRefundMoneyDao().replaceTasksForTerminal(
                         terminalId,
                         tasks.map { it.toCache(branchId, terminalId, fetchedAt) },
-                    )
-                    db.membershipRefundMoneyDao().replaceAttemptsForTerminal(
-                        terminalId,
-                        attempts.map { it.toCache(branchId, terminalId, fetchedAt) },
                     )
                     db.syncMetaDao().put(SyncMetaEntity("membership_refund_tasks", fetchedAt))
                 }
@@ -5536,13 +5608,64 @@ class SyncEngine(
         } catch (e: Exception) {
             sessionAwareLastError = e.message ?: "Could not reconcile membership refund tasks."
             passHadAmbiguousFailure = true
+            return false
+        }
+        if (!ordinaryTasksCommitted) return false
+
+        // The attempt register/list/resolve and evidence reconciliation API is
+        // deliberately admin.system-only. Do not make an ordinary co-owner's
+        // valid refund-task refresh depend on a request the backend must deny.
+        if (!canAccessMembershipLegacyRecovery()) {
+            // This table is a replaceable server projection, not a durable
+            // outbox. Clear any row retained by an older app so a co-owner is
+            // neither shown protected evidence nor locally blocked forever
+            // after the Audit Control owner resolves it elsewhere. The server
+            // remains authoritative and will still reject shift close while a
+            // real unresolved attempt exists.
+            return commitToCurrentScope(lease) {
+                db.membershipRefundMoneyDao().replaceAttemptsForTerminal(
+                    terminalId,
+                    emptyList(),
+                )
+            }
+        }
+
+        return try {
+            val attempts = requireCompleteTaskList(
+                membershipsApi.refundAttempts(unresolved = true, limit = 200),
+                limit = 200,
+                resource = "legacy membership refund recovery tasks",
+            )
+            if (attempts.any { it.status !in setOf("unresolved", "resolved") }) {
+                error("Legacy refund recovery contains an unknown status. Update the app before resolving it.")
+            }
+            val fetchedAt = System.currentTimeMillis()
+            commitToCurrentScope(lease) {
+                db.membershipRefundMoneyDao().replaceAttemptsForTerminal(
+                    terminalId,
+                    attempts.map { it.toCache(branchId, terminalId, fetchedAt) },
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            sessionAwareLastError =
+                e.message ?: "Ordinary membership refunds refreshed, but Audit Control recovery could not be refreshed."
+            passHadAmbiguousFailure = true
             false
         }
     }
 
     private suspend fun reconcileMembershipRefundActionsFromCache() {
         val dao = db.membershipRefundMoneyDao()
+        val canRecoverLegacyEvidence = canAccessMembershipLegacyRecovery()
         dao.pushableActions().forEach { action ->
+            if (
+                membershipRefundActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyEvidence
+            ) {
+                return@forEach
+            }
             when (action.kind) {
                 MembershipRefundActionKind.LEGACY_REGISTER -> {
                     if (dao.attemptByOriginalAction(action.rootClientActionId) != null) {
@@ -5613,8 +5736,15 @@ class SyncEngine(
 
     private suspend fun pushMembershipRefundActions() {
         if (!canAccessMembershipMoney()) return
+        val canRecoverLegacyEvidence = canAccessMembershipLegacyRecovery()
         val dao = db.membershipRefundMoneyDao()
         for (action in dao.pushableActions()) {
+            if (
+                membershipRefundActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyEvidence
+            ) {
+                continue
+            }
             val task = action.serverRefundId?.let { dao.taskById(it) }
             if (task != null && action.kind != MembershipRefundActionKind.LEGACY_RECONCILE_SERVER &&
                 refundActionSatisfied(action, task)
@@ -6215,7 +6345,8 @@ class SyncEngine(
                     rows.map {
                         TerminalCacheEntity(
                             id = it.id, branchId = it.branchId, name = it.name,
-                            deviceId = it.deviceId, lastSeenAt = it.lastSeenAt,
+                            purpose = it.purpose, deviceId = it.deviceId,
+                            lastSeenAt = it.lastSeenAt,
                         )
                     },
                 )
@@ -6304,7 +6435,12 @@ class SyncEngine(
 
     private suspend fun pushTerminalOne(row: LocalTerminalEntity) {
         settingsApi.createTerminal(
-            TerminalCreateBody(branchId = row.branchId, name = row.name, deviceId = row.deviceId),
+            TerminalCreateBody(
+                branchId = row.branchId,
+                name = row.name,
+                purpose = row.purpose,
+                deviceId = row.deviceId,
+            ),
             "settings-terminal:${row.localId}",
             outboxProvenanceHeaders(row.createdAtMillis, "settings-terminal:${row.localId}"),
         )

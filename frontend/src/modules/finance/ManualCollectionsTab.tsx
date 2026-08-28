@@ -4,8 +4,8 @@ import { AlertCircle, Ban, BookOpen, Loader2, Plus, RefreshCw } from 'lucide-rea
 import Modal from '@/components/ui/Modal';
 import {
   finance,
-  settings,
-  type BranchDTO,
+  pos,
+  type BranchReferenceDTO,
   type ManualCollectionDTO,
   type ManualCollectionMethod,
 } from '@/lib/erp-api';
@@ -27,7 +27,7 @@ import { useAuth } from '@/modules/auth/AuthContext';
 export default function ManualCollectionsTab() {
   const { me } = useAuth();
   const [rows, setRows] = useState<ManualCollectionDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [companyTimezone, setCompanyTimezone] = useState(DEFAULT_BUSINESS_TIMEZONE);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -38,14 +38,14 @@ export default function ManualCollectionsTab() {
     setLoading(true);
     setErr(null);
     try {
-      const [collections, branchRows, company] = await Promise.all([
+      const [collections, branchRows, receiptIdentity] = await Promise.all([
         finance.listManualCollections({ include_voided: true, limit: 500 }),
-        settings.listBranches(),
-        settings.getCompany(),
+        finance.listBranches(),
+        pos.receiptBusiness().catch(() => null),
       ]);
       setRows(collections);
       setBranches(branchRows);
-      setCompanyTimezone(company.timezone || DEFAULT_BUSINESS_TIMEZONE);
+      setCompanyTimezone(receiptIdentity?.timezone || DEFAULT_BUSINESS_TIMEZONE);
     } catch (error) {
       setErr((error as Error).message);
     } finally {
@@ -100,7 +100,7 @@ export default function ManualCollectionsTab() {
 
       {!branches.length && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
-          Add a branch in <b>Settings → Branches</b> before recording a collection.
+          No shop is available for this collection. Ask the protected owner to check your shop access.
         </div>
       )}
       {err && <ErrorRow text={err}/>}
@@ -252,7 +252,7 @@ function ManualCollectionForm({
   onClose,
   onSuccess,
 }: {
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   defaultBranchId: string;
   companyTimezone: string;
   onClose: () => void;

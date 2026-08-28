@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, NotFoundError
-from app.core.permissions import requires
+from app.core.permissions import requires, requires_any
 from app.core.tenant import TenantContext
 from app.models import Branch, OcrExtraction, OcrUpload, OcrVerification
 
@@ -36,10 +36,41 @@ class ExtractionRead(BaseModel):
     status: str
 
 
+class OcrBranchRead(BaseModel):
+    """Least-privilege branch identity used by receipt upload forms."""
+
+    id: UUID
+    name: str
+    code: str | None = None
+
+
 class VerificationDecision(BaseModel):
     decision: Literal["approve", "reject", "edit"]
     edits: dict | None = None
     notes: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/branches", response_model=list[OcrBranchRead])
+async def list_ocr_branches(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires_any("ocr.upload", "ocr.verify")),
+) -> list[OcrBranchRead]:
+    """Return only branches this OCR operator is allowed to reference.
+
+    Receipt upload/review must not depend on the admin-only Settings API, nor
+    should it silently require Finance or Inventory access merely to resolve a
+    branch label. Branch-bound identities receive exactly their assigned
+    branch; company-wide OCR operators receive active branches in name order.
+    """
+
+    stmt = select(Branch).where(
+        Branch.company_id == tenant.company_id,
+        Branch.deleted_at.is_(None),
+    )
+    if tenant.branch_id is not None:
+        stmt = stmt.where(Branch.id == tenant.branch_id)
+    rows = (await session.execute(stmt.order_by(Branch.name))).scalars().all()
+    return [OcrBranchRead(id=row.id, name=row.name, code=row.code) for row in rows]
 
 
 @router.post(

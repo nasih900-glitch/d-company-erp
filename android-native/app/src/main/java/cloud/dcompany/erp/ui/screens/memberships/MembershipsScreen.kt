@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.MembershipAccess
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.MembershipMoneyActionState
 import cloud.dcompany.erp.core.db.MembershipPaymentActionKind
@@ -58,6 +59,8 @@ import cloud.dcompany.erp.core.db.MembershipRefundActionKind
 import cloud.dcompany.erp.core.db.MembershipRefundAttemptCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
+import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
+import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
@@ -85,18 +88,19 @@ import cloud.dcompany.erp.ui.theme.Spacing
  * server-authorised and online-only — see MembershipsViewModel's class doc.
  */
 @Composable
-fun MembershipsScreen(canManage: Boolean) {
+fun MembershipsScreen(access: MembershipAccess) {
     val vm: MembershipsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
-    MembershipsContent(state, vm, canManage)
+    MembershipsContent(state, vm, access)
 }
 
 @Composable
 private fun MembershipsContent(
     state: MembershipsUiState,
     vm: MembershipsViewModel,
-    canManage: Boolean,
+    access: MembershipAccess,
 ) {
+    val canManage = access.canManageMoney
     Column(
         Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -120,7 +124,11 @@ private fun MembershipsContent(
                     state.legacyRefundAttempts.isNotEmpty()
             )
         ) {
-            PendingMembershipChangesPanel(state, vm)
+            PendingMembershipChangesPanel(
+                state = state,
+                vm = vm,
+                canRecoverLegacyEvidence = access.canRecoverLegacyEvidence,
+            )
         }
 
         MembershipSummary(state)
@@ -139,7 +147,13 @@ private fun MembershipsContent(
             item { MembershipPlansPanel(state) }
         }
 
-        when (val dialog = state.dialog.takeIf { canManage }) {
+        val visibleDialog = state.dialog?.takeIf { current ->
+            canManage && (
+                current !is MembershipsDialog.ResolveLegacyRefund ||
+                    access.canRecoverLegacyEvidence
+            )
+        }
+        when (val dialog = visibleDialog) {
             is MembershipsDialog.SubscribeForm -> SubscribeFormDialog(dialog.customer, state, vm)
             is MembershipsDialog.ConfirmCancel -> ConfirmDialog(
                 title = "Stop ${dialog.customer.name.orEmpty().ifBlank { dialog.customer.phone }}'s renewal?",
@@ -1314,10 +1328,44 @@ private fun WithdrawCashRefundDialog(
 // PENDING CHANGES
 // ============================================================================
 @Composable
-private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: MembershipsViewModel) {
+private fun MembershipAuditControlEscalation(recordCount: Int) {
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "Audit Control review required",
+            color = Brand.GoldMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            "$recordCount older-app recovery ${if (recordCount == 1) "record is" else "records are"} " +
+                "preserved but read only for this account. Ask the Audit Control owner to " +
+                "verify the original drawer/provider evidence. Do not repeat a collection or payout.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun PendingMembershipChangesPanel(
+    state: MembershipsUiState,
+    vm: MembershipsViewModel,
+    canRecoverLegacyEvidence: Boolean,
+) {
     val pendingCount = state.pendingSubscriptions.size + state.pendingCancellations.size +
         state.pendingRefunds.size + state.paymentTasks.size + state.paymentActions.size +
         state.refundTasks.size + state.refundActions.size + state.legacyRefundAttempts.size
+    val restrictedPaymentActions = state.paymentActions.filter {
+        membershipPaymentActionRequiresAuditControl(it.kind, it.state)
+    }
+    val restrictedRefundActions = state.refundActions.filter {
+        membershipRefundActionRequiresAuditControl(it.kind, it.state)
+    }
+    val restrictedRecoveryCount = state.legacyRefundAttempts.size +
+        restrictedPaymentActions.size + restrictedRefundActions.size
     var expanded by rememberSaveable { mutableStateOf(true) }
 
     SectionCard(
@@ -1360,7 +1408,12 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                     },
             )
         }
-        state.legacyRefundAttempts.forEach { attempt ->
+        if (!canRecoverLegacyEvidence && restrictedRecoveryCount > 0) {
+            MembershipAuditControlEscalation(restrictedRecoveryCount)
+        }
+        state.legacyRefundAttempts.takeIf { canRecoverLegacyEvidence }
+            .orEmpty()
+            .forEach { attempt ->
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).padding(10.dp),
@@ -1381,7 +1434,10 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 }
             }
         }
-        state.refundActions.forEach { action ->
+        state.refundActions.filter {
+            canRecoverLegacyEvidence ||
+                !membershipRefundActionRequiresAuditControl(it.kind, it.state)
+        }.forEach { action ->
             val recovery = action.state in setOf(
                 MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
                 MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
@@ -1420,7 +1476,10 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
         state.paymentTasks.forEach { task ->
             MembershipPaymentTaskCard(task, vm)
         }
-        state.paymentActions.forEach { action ->
+        state.paymentActions.filter {
+            canRecoverLegacyEvidence ||
+                !membershipPaymentActionRequiresAuditControl(it.kind, it.state)
+        }.forEach { action ->
             val recovery = action.state in setOf(
                 MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
                 MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,

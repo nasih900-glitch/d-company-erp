@@ -52,8 +52,8 @@ android {
         applicationId = "cloud.dcompany.erp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "3.0.6"
+        versionCode = 8
+        versionName = "3.0.7"
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.

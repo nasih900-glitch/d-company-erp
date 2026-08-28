@@ -4,12 +4,15 @@ import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
   Wallet, ScanLine, Users, BarChart3, LogOut, Tv, Settings, Menu, X, FileText,
   ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
-  MessageSquareWarning,
+  MessageSquareWarning, RotateCcw,
+  CreditCard,
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
 import { hasAdminSystemAccess } from '@/lib/admin-access';
 import { rolesLabel } from '@/lib/roles';
+import { canAccessRefunds } from '@/modules/refunds/refund-policy';
+import { canViewMemberships } from '@/modules/memberships/membership-policy';
 import InstallButton from './InstallButton';
 import ConnectivityBanner from './ConnectivityBanner';
 
@@ -32,6 +35,7 @@ const NAV_GROUPS = [
       { to: '/gaming',     label: 'Gaming',     Icon: Gamepad2 },
       { to: '/reservations', label: 'Reservations', Icon: CalendarClock },
       { to: '/customers',  label: 'Customers',  Icon: UserCircle },
+      { to: '/memberships', label: 'Memberships', Icon: CreditCard, membershipOnly: true },
     ],
   },
   {
@@ -45,6 +49,7 @@ const NAV_GROUPS = [
   {
     title: 'Reports & Money',
     items: [
+      { to: '/refunds',  label: 'Refunds',   Icon: RotateCcw, refundOnly: true },
       { to: '/ocr',       label: 'OCR',       Icon: ScanLine },
       { to: '/analytics', label: 'Analytics', Icon: BarChart3, module: 'insights_reports' },
       { to: '/insights',  label: 'Insights',  Icon: Sparkles, module: 'insights_reports' },
@@ -69,7 +74,7 @@ const NAV = NAV_GROUPS.flatMap((g) => g.items);
 
 export default function AppShell({ children }: { children?: ReactNode }) {
   const {
-    me, logout, demo, terminalReady, terminalOptions, terminalIssue, selectTerminal,
+    me, logout, demo, terminalId, terminalReady, terminalOptions, terminalIssue, selectTerminal,
   } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const loc = useLocation();
@@ -80,17 +85,27 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
   const hasSystemAccess = hasAdminSystemAccess(me);
+  const hasRefundAccess = Boolean(demo || canAccessRefunds(me));
+  const hasMembershipAccess = Boolean(demo || canViewMemberships(me));
   const accessibleModules = me?.accessible_modules;
   const isVisible = useCallback(
     (item: (typeof NAV)[number]) => {
       if ('protectedOnly' in item && !hasAuditAccess) return false;
       if ('adminSystemOnly' in item && !hasSystemAccess) return false;
-      if (item.module && !isProtectedOwner && accessibleModules && !accessibleModules.includes(item.module)) {
+      if ('refundOnly' in item && !hasRefundAccess) return false;
+      if ('membershipOnly' in item && !hasMembershipAccess) return false;
+      if (
+        'module' in item
+        && typeof item.module === 'string'
+        && !isProtectedOwner
+        && accessibleModules
+        && !accessibleModules.includes(item.module)
+      ) {
         return false;
       }
       return true;
     },
-    [isProtectedOwner, hasAuditAccess, hasSystemAccess, accessibleModules],
+    [isProtectedOwner, hasAuditAccess, hasSystemAccess, hasRefundAccess, hasMembershipAccess, accessibleModules],
   );
   const navGroups = useMemo(
     () => NAV_GROUPS
@@ -112,6 +127,10 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       .slice(0, 2)
       .join(''),
     [me?.name],
+  );
+  const selectedTerminal = useMemo(
+    () => terminalOptions.find((terminal) => terminal.id === terminalId) ?? null,
+    [terminalId, terminalOptions],
   );
 
   // Close the drawer whenever the route changes.
@@ -245,6 +264,33 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           <div className="px-2 py-3">
             <p className="text-sm font-medium">{me?.name}</p>
             <p className="text-xs text-fg-muted">{rolesLabel(me?.roles)}</p>
+            {selectedTerminal && (
+              <p className="mt-1 text-xs text-fg-muted">Terminal · {selectedTerminal.name}</p>
+            )}
+            {terminalOptions.length > 1 && (
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                  Work terminal
+                </span>
+                <select
+                  className="input !min-h-[42px] !py-2 text-xs"
+                  value={terminalId ?? ''}
+                  onChange={(event) => selectTerminal(event.target.value)}
+                  aria-label="Change work terminal"
+                >
+                  {terminalOptions.map((terminal) => (
+                    <option key={terminal.id} value={terminal.id}>
+                      {terminal.name} · {terminal.purpose === 'gaming'
+                        ? 'Gaming'
+                        : terminal.purpose === 'cafe_pos' ? 'Cafe POS' : 'Combined'}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-[10px] leading-4 text-fg-muted">
+                  Drafts and open-shift selection stay separate for each terminal.
+                </span>
+              </label>
+            )}
           </div>
           <button onClick={logout} className="btn btn-ghost w-full mt-2">
             <LogOut size={16} /> Sign out

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.Refresh
@@ -225,7 +226,7 @@ private fun AccountTab(
                 }
                 state.me!!.branchName?.takeIf(String::isNotBlank)?.let { branchName ->
                     PanelDivider()
-                    InfoRow("Branch", branchName)
+                    InfoRow("Shop", branchName)
                 }
             }
             SectionCard(
@@ -289,7 +290,7 @@ private fun AccountTab(
             tone = UiTone.Information,
         ) {
             Text(
-                "Describe what went wrong and the app will include only safe device, version, branch, till, screen, and connectivity details.",
+                "Describe what went wrong and the app will include only safe device, version, shop, till, screen, and connectivity details.",
                 color = Brand.ForegroundMuted,
             )
             ErpButton(
@@ -515,29 +516,31 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
         ) {
             if (state.branchesError != null) {
                 RefreshStatusBanner(
-                    title = "Saved branches",
+                    title = "Saved shop details",
                     message = state.branchesError,
                     refreshing = state.branchesRefreshing,
                     onRetry = vm::loadBranches,
                 )
             } else if (state.branchesRefreshing) {
-                RefreshingRow("Refreshing branches…")
+                RefreshingRow("Refreshing shop details…")
             }
             SectionCard(
-                title = "Branches",
-                subtitle = "Business locations, operating hours and licence details.",
+                title = "Shop",
+                subtitle = "Your single business location, operating hours and licence details.",
                 icon = Icons.Default.Store,
                 action = {
-                    ErpButton("Add branch", vm::newBranch, leadingIcon = Icons.Default.Add)
+                    if (state.branches.isEmpty() && state.pendingBranches.isEmpty()) {
+                        ErpButton("Add shop", vm::newBranch, leadingIcon = Icons.Default.Add)
+                    }
                 },
                 contentPadding = PaddingValues(0.dp),
             ) {
                 if (state.branches.isEmpty() && state.pendingBranches.isEmpty()) {
                     DesignedEmptyState(
-                        title = "No branches yet",
-                        body = "Add a branch before configuring tills and starting billing.",
+                        title = "No shop is configured yet",
+                        body = "Add the shop before configuring Cafe POS and Gaming Area.",
                         icon = Icons.Default.Store,
-                        primaryLabel = "Add branch",
+                        primaryLabel = "Add shop",
                         onPrimary = vm::newBranch,
                     )
                 } else {
@@ -590,7 +593,7 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
                             rejected = row.rejected,
                             onRetry = { vm.retryBranch(row.localId) },
                             onDiscard = { vm.discardRejectedBranch(row.localId) },
-                            discardSubject = "failed branch \"${row.name}\"",
+                            discardSubject = "failed shop \"${row.name}\"",
                         )
                     }
                 }
@@ -612,7 +615,7 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
         shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         onDismissRequest = { if (!state.branchSaving) requestDismiss() },
         modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(0.92f).imePadding(),
-        title = { Text(if (form.isNew) "Add branch" else "Edit ${form.name}") },
+        title = { Text(if (form.isNew) "Add shop" else "Edit ${form.name}") },
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
@@ -632,14 +635,14 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
                 Text(
                     when {
                         !form.isNew && form.invoiceSeriesCode.isBlank() ->
-                            "Invoice series has not been refreshed on this tablet. Refresh Branches " +
+                            "Invoice series has not been refreshed on this tablet. Refresh Shop " +
                                 "before editing or billing."
                         form.isNew ->
                             "Required and unique within the company, for example MN. It is printed " +
-                                "on every invoice from this branch."
+                                "on every invoice from this shop."
                         else ->
-                            "This identifies the branch on fiscal receipts. It can only change " +
-                                "before the branch has issued its first invoice; existing receipt " +
+                            "This identifies the shop on fiscal receipts. It can only change " +
+                                "before the shop has issued its first invoice; existing receipt " +
                                 "history is protected by the server."
                     },
                     style = MaterialTheme.typography.labelSmall,
@@ -669,7 +672,7 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
                 Field("Trade licence no.", form.tradeLicenseNo) { v ->
                     vm.updateBranchForm { it.copy(tradeLicenseNo = v) }
                 }
-                Field("Branch GSTIN", form.branchGstin) { v -> vm.updateBranchForm { it.copy(branchGstin = v.uppercase()) } }
+                Field("Shop GSTIN", form.branchGstin) { v -> vm.updateBranchForm { it.copy(branchGstin = v.uppercase()) } }
                 state.branchFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
@@ -677,7 +680,7 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
             ErpButton(
                 text = when {
                     state.branchSaving -> "Saving…"
-                    form.isNew -> "Queue branch"
+                    form.isNew -> "Queue shop"
                     else -> "Save"
                 },
                 onClick = vm::saveBranch,
@@ -718,25 +721,25 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             icon = Icons.Default.PointOfSale,
         ) {
             Text(
-                "Select a branch to review its assigned tills or add another tablet terminal.",
+                "Cafe POS and Gaming Area are separate work terminals inside this one shop. Each keeps its own accountable shift.",
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         if (state.branchesError != null) {
             RefreshStatusBanner(
-                title = "Saved branch list",
+                title = "Saved shop details",
                 message = state.branchesError,
                 refreshing = state.branchesRefreshing,
                 onRetry = vm::loadBranches,
             )
         } else if (state.branchesRefreshing) {
-            RefreshingRow("Refreshing branches…")
+            RefreshingRow("Refreshing shop details…")
         }
         state.terminalActionError?.let { message ->
             ActionErrorBanner(message, vm::dismissTerminalFeedback)
         }
-        if (state.branches.isNotEmpty()) {
+        if (state.branches.size > 1) {
             PremiumTabBar(
                 options = state.branches.map { branch ->
                     TabOption(
@@ -782,9 +785,10 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                         pendingForBranch.forEach { row ->
                             PendingBanner(
                                 text = if (row.rejected) {
-                                    "\"${row.name}\" could not sync: ${row.error ?: "unknown error"}"
+                                    "\"${row.name}\" (${terminalPurposeLabel(row.purpose)}) could not sync: " +
+                                        (row.error ?: "unknown error")
                                 } else {
-                                    "\"${row.name}\" queued — not synced yet."
+                                    "\"${row.name}\" (${terminalPurposeLabel(row.purpose)}) queued — not synced yet."
                                 },
                                 rejected = row.rejected,
                                 onRetry = { vm.retryTerminal(row.localId) },
@@ -803,8 +807,8 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 ) {
                     if (state.terminals.isEmpty() && pendingForBranch.isEmpty()) {
                         DesignedEmptyState(
-                            title = "No terminals for this branch",
-                            body = "Add a till below and assign a stable tablet identifier where available.",
+                            title = "No terminals for this shop",
+                            body = "Add Cafe POS first, then Gaming Area. A device ID is optional until a tablet is assigned.",
                             icon = Icons.Default.PointOfSale,
                         )
                     } else {
@@ -817,6 +821,11 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                                         style = MaterialTheme.typography.titleMedium,
                                     )
                                     Text(
+                                        terminalPurposeLabel(terminal.purpose),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Brand.Gold,
+                                    )
+                                    Text(
                                         terminal.deviceId?.takeIf(String::isNotBlank)
                                             ?: "No tablet device ID assigned",
                                         style = MaterialTheme.typography.labelSmall,
@@ -824,12 +833,21 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                                     )
                                 },
                                 trailing = {
-                                    ErpButton(
-                                        text = "Delete",
-                                        onClick = { terminalToDelete = terminal },
-                                        intent = ActionIntent.Quiet,
-                                        enabled = !state.terminalBusy,
-                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                        ErpButton(
+                                            text = "Edit",
+                                            onClick = { vm.openTerminalEdit(terminal) },
+                                            intent = ActionIntent.Secondary,
+                                            enabled = !state.terminalBusy,
+                                            leadingIcon = Icons.Default.Edit,
+                                        )
+                                        ErpButton(
+                                            text = "Delete",
+                                            onClick = { terminalToDelete = terminal },
+                                            intent = ActionIntent.Quiet,
+                                            enabled = !state.terminalBusy,
+                                        )
+                                    }
                                 },
                             )
                             if (index != state.terminals.lastIndex) PanelDivider()
@@ -838,10 +856,14 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 }
                 SectionCard(
                     title = "Add a terminal",
-                    subtitle = "Saved locally and synced automatically if the connection drops.",
+                    subtitle = "Add Cafe POS or Gaming Area without creating another shop.",
                     icon = Icons.Default.Add,
                 ) {
                     Field("Name", state.terminalName, onChange = vm::setTerminalName)
+                    TerminalPurposeSelector(
+                        selected = state.terminalPurpose,
+                        onSelect = vm::setTerminalPurpose,
+                    )
                     Field("Tablet device ID (optional)", state.terminalDeviceId, onChange = vm::setTerminalDeviceId)
                     Text(
                         "Use a stable identifier such as the tablet asset tag. It helps owners " +
@@ -853,7 +875,8 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                     ErpButton(
                         text = if (state.terminalBusy) "Saving…" else "Add terminal",
                         onClick = vm::addTerminal,
-                        enabled = !state.terminalBusy && state.selectedBranchId != null,
+                        enabled = !state.terminalBusy && state.selectedBranchId != null &&
+                            state.terminalPurpose != null,
                         busy = state.terminalBusy,
                         leadingIcon = Icons.Default.Add,
                     )
@@ -874,7 +897,104 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             onDismiss = { terminalToDelete = null },
         )
     }
+    state.terminalEdit?.let { form ->
+        TerminalEditDialog(
+            form = form,
+            busy = state.terminalBusy,
+            error = state.terminalEditError,
+            onNameChange = vm::setTerminalEditName,
+            onPurposeChange = vm::setTerminalEditPurpose,
+            onDeviceIdChange = vm::setTerminalEditDeviceId,
+            onSave = vm::saveTerminalEdit,
+            onDismiss = vm::closeTerminalEdit,
+        )
+    }
     Feedback(state.terminalNotice, vm::dismissTerminalFeedback)
+}
+
+@Composable
+private fun TerminalEditDialog(
+    form: TerminalEditForm,
+    busy: Boolean,
+    error: String?,
+    onNameChange: (String) -> Unit,
+    onPurposeChange: (String) -> Unit,
+    onDeviceIdChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Edit ${form.originalName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Text(
+                    "Rename this terminal in place so its existing shifts, orders, and audit history stay attached.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Field("Name", form.name, enabled = !busy, onChange = onNameChange)
+                TerminalPurposeSelector(
+                    selected = form.purpose,
+                    enabled = !busy,
+                    onSelect = onPurposeChange,
+                )
+                if (form.purpose != form.originalPurpose) {
+                    Text(
+                        "Close this terminal's current shift before changing its work area. Renaming does not require closing the shift.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Field(
+                    "Tablet device ID (optional)",
+                    form.deviceId,
+                    enabled = !busy,
+                    onChange = onDeviceIdChange,
+                )
+                Text(
+                    "Clear the device ID only when this till is no longer bound to that tablet.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSave, enabled = !busy) {
+                Text(if (busy) "Saving…" else "Save terminal")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun TerminalPurposeSelector(
+    selected: String?,
+    onSelect: (String) -> Unit,
+    enabled: Boolean = true,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Text(
+            "Operational purpose",
+            color = Brand.Foreground,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        PremiumTabBar(
+            options = terminalPurposeOptions.map { TabOption(it.id, it.label) },
+            selectedId = selected.orEmpty(),
+            onSelect = { if (enabled) onSelect(it) },
+        )
+        Text(
+            terminalPurposeOptions.firstOrNull { it.id == selected }?.description
+                ?: "Choose deliberately. This controls where Gaming bills are allowed to go.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
 }
 
 @Composable
@@ -931,7 +1051,7 @@ private fun RefreshStatusBanner(
 @Composable
 private fun ActionErrorBanner(message: String, onDismiss: () -> Unit) {
     OperationalBanner(
-        title = "Terminal was not deleted",
+        title = "Terminal change failed",
         detail = message,
         tone = UiTone.Danger,
         icon = Icons.Default.ErrorOutline,

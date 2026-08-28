@@ -22,6 +22,8 @@ data class ValidatedTerminalDisplay(
     val terminalId: String,
     val terminalName: String,
     val branchId: String,
+    /** Raw server value. Unknown future values stay unknown and fail closed in feature policy. */
+    val purpose: String,
 )
 
 /**
@@ -40,6 +42,7 @@ class TerminalStore(private val context: Context) {
     private val key = stringPreferencesKey("terminal_id")
     private val nameKey = stringPreferencesKey("terminal_name")
     private val branchKey = stringPreferencesKey("terminal_branch_id")
+    private val purposeKey = stringPreferencesKey("terminal_purpose")
 
     @Volatile private var cached: String? = null
     @Volatile private var persistedDisplay: ValidatedTerminalDisplay? = null
@@ -63,6 +66,7 @@ class TerminalStore(private val context: Context) {
             terminalId = cached,
             terminalName = prefs[nameKey],
             branchId = prefs[branchKey],
+            purpose = prefs[purposeKey] ?: TerminalPurpose.HYBRID,
         )
         _terminalId.value = cached
         // Loading a persisted candidate is not runtime activation. SessionViewModel
@@ -86,6 +90,7 @@ class TerminalStore(private val context: Context) {
             // An id-only write cannot retain a label proven for another id.
             it.remove(nameKey)
             it.remove(branchKey)
+            it.remove(purposeKey)
         }
         // Publish only after persistence succeeds.
         cached = id
@@ -104,11 +109,13 @@ class TerminalStore(private val context: Context) {
             terminalId = terminal.id,
             terminalName = terminal.name,
             branchId = terminal.branchId,
+            purpose = terminal.purpose,
         ) ?: throw IllegalArgumentException("A validated till must have an id and branch")
         context.terminalDataStore.edit {
             it[key] = display.terminalId
             it[nameKey] = display.terminalName
             it[branchKey] = display.branchId
+            it[purposeKey] = display.purpose
         }
         cached = display.terminalId
         persistedDisplay = display
@@ -137,11 +144,17 @@ class TerminalStore(private val context: Context) {
         terminalId: String?,
         terminalName: String?,
         branchId: String?,
+        purpose: String?,
     ): ValidatedTerminalDisplay? {
         val id = terminalId?.trim()?.takeIf(String::isNotEmpty) ?: return null
         val branch = branchId?.trim()?.takeIf(String::isNotEmpty) ?: return null
         val name = terminalName?.trim()?.takeIf(String::isNotEmpty)
             ?: "Till ${id.take(8)}"
-        return ValidatedTerminalDisplay(id, name, branch)
+        // Missing is a legacy server/install and therefore hybrid. Preserve
+        // unknown non-blank values so a future capability cannot silently be
+        // widened into local POS authority by an older client.
+        val resolvedPurpose = purpose?.trim()?.takeIf(String::isNotEmpty)
+            ?: TerminalPurpose.HYBRID
+        return ValidatedTerminalDisplay(id, name, branch, resolvedPurpose)
     }
 }

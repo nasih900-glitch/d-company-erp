@@ -10,9 +10,9 @@ from app.core.config import Settings, get_settings
 from app.core.middleware import ClientCompatibilityMiddleware
 
 
-def test_backend_defaults_keep_v5_supported_and_advertise_v7() -> None:
-    assert Settings.model_fields["android_min_supported_version_code"].default == 5
-    assert Settings.model_fields["android_latest_version_code"].default == 7
+def test_backend_defaults_require_and_advertise_v8() -> None:
+    assert Settings.model_fields["android_min_supported_version_code"].default == 8
+    assert Settings.model_fields["android_latest_version_code"].default == 8
     assert Settings.model_fields["require_native_version_headers"].default is True
 
 

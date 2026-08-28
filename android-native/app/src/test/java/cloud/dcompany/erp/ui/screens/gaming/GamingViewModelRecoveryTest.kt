@@ -1,10 +1,11 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
-import cloud.dcompany.erp.core.db.GamingSessionState
+import cloud.dcompany.erp.core.auth.TerminalPurpose
+import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
+import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.RecoveredLegacyServerDisposition
-import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.coroutines.CancellationException
@@ -27,7 +28,12 @@ class GamingViewModelRecoveryTest {
             branchId = "branch-a",
             protected = false,
         )
-        val terminal = ValidatedTerminalDisplay("terminal-a", "Main POS", "branch-a")
+        val terminal = ValidatedTerminalDisplay(
+            "terminal-a",
+            "Main POS",
+            "branch-a",
+            TerminalPurpose.HYBRID,
+        )
         val sameBranchOwner = profile(
             userId = "owner-same-branch",
             companyId = "company-a",

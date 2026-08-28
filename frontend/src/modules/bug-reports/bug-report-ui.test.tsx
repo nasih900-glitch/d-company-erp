@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { hasAdminSystemAccess } from '@/lib/admin-access';
+import { hasAdminSystemAccess, hasAuditAccess } from '@/lib/admin-access';
 import type { BugReportDTO } from '@/lib/erp-api';
 import { ReportDetail } from './BugReportsScreen';
 import {
@@ -60,6 +60,10 @@ const report: BugReportDTO = {
 
 describe('bug report inbox access and filtering', () => {
   it('uses the exact audit_access signal for admin.system route and navigation access', () => {
+    expect(hasAuditAccess({ audit_access: true })).toBe(true);
+    expect(hasAuditAccess({ audit_access: false })).toBe(false);
+    expect(hasAuditAccess({ protected_access: true })).toBe(false);
+
     expect(hasAdminSystemAccess({ audit_access: true })).toBe(true);
     expect(hasAdminSystemAccess({ audit_access: false })).toBe(false);
     expect(hasAdminSystemAccess(null)).toBe(false);

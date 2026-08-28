@@ -2,8 +2,8 @@
 
 > Evidence boundary: this document records the earlier `3.0.4` (`5`) Android
 > snapshot. Material fixes were made before the source identity moved to
-> `3.0.6` (`7`), so none of the emulator, instrumentation, signed-build, or
-> performance results below count as `3.0.6` acceptance evidence. The new
+> `3.0.7` (`8`), so none of the emulator, instrumentation, signed-build, or
+> performance results below count as `3.0.7` acceptance evidence. The new
 > candidate still requires its own automated, emulator, and physical-device
 > gates and has not been deployed to production.
 

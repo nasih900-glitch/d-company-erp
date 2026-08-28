@@ -5,8 +5,10 @@ import { Loader2 } from 'lucide-react';
 import AppShell from '@/components/layout/AppShell';
 import RequireAuth from '@/modules/auth/RequireAuth';
 import { useAuth } from '@/modules/auth/AuthContext';
-import { hasAdminSystemAccess } from '@/lib/admin-access';
+import { hasAdminSystemAccess, hasAuditAccess } from '@/lib/admin-access';
 import { LIVE_MODE } from '@/lib/demo';
+import { canAccessRefunds } from '@/modules/refunds/refund-policy';
+import { canViewMemberships } from '@/modules/memberships/membership-policy';
 
 const Login = lazy(() => import('@/modules/auth/Login'));
 const POSScreen = lazy(() => import('@/modules/pos/POSScreen'));
@@ -30,6 +32,8 @@ const StaffScreen = lazy(() => import('@/modules/staff/StaffScreen'));
 const AnalyticsScreen = lazy(() => import('@/modules/analytics/AnalyticsScreen'));
 const ReportsScreen = lazy(() => import('@/modules/reports/ReportsScreen'));
 const SettingsScreen = lazy(() => import('@/modules/settings/SettingsScreen'));
+const RefundsScreen = lazy(() => import('@/modules/refunds/RefundsScreen'));
+const MembershipsScreen = lazy(() => import('@/modules/memberships/MembershipsScreen'));
 
 function RouteFallback() {
   return (
@@ -44,15 +48,27 @@ function Screen({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }
 
-function ProtectedOwnerOnly({ children }: { children: ReactNode }) {
+function AuditAccessOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
-  if (demo || me?.protected_access) return <>{children}</>;
+  if (demo || hasAuditAccess(me)) return <>{children}</>;
   return <Navigate to="/pos" replace />;
 }
 
 function AdminSystemOnly({ children }: { children: ReactNode }) {
   const { me } = useAuth();
   if (hasAdminSystemAccess(me)) return <>{children}</>;
+  return <Navigate to="/pos" replace />;
+}
+
+function RefundAccessOnly({ children }: { children: ReactNode }) {
+  const { me, demo } = useAuth();
+  if (demo || canAccessRefunds(me)) return <>{children}</>;
+  return <Navigate to="/pos" replace />;
+}
+
+function MembershipAccessOnly({ children }: { children: ReactNode }) {
+  const { me, demo } = useAuth();
+  if (demo || canViewMemberships(me)) return <>{children}</>;
   return <Navigate to="/pos" replace />;
 }
 
@@ -103,14 +119,22 @@ export default function App() {
         <Route path="/ocr" element={<Screen><OcrScreen /></Screen>} />
         <Route path="/staff" element={<Screen><StaffScreen /></Screen>} />
         <Route path="/customers" element={<Screen><CustomersScreen /></Screen>} />
+        <Route
+          path="/memberships"
+          element={<Screen><MembershipAccessOnly><MembershipsScreen /></MembershipAccessOnly></Screen>}
+        />
         <Route path="/insights" element={<Screen><InsightsScreen /></Screen>} />
-        <Route path="/audit" element={<Screen><ProtectedOwnerOnly><AuditScreen /></ProtectedOwnerOnly></Screen>} />
+        <Route path="/audit" element={<Screen><AuditAccessOnly><AuditScreen /></AuditAccessOnly></Screen>} />
         <Route
           path="/bug-reports"
           element={<Screen><AdminSystemOnly><BugReportsScreen /></AdminSystemOnly></Screen>}
         />
         <Route path="/analytics" element={<Screen><AnalyticsScreen /></Screen>} />
         <Route path="/reports" element={<Screen><ReportsScreen /></Screen>} />
+        <Route
+          path="/refunds"
+          element={<Screen><RefundAccessOnly><RefundsScreen /></RefundAccessOnly></Screen>}
+        />
         <Route path="/settings" element={<Screen><SettingsScreen /></Screen>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

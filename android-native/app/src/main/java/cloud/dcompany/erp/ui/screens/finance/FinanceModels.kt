@@ -35,6 +35,67 @@ data class Expense(
 )
 
 @Serializable
+data class ManualCollection(
+    val id: String,
+    @SerialName("company_id") val companyId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("business_date") val businessDate: String,
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("source_kind") val sourceKind: String,
+    @SerialName("source_ref") val sourceRef: String,
+    val note: String? = null,
+    @SerialName("idempotency_key") val idempotencyKey: String,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("created_by_name") val createdByName: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("voided_by_name") val voidedByName: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("is_voided") val isVoided: Boolean = false,
+)
+
+@Serializable
+data class TipPayout(
+    val id: String,
+    @SerialName("company_id") val companyId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    val method: String,
+    @SerialName("paid_at") val paidAt: String,
+    val note: String,
+    @SerialName("idempotency_key") val idempotencyKey: String,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("created_by_name") val createdByName: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("voided_by_name") val voidedByName: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("is_voided") val isVoided: Boolean = false,
+)
+
+@Serializable
+data class TrialBalanceLine(
+    @SerialName("account_code") val accountCode: String,
+    @SerialName("account_name") val accountName: String,
+    @SerialName("account_type") val accountType: String,
+    @SerialName("debit_minor") val debitMinor: Long,
+    @SerialName("credit_minor") val creditMinor: Long,
+    @SerialName("balance_minor") val balanceMinor: Long,
+)
+
+@Serializable
+data class TrialBalance(
+    @SerialName("as_of") val asOf: String,
+    val lines: List<TrialBalanceLine>,
+    @SerialName("total_debit_minor") val totalDebitMinor: Long,
+    @SerialName("total_credit_minor") val totalCreditMinor: Long,
+    @SerialName("is_balanced") val isBalanced: Boolean,
+)
+
+@Serializable
 data class ExpenseCategory(
     val id: String,
     val name: String,
@@ -110,6 +171,29 @@ data class ExpenseCreate(
     @SerialName("invoice_no") val invoiceNo: String? = null,
     val note: String? = null,
 )
+
+@Serializable
+data class ManualCollectionCreate(
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("business_date") val businessDate: String,
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("source_kind") val sourceKind: String = "manual_daily",
+    @SerialName("source_ref") val sourceRef: String,
+    val note: String? = null,
+)
+
+@Serializable
+data class TipPayoutCreate(
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    val method: String,
+    @SerialName("paid_at") val paidAt: String,
+    val note: String,
+)
+
+@Serializable
+data class FinanceVoidRequest(val reason: String)
 
 @Serializable
 data class AssetCreate(
@@ -295,6 +379,53 @@ fun paidViaLabel(method: String): String = when (method.lowercase(Locale.UK)) {
     "bank" -> "Bank transfer"
     else -> method
 }
+
+internal const val TIPS_PAYABLE_ACCOUNT_CODE = "2400"
+internal val FINANCE_PAYMENT_METHODS = setOf("cash", "upi", "card", "bank")
+
+internal fun TrialBalance.tipsPayableMinor(): Long =
+    lines.firstOrNull { it.accountCode == TIPS_PAYABLE_ACCOUNT_CODE }?.balanceMinor ?: 0L
+
+data class ManualCollectionTotals(
+    val cashMinor: Long = 0,
+    val upiMinor: Long = 0,
+    val cardMinor: Long = 0,
+    val bankMinor: Long = 0,
+    val totalMinor: Long = 0,
+    val activeCount: Int = 0,
+    val voidedCount: Int = 0,
+)
+
+internal fun manualCollectionTotals(rows: List<ManualCollection>): ManualCollectionTotals {
+    var totals = ManualCollectionTotals()
+    rows.forEach { row ->
+        if (row.isVoided) {
+            totals = totals.copy(voidedCount = totals.voidedCount + 1)
+        } else {
+            totals = totals.copy(
+                cashMinor = totals.cashMinor + if (row.method == "cash") row.amountMinor else 0,
+                upiMinor = totals.upiMinor + if (row.method == "upi") row.amountMinor else 0,
+                cardMinor = totals.cardMinor + if (row.method == "card") row.amountMinor else 0,
+                bankMinor = totals.bankMinor + if (row.method == "bank") row.amountMinor else 0,
+                totalMinor = totals.totalMinor + row.amountMinor,
+                activeCount = totals.activeCount + 1,
+            )
+        }
+    }
+    return totals
+}
+
+internal fun tipPayoutTotal(rows: List<TipPayout>): Long =
+    rows.filterNot(TipPayout::isVoided).sumOf(TipPayout::amountMinor)
+
+internal fun defaultManualCollectionReference(businessDate: String, method: String): String =
+    "Daily collection $businessDate ${paidViaLabel(method)}"
+
+private val FINANCE_BUSINESS_ZONE: ZoneId = ZoneId.of("Asia/Kolkata")
+
+/** D Company currently operates one Kerala shop; accounting dates follow IST
+ * even if the tablet itself is set to another timezone. */
+internal fun financeBusinessToday(): LocalDate = LocalDate.now(FINANCE_BUSINESS_ZONE)
 
 fun countLabel(count: Int, singular: String, plural: String = singular + "s"): String =
     "$count ${if (count == 1) singular else plural}"

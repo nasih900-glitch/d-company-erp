@@ -66,7 +66,7 @@ async def _staff_headers(session, seed_owner) -> tuple[User, dict[str, str]]:
         "Authorization": f"Bearer {token}",
         "X-Terminal-Id": str(seed_owner["terminal"].id),
         "X-Client-Platform": "android",
-        "X-Client-Version-Code": "6",
+        "X-Client-Version-Code": "8",
     }
 
 
@@ -111,8 +111,8 @@ def _report_payload(seed_owner, **overrides) -> dict:
         "actual_behavior": "The dialog closes and the order remains unpaid.",
         "client_context": {
             "platform": "android",
-            "app_version": "3.0.5",
-            "version_code": 6,
+            "app_version": "3.0.7",
+            "version_code": 8,
             "device_model": "Android SDK built for arm64",
             "os_version": "Android 15",
             "current_screen": "POS/Payment",

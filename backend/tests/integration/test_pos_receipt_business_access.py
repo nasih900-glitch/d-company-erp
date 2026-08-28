@@ -16,7 +16,7 @@ async def require_local_db(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_standard_owner_can_read_current_branch_receipt_identity_only(
+async def test_standard_owner_can_read_receipt_identity_and_owner_settings(
     client,
     session,
     seed_owner,
@@ -91,8 +91,13 @@ async def test_standard_owner_can_read_current_branch_receipt_identity_only(
     assert "payment_key_secret" not in receipt.text
     assert "admin.example.invalid" not in receipt.text
 
-    # The operational projection must not weaken the protected settings API.
+    # settings.manage is an owner-level business permission now; it is
+    # intentionally independent from admin.system/Audit Log authority.
     company_settings = await client.get("/api/v1/settings/company", headers=headers)
     branch_settings = await client.get("/api/v1/settings/branches", headers=headers)
-    assert company_settings.status_code == 403
-    assert branch_settings.status_code == 403
+    assert company_settings.status_code == 200
+    assert branch_settings.status_code == 200
+    assert company_settings.json()["name"] == "D Company"
+    assert company_settings.json()["payment_secret_set"] is True
+    assert "payment_key_secret" not in company_settings.text
+    assert str(branch.id) in {row["id"] for row in branch_settings.json()}

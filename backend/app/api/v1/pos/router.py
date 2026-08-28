@@ -2048,7 +2048,7 @@ async def get_receipt_business(
 ) -> ReceiptBusinessRead:
     """Return only fields needed for billing and receipt rendering.
 
-    Company/branch administration remains protected by ``admin.system``. POS
+    Company/branch administration remains protected by ``settings.manage``. POS
     users get a projection for their JWT/terminal-resolved branch instead of
     access to integration URLs or payment-provider configuration.
     """

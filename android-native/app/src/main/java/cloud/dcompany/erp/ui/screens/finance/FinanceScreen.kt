@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import android.app.DatePickerDialog
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,7 +38,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -50,9 +54,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -75,6 +81,8 @@ import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import java.text.DateFormat
+import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.Date
 import kotlin.math.abs
 
@@ -94,7 +102,7 @@ fun FinanceScreen(access: FinanceAccess = FinanceAccess()) {
 @Composable
 private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: FinanceAccess) {
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Overview", "Expenses", "Assets", "Partners")
+    val tabs = listOf("Overview", "Expenses", "Collections", "Tip payouts", "Assets", "Partners")
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
         Header(state, onRefresh = vm::load)
@@ -129,6 +137,17 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
                 if (state.error != null && state.online) {
                     ErrorBanner(state.error, vm::load)
                 }
+                state.pendingOnlineWrite?.let { pending ->
+                    Box(Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) {
+                        PendingOnlineFinanceWriteBanner(
+                            pending = pending,
+                            online = state.online,
+                            canRetry = access.canRecordExpenses,
+                            busy = state.busy,
+                            onRetry = vm::retryPendingOnlineWrite,
+                        )
+                    }
+                }
                 if (state.notice != null) {
                     Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                         NoticeBanner(state.notice, vm::dismissNotice)
@@ -144,7 +163,9 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
                 when (tab) {
                     0 -> OverviewTab(state)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
-                    2 -> AssetsTab(state, vm, access.canManageAssets)
+                    2 -> ManualCollectionsTab(state, vm, access.canRecordExpenses)
+                    3 -> TipPayoutsTab(state, vm, access.canRecordExpenses)
+                    4 -> AssetsTab(state, vm, access.canManageAssets)
                     else -> PartnersTab(state, vm, access.canRecordPartnerCapital)
                 }
 
@@ -153,6 +174,18 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
                     FinanceDialog.AssetForm -> if (access.canManageAssets) AssetCreateDialog(state, vm)
                     is FinanceDialog.CapitalEntryForm -> if (access.canRecordPartnerCapital) {
                         CapitalEntryCreateDialog(dialog.partner, state, vm)
+                    }
+                    FinanceDialog.ManualCollectionForm -> if (access.canRecordExpenses) {
+                        ManualCollectionCreateDialog(state, vm)
+                    }
+                    FinanceDialog.TipPayoutForm -> if (access.canRecordExpenses) {
+                        TipPayoutCreateDialog(state, vm)
+                    }
+                    is FinanceDialog.VoidManualCollection -> if (access.canRecordExpenses) {
+                        VoidManualCollectionDialog(dialog.row, state, vm)
+                    }
+                    is FinanceDialog.VoidTipPayout -> if (access.canRecordExpenses) {
+                        VoidTipPayoutDialog(dialog.row, state, vm)
                     }
                     null -> {}
                 }
@@ -498,6 +531,329 @@ private fun ExpenseRow(expense: Expense, categoryName: String) {
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// MANUAL COLLECTIONS — online-only immutable off-POS revenue register
+// ============================================================================
+@Composable
+private fun ManualCollectionsTab(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    canWrite: Boolean,
+) {
+    val totals = state.collectionTotals
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            OperationalBanner(
+                title = "Use only for genuine money collected outside POS",
+                detail =
+                    "This adds unitemized revenue and payment movement, but creates no order, invoice, item mix, tax split or automatic COGS. Mistakes must be voided with a reason.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.Payments,
+            )
+        }
+        if (!canWrite) {
+            item {
+                ViewOnlyNotice("Manual collections are view only — ask an owner or manager to record or void one.")
+            }
+        }
+        item {
+            StatGrid(
+                listOf(
+                    StatSpec("Active total", totals.totalMinor.asRupees(), countLabel(totals.activeCount, "entry")),
+                    StatSpec("Cash", totals.cashMinor.asRupees()),
+                    StatSpec("UPI", totals.upiMinor.asRupees()),
+                    StatSpec(
+                        "Card + bank",
+                        (totals.cardMinor + totals.bankMinor).asRupees(),
+                        countLabel(totals.voidedCount, "voided entry"),
+                    ),
+                ),
+                columns = 4,
+            )
+        }
+        item {
+            ActionBar(
+                leading = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            "Immutable collection register",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Newest business date first · server-authoritative",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Brand.ForegroundMuted,
+                        )
+                    }
+                },
+                trailing = {
+                    ErpButton(
+                        text = "Add collection",
+                        onClick = vm::openManualCollectionForm,
+                        enabled = canWrite && state.online &&
+                            state.pendingOnlineWrite == null && state.branches.isNotEmpty(),
+                        leadingIcon = Icons.Default.Add,
+                    )
+                },
+            )
+        }
+        if (!state.online) {
+            item {
+                Note("Online-only accounting: reconnect and refresh before recording or voiding a collection. Nothing is queued offline.")
+            }
+        }
+        if (state.manualCollections.size == 500) {
+            item {
+                Note("Showing the newest 500 records. Use period reports for older collection totals.")
+            }
+        }
+        if (state.manualCollections.isEmpty()) {
+            item {
+                Panel {
+                    SectionTitle("No manual collections recorded")
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Normal sales should continue through Tables, Gaming or Shisha into POS. Use Add collection only when no itemized order exists.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        } else {
+            items(state.manualCollections, key = { it.id }) { row ->
+                ManualCollectionRow(
+                    row = row,
+                    branchName = state.branches.firstOrNull { it.id == row.branchId }?.name
+                        ?: "Unknown shop",
+                    canVoid = canWrite && state.online && state.pendingOnlineWrite == null,
+                    onVoid = { vm.openVoidManualCollection(row) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManualCollectionRow(
+    row: ManualCollection,
+    branchName: String,
+    canVoid: Boolean,
+    onVoid: () -> Unit,
+) {
+    Panel(border = if (row.isVoided) Brand.Danger.copy(alpha = 0.45f) else null) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    row.sourceRef,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                    textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
+                )
+                Text(
+                    "${row.businessDate.asDay()} · $branchName · ${paidViaLabel(row.method)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "Recorded by ${row.createdByName ?: "verified employee"} · ${row.createdAt.asDay()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                row.note?.takeIf(String::isNotBlank)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = Brand.ForegroundMuted)
+                }
+                row.voidReason?.let {
+                    Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = Brand.Danger)
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    row.amountMinor.asRupees(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (row.isVoided) Brand.ForegroundMuted else Brand.Foreground,
+                    textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
+                )
+                if (row.isVoided) {
+                    Text("VOIDED", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                } else {
+                    ErpButton(
+                        text = "Void",
+                        onClick = onVoid,
+                        enabled = canVoid,
+                        intent = ActionIntent.Destructive,
+                        leadingIcon = Icons.Default.Block,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// TIP PAYOUTS — online-only settlement of Tips Payable
+// ============================================================================
+@Composable
+private fun TipPayoutsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            OperationalBanner(
+                title = "Record money actually handed to staff",
+                detail =
+                    "This debits Tips Payable as one lump-sum payout. Use the note for the staff split; entries remain immutable and mistakes require a reasoned void.",
+                tone = UiTone.Information,
+                icon = Icons.Default.Payments,
+            )
+        }
+        if (!canWrite) {
+            item {
+                ViewOnlyNotice("Tip payouts are view only — ask an owner or manager to record or void one.")
+            }
+        }
+        item {
+            StatGrid(
+                listOf(
+                    StatSpec(
+                        "Owed to staff now",
+                        state.tipsPayableMinor?.asRupees() ?: "Unavailable",
+                        "live Tips Payable balance",
+                        if (state.tipsPayableMinor == null) Tone.Bad else Tone.Default,
+                    ),
+                    StatSpec(
+                        "Paid out to date",
+                        state.tipPayoutTotalMinor.asRupees(),
+                        countLabel(state.tipPayouts.count { !it.isVoided }, "active payout"),
+                    ),
+                ),
+                columns = 2,
+            )
+        }
+        item {
+            ActionBar(
+                leading = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            "Immutable payout register",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Newest payout first · server-authoritative",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Brand.ForegroundMuted,
+                        )
+                    }
+                },
+                trailing = {
+                    ErpButton(
+                        text = "Pay out tips",
+                        onClick = vm::openTipPayoutForm,
+                        enabled = canWrite && state.online && state.tipsPayableMinor != null &&
+                            state.pendingOnlineWrite == null && state.branches.isNotEmpty(),
+                        leadingIcon = Icons.Default.Payments,
+                    )
+                },
+            )
+        }
+        if (!state.online) {
+            item {
+                Note("Online-only accounting: reconnect and refresh the live Tips Payable balance before paying or voiding. Nothing is queued offline.")
+            }
+        }
+        if (state.tipPayouts.size == 500) {
+            item { Note("Showing the newest 500 payout records.") }
+        }
+        if (state.tipPayouts.isEmpty()) {
+            item {
+                Panel {
+                    SectionTitle("No tip payouts recorded")
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Tips collected on paid orders remain in Tips Payable until staff are actually paid here.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        } else {
+            items(state.tipPayouts, key = { it.id }) { row ->
+                TipPayoutRow(
+                    row = row,
+                    branchName = state.branches.firstOrNull { it.id == row.branchId }?.name
+                        ?: "Unknown shop",
+                    canVoid = canWrite && state.online && state.pendingOnlineWrite == null,
+                    onVoid = { vm.openVoidTipPayout(row) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TipPayoutRow(
+    row: TipPayout,
+    branchName: String,
+    canVoid: Boolean,
+    onVoid: () -> Unit,
+) {
+    Panel(border = if (row.isVoided) Brand.Danger.copy(alpha = 0.45f) else null) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    row.note,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.SemiBold,
+                    textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
+                )
+                Text(
+                    "${row.paidAt.asDay()} · $branchName · ${paidViaLabel(row.method)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "Recorded by ${row.createdByName ?: "verified employee"} · ${row.createdAt.asDay()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+                row.voidReason?.let {
+                    Text("Void reason: $it", style = MaterialTheme.typography.bodySmall, color = Brand.Danger)
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    row.amountMinor.asRupees(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (row.isVoided) Brand.ForegroundMuted else Brand.Foreground,
+                    textDecoration = if (row.isVoided) TextDecoration.LineThrough else null,
+                )
+                if (row.isVoided) {
+                    Text("VOIDED", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                } else {
+                    ErpButton(
+                        text = "Void",
+                        onClick = onVoid,
+                        enabled = canVoid,
+                        intent = ActionIntent.Destructive,
+                        leadingIcon = Icons.Default.Block,
+                    )
+                }
             }
         }
     }
@@ -1055,7 +1411,10 @@ private fun FinanceOfflineBanner(lastUpdatedAtMillis: Long?) {
         title = "Offline · showing saved financial data",
         detail = buildString {
             if (lastUpdated != null) append("Last successful server load: $lastUpdated. ")
-            append("New authorised entries stay on this tablet and sync automatically after reconnection.")
+            append(
+                "Expense, asset and capital drafts stay on this tablet and sync after reconnection. " +
+                    "Manual collections and tip payouts are never saved offline.",
+            )
         },
         tone = UiTone.Warning,
         icon = Icons.Default.CloudOff,
@@ -1218,9 +1577,322 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     }
 }
 
+@Composable
+private fun PendingOnlineFinanceWriteBanner(
+    pending: PendingFinanceOnlineWrite,
+    online: Boolean,
+    canRetry: Boolean,
+    busy: Boolean,
+    onRetry: () -> Unit,
+) {
+    OperationalBanner(
+        title = "Finance request needs exact recovery",
+        detail =
+            "${pending.summary()}. The previous server result was not confirmed. Do not enter or pay it again; retrying reuses the exact saved request.",
+        tone = UiTone.Warning,
+        icon = Icons.Default.Refresh,
+        action = {
+            ErpButton(
+                text = if (online) "Retry exact request" else "Reconnect to retry",
+                onClick = onRetry,
+                enabled = online && canRetry,
+                busy = busy,
+                intent = ActionIntent.Warning,
+                leadingIcon = Icons.Default.Refresh,
+            )
+        },
+    )
+}
+
 // ============================================================================
 // CREATE DIALOGS
 // ============================================================================
+@Composable
+private fun ManualCollectionCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+    var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
+    var businessDate by remember { mutableStateOf(financeBusinessToday().toString()) }
+    var method by remember { mutableStateOf("cash") }
+    var amountRupees by remember { mutableStateOf("") }
+    var sourceRef by remember {
+        mutableStateOf(defaultManualCollectionReference(businessDate, method))
+    }
+    var note by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    fun changeDate(next: String) {
+        val oldDefault = defaultManualCollectionReference(businessDate, method)
+        businessDate = next
+        if (sourceRef == oldDefault) {
+            sourceRef = defaultManualCollectionReference(next, method)
+        }
+    }
+
+    fun changeMethod(next: String) {
+        val oldDefault = defaultManualCollectionReference(businessDate, method)
+        method = next
+        if (sourceRef == oldDefault) {
+            sourceRef = defaultManualCollectionReference(businessDate, next)
+        }
+    }
+
+    FormDialog(
+        title = "Add manual collection",
+        confirmLabel = "Record collection",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val amountMinor = parseRupeesToMinor(amountRupees)
+            when {
+                amountMinor == null || amountMinor <= 0 ->
+                    localError = "Enter an amount greater than ₹0 with no more than 2 decimal places."
+                sourceRef.trim().isEmpty() ->
+                    localError = "Enter a reference that can be matched to payment evidence."
+                else -> {
+                    localError = null
+                    vm.createManualCollection(
+                        branchId = branchId,
+                        businessDate = businessDate,
+                        method = method,
+                        amountMinor = amountMinor,
+                        sourceRef = sourceRef,
+                        note = note,
+                    )
+                }
+            }
+        },
+    ) {
+        OperationalBanner(
+            title = "Unitemized revenue only",
+            detail =
+                "This will not create an order, receipt, table ticket, gaming session, tax split or automatic COGS. It is sent live and never queued offline.",
+            tone = UiTone.Warning,
+            icon = Icons.Default.Payments,
+        )
+        BusinessDatePickerField(businessDate, ::changeDate)
+        PickerField(
+            "Shop",
+            state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
+            state.branches.map { it.id to it.name },
+        ) { branchId = it }
+        PickerField(
+            "Payment method",
+            paidViaLabel(method),
+            listOf(
+                "cash" to "Cash",
+                "upi" to "UPI",
+                "card" to "Card",
+                "bank" to "Bank transfer",
+            ),
+        ) { changeMethod(it) }
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        OutlinedTextField(
+            value = sourceRef,
+            onValueChange = { sourceRef = it.take(160) },
+            label = { Text("Evidence reference") },
+            supportingText = { Text("Daily sheet row, settlement reference, or bank evidence") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = note,
+            onValueChange = { note = it.take(500) },
+            label = { Text("Note (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+    var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
+    var method by remember { mutableStateOf("cash") }
+    var amountRupees by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+    val amountMinor = parseRupeesToMinor(amountRupees)
+    val owed = state.tipsPayableMinor
+    val exceedsOwed = amountMinor != null && owed != null && amountMinor > owed
+
+    FormDialog(
+        title = "Pay out tips",
+        confirmLabel = "Record payout",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        confirmEnabled = !exceedsOwed,
+        onConfirm = {
+            val parsedAmount = parseRupeesToMinor(amountRupees)
+            when {
+                parsedAmount == null || parsedAmount <= 0 ->
+                    localError = "Enter an amount greater than ₹0 with no more than 2 decimal places."
+                owed == null ->
+                    localError = "Refresh the live Tips Payable balance before paying staff."
+                parsedAmount > owed ->
+                    localError = "This exceeds the ${owed.asRupees()} currently owed to staff."
+                note.trim().length < 3 ->
+                    localError = "Explain how the payout was split (at least 3 characters)."
+                else -> {
+                    localError = null
+                    vm.createTipPayout(
+                        branchId = branchId,
+                        method = method,
+                        amountMinor = parsedAmount,
+                        paidAt = nowIso(),
+                        note = note,
+                    )
+                }
+            }
+        },
+    ) {
+        OperationalBanner(
+            title = "Owed to staff: ${owed?.asRupees() ?: "Unavailable"}",
+            detail =
+                "Record only money actually handed over now. This is one lump-sum payout; the note is the staff-split record until Payroll exists.",
+            tone = if (owed == null) UiTone.Danger else UiTone.Information,
+            icon = Icons.Default.Payments,
+        )
+        PickerField(
+            "Shop",
+            state.branches.firstOrNull { it.id == branchId }?.name ?: "Select…",
+            state.branches.map { it.id to it.name },
+        ) { branchId = it }
+        PickerField(
+            "Paid via",
+            paidViaLabel(method),
+            listOf(
+                "cash" to "Cash",
+                "upi" to "UPI",
+                "card" to "Card",
+                "bank" to "Bank transfer",
+            ),
+        ) { method = it }
+        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)")
+        if (exceedsOwed) {
+            Text(
+                "This is more than the ${owed?.asRupees()} currently owed to staff.",
+                color = Brand.Danger,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        OutlinedTextField(
+            value = note,
+            onValueChange = { note = it.take(500) },
+            label = { Text("Staff split / payout note") },
+            supportingText = { Text("For example: split among Anu, Basil and Reji on shift") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Note("The server records the actual current date/time when you confirm this payout.")
+    }
+}
+
+@Composable
+private fun VoidManualCollectionDialog(
+    row: ManualCollection,
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+) {
+    var reason by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+    FormDialog(
+        title = "Void manual collection",
+        confirmLabel = "Void collection",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        confirmEnabled = reason.trim().length >= 3,
+        onConfirm = {
+            if (reason.trim().length < 3) {
+                localError = "Enter a reason with at least 3 characters."
+            } else {
+                localError = null
+                vm.voidManualCollection(row, reason)
+            }
+        },
+    ) {
+        OperationalBanner(
+            title = "Void ${row.amountMinor.asRupees()} · ${paidViaLabel(row.method)}?",
+            detail =
+                "The original record remains visible for audit, but its revenue and payment movement will be reversed.",
+            tone = UiTone.Danger,
+            icon = Icons.Default.Block,
+        )
+        OutlinedTextField(
+            value = reason,
+            onValueChange = { reason = it.take(500) },
+            label = { Text("Void reason") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun VoidTipPayoutDialog(row: TipPayout, state: FinanceUiState, vm: FinanceViewModel) {
+    var reason by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+    FormDialog(
+        title = "Void tip payout",
+        confirmLabel = "Void payout",
+        busy = state.busy,
+        error = localError ?: state.formError,
+        onDismiss = vm::closeDialog,
+        confirmEnabled = reason.trim().length >= 3,
+        onConfirm = {
+            if (reason.trim().length < 3) {
+                localError = "Enter a reason with at least 3 characters."
+            } else {
+                localError = null
+                vm.voidTipPayout(row, reason)
+            }
+        },
+    ) {
+        OperationalBanner(
+            title = "Void ${row.amountMinor.asRupees()} · ${paidViaLabel(row.method)}?",
+            detail =
+                "The original record remains visible for audit and this amount becomes owed to staff in Tips Payable again.",
+            tone = UiTone.Danger,
+            icon = Icons.Default.Block,
+        )
+        OutlinedTextField(
+            value = reason,
+            onValueChange = { reason = it.take(500) },
+            label = { Text("Void reason") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun BusinessDatePickerField(value: String, onValueChange: (String) -> Unit) {
+    val context = LocalContext.current
+    val current = runCatching { LocalDate.parse(value) }.getOrDefault(financeBusinessToday())
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Business date", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+        ErpButton(
+            text = current.toString().asDay(),
+            onClick = {
+                DatePickerDialog(
+                    context,
+                    { _, year, month, day ->
+                        onValueChange(LocalDate.of(year, month + 1, day).toString())
+                    },
+                    current.year,
+                    current.monthValue - 1,
+                    current.dayOfMonth,
+                ).apply {
+                    datePicker.maxDate = financeBusinessToday().plusDays(1)
+                        .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() - 1
+                }.show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            intent = ActionIntent.Secondary,
+        )
+    }
+}
+
 @Composable
 private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
     var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }

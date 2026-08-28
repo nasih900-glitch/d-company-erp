@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CardMembership
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
@@ -104,6 +105,7 @@ enum class Destination(
     Pos("POS", "Take orders and payments", Icons.Filled.PointOfSale),
     Gaming("Gaming", "Manage stations and sessions", Icons.Filled.SportsEsports),
     Tables("Tables", "Open and manage table orders", Icons.Filled.TableRestaurant),
+    Reservations("Reservations", "Manage table and gaming bookings", Icons.Filled.CalendarMonth),
     Kitchen("Kitchen", "Prepare and complete kitchen tickets", Icons.Filled.Restaurant),
     Shift("Shift", "Open, review and close this till", Icons.Filled.Schedule),
     Customers("Customers", "Find customers and loyalty history", Icons.Filled.People),

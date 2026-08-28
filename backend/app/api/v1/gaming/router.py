@@ -47,6 +47,8 @@ from app.models import (
     Refund,
     Shift,
     Station,
+    Terminal,
+    User,
 )
 from app.services.gaming.billing_mode import (
     has_complete_package_snapshot,
@@ -73,6 +75,8 @@ _SESSION_ITEM_LABEL = {
     "hookah": "Shisha Session",
     "streaming": "Streaming Session",
 }
+_GAMING_SOURCE_TERMINAL_PURPOSES = frozenset({"gaming", "hybrid"})
+_POS_DESTINATION_TERMINAL_PURPOSES = frozenset({"cafe_pos", "hybrid"})
 
 
 class StationRead(BaseModel):
@@ -402,6 +406,31 @@ class SessionReconcileToPosRead(BaseModel):
     already_linked: bool
 
 
+class SessionPosHandoff(BaseModel):
+    """Explicit destination for a normal cross-terminal POS handoff."""
+
+    target_shift_id: UUID
+
+
+class SessionPosHandoffRead(BaseModel):
+    order_id: UUID
+    amount_minor: int
+    source_shift_id: UUID
+    source_terminal_id: UUID
+    target_shift_id: UUID
+    target_terminal_id: UUID
+    already_linked: bool
+
+
+class PosTargetShiftRead(BaseModel):
+    shift_id: UUID
+    terminal_id: UUID
+    terminal_name: str
+    opened_by: UUID
+    opened_by_name: str
+    opened_at: datetime
+
+
 class BookingCreate(BaseModel):
     station_id: UUID
     starts_at: datetime
@@ -543,6 +572,32 @@ def _current_gaming_branch_id(tenant: TenantContext) -> UUID:
     if tenant.branch_id is None:
         raise BusinessRuleError("select a branch or terminal before managing gaming stations")
     return tenant.branch_id
+
+
+async def _require_terminal_purpose(
+    session,
+    *,
+    tenant: TenantContext,
+    allowed: frozenset[str],
+    invalid_message: str,
+) -> Terminal:
+    """Resolve the selected terminal and enforce its operational capability.
+
+    Terminal names are editable display labels and therefore must never drive
+    financial routing. Purpose is the durable, database-constrained contract.
+    """
+    if tenant.terminal_id is None or tenant.branch_id is None:
+        raise BusinessRuleError(
+            "Select a terminal in this shop before managing gaming sessions."
+        )
+    terminal = await session.get(Terminal, tenant.terminal_id)
+    if terminal is None or terminal.branch_id != tenant.branch_id:
+        raise BusinessRuleError(
+            "The selected terminal is not valid for this shop. Refresh your terminal selection."
+        )
+    if terminal.purpose not in allowed:
+        raise BusinessRuleError(invalid_message)
+    return terminal
 
 
 def _require_idempotency(request: Request) -> tuple[str, str]:
@@ -1961,6 +2016,15 @@ async def start_session(
         raise NotFoundError("station not found")
     if not station.is_active:
         raise BusinessRuleError("station is not active")
+    await _require_terminal_purpose(
+        session,
+        tenant=tenant,
+        allowed=_GAMING_SOURCE_TERMINAL_PURPOSES,
+        invalid_message=(
+            "This terminal is configured for Cafe POS and cannot start gaming "
+            "sessions. Select the Gaming Area terminal."
+        ),
+    )
     if (
         payload.package_id is None
         and payload.expected_rate_per_hour_minor is None
@@ -3810,6 +3874,291 @@ async def _create_session_pos_order(
     return order
 
 
+@router.get(
+    "/sessions/{session_id}/pos-target-shifts",
+    response_model=list[PosTargetShiftRead],
+)
+async def list_session_pos_target_shifts(
+    session_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.write", "pos.read")),
+) -> list[PosTargetShiftRead]:
+    """List explicit, currently eligible POS destinations for one session.
+
+    The source gaming shift remains the session's provenance.  A destination
+    is another open terminal shift in the same company and branch; listing it
+    does not make held orders branch-wide or grant checkout authority there.
+    """
+    if tenant.terminal_id is None:
+        raise BusinessRuleError(
+            "Select the gaming terminal used by this device before choosing a POS till."
+        )
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before choosing a POS till."
+        )
+
+    gs = await session.get(GamingSession, session_id)
+    if not gs or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if gs.order_id is not None:
+        raise BusinessRuleError("This session was already sent to POS.")
+    if gs.status != "ended":
+        raise BusinessRuleError("Stop the session before choosing a POS till.")
+    if _require_repaired_ended_amount(gs) <= 0:
+        raise BusinessRuleError(
+            "The session has no billable amount. Cancel it with a reason instead."
+        )
+
+    source_shift = await session.get(Shift, gs.shift_id)
+    source_shift = require_open_operational_shift(
+        source_shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="choosing a POS till for this gaming session",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+    await _require_terminal_purpose(
+        session,
+        tenant=tenant,
+        allowed=_GAMING_SOURCE_TERMINAL_PURPOSES,
+        invalid_message=(
+            "This terminal is not configured to host gaming sessions. "
+            "Select the Gaming Area terminal."
+        ),
+    )
+
+    rows = (
+        await session.execute(
+            select(Shift, Terminal, User)
+            .join(
+                Terminal,
+                (Terminal.id == Shift.terminal_id)
+                & (Terminal.branch_id == Shift.branch_id),
+            )
+            .join(User, User.id == Shift.opened_by)
+            .where(
+                Shift.company_id == tenant.company_id,
+                Shift.branch_id == tenant.branch_id,
+                Shift.status == "open",
+                Shift.id != source_shift.id,
+                Shift.terminal_id != source_shift.terminal_id,
+                Terminal.purpose.in_(_POS_DESTINATION_TERMINAL_PURPOSES),
+                User.company_id == tenant.company_id,
+            )
+            .order_by(Terminal.name, Shift.opened_at, Shift.id)
+        )
+    ).all()
+    return [
+        PosTargetShiftRead(
+            shift_id=target_shift.id,
+            terminal_id=terminal.id,
+            terminal_name=terminal.name,
+            opened_by=opener.id,
+            opened_by_name=opener.name,
+            opened_at=target_shift.opened_at,
+        )
+        for target_shift, terminal, opener in rows
+    ]
+
+
+@router.post(
+    "/sessions/{session_id}/handoff-to-pos",
+    response_model=SessionPosHandoffRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def handoff_session_to_pos(
+    session_id: UUID,
+    payload: SessionPosHandoff,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.write", "pos.read")),
+) -> SessionPosHandoffRead:
+    """Create a held order on an explicitly selected POS terminal shift.
+
+    This is the normal open-source-shift path for a gaming area and a café POS
+    using separate logical terminals.  The gaming session keeps its original
+    shift; only the held order belongs to the destination drawer.
+    """
+    if tenant.terminal_id is None:
+        raise BusinessRuleError(
+            "Select the gaming terminal used by this device before sending to POS."
+        )
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before sending to POS."
+        )
+
+    gs = (
+        await session.execute(
+            select(GamingSession)
+            .where(GamingSession.id == session_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not gs or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+
+    source_shift = await session.get(Shift, gs.shift_id)
+    source_shift = require_operational_shift_scope(
+        source_shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="sending this gaming session to another POS terminal",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+
+    if gs.order_id is not None:
+        existing_order = await session.get(Order, gs.order_id)
+        if existing_order is None or existing_order.company_id != tenant.company_id:
+            raise NotFoundError("Order not found for this company.")
+        if existing_order.branch_id != tenant.branch_id:
+            raise BusinessRuleError("Order belongs to a different branch.")
+        if existing_order.shift_id != payload.target_shift_id:
+            raise ConflictError(
+                "This session was already sent to a different POS shift. "
+                "Refresh Gaming and open the linked held order."
+            )
+        return SessionPosHandoffRead(
+            order_id=existing_order.id,
+            amount_minor=int(existing_order.total_minor),
+            source_shift_id=source_shift.id,
+            source_terminal_id=source_shift.terminal_id,
+            target_shift_id=existing_order.shift_id,
+            target_terminal_id=existing_order.terminal_id,
+            already_linked=True,
+        )
+
+    if gs.status != "ended":
+        raise BusinessRuleError("Stop the session before sending it to POS.")
+    amount_minor = _require_repaired_ended_amount(gs)
+    if amount_minor <= 0:
+        raise BusinessRuleError(
+            "The session has no billable amount. Cancel it with a reason instead."
+        )
+    await _require_terminal_purpose(
+        session,
+        tenant=tenant,
+        allowed=_GAMING_SOURCE_TERMINAL_PURPOSES,
+        invalid_message=(
+            "This terminal is not configured to host gaming sessions. "
+            "Select the Gaming Area terminal."
+        ),
+    )
+
+    # Lock both shifts in UUID order. Two simultaneous A->B and B->A handoffs
+    # must never deadlock by taking the same pair in opposite orders.
+    shift_ids = sorted({source_shift.id, payload.target_shift_id}, key=str)
+    locked_shifts = (
+        await session.execute(
+            select(Shift)
+            .where(Shift.id.in_(shift_ids))
+            .order_by(Shift.id)
+            .with_for_update()
+            # ``source_shift`` was read above for tenant scoping. Refresh it
+            # under the lock so a concurrent close cannot leave this request
+            # validating a stale in-memory ``status == open`` value.
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    shifts_by_id = {shift.id: shift for shift in locked_shifts}
+    source_shift = require_open_operational_shift(
+        shifts_by_id.get(gs.shift_id),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="handing this gaming session to POS",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+    target_shift = shifts_by_id.get(payload.target_shift_id)
+    if target_shift is None or target_shift.company_id != tenant.company_id:
+        raise NotFoundError("Target POS shift not found for this company.")
+    if target_shift.branch_id != tenant.branch_id:
+        raise BusinessRuleError("Target POS shift belongs to a different branch.")
+    if target_shift.branch_id != station.branch_id:
+        raise BusinessRuleError(
+            "Target POS shift branch does not match the gaming station branch."
+        )
+    if target_shift.status != "open":
+        raise BusinessRuleError(
+            "The selected POS shift is not open. Refresh the till list and choose an open shift."
+        )
+    if target_shift.id == source_shift.id:
+        raise BusinessRuleError(
+            "The selected shift is this gaming terminal's shift. Use Send to POS normally."
+        )
+    if target_shift.terminal_id == source_shift.terminal_id:
+        raise BusinessRuleError(
+            "Choose a shift on another terminal for a cross-terminal handoff."
+        )
+
+    target_terminal = await session.get(Terminal, target_shift.terminal_id)
+    if target_terminal is None or target_terminal.branch_id != target_shift.branch_id:
+        raise BusinessRuleError(
+            "The selected POS terminal is not valid for this shop. Refresh the till list."
+        )
+    if target_terminal.purpose not in _POS_DESTINATION_TERMINAL_PURPOSES:
+        raise BusinessRuleError(
+            "The selected terminal cannot receive POS bills. Choose an open Cafe POS "
+            "or Hybrid terminal shift."
+        )
+
+    source_shift_id = source_shift.id
+    source_terminal_id = source_shift.terminal_id
+    order = await _create_session_pos_order(
+        session,
+        gaming_session=gs,
+        station=station,
+        target_shift=target_shift,
+        company_id=tenant.company_id,
+        opened_by=tenant.user_id,
+    )
+    audit_reason = "Explicit cross-terminal Gaming to POS handoff"
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="gaming_session_handoff_to_pos",
+            entity_type="GamingSession",
+            entity_id=str(gs.id),
+            before={
+                "source_shift_id": str(source_shift_id),
+                "source_terminal_id": str(source_terminal_id),
+                "order_id": None,
+            },
+            after={
+                "source_shift_id": str(source_shift_id),
+                "source_terminal_id": str(source_terminal_id),
+                "target_shift_id": str(target_shift.id),
+                "target_terminal_id": str(target_shift.terminal_id),
+                "order_id": str(order.id),
+            },
+            terminal_id=tenant.terminal_id,
+            reason=audit_reason,
+        )
+    )
+    await session.flush()
+    return SessionPosHandoffRead(
+        order_id=order.id,
+        amount_minor=int(order.total_minor),
+        source_shift_id=source_shift_id,
+        source_terminal_id=source_terminal_id,
+        target_shift_id=target_shift.id,
+        target_terminal_id=target_shift.terminal_id,
+        already_linked=False,
+    )
+
+
 @router.post("/sessions/{session_id}/send-to-pos", status_code=status.HTTP_201_CREATED)
 async def send_session_to_pos(
     session_id: UUID,
@@ -3886,6 +4235,15 @@ async def send_session_to_pos(
         operation="sending a session to POS",
         resource_branch_id=station.branch_id,
         resource_name="gaming station",
+    )
+    await _require_terminal_purpose(
+        session,
+        tenant=tenant,
+        allowed=_POS_DESTINATION_TERMINAL_PURPOSES,
+        invalid_message=(
+            "This terminal is configured for Gaming only. Use the cross-terminal "
+            "Send to POS handoff and choose an open Cafe POS shift."
+        ),
     )
 
     order = await _create_session_pos_order(

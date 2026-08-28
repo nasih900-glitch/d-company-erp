@@ -28,13 +28,17 @@ from app.api.v1.settings.router import (
     BranchUpdate,
     TerminalCreate,
     TerminalRead,
+    TerminalUpdate,
     create_branch,
     create_terminal,
+    delete_branch,
     list_terminals,
     update_branch,
+    update_terminal,
 )
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.tenant import TenantContext
+from app.models import Terminal
 
 COMPANY_ID = UUID("11111111-1111-1111-1111-111111111111")
 BRANCH_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -143,6 +147,7 @@ async def test_create_branch_persists_and_stores_response(monkeypatch) -> None:
     session = _QueuedSession(
         [
             _Result(scalar=COMPANY_ID),
+            _Result(scalar=None),  # no existing active shop
             _Result(scalar=None),  # no existing branch by name
             _Result(scalar=None),  # no existing fiscal series
         ]
@@ -172,7 +177,12 @@ async def test_create_branch_compatibility_accepts_only_an_exact_two_char_code(
     monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
     monkeypatch.setattr(settings_router, "store_response", store)
     session = _QueuedSession(
-        [_Result(scalar=COMPANY_ID), _Result(scalar=None), _Result(scalar=None)]
+        [
+            _Result(scalar=COMPANY_ID),
+            _Result(scalar=None),
+            _Result(scalar=None),
+            _Result(scalar=None),
+        ]
     )
 
     result = await create_branch(
@@ -200,6 +210,49 @@ def test_explicit_invoice_series_is_normalized_and_strict() -> None:
     )
     with pytest.raises(ValueError, match="exactly two"):
         BranchCreate(name="Kiosk", invoice_series_code="MAIN")
+
+
+@pytest.mark.asyncio
+async def test_create_branch_rejects_a_second_active_shop(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
+    session = _QueuedSession(
+        [
+            _Result(scalar=COMPANY_ID),
+            _Result(scalar=BRANCH_ID),
+        ]
+    )
+
+    with pytest.raises(BusinessRuleError, match="configured for one shop"):
+        await create_branch(
+            BranchCreate(name="Second Shop", invoice_series_code="S2"),
+            _request(),
+            session,
+            _tenant(),
+        )
+
+    assert session.added == []
+    assert session.flushes == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_branch_rejects_the_only_active_shop() -> None:
+    branch = _branch()
+    session = _QueuedSession(
+        [
+            _Result(scalar=COMPANY_ID),
+            _Result(scalar=branch),
+            _Result(scalar=1),
+        ]
+    )
+
+    with pytest.raises(BusinessRuleError, match="only shop cannot be deleted"):
+        await delete_branch(BRANCH_ID, session, _tenant())
+
+    assert branch.deleted_at is None
+    assert session.flushes == 0
 
 
 @pytest.mark.asyncio
@@ -265,7 +318,11 @@ async def test_update_branch_rejects_series_change_after_counter_history() -> No
 async def test_create_terminal_requires_idempotency_key() -> None:
     session = _QueuedSession([])
     bare_request = SimpleNamespace(state=SimpleNamespace())
-    payload = TerminalCreate(branch_id=BRANCH_ID, name="POS-T2")
+    payload = TerminalCreate(
+        branch_id=BRANCH_ID,
+        name="POS-T2",
+        purpose="cafe_pos",
+    )
 
     with pytest.raises(BusinessRuleError, match="Idempotency-Key"):
         await create_terminal(payload, bare_request, session, _tenant())
@@ -285,21 +342,172 @@ async def test_create_terminal_persists_and_stores_response(monkeypatch) -> None
     monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
     monkeypatch.setattr(settings_router, "store_response", store)
 
-    class _CreateSession(_QueuedSession):
-        async def get(self, model, key):
-            assert key == BRANCH_ID
-            return _branch()
-
-    session = _CreateSession([])
-    payload = TerminalCreate(branch_id=BRANCH_ID, name="POS-T2")
+    session = _QueuedSession([
+        _Result(scalar=_branch()),
+        _Result(scalar=None),  # no case-insensitive name conflict
+    ])
+    payload = TerminalCreate(
+        branch_id=BRANCH_ID,
+        name="POS-T2",
+        purpose="cafe_pos",
+    )
 
     result = await create_terminal(payload, _request(), session, _tenant())
 
     assert session.flushes == 1
     assert len(session.added) == 1
     assert result.name == "POS-T2"
+    assert result.purpose == "cafe_pos"
+    assert session.added[0].purpose == "cafe_pos"
     assert stored["status_code"] == 201
     assert stored["body"]["name"] == "POS-T2"
+    assert stored["body"]["purpose"] == "cafe_pos"
+
+
+def test_terminal_purpose_is_explicit_strict_and_migration_safe_by_default() -> None:
+    assert TerminalCreate(branch_id=BRANCH_ID, name="Legacy till").purpose == "hybrid"
+    assert TerminalUpdate(purpose="gaming").purpose == "gaming"
+    with pytest.raises(ValueError, match="hybrid"):
+        TerminalCreate(
+            branch_id=BRANCH_ID,
+            name="Invalid till",
+            purpose="pos",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_terminal_rejects_duplicate_name_in_the_same_branch(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
+    session = _QueuedSession([
+        _Result(scalar=_branch()),
+        _Result(scalar=uuid4()),
+    ])
+
+    with pytest.raises(ConflictError, match="already exists in this branch"):
+        await create_terminal(
+            TerminalCreate(branch_id=BRANCH_ID, name=" cafe pos "),
+            _request(),
+            session,
+            _tenant(),
+        )
+
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_renames_history_bearing_row_in_place() -> None:
+    terminal_id = uuid4()
+    terminal = Terminal(
+        id=terminal_id,
+        branch_id=BRANCH_ID,
+        name="Main Terminal",
+        purpose="hybrid",
+        device_id="old-device",
+    )
+    session = _QueuedSession([
+        _Result(scalar=BRANCH_ID),
+        _Result(scalar=_branch()),
+        _Result(scalar=terminal),
+        _Result(scalar=None),  # no open or unresolved shift blocks purpose change
+        _Result(scalar=None),  # no name conflict
+        _Result(scalar=None),  # no device conflict
+    ])
+
+    result = await update_terminal(
+        terminal_id,
+        TerminalUpdate(
+            name=" Cafe POS ",
+            purpose="cafe_pos",
+            device_id=" cafe-tablet ",
+        ),
+        session,
+        _tenant(),
+    )
+
+    assert result.id == terminal_id
+    assert result.branch_id == BRANCH_ID
+    assert result.name == "Cafe POS"
+    assert result.purpose == "cafe_pos"
+    assert result.device_id == "cafe-tablet"
+    assert terminal.name == "Cafe POS"
+    assert terminal.purpose == "cafe_pos"
+    assert session.flushes == 1
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_blocks_purpose_change_during_an_open_shift() -> None:
+    terminal_id = uuid4()
+    terminal = Terminal(
+        id=terminal_id,
+        branch_id=BRANCH_ID,
+        name="Gaming Area",
+        purpose="gaming",
+        device_id="gaming-tablet",
+    )
+    session = _QueuedSession([
+        _Result(scalar=BRANCH_ID),
+        _Result(scalar=_branch()),
+        _Result(scalar=terminal),
+        _Result(scalar=uuid4()),
+    ])
+
+    with pytest.raises(BusinessRuleError, match="current shift"):
+        await update_terminal(
+            terminal_id,
+            TerminalUpdate(purpose="cafe_pos"),
+            session,
+            _tenant(),
+        )
+
+    assert terminal.purpose == "gaming"
+    assert session.flushes == 0
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_explicit_null_clears_device_binding() -> None:
+    terminal_id = uuid4()
+    terminal = Terminal(
+        id=terminal_id,
+        branch_id=BRANCH_ID,
+        name="Cafe POS",
+        purpose="cafe_pos",
+        device_id="old-device",
+    )
+    session = _QueuedSession([
+        _Result(scalar=BRANCH_ID),
+        _Result(scalar=_branch()),
+        _Result(scalar=terminal),
+        _Result(scalar=None),
+    ])
+
+    result = await update_terminal(
+        terminal_id,
+        TerminalUpdate(device_id=None),
+        session,
+        _tenant(),
+    )
+
+    assert result.device_id is None
+    assert terminal.device_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_hides_cross_tenant_target() -> None:
+    session = _QueuedSession([_Result(scalar=None)])
+
+    with pytest.raises(NotFoundError, match="terminal not found"):
+        await update_terminal(
+            uuid4(),
+            TerminalUpdate(name="Cafe POS"),
+            session,
+            _tenant(),
+        )
+
+    assert session.flushes == 0
 
 
 @pytest.mark.asyncio

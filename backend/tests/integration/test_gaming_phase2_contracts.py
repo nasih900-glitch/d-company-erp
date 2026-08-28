@@ -176,7 +176,7 @@ def _offline_action_headers(
         key,
         **{
             "X-Client-Platform": "android",
-            "X-Client-Version-Code": "5",
+            "X-Client-Version-Code": "8",
             "X-Offline-Captured": "true",
             "X-Client-Occurred-At": captured_at.isoformat(),
             "X-Client-Action-Id": key,

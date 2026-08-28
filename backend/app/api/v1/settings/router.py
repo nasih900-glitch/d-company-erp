@@ -8,18 +8,19 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID, uuid4
 from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
-from app.core.permissions import requires
+from app.core.permissions import has_permission, requires, requires_any
 from app.core.tenant import TenantContext
 from app.models import (
     Branch,
@@ -30,6 +31,7 @@ from app.models import (
     MembershipRefundSettlement,
     Order,
     Refund,
+    Shift,
     Terminal,
 )
 from app.services.accounting.accounts import ACCOUNT_BY_CODE
@@ -41,6 +43,7 @@ router = APIRouter()
 # so a bad timezone must never be allowed to persist.
 _IANA_TIMEZONES = available_timezones()
 _INVOICE_SERIES_RE = re.compile(r"^[A-Z0-9]{2}$")
+TerminalPurpose = Literal["hybrid", "cafe_pos", "gaming"]
 
 
 def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
@@ -212,6 +215,9 @@ class TerminalRead(BaseModel):
     id: UUID
     branch_id: UUID
     name: str
+    # Default keeps historical idempotency-response replays readable after
+    # the purpose contract is deployed.
+    purpose: TerminalPurpose = "hybrid"
     device_id: str | None
     last_seen_at: datetime | None
 
@@ -219,7 +225,47 @@ class TerminalRead(BaseModel):
 class TerminalCreate(BaseModel):
     branch_id: UUID
     name: str = Field(min_length=1, max_length=100)
+    purpose: TerminalPurpose = "hybrid"
     device_id: str | None = Field(default=None, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("terminal name cannot be blank")
+        return normalized
+
+    @field_validator("device_id")
+    @classmethod
+    def normalize_device_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class TerminalUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    purpose: TerminalPurpose | None = None
+    # Explicit null or a blank string clears a no-longer-used device binding.
+    device_id: str | None = Field(default=None, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("terminal name cannot be blank")
+        return normalized
+
+    @field_validator("device_id")
+    @classmethod
+    def normalize_device_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class ExpenseCategoryRead(BaseModel):
@@ -251,13 +297,55 @@ class ExpenseCategoryCreate(BaseModel):
         return normalized
 
 
+def _terminal_read(terminal: Terminal) -> TerminalRead:
+    return TerminalRead(
+        id=terminal.id,
+        branch_id=terminal.branch_id,
+        name=terminal.name,
+        purpose=getattr(terminal, "purpose", None) or "hybrid",
+        device_id=terminal.device_id,
+        last_seen_at=terminal.last_seen_at,
+    )
+
+
+async def _ensure_terminal_identity_available(
+    session,
+    *,
+    branch_id: UUID,
+    name: str,
+    device_id: str | None,
+    exclude_terminal_id: UUID | None = None,
+) -> None:
+    """Reject ambiguous till labels and duplicate physical-device bindings.
+
+    Callers lock the owning Branch row first. That shared parent lock
+    serializes terminal creates/renames inside one branch even though the
+    historic schema has no branch+name unique constraint.
+    """
+    name_stmt = select(Terminal.id).where(
+        Terminal.branch_id == branch_id,
+        func.lower(Terminal.name) == name.lower(),
+    )
+    if exclude_terminal_id is not None:
+        name_stmt = name_stmt.where(Terminal.id != exclude_terminal_id)
+    if (await session.execute(name_stmt.limit(1))).scalar_one_or_none() is not None:
+        raise ConflictError(f"a terminal named '{name}' already exists in this branch")
+
+    if device_id is None:
+        return
+    device_stmt = select(Terminal.id).where(Terminal.device_id == device_id)
+    if exclude_terminal_id is not None:
+        device_stmt = device_stmt.where(Terminal.id != exclude_terminal_id)
+    if (await session.execute(device_stmt.limit(1))).scalar_one_or_none() is not None:
+        raise ConflictError("this device ID is already assigned to another terminal")
+
 # ============================================================================
 # COMPANY
 # ============================================================================
 @router.get("/company", response_model=CompanyRead)
 async def get_company(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> CompanyRead:
     c = await session.get(Company, tenant.company_id)
     if not c:
@@ -280,7 +368,7 @@ async def get_company(
 async def update_company(
     payload: CompanyUpdate,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> CompanyRead:
     c = await session.get(Company, tenant.company_id)
     if not c:
@@ -312,7 +400,7 @@ async def update_company(
 @router.get("/branches", response_model=list[BranchRead])
 async def list_branches(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> list[BranchRead]:
     rows = (
         await session.execute(
@@ -338,7 +426,7 @@ async def create_branch(
     payload: BranchCreate,
     request: Request,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> BranchRead:
     idempotency_key, request_hash = _require_idempotency(request, what="branch create")
     replay = await check_or_reserve(
@@ -362,6 +450,27 @@ async def create_branch(
     ).scalar_one_or_none()
     if company_id is None:
         raise NotFoundError("company not found")
+
+    # D Company is operated as one shop. Keep Branch as the durable accounting,
+    # timezone, receipt-series, and tenant-scope entity, but do not expose a
+    # second active business location through a direct API call after the UI has
+    # already hidden that action. The company-row lock serializes create/delete
+    # so two concurrent requests cannot bypass the one-shop invariant.
+    active_branch_id = (
+        await session.execute(
+            select(Branch.id)
+            .where(
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if active_branch_id is not None:
+        raise BusinessRuleError(
+            "This ERP is configured for one shop. Edit the existing shop instead "
+            "of adding another."
+        )
 
     existing_name = (
         await session.execute(
@@ -414,7 +523,7 @@ async def update_branch(
     branch_id: UUID,
     payload: BranchUpdate,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> BranchRead:
     company_id = (
         await session.execute(
@@ -505,11 +614,45 @@ async def update_branch(
 async def delete_branch(
     branch_id: UUID,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ):
-    b = await session.get(Branch, branch_id)
-    if not b or b.company_id != tenant.company_id or b.deleted_at:
+    company_id = (
+        await session.execute(
+            select(Company.id)
+            .where(Company.id == tenant.company_id, Company.deleted_at.is_(None))
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company_id is None:
+        raise NotFoundError("company not found")
+    b = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if b is None:
         raise NotFoundError("branch not found")
+    active_count = int(
+        (
+            await session.execute(
+                select(func.count(Branch.id)).where(
+                    Branch.company_id == tenant.company_id,
+                    Branch.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if active_count <= 1:
+        raise BusinessRuleError(
+            "The only shop cannot be deleted. Edit its details instead."
+        )
     b.deleted_at = datetime.now(timezone.utc)
     await session.flush()
 
@@ -520,14 +663,14 @@ async def delete_branch(
 @router.get("/terminals", response_model=list[TerminalRead])
 async def list_terminals(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.read")),
+    tenant: TenantContext = Depends(requires_any("pos.read", "settings.manage")),
     branch_id: UUID | None = None,
 ) -> list[TerminalRead]:
     # Ordinary POS users may discover tills only in their authenticated
-    # branch.  The protected system administrator is the one deliberate
-    # exception: the Settings screen is company-wide for that identity and
-    # must be able to inspect a branch before assigning a new terminal there.
-    if tenant.branch_id is not None and not tenant.audit_access:
+    # branch. An owner with settings.manage may inspect the company's other
+    # active branches without being granted Audit Log or admin.system access.
+    can_manage_settings = await has_permission(session, tenant, "settings.manage")
+    if tenant.branch_id is not None and not can_manage_settings:
         if branch_id is not None and branch_id != tenant.branch_id:
             # Do not reveal whether another branch or terminal exists.
             raise NotFoundError("branch not found")
@@ -546,6 +689,7 @@ async def list_terminals(
     return [
         TerminalRead(
             id=r.id, branch_id=r.branch_id, name=r.name,
+            purpose=r.purpose,
             device_id=r.device_id, last_seen_at=r.last_seen_at,
         )
         for r in rows
@@ -557,7 +701,7 @@ async def create_terminal(
     payload: TerminalCreate,
     request: Request,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> TerminalRead:
     idempotency_key, request_hash = _require_idempotency(request, what="terminal create")
     replay = await check_or_reserve(
@@ -567,21 +711,45 @@ async def create_terminal(
     if replay:
         return TerminalRead.model_validate(replay["body"])
 
-    b = await session.get(Branch, payload.branch_id)
-    if not b or b.company_id != tenant.company_id or b.deleted_at:
+    # Lock the durable branch parent before checking terminal identities. A
+    # concurrent create/rename in this branch must finish first, otherwise two
+    # requests can both observe an available name and create ambiguous tills.
+    b = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == payload.branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not b:
         raise NotFoundError("branch not found")
-    t = Terminal(
-        id=uuid4(),
+    await _ensure_terminal_identity_available(
+        session,
         branch_id=payload.branch_id,
         name=payload.name,
         device_id=payload.device_id,
     )
-    session.add(t)
-    await session.flush()
-    response = TerminalRead(
-        id=t.id, branch_id=t.branch_id, name=t.name,
-        device_id=t.device_id, last_seen_at=t.last_seen_at,
+    t = Terminal(
+        id=uuid4(),
+        branch_id=payload.branch_id,
+        name=payload.name,
+        purpose=payload.purpose,
+        device_id=payload.device_id,
     )
+    session.add(t)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # device_id has a database unique constraint, which closes the final
+        # cross-branch race that the branch-scoped parent lock cannot cover.
+        raise ConflictError(
+            "terminal name or device ID conflicts with an existing terminal"
+        ) from exc
+    response = _terminal_read(t)
     await store_response(
         session, key=idempotency_key, status_code=status.HTTP_201_CREATED,
         body=response.model_dump(mode="json"),
@@ -589,11 +757,100 @@ async def create_terminal(
     return response
 
 
+@router.patch("/terminals/{terminal_id}", response_model=TerminalRead)
+async def update_terminal(
+    terminal_id: UUID,
+    payload: TerminalUpdate,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("settings.manage")),
+) -> TerminalRead:
+    # Resolve tenant ownership before locking, then acquire locks in the same
+    # branch -> terminal order as create_terminal. The second lookup closes a
+    # delete/race window between ownership resolution and lock acquisition.
+    branch_id = (
+        await session.execute(
+            select(Terminal.branch_id)
+            .join(Branch, Branch.id == Terminal.branch_id)
+            .where(
+                Terminal.id == terminal_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if branch_id is None:
+        raise NotFoundError("terminal not found")
+    branch = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if branch is None:
+        raise NotFoundError("terminal not found")
+    terminal = (
+        await session.execute(
+            select(Terminal)
+            .where(Terminal.id == terminal_id, Terminal.branch_id == branch_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if terminal is None:
+        raise NotFoundError("terminal not found")
+
+    name = payload.name if payload.name is not None else terminal.name
+    device_id = (
+        payload.device_id
+        if "device_id" in payload.model_fields_set
+        else terminal.device_id
+    )
+    purpose = payload.purpose if payload.purpose is not None else terminal.purpose
+    if purpose != terminal.purpose:
+        blocking_shift_id = (
+            await session.execute(
+                select(Shift.id)
+                .where(
+                    Shift.company_id == tenant.company_id,
+                    Shift.terminal_id == terminal.id,
+                    Shift.status.not_in(("closed", "reconciled")),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if blocking_shift_id is not None:
+            raise BusinessRuleError(
+                "Close or reconcile this terminal's current shift before changing "
+                "whether it is used for Cafe POS or Gaming."
+            )
+    await _ensure_terminal_identity_available(
+        session,
+        branch_id=branch_id,
+        name=name,
+        device_id=device_id,
+        exclude_terminal_id=terminal.id,
+    )
+    terminal.name = name
+    terminal.device_id = device_id
+    terminal.purpose = purpose
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise ConflictError(
+            "terminal name or device ID conflicts with an existing terminal"
+        ) from exc
+    return _terminal_read(terminal)
+
+
 @router.delete("/terminals/{terminal_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_terminal(
     terminal_id: UUID,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ):
     t = await session.get(Terminal, terminal_id)
     if not t:

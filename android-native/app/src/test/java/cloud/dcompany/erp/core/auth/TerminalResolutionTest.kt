@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.core.auth
 
+import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.Terminal
+import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,6 +10,19 @@ import org.junit.Test
 import kotlinx.coroutines.runBlocking
 
 class TerminalResolutionTest {
+
+    @Test
+    fun `legacy terminal payload defaults to hybrid while unknown future purpose is preserved`() {
+        val legacy = ApiClient.json.decodeFromString<Terminal>(
+            """{"id":"till-1","name":"Main till","branch_id":"branch-1"}""",
+        )
+        val future = ApiClient.json.decodeFromString<Terminal>(
+            """{"id":"till-2","name":"Future till","branch_id":"branch-1","purpose":"future"}""",
+        )
+
+        assertEquals(TerminalPurpose.HYBRID, legacy.purpose)
+        assertEquals("future", future.purpose)
+    }
 
     @Test
     fun `non POS employee does not need a terminal`() {

@@ -167,4 +167,42 @@ describe('gaming paid-extension API contract', () => {
       },
     );
   });
+
+  it('lists eligible open POS destination shifts for a stopped session', async () => {
+    const response = [{
+      shift_id: 'target-shift',
+      terminal_id: 'cafe-pos',
+      terminal_name: 'Cafe POS',
+      opened_by: 'cashier-1',
+      opened_by_name: 'Rafi',
+      opened_at: '2026-08-28T10:00:00Z',
+    }];
+    vi.mocked(api.get).mockResolvedValue({ data: response });
+
+    await expect(gaming.listPosTargetShifts('session-1')).resolves.toEqual(response);
+    expect(api.get).toHaveBeenCalledWith(
+      '/gaming/sessions/session-1/pos-target-shifts',
+    );
+  });
+
+  it('hands a stopped session to the explicitly selected POS shift', async () => {
+    const response = {
+      order_id: 'order-1',
+      amount_minor: 15_700,
+      source_shift_id: 'gaming-shift',
+      source_terminal_id: 'gaming-area',
+      target_shift_id: 'cafe-shift',
+      target_terminal_id: 'cafe-pos',
+      already_linked: false,
+    };
+    vi.mocked(api.post).mockResolvedValue({ data: response });
+
+    await expect(
+      gaming.handoffToPos('session-1', 'cafe-shift'),
+    ).resolves.toEqual(response);
+    expect(api.post).toHaveBeenCalledWith(
+      '/gaming/sessions/session-1/handoff-to-pos',
+      { target_shift_id: 'cafe-shift' },
+    );
+  });
 });

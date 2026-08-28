@@ -1,23 +1,41 @@
 import { useEffect, useState } from 'react';
-import { Plus, Edit2, Save, Loader2, AlertCircle, MapPin } from 'lucide-react';
+import {
+  Plus, Edit2, Save, Loader2, AlertCircle, MapPin, MonitorSmartphone,
+} from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
-import { settings, type BranchDTO } from '@/lib/erp-api';
+import { settings, type BranchDTO, type TerminalDTO } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
+const TERMINAL_PURPOSE_LABELS: Record<TerminalDTO['purpose'], string> = {
+  cafe_pos: 'Cafe POS',
+  gaming: 'Gaming Area',
+  hybrid: 'General / combined',
+};
+
 export default function BranchesTab() {
   const [rows, setRows] = useState<BranchDTO[]>([]);
+  const [terminals, setTerminals] = useState<TerminalDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<BranchDTO | null>(null);
+  const [terminalForm, setTerminalForm] = useState<{
+    branch: BranchDTO;
+    terminal?: TerminalDTO;
+  } | null>(null);
 
   async function load() {
     if (!LIVE_MODE) { setLoading(false); return; }
     setLoading(true); setErr(null);
     try {
-      setRows(await settings.listBranches());
+      const [branchRows, terminalRows] = await Promise.all([
+        settings.listBranches(),
+        settings.listTerminals(),
+      ]);
+      setRows(branchRows);
+      setTerminals(terminalRows);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
   }
@@ -28,11 +46,19 @@ export default function BranchesTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-between items-center">
-        <p className="text-sm text-fg-muted">{rows.length} branch{rows.length === 1 ? '' : 'es'}</p>
-        <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
-          <Plus size={14}/> Add branch
-        </button>
+      <div className="card flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="font-semibold">One shop, separate working terminals</p>
+          <p className="mt-1 text-sm text-fg-muted">
+            The shop is selected automatically. Cafe POS and Gaming Area keep their shifts
+            accountable while operating under the same business location.
+          </p>
+        </div>
+        {rows.length === 0 && (
+          <button className="btn btn-primary shrink-0" onClick={() => setAddOpen(true)}>
+            <Plus size={14}/> Add shop
+          </button>
+        )}
       </div>
 
       {err && <ErrorRow text={err}/>}
@@ -60,17 +86,80 @@ export default function BranchesTab() {
                 <Edit2 size={11}/> Edit
               </button>
             </div>
+
+            <div className="mt-4 border-t border-bg-border pt-4">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">Terminals</p>
+                  <p className="text-xs text-fg-muted">
+                    Each physical service area uses its own shift and terminal identity.
+                  </p>
+                </div>
+                <button
+                  className="btn btn-secondary !min-h-[36px] !px-3 !py-1.5 text-xs"
+                  onClick={() => setTerminalForm({ branch: b })}
+                >
+                  <Plus size={13}/> Add terminal
+                </button>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-2">
+                {terminals.filter((terminal) => terminal.branch_id === b.id).map((terminal) => (
+                  <div
+                    key={terminal.id}
+                    className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-bg-border bg-bg-raised p-3"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <MonitorSmartphone size={18} className="shrink-0 text-fg-muted"/>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{terminal.name}</p>
+                        <p className="text-xs font-medium text-accent">
+                          {TERMINAL_PURPOSE_LABELS[terminal.purpose]}
+                        </p>
+                        <p className="truncate text-xs text-fg-muted">
+                          {terminal.device_id || 'Device selected inside the app'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs"
+                      onClick={() => setTerminalForm({ branch: b, terminal })}
+                    >
+                      <Edit2 size={11}/> Edit
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {terminals.every((terminal) => terminal.branch_id !== b.id) && (
+                <div className="mt-2 rounded-lg border border-dashed border-bg-border p-4 text-sm text-fg-muted">
+                  No terminal is configured yet. Add Cafe POS first.
+                </div>
+              )}
+            </div>
           </div>
         ))}
         {!rows.length && (
-          <div className="card text-fg-muted text-sm">No branches yet. Add your first branch.</div>
+          <div className="card text-fg-muted text-sm">No shop location exists yet.</div>
         )}
       </div>
 
       {addOpen && <BranchForm onClose={() => setAddOpen(false)}
         onSuccess={() => { setAddOpen(false); load(); }}/>}
-      {edit && <BranchForm branch={edit} onClose={() => setEdit(null)}
-        onSuccess={() => { setEdit(null); load(); }}/>}
+      {edit && (
+        <BranchForm
+          branch={edit}
+          onClose={() => setEdit(null)}
+          onSuccess={() => { setEdit(null); load(); }}
+        />
+      )}
+      {terminalForm && (
+        <TerminalForm
+          branch={terminalForm.branch}
+          terminal={terminalForm.terminal}
+          onClose={() => setTerminalForm(null)}
+          onSuccess={() => { setTerminalForm(null); load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -93,6 +182,7 @@ function BranchForm({
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [idempotencyKey] = useState(() => `shop-create:${crypto.randomUUID()}`);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
@@ -111,14 +201,14 @@ function BranchForm({
         branch_gstin: form.branch_gstin?.trim() || null,
       };
       if (isEdit) await settings.updateBranch(branch!.id, payload);
-      else await settings.createBranch(payload);
+      else await settings.createBranch(payload, idempotencyKey);
       onSuccess();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   }
 
   return (
-    <Modal open onClose={onClose} title={isEdit ? `Edit ${branch!.name}` : 'New branch'} size="lg">
+    <Modal open onClose={onClose} title={isEdit ? `Edit ${branch!.name}` : 'New shop'} size="lg">
       <form onSubmit={submit} className="space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Field label="Name"><input className="input" required value={form.name ?? ''}
@@ -155,7 +245,7 @@ function BranchForm({
           <input className="input font-mono" value={form.trade_license_no ?? ''}
             onChange={(e) => setForm({ ...form, trade_license_no: e.target.value })}/>
         </Field>
-        <Field label="Branch GSTIN (if different from company)">
+        <Field label="Shop GSTIN (if different from company)">
           <input className="input font-mono" maxLength={15} value={form.branch_gstin ?? ''}
             onChange={(e) => setForm({ ...form, branch_gstin: e.target.value.toUpperCase() })}/>
         </Field>
@@ -165,6 +255,121 @@ function BranchForm({
           <button type="submit" className="btn btn-primary" disabled={busy}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>}
             {isEdit ? 'Save' : 'Create'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function TerminalForm({
+  branch, terminal, onClose, onSuccess,
+}: {
+  branch: BranchDTO;
+  terminal?: TerminalDTO;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const isEdit = Boolean(terminal);
+  const [name, setName] = useState(terminal?.name ?? '');
+  const [deviceId, setDeviceId] = useState(terminal?.device_id ?? '');
+  const [purpose, setPurpose] = useState<TerminalDTO['purpose']>(terminal?.purpose ?? 'cafe_pos');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [idempotencyKey] = useState(() => `terminal-create:${crypto.randomUUID()}`);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      setErr('Enter a terminal name, such as Cafe POS or Gaming Area.');
+      return;
+    }
+
+    setBusy(true);
+    setErr(null);
+    try {
+      const normalizedDeviceId = deviceId.trim();
+      if (terminal) {
+        await settings.updateTerminal(terminal.id, {
+          name: normalizedName,
+          device_id: normalizedDeviceId || null,
+          purpose,
+        });
+      } else {
+        await settings.createTerminal({
+          branch_id: branch.id,
+          name: normalizedName,
+          purpose,
+          ...(normalizedDeviceId ? { device_id: normalizedDeviceId } : {}),
+        }, idempotencyKey);
+      }
+      onSuccess();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={isEdit ? `Edit ${terminal!.name}` : `Add terminal to ${branch.name}`}
+      size="sm"
+    >
+      <form onSubmit={submit} className="space-y-3">
+        <p className="text-sm text-fg-muted">
+          A terminal is a physical work area, not another shop. Use Cafe POS and Gaming Area
+          so each shift and handoff is clearly attributable.
+        </p>
+        <Field label="Terminal name">
+          <input
+            className="input"
+            required
+            autoFocus
+            placeholder="Cafe POS"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        <Field label="Work area">
+          <select
+            className="input"
+            value={purpose}
+            onChange={(event) => setPurpose(event.target.value as TerminalDTO['purpose'])}
+          >
+            <option value="cafe_pos">Cafe POS — takes orders and collects payments</option>
+            <option value="gaming">Gaming Area — starts sessions and sends bills to Cafe POS</option>
+            <option value="hybrid">General / combined — both workflows on one terminal</option>
+          </select>
+        </Field>
+        {isEdit && purpose !== terminal!.purpose && (
+          <p className="text-xs text-accent-warning">
+            Close this terminal&apos;s current shift before changing its work area. Renaming
+            the terminal does not require closing the shift.
+          </p>
+        )}
+        <Field label="Device ID (optional)">
+          <input
+            className="input font-mono"
+            placeholder="Leave blank until a tablet is assigned"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+          />
+        </Field>
+        <p className="text-xs text-fg-muted">
+          Renaming keeps existing shifts, orders, receipts, and audit history attached.
+        </p>
+        {err && <ErrorRow text={err}/>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
+            {busy ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>}
+            {isEdit ? 'Save terminal' : 'Add terminal'}
           </button>
         </div>
       </form>

@@ -11,14 +11,14 @@ Current Android identity:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.0.6` |
-| Version code | `7` |
+| Version name | `3.0.7` |
+| Version code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-This is the identity reserved for the next candidate. No final `3.0.6` APK/AAB
+This is the identity reserved for the next candidate. No final `3.0.7` APK/AAB
 has been built, uploaded, or installed. Treat any locally signed output as a
 candidate only until every gate below passes. There is currently no emulator or
-physical-device acceptance proof for `3.0.6`, and this preparation has not
+physical-device acceptance proof for `3.0.7`, and this preparation has not
 deployed the production backend or web ERP.
 
 Google's current internal-testing instructions are at
@@ -32,8 +32,8 @@ repository release workflow and verify all of the following:
 - backend tests and migrations pass;
 - Android JVM tests, compilation, lint, assembly, and emulator instrumentation
   pass;
-- the release manifest says package `cloud.dcompany.erp`, version `3.0.6`, code
-  `7`, and the production HTTPS API above;
+- the release manifest says package `cloud.dcompany.erp`, version `3.0.7`, code
+  `8`, and the production HTTPS API above;
 - APK/AAB signatures and the published SHA-256 checksums verify;
 - no test active session, unpaid held order, pending cancellation, or open test
   shift remains in the acceptance environment;
@@ -44,7 +44,7 @@ repository release workflow and verify all of the following:
   tablet.
 
 An Android 15 emulator run would be useful evidence, but it would not be
-physical Redmi Pad proof. No such run has yet been completed for `3.0.6`.
+physical Redmi Pad proof. No such run has yet been completed for `3.0.7`.
 Uploading to an internal track also does not deploy the backend or web ERP to
 production. GST validation is outside the current Android acceptance scope.
 
@@ -129,20 +129,20 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload version 3.0.6 (7)
+## 5. Upload version 3.0.7 (8)
 
 1. Open **Test and release → Testing → Internal testing**.
 2. Choose **Create new release**.
 3. Upload the signed AAB from the green repository release, normally named
-   `d-company-erp-v3.0.6.aab`. Do not upload `app-debug.apk`.
-4. Confirm Play reads package `cloud.dcompany.erp`, version `3.0.6`, and version
-   code `7` from the bundle.
-5. Use release name `3.0.6 (7)`.
+   `d-company-erp-v3.0.7.aab`. Do not upload `app-debug.apk`.
+4. Confirm Play reads package `cloud.dcompany.erp`, version `3.0.7`, and version
+   code `8` from the bundle.
+5. Use release name `3.0.7 (8)`.
 6. Add concise notes such as: `Native Android staff workflow: shifts, POS,
    Tables/KDS, gaming hand-off, alarms, and offline recovery.`
 7. Review all warnings, then start the rollout to **Internal testing only**.
 
-If Play reports that version code `7` was already used, increment `versionCode`
+If Play reports that version code `8` was already used, increment `versionCode`
 and rebuild through the release workflow. Never alter or rename an existing
 bundle to work around a version error.
 
@@ -169,7 +169,7 @@ On the tablet:
 1. Sign in to Google Play with the authorised tester account.
 2. Open the opt-in link and accept the invitation.
 3. Install or update **D Company** from Google Play.
-4. Confirm Android reports version `3.0.6`.
+4. Confirm Android reports version `3.0.7`.
 5. Grant notification permission and, when prompted, allow the exact-alarm
    access needed for operational session/held-order reminders.
 6. Run the complete start-to-close workflow in

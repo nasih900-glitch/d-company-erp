@@ -28,7 +28,7 @@ internal class SyncResourceAccess private constructor(
         ) == true
         "inventory" -> permissions?.has(ErpPermission.InventoryRead) == true
         "finance" -> permissions?.has(ErpPermission.FinanceRead) == true
-        "settings" -> permissions?.has(ErpPermission.AdminSystem) == true
+        "settings" -> permissions?.has(ErpPermission.SettingsManage) == true
         else -> false
     }
 

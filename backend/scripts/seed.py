@@ -1,4 +1,4 @@
-"""Seed script — creates a default company, branch, terminal, owner user,
+"""Seed script — creates a default company, shop, two terminals, owner user,
 roles, chart of accounts, and a minimal menu so the system is ready
 to take its first order.
 
@@ -57,6 +57,13 @@ DEFAULT_ROLES: list[tuple[str, str]] = [
     ("staff", "General service staff — table orders, kitchen progress, and attendance"),
 ]
 
+BOOTSTRAP_OWNER_ROLE = "super_owner"
+DEFAULT_SHOP_NAME = "Main Shop"
+DEFAULT_TERMINALS: tuple[tuple[str, str, str | None], ...] = (
+    ("Cafe POS", "cafe_pos", "seed-terminal-1"),
+    ("Gaming Area", "gaming", None),
+)
+
 
 def _seed_owner_password() -> str:
     configured = (
@@ -96,7 +103,7 @@ async def seed() -> None:
         branch = Branch(
             id=uuid4(),
             company_id=company.id,
-            name="Main Branch",
+            name=DEFAULT_SHOP_NAME,
             invoice_series_code="MN",
             timezone="Asia/Kolkata",
             state_code="32",
@@ -104,13 +111,19 @@ async def seed() -> None:
         s.add(branch)
         await s.flush()
 
-        terminal = Terminal(
-            id=uuid4(),
-            branch_id=branch.id,
-            name="POS-01",
-            device_id="seed-terminal-1",
-        )
-        s.add(terminal)
+        terminal_ids = []
+        for terminal_name, purpose, device_id in DEFAULT_TERMINALS:
+            terminal_id = uuid4()
+            terminal_ids.append(terminal_id)
+            s.add(
+                Terminal(
+                    id=terminal_id,
+                    branch_id=branch.id,
+                    name=terminal_name,
+                    purpose=purpose,
+                    device_id=device_id,
+                )
+            )
         await s.flush()
 
         # Roles
@@ -141,7 +154,16 @@ async def seed() -> None:
         )
         s.add(owner)
         await s.flush()
-        s.add(UserRole(id=uuid4(), user_id=owner.id, role_id=roles_by_code["owner"].id))
+        # A clean bootstrap must always have one identity capable of Audit Log,
+        # Access Control, and protected support-inbox administration. Ordinary
+        # owner/co_owner roles intentionally do not receive that authority.
+        s.add(
+            UserRole(
+                id=uuid4(),
+                user_id=owner.id,
+                role_id=roles_by_code[BOOTSTRAP_OWNER_ROLE].id,
+            )
+        )
 
         # Chart of accounts
         for a in DEFAULT_ACCOUNTS:
@@ -399,7 +421,7 @@ async def seed() -> None:
 
         print(f"seeded company {company.name} ({company.id})")
         print(f"  branch: {branch.id}")
-        print(f"  terminal: {terminal.id}")
+        print(f"  terminals: {', '.join(str(value) for value in terminal_ids)}")
         print("  owner login: created from seed defaults; rotate before production use")
         if not existing_partners:
             print("  ✓ seeded 3 partners (Nasih, Shemeer, Rafi) with opening capital")

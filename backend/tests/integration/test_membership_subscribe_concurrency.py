@@ -705,27 +705,54 @@ async def test_money_task_lists_support_exact_recovery_and_truncation(
             recovery.json()["id"]
         ]
 
+        resolution_evidence_at = datetime.now(UTC).replace(microsecond=0)
+        resolution_payload = {
+            "original_client_action_id": recovery_action,
+            "customer_id": str(case.customer_id),
+            "membership_id": sale.json()["membership_id"],
+            "payment_id": sale.json()["payment_id"],
+            "source_shift_id": str(case.shift_id),
+            "reconciliation_shift_id": None,
+            "expected_amount_minor": case.amount_minor,
+            "paid_via": "upi",
+            "outcome": "no_payout",
+            "reason": "Provider search proved no refund was created",
+            "provider_status": "not_completed",
+            "verification_reference": f"NO-REFUND-{uuid4().hex}",
+            "evidence_occurred_at": resolution_evidence_at.isoformat(),
+            "cash_handover_confirmed": False,
+        }
         resolved = await client.post(
             "/api/v1/memberships/refund-attempts/resolve",
-            json={
-                "original_client_action_id": recovery_action,
-                "customer_id": str(case.customer_id),
-                "membership_id": sale.json()["membership_id"],
-                "payment_id": sale.json()["payment_id"],
-                "source_shift_id": str(case.shift_id),
-                "reconciliation_shift_id": None,
-                "expected_amount_minor": case.amount_minor,
-                "paid_via": "upi",
-                "outcome": "no_payout",
-                "reason": "Provider search proved no refund was created",
-                "provider_status": "not_completed",
-                "verification_reference": f"NO-REFUND-{uuid4().hex}",
-                "evidence_occurred_at": datetime.now(UTC).isoformat(),
-                "cash_handover_confirmed": False,
-            },
+            json=resolution_payload,
             headers=_headers(case, f"membership-list-recovery-resolve:{uuid4()}"),
         )
         assert resolved.status_code == 201, resolved.text
+
+        natural_key_replay = await client.post(
+            "/api/v1/memberships/refund-attempts/resolve",
+            json=resolution_payload,
+            headers=_headers(
+                case, f"membership-list-recovery-natural-replay:{uuid4()}"
+            ),
+        )
+        assert natural_key_replay.status_code == 201, natural_key_replay.text
+        assert natural_key_replay.json() == resolved.json()
+
+        conflicting_evidence = await client.post(
+            "/api/v1/memberships/refund-attempts/resolve",
+            json={
+                **resolution_payload,
+                "evidence_occurred_at": (
+                    resolution_evidence_at + timedelta(seconds=2)
+                ).isoformat(),
+            },
+            headers=_headers(
+                case, f"membership-list-recovery-evidence-conflict:{uuid4()}"
+            ),
+        )
+        assert conflicting_evidence.status_code == 422, conflicting_evidence.text
+        assert "different immutable evidence" in conflicting_evidence.text
 
         refund_action = f"membership-refund-request:{uuid4()}"
         refund = await client.post(
@@ -1965,20 +1992,61 @@ async def test_legacy_cash_refund_attempt_is_quarantined_then_reconciled_once(
         }
 
         # A protected owner from another company cannot adopt the immutable
-        # payment merely by knowing its UUIDs.
-        cross_tenant = await client.post(
-            "/api/v1/memberships/refund-attempts/register",
-            json=registration_payload,
-            headers={
-                "Authorization": f"Bearer {other_token}",
-                "X-Terminal-Id": str(other_terminal.id),
-                "Idempotency-Key": f"membership-foreign-register:{uuid4()}",
-                "X-Client-Action-Id": f"membership-foreign-register:{uuid4()}",
-                "X-Client-Platform": "android",
-                "X-Client-Version-Code": "21",
-            },
-        )
-        assert cross_tenant.status_code == 404, cross_tenant.text
+        # payment merely by knowing its UUIDs. Tenant scope must also be in the
+        # SELECT before FOR UPDATE: neither recovery endpoint may wait behind a
+        # lock held on another company's shift.
+        async with AsyncSessionLocal() as blocker:
+            await blocker.execute(
+                select(Shift).where(Shift.id == case.shift_id).with_for_update()
+            )
+            try:
+                foreign_register_key = f"membership-foreign-register:{uuid4()}"
+                cross_tenant = await asyncio.wait_for(
+                    client.post(
+                        "/api/v1/memberships/refund-attempts/register",
+                        json=registration_payload,
+                        headers={
+                            "Authorization": f"Bearer {other_token}",
+                            "X-Terminal-Id": str(other_terminal.id),
+                            "Idempotency-Key": foreign_register_key,
+                            "X-Client-Action-Id": foreign_register_key,
+                            "X-Client-Platform": "android",
+                            "X-Client-Version-Code": "21",
+                        },
+                    ),
+                    timeout=2,
+                )
+                assert cross_tenant.status_code == 404, cross_tenant.text
+
+                foreign_payment_key = f"membership-foreign-payment-resolve:{uuid4()}"
+                cross_tenant_payment = await asyncio.wait_for(
+                    client.post(
+                        "/api/v1/memberships/payment-attempts/resolve",
+                        json={
+                            "original_client_action_id": f"membership-subscribe:{uuid4()}",
+                            "customer_id": str(case.customer_id),
+                            "tier_id": str(case.tier_id),
+                            "shift_id": str(case.shift_id),
+                            "expected_amount_minor": case.amount_minor,
+                            "paid_via": "cash",
+                            "resolution": "payment_not_collected",
+                            "reason": "Foreign tenant lock-scope proof",
+                            "cash_return_confirmed": False,
+                        },
+                        headers={
+                            "Authorization": f"Bearer {other_token}",
+                            "X-Terminal-Id": str(other_terminal.id),
+                            "Idempotency-Key": foreign_payment_key,
+                            "X-Client-Action-Id": foreign_payment_key,
+                            "X-Client-Platform": "android",
+                            "X-Client-Version-Code": "21",
+                        },
+                    ),
+                    timeout=2,
+                )
+                assert cross_tenant_payment.status_code == 404, cross_tenant_payment.text
+            finally:
+                await blocker.rollback()
 
         register_key = f"membership-legacy-register:{uuid4()}"
         registered = await client.post(

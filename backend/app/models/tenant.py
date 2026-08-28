@@ -129,8 +129,22 @@ class Terminal(Base, TimestampMixin):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Explicit operational capability. Existing installations migrate to
+    # ``hybrid`` so their current local Gaming/POS workflow remains valid;
+    # newly configured two-terminal shops can route gaming bills only to a
+    # terminal that is actually allowed to act as a POS destination.
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="hybrid", server_default="hybrid"
+    )
     device_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     offline_seq_high_water: Mapped[int] = mapped_column(BigInteger, default=0)
 
     branch: Mapped[Branch] = relationship(back_populates="terminals")
+
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('hybrid', 'cafe_pos', 'gaming')",
+            name="ck_terminals_purpose",
+        ),
+    )

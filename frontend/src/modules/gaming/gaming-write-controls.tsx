@@ -14,6 +14,7 @@ export const GAMING_WRITE_OPERATION_NAMES = [
   'repairSessionBilling',
   'cancelSession',
   'sendToPos',
+  'handoffToPos',
   'reconcileToPos',
 ] as const;
 

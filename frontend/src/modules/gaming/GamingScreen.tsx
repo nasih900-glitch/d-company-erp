@@ -26,7 +26,13 @@ import { inr } from '@/lib/inr';
 import { hasActivePricingToken, type ApiError } from '@/lib/api';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
-import { gaming, shifts, type GamingPackageDTO, type StationDTO } from '@/lib/erp-api';
+import {
+  gaming,
+  shifts,
+  type GamingPackageDTO,
+  type GamingPosTargetShiftDTO,
+  type StationDTO,
+} from '@/lib/erp-api';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
 import { createOperationKey, isAmbiguousApiError } from '@/lib/retry-drafts';
 import { subscribeRealtime } from '@/lib/realtime';
@@ -64,6 +70,7 @@ import {
   type PaidExtensionAttemptContext,
   type PaidExtensionLockManager,
 } from './paid-extension-attempt';
+import { resolveGamingPosRoute } from './gaming-pos-handoff';
 import { runningBillMinor } from './running-bill';
 import { sessionTimerMinutesForLocalState } from './session-start-snapshot';
 
@@ -136,6 +143,11 @@ type PendingReconciliation = {
   targetShiftId: string;
 };
 
+type PendingPosHandoff = {
+  station: StationDTO;
+  targets: GamingPosTargetShiftDTO[];
+};
+
 type SendFailure = {
   message: string;
   code?: string;
@@ -165,7 +177,11 @@ function notifyTimerExpired(stationName: string) {
 
 export default function GamingScreen() {
   const notifications = useNotifications();
-  const { me, terminalId, terminalReady } = useAuth();
+  const { me, terminalId, terminalReady, terminalOptions } = useAuth();
+  const currentTerminal = terminalOptions.find((terminal) => terminal.id === terminalId) ?? null;
+  const canStartOnSelectedTerminal = !LIVE_MODE
+    || currentTerminal?.purpose === 'gaming'
+    || currentTerminal?.purpose === 'hybrid';
   // accessible_modules includes read-only roles, so it is not sufficient for
   // Start/Stop. Use the backend's exact post-override permission; retain the
   // protected operational bypass for compatibility with older /auth/me.
@@ -231,6 +247,7 @@ export default function GamingScreen() {
   const [deleteStationBusy, setDeleteStationBusy] = useState(false);
   const [pendingExtension, setPendingExtension] = useState<PendingExtension | null>(null);
   const [pendingReconciliation, setPendingReconciliation] = useState<PendingReconciliation | null>(null);
+  const [pendingPosHandoff, setPendingPosHandoff] = useState<PendingPosHandoff | null>(null);
   const [cancelStationTarget, setCancelStationTarget] = useState<StationDTO | null>(null);
   const [repairStationTarget, setRepairStationTarget] = useState<StationDTO | null>(null);
   const [repairingBilling, setRepairingBilling] = useState<string | null>(null);
@@ -1218,6 +1235,26 @@ export default function GamingScreen() {
       return next;
     });
     try {
+      const posRoute = resolveGamingPosRoute({
+        currentTerminalId: terminalId,
+        stationBranchId: st.branch_id,
+        terminals: terminalOptions ?? [],
+      });
+      if (posRoute === 'terminal_unverified') {
+        throw new Error(
+          'This device terminal could not be verified. Select the correct terminal and refresh; the gaming bill is still saved and unpaid.',
+        );
+      }
+      if (posRoute === 'handoff') {
+        const targets = await gaming.listPosTargetShifts(s.backend_session_id);
+        if (targets.length === 0) {
+          throw new Error(
+            'No POS shift is open on another terminal. Ask the Cafe POS cashier to open a shift, then retry. This gaming bill is still saved and unpaid.',
+          );
+        }
+        setPendingPosHandoff({ station: st, targets });
+        return;
+      }
       await write.dispatch('sendToPos', s.backend_session_id);
       setSessions((map) => {
         const next = { ...map };
@@ -1232,6 +1269,55 @@ export default function GamingScreen() {
         [st.id]: { message, code: (e as ApiError).code },
       }));
       notifications.error(message, { title: 'Could not send session to POS' });
+    } finally {
+      setSendingToPos(null);
+    }
+  }
+
+  async function confirmPosHandoff(targetShift: GamingPosTargetShiftDTO) {
+    const pending = pendingPosHandoff;
+    if (!pending) return;
+    const write = requireGamingWrite('Cannot send session to POS');
+    if (!write.allowed) return;
+    const current = sessions[pending.station.id];
+    if (!current?.backend_session_id) return;
+    if (!requireCurrentShiftOwnership(current, 'send it to POS')) return;
+    if (!requirePaidExtensionResolved(current, 'sent to POS')) return;
+
+    setSendingToPos(pending.station.id);
+    setSendErrors((errors) => {
+      const next = { ...errors };
+      delete next[pending.station.id];
+      return next;
+    });
+    try {
+      const result = await write.dispatch(
+        'handoffToPos',
+        current.backend_session_id,
+        targetShift.shift_id,
+      );
+      setSessions((map) => {
+        const next = { ...map };
+        delete next[pending.station.id];
+        return next;
+      });
+      setPendingPosHandoff(null);
+      notifications.success(
+        result.already_linked
+          ? `${pending.station.name} was already waiting at ${targetShift.terminal_name}; no duplicate bill was created.`
+          : `${pending.station.name} is ready to bill at ${targetShift.terminal_name}.`,
+        { title: result.already_linked ? 'Already in POS' : 'Sent to Cafe POS' },
+      );
+    } catch (e) {
+      const message = (e as Error).message;
+      setSendErrors((errors) => ({
+        ...errors,
+        [pending.station.id]: { message, code: (e as ApiError).code },
+      }));
+      notifications.error(
+        `${message} The gaming bill remains saved and unpaid.`,
+        { title: 'Could not hand off to POS' },
+      );
     } finally {
       setSendingToPos(null);
     }
@@ -1466,6 +1552,18 @@ export default function GamingScreen() {
             <div className="font-semibold text-accent-gold">Gaming is view-only</div>
             <div className="mt-1 text-fg-muted">
               You can review stations and sessions, but this account does not have gaming.write. Ask an owner to enable the Gaming module for this role.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {LIVE_MODE && currentTerminal?.purpose === 'cafe_pos' && (
+        <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <div>
+            <div className="font-semibold text-accent-gold">Viewing Gaming from Cafe POS</div>
+            <div className="mt-1 text-fg-muted">
+              Sessions are monitored here, but new sessions must be started from the Gaming Area terminal so the correct shift owns them.
             </div>
           </div>
         </div>
@@ -1935,14 +2033,14 @@ export default function GamingScreen() {
                     <>
                       <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
                         className="input !py-1.5 text-xs w-full mb-2"
-                        disabled={!canManageStations}
+                        disabled={!canManageStations || !canStartOnSelectedTerminal}
                         value={phone}
                         onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
                       {variants.length > 1 && (
                         <div className="flex items-center gap-1.5 mb-2">
                           {variants.map((v) => (
                             <button key={v}
-                              disabled={!canManageStations}
+                              disabled={!canManageStations || !canStartOnSelectedTerminal}
                               className={`chip text-[11px] capitalize ${variant === v ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                               onClick={() => {
                                 setPickerVariant((s) => ({ ...s, [st.id]: v }));
@@ -1963,9 +2061,11 @@ export default function GamingScreen() {
                             key={tier.id}
                             className="btn btn-ghost !justify-between !py-1.5 text-xs"
                             onClick={() => startSession(st, '', { packageId: tier.id, extraControllers: showControllerStepper ? controllers : 0 }, phone)}
-                            disabled={!st.is_active || !packageStartRecoveryReady}
+                            disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal}
                             title={packageStartRecoveryReady
-                              ? `Start ${tier.name}`
+                              ? canStartOnSelectedTerminal
+                                ? `Start ${tier.name}`
+                                : 'Switch this device to the Gaming Area terminal to start a session'
                               : 'Package sessions require verified paid-extension recovery storage on this device'}>
                             <span>{tier.name}</span>
                             <span className="font-mono font-bold">
@@ -1988,13 +2088,13 @@ export default function GamingScreen() {
                           <span>Extra controllers (₹30/hr, min ₹30)</span>
                           <div className="flex items-center gap-2">
                             <button className="chip !px-2 text-[11px]"
-                              disabled={!canManageStations}
+                              disabled={!canManageStations || !canStartOnSelectedTerminal}
                               onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.max(0, controllers - 1) }))}>
                               −
                             </button>
                             <span className="w-4 text-center font-mono">{controllers}</span>
                             <button className="chip !px-2 text-[11px]"
-                              disabled={!canManageStations}
+                              disabled={!canManageStations || !canStartOnSelectedTerminal}
                               onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.min(6, controllers + 1) }))}>
                               +
                             </button>
@@ -2007,20 +2107,20 @@ export default function GamingScreen() {
                   <>
                     <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
                       className="input !py-1.5 text-xs w-full mb-2"
-                      disabled={!canManageStations}
+                      disabled={!canManageStations || !canStartOnSelectedTerminal}
                       value={phone}
                       onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
                     <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                       {DURATION_PRESETS.map((p) => (
                         <button key={p.label}
-                          disabled={!canManageStations}
+                          disabled={!canManageStations || !canStartOnSelectedTerminal}
                           className={`chip text-[11px] ${(pendingDuration[st.id] ?? null) === p.minutes && customDurationFor !== st.id ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                           onClick={() => { setPendingDuration((s) => ({ ...s, [st.id]: p.minutes })); setCustomDurationFor(null); }}>
                           {p.label}
                         </button>
                       ))}
                       <button
-                        disabled={!canManageStations}
+                        disabled={!canManageStations || !canStartOnSelectedTerminal}
                         className={`chip text-[11px] ${customDurationFor === st.id ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                         onClick={() => setCustomDurationFor(customDurationFor === st.id ? null : st.id)}>
                         Custom
@@ -2030,7 +2130,7 @@ export default function GamingScreen() {
                       <div className="flex items-center gap-2 mb-2">
                         <input type="number" min={1} max={1440} placeholder="minutes"
                           className="input !py-1.5 text-sm flex-1"
-                          disabled={!canManageStations}
+                          disabled={!canManageStations || !canStartOnSelectedTerminal}
                           value={pendingDuration[st.id] ?? ''}
                           onChange={(e) => setPendingDuration((s) => ({
                             ...s, [st.id]: e.target.value ? Math.max(1, Math.min(1440, Number(e.target.value))) : null,
@@ -2042,7 +2142,10 @@ export default function GamingScreen() {
                       canManageSessions={canManageStations}
                       className="btn btn-primary w-full"
                       onClick={() => startSession(st, '', undefined, phone)}
-                      disabled={!st.is_active}>
+                      disabled={!st.is_active || !canStartOnSelectedTerminal}
+                      title={canStartOnSelectedTerminal
+                        ? undefined
+                        : 'Switch this device to the Gaming Area terminal to start a session'}>
                       <Play size={14}/> Start session
                       {pendingDuration[st.id] ? ` · ${pendingDuration[st.id]}m` : ''}
                     </GamingMutationButton>
@@ -2123,6 +2226,15 @@ export default function GamingScreen() {
             onCancel={() => { if (!reconciling) setPendingReconciliation(null); }}
           />
         )}
+        {pendingPosHandoff && (
+          <PosHandoffModal
+            station={pendingPosHandoff.station}
+            targets={pendingPosHandoff.targets}
+            busy={sendingToPos === pendingPosHandoff.station.id}
+            onSelect={(target) => { void confirmPosHandoff(target); }}
+            onCancel={() => { if (!sendingToPos) setPendingPosHandoff(null); }}
+          />
+        )}
         {repairStationTarget && (
           <BillingRepairModal
             station={repairStationTarget}
@@ -2151,6 +2263,60 @@ export default function GamingScreen() {
         )}
       </GamingWriteOnly>
     </div>
+  );
+}
+
+function PosHandoffModal({
+  station,
+  targets,
+  busy,
+  onSelect,
+  onCancel,
+}: {
+  station: StationDTO;
+  targets: GamingPosTargetShiftDTO[];
+  busy: boolean;
+  onSelect: (target: GamingPosTargetShiftDTO) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal open onClose={onCancel} title={`Send ${station.name} to POS`}>
+      <div className="space-y-3">
+        <div className="rounded-lg border border-bg-border bg-bg-raised p-3 text-sm text-fg-muted">
+          Choose the open cashier shift that will collect this payment. The gaming shift keeps
+          the session record; the selected POS shift receives the held bill.
+        </div>
+        <div className="space-y-2">
+          {targets.map((target) => (
+            <button
+              key={target.shift_id}
+              type="button"
+              className="flex min-h-14 w-full items-center justify-between gap-3 rounded-lg border border-bg-border bg-bg-surface p-3 text-left transition-colors hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={busy}
+              onClick={() => onSelect(target)}
+            >
+              <span className="min-w-0">
+                <span className="block truncate font-semibold">{target.terminal_name}</span>
+                <span className="block truncate text-xs text-fg-muted">
+                  Shift opened by {target.opened_by_name} at{' '}
+                  {new Date(target.opened_at).toLocaleTimeString([], {
+                    hour: '2-digit', minute: '2-digit',
+                  })}
+                </span>
+              </span>
+              <span className="btn btn-primary pointer-events-none !min-h-[36px] shrink-0 !px-3 !py-1.5 text-xs">
+                {busy ? <Loader2 className="animate-spin" size={14}/> : <Send size={14}/>} Send
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end pt-1">
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onCancel}>
+            Keep payment pending
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

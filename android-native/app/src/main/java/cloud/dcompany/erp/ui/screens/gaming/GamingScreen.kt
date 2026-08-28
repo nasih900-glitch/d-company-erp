@@ -96,6 +96,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import cloud.dcompany.erp.core.auth.GamingAccess
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
@@ -218,6 +219,8 @@ fun GamingScreen(
     vm: GamingViewModel = viewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val activeTerminal by vm.activeTerminal.collectAsStateWithLifecycle()
+    val posTargetSelection by vm.posTargetSelection.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
 
     // One lifecycle-aware clock drives every visible active station. This
@@ -272,9 +275,11 @@ fun GamingScreen(
         state.stations.filter { selectedFilter == "all" || stationFilterId(it.type) == selectedFilter }
     }
     val orphanedExtensionActions = state.orphanedPackageExtensionActions()
+    val startTerminalBlockMessage = gamingStartTerminalBlockMessage(activeTerminal?.purpose)
     val gridState = rememberLazyGridState()
     val gridHeaderCount = 3 + // alarm, metrics, filters
         (if (!access.canManageSessions) 1 else 0) +
+        (if (startTerminalBlockMessage != null) 1 else 0) +
         (if (focusSessionId != null && focusStationId != null) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
         (if (state.refreshError != null) 1 else 0) +
@@ -311,6 +316,20 @@ fun GamingScreen(
             if (!access.canManageSessions) {
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     ViewOnlyNotice()
+                }
+            }
+            startTerminalBlockMessage?.let { message ->
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    OperationalBanner(
+                        title = if (activeTerminal?.purpose == TerminalPurpose.CAFE_POS) {
+                            "Gaming starts are disabled on Cafe POS"
+                        } else {
+                            "Terminal purpose needs verification"
+                        },
+                        detail = message,
+                        tone = UiTone.Warning,
+                        icon = Icons.Filled.Warning,
+                    )
                 }
             }
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
@@ -476,6 +495,7 @@ fun GamingScreen(
                         canReconcileLegacy = access.canReconcileLegacySessions,
                         activeShiftId = state.activeShiftId,
                         activeShiftServerConfirmed = state.activeShiftServerConfirmed,
+                        startTerminalBlockMessage = startTerminalBlockMessage,
                         online = state.online,
                         packages = state.packages,
                         hasTransferTarget = state.stations.any { candidate ->
@@ -538,7 +558,12 @@ fun GamingScreen(
                 Text(
                     "$stationName · ${session.billableMinutes ?: 0} minutes · " +
                         "${(session.amountMinor ?: 0L).asRupees()}. POS will receive a separate unpaid order " +
-                        "for the cashier to review and collect.",
+                        "for the cashier to review and collect. " +
+                        if (activeTerminal?.purpose == TerminalPurpose.GAMING) {
+                            "You will choose the receiving Cafe POS shift next."
+                        } else {
+                            "It will stay on this terminal's open shift."
+                        },
                     color = Brand.ForegroundMuted,
                 )
             },
@@ -550,6 +575,17 @@ fun GamingScreen(
                 )
             },
             dismissButton = { TextButton(onClick = { sending = null }) { Text("Not yet") } },
+        )
+    }
+
+    posTargetSelection?.takeIf { access.canManageSessions }?.let { selection ->
+        PosTargetShiftDialog(
+            selection = selection,
+            stationName = state.stations.firstOrNull { it.id == selection.session.stationId }?.name
+                ?: "Gaming session",
+            busy = state.busyStationId == selection.session.stationId,
+            onDismiss = vm::dismissPosTargetSelection,
+            onConfirm = vm::handoffToPos,
         )
     }
 
@@ -723,6 +759,116 @@ fun GamingScreen(
 }
 
 @Composable
+private fun PosTargetShiftDialog(
+    selection: PosTargetSelectionUi,
+    stationName: String,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var selectedShiftId by remember(selection.serverSessionId, selection.targets) {
+        mutableStateOf<String?>(null)
+    }
+    val selectedTarget = selection.targets.firstOrNull { it.shiftId == selectedShiftId }
+    AlertDialog(
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Choose the receiving POS shift") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text(
+                    "$stationName · ${(selection.session.amountMinor ?: 0L).asRupees()}. " +
+                        "The Gaming shift keeps the session history; the selected Cafe POS shift " +
+                        "receives the unpaid order.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    items(selection.targets, key = PosTargetShift::shiftId) { target ->
+                        val selected = target.shiftId == selectedShiftId
+                        OutlinedButton(
+                            onClick = { selectedShiftId = target.shiftId },
+                            enabled = !busy,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) Brand.Gold else Brand.Foreground,
+                            ),
+                            contentPadding = PaddingValues(Spacing.md),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(
+                                    Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        target.terminalName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        posTargetShiftSupportingText(target),
+                                        color = Brand.ForegroundMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(
+                                        Icons.Filled.CheckCircle,
+                                        contentDescription = "Selected receiving shift",
+                                        tint = Brand.Good,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "If the Cafe POS shift is not listed, keep the bill pending and ask its cashier to open a shift.",
+                    color = Brand.ForegroundFaint,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        },
+        confirmButton = {
+            ErpButton(
+                text = selectedTarget?.let { "Send to ${it.terminalName}" } ?: "Choose a shift",
+                onClick = { selectedShiftId?.let(onConfirm) },
+                enabled = !busy && canConfirmPosTargetSelection(
+                    selectedShiftId,
+                    selection.targets,
+                ),
+                busy = busy,
+                leadingIcon = Icons.AutoMirrored.Filled.Send,
+            )
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep pending") }
+        },
+    )
+}
+
+internal fun posTargetShiftSupportingText(target: PosTargetShift): String {
+    val openedAt = runCatching { timeFormatter.format(Instant.parse(target.openedAt)) }
+        .getOrNull()
+    return buildString {
+        append("Opened by ${target.openedByName}")
+        if (openedAt != null) append(" at $openedAt")
+    }
+}
+
+@Composable
 private fun GamingEmptyState(state: GamingUiState, onRefresh: () -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
@@ -891,6 +1037,7 @@ internal fun GamingStationCard(
     canReconcileLegacy: Boolean,
     activeShiftId: String?,
     activeShiftServerConfirmed: Boolean,
+    startTerminalBlockMessage: String? = null,
     online: Boolean = true,
     packages: List<GamingPackage>,
     hasTransferTarget: Boolean,
@@ -1029,12 +1176,14 @@ internal fun GamingStationCard(
         } else when (presentation.state) {
             StationVisualState.Available -> ErpButton(
                 text = when {
+                    startTerminalBlockMessage != null -> "Change terminal"
                     activeShiftId == null -> "Open POS shift to start"
                     !activeShiftServerConfirmed -> "Waiting for shift sync"
                     else -> "Start session"
                 },
                 onClick = onStart,
-                enabled = actionsEnabled && activeShiftId != null && activeShiftServerConfirmed,
+                enabled = actionsEnabled && startTerminalBlockMessage == null &&
+                    activeShiftId != null && activeShiftServerConfirmed,
                 busy = busyHere,
                 // Several available stations may be visible at once. A quiet
                 // repeated action keeps Review/Send as the dominant workflow.
