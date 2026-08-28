@@ -32,6 +32,7 @@ enum class SettingsTab(val label: String) {
 data class PendingBranchRow(
     val localId: String,
     val name: String,
+    val invoiceSeriesCode: String?,
     val rejected: Boolean,
     val error: String?,
 )
@@ -56,6 +57,7 @@ data class SettingsUiState(
     val accountBusy: Boolean = false,
     val accountError: String? = null,
     val accountNotice: String? = null,
+    val passwordChanged: Boolean = false,
 
     // -- company (cache + Shape C pending edit) ------------------------------
     val companyLoading: Boolean = true,
@@ -114,6 +116,24 @@ data class SettingsUiState(
                 ?: BranchForm()
             return form != original
         }
+
+    /** Catch a known duplicate immediately, including while fully offline. */
+    fun invoiceSeriesConflict(form: BranchForm): String? {
+        val requested = normalizeInvoiceSeries(form.invoiceSeriesCode)
+        branches.firstOrNull {
+            it.id != form.id && normalizeInvoiceSeries(it.invoiceSeriesCode) == requested
+        }?.let { existing ->
+            return "Invoice series '$requested' is already used by ${existing.name}. " +
+                "Choose another two-character code."
+        }
+        pendingBranches.firstOrNull {
+            form.isNew && it.invoiceSeriesCode?.let(::normalizeInvoiceSeries) == requested
+        }?.let { pending ->
+            return "Invoice series '$requested' is already queued for ${pending.name}. " +
+                "Choose another two-character code."
+        }
+        return null
+    }
 }
 
 internal enum class SettingsReadPresentation {
@@ -257,6 +277,7 @@ class SettingsViewModel : ViewModel() {
                 _state.value = _state.value.copy(
                     challenge = null,
                     accountNotice = result.message.ifBlank { "Password updated." },
+                    passwordChanged = true,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -549,6 +570,10 @@ class SettingsViewModel : ViewModel() {
             _state.value = _state.value.copy(branchFormError = message)
             return
         }
+        _state.value.invoiceSeriesConflict(form)?.let { message ->
+            _state.value = _state.value.copy(branchFormError = message)
+            return
+        }
         _state.value = _state.value.copy(branchSaving = true, branchFormError = null)
         if (form.isNew) {
             val scopeLease = cacheIsolation.currentLease() ?: run {
@@ -563,6 +588,7 @@ class SettingsViewModel : ViewModel() {
                                     localId = UUID.randomUUID().toString(),
                                     name = form.name.trim(),
                                     code = form.code.trim().uppercase().ifBlank { null },
+                                    invoiceSeriesCode = normalizeInvoiceSeries(form.invoiceSeriesCode),
                                     address = form.address.trim().ifBlank { null },
                                     timezone = form.timezone.trim().ifBlank { null },
                                     opensAt = form.opensAt.trim().ifBlank { null },
@@ -954,12 +980,13 @@ private fun LocalCompanyEditEntity.overlayOnto(base: CompanyDto?): CompanyDto {
 
 private fun BranchCacheEntity.toDto(): BranchDto = BranchDto(
     id = id, name = name, code = code, address = address, timezone = timezone,
+    invoiceSeriesCode = invoiceSeriesCode.orEmpty(),
     opensAt = opensAt, closesAt = closesAt, stateCode = stateCode,
     fssaiLicenseNo = fssaiLicenseNo, tradeLicenseNo = tradeLicenseNo, branchGstin = branchGstin,
 )
 
 private fun LocalBranchEntity.toPendingRow() = PendingBranchRow(
-    localId = localId, name = name,
+    localId = localId, name = name, invoiceSeriesCode = invoiceSeriesCode,
     rejected = syncState == SettingsWriteState.REJECTED, error = lastError,
 )
 
@@ -992,6 +1019,10 @@ private fun LocalTerminalEntity.toPendingRow(branches: List<BranchDto>) = Pendin
 private fun ApiException.readable(): String {
     val server = message?.takeIf { it.isNotBlank() } ?: "The request failed."
     return when {
+        status == 409 && server.contains("invoice series cannot be changed", ignoreCase = true) ->
+            "$server Refresh this branch and keep its current invoice series."
+        status == 409 && server.contains("invoice series", ignoreCase = true) ->
+            "$server Choose a different two-character series, then save again."
         status == 422 && code == null ->
             "$server The server rejected one of these values — timezone (must be an " +
                 "IANA name like Asia/Kolkata), GSTIN (15 characters), PAN (10 " +

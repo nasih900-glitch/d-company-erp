@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.kitchen
 
+import cloud.dcompany.erp.core.net.OrderModifierSnapshot
+import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -45,6 +47,20 @@ class KitchenBoardPolicyTest {
         assertFalse(KitchenUiState().tapsLocked)
         assertTrue(KitchenUiState(busyOrderId = "order-1").tapsLocked)
         assertTrue(KitchenUiState(advanceLockedUntilMillis = 20_000L).tapsLocked)
+    }
+
+    @Test
+    fun `kitchen option labels preserve variant and modifier quantities`() {
+        assertEquals(
+            listOf("Large", "Oat milk", "2× Extra shot"),
+            kitchenOptionLabels(
+                variant = OrderVariantSnapshot("variant-large", " Large "),
+                modifiers = listOf(
+                    OrderModifierSnapshot(modifierId = "oat", name = "Oat milk"),
+                    OrderModifierSnapshot(modifierId = "shot", name = "Extra shot", qty = 2),
+                ),
+            ),
+        )
     }
 
     @Test

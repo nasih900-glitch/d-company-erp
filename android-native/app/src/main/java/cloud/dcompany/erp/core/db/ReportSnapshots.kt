@@ -41,6 +41,10 @@ interface ReportSnapshotDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(entity: ReportSnapshotEntity)
+
+    /** A posted financial fact makes every aggregate period snapshot stale. */
+    @Query("DELETE FROM report_snapshots")
+    suspend fun invalidateAll()
 }
 
 /**

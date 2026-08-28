@@ -85,6 +85,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.R
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
 import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.fieldColors
@@ -131,6 +133,8 @@ fun WorkspaceScaffold(
     employeeName: String,
     locationLabel: String,
     connectivityProblem: SyncAvailabilityProblem,
+    outboxWorkStatus: OutboxWorkStatus,
+    syncing: Boolean,
     canChangeTill: Boolean,
     onChangeTill: () -> Unit,
     onSignOut: () -> Unit,
@@ -174,6 +178,8 @@ fun WorkspaceScaffold(
                     employeeName = employeeName,
                     locationLabel = locationLabel,
                     connectivityProblem = connectivityProblem,
+                    outboxWorkStatus = outboxWorkStatus,
+                    syncing = syncing,
                     compact = compact,
                     canChangeTill = canChangeTill,
                     onOpenCommand = { commandOpen = true },
@@ -439,6 +445,8 @@ private fun WorkspaceHeader(
     employeeName: String,
     locationLabel: String,
     connectivityProblem: SyncAvailabilityProblem,
+    outboxWorkStatus: OutboxWorkStatus,
+    syncing: Boolean,
     compact: Boolean,
     canChangeTill: Boolean,
     onOpenCommand: () -> Unit,
@@ -497,6 +505,11 @@ private fun WorkspaceHeader(
         }
 
         ConnectivityStatus(connectivityProblem, showDetail = !compact)
+        OutboxWorkStatusPill(
+            status = outboxWorkStatus,
+            syncing = syncing,
+            showDetail = !compact,
+        )
 
         Box {
             Row(
@@ -572,6 +585,47 @@ private fun ConnectivityStatus(problem: SyncAvailabilityProblem, showDetail: Boo
         if (showDetail) {
             Text(label, color = Brand.Foreground, style = MaterialTheme.typography.labelMedium)
         }
+    }
+}
+
+@Composable
+private fun OutboxWorkStatusPill(
+    status: OutboxWorkStatus,
+    syncing: Boolean,
+    showDetail: Boolean,
+) {
+    if (status.isClear && !syncing) return
+
+    val color = when {
+        status.actionRequiredCount > 0 -> Brand.Danger
+        syncing -> Brand.Information
+        status.retryableCount > 0 -> Brand.Warning
+        else -> Brand.Information
+    }
+    val visibleLabel = outboxWorkVisibleLabel(status, syncing, showDetail) ?: return
+    val accessibilityDetail = buildList {
+        if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
+        if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
+        if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")
+        if (syncing) add("sync in progress")
+    }.joinToString(", ")
+
+    Row(
+        Modifier.height(44.dp).clip(Radius.shapePill)
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.34f), Radius.shapePill)
+            .semantics { contentDescription = "Saved work status: $accessibilityDetail" }
+            .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Text(
+            visibleLabel,
+            color = color,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+        )
     }
 }
 

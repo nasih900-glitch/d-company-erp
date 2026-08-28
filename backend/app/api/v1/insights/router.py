@@ -9,6 +9,7 @@ materialized view layer later if Postgres struggles.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError
+from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
@@ -36,6 +37,10 @@ from app.models import (
     Refund,
     StockMovement,
 )
+from app.services.accounting.refund_allocation import cumulative_refunded_tip_minor
+from app.services.inventory.accounting import load_inventory_value_changes
+from app.services.inventory.valuation import remaining_batch_totals, round_minor
+from app.services.reports.metrics import average_ticket_minor
 
 router = APIRouter()
 
@@ -65,12 +70,14 @@ class ValuationLineDTO(BaseModel):
 
 class InventoryValuationDTO(BaseModel):
     as_of: date
+    branch_id: UUID | None
     lines: list[ValuationLineDTO]
     total_valuation_minor: int
     low_stock_count: int
 
 
 class RecipeMarginDTO(BaseModel):
+    branch_id: UUID
     menu_item_id: UUID
     sku: str
     name: str
@@ -79,6 +86,7 @@ class RecipeMarginDTO(BaseModel):
     cost_minor: int
     margin_minor: int
     margin_pct: float
+    costing_complete: bool
 
 
 class CostingIssueDTO(BaseModel):
@@ -93,6 +101,7 @@ class CostingIssueDTO(BaseModel):
 class CostingCoverageDTO(BaseModel):
     """Current catalogue coverage for automatic inventory COGS."""
 
+    branch_id: UUID
     inventory_item_count: int
     fully_costed_item_count: int
     incomplete_item_count: int
@@ -104,11 +113,13 @@ class CostingCoverageDTO(BaseModel):
 
 
 class TopItemDTO(BaseModel):
+    branch_id: UUID
     menu_item_id: UUID
     name: str
     type: str
     qty_sold: float
     revenue_minor: int
+    revenue_basis: Literal["gross_line"] = "gross_line"
 
 
 class GrowthPeriodDTO(BaseModel):
@@ -122,10 +133,11 @@ class GrowthPeriodDTO(BaseModel):
 
 
 class GrowthDTO(BaseModel):
+    branch_id: UUID
     current: GrowthPeriodDTO
     previous: GrowthPeriodDTO
-    revenue_delta_pct: float
-    orders_delta_pct: float
+    revenue_delta_pct: float | None
+    orders_delta_pct: float | None
 
 
 class HeatmapCellDTO(BaseModel):
@@ -145,6 +157,7 @@ class LossLineDTO(BaseModel):
 
 
 class LossesDTO(BaseModel):
+    branch_id: UUID
     from_date: date
     to_date: date
     waste_minor: int
@@ -159,7 +172,14 @@ class LossesDTO(BaseModel):
 async def inventory_valuation(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("inventory.read")),
+    branch_id: UUID | None = None,
 ) -> InventoryValuationDTO:
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for inventory valuation")
+    if branch_id is not None and branch_id != tenant.branch_id:
+        raise NotFoundError("branch not found")
+    scoped_branch_id = tenant.branch_id
+
     rows = (
         await session.execute(
             select(Ingredient).where(
@@ -168,27 +188,44 @@ async def inventory_valuation(
             ).order_by(Ingredient.name)
         )
     ).scalars().all()
+    batch_totals = await remaining_batch_totals(
+        session,
+        company_id=tenant.company_id,
+        branch_id=scoped_branch_id,
+    )
     lines: list[ValuationLineDTO] = []
     total = 0
     low = 0
     for r in rows:
-        qty = float(r.current_qty or 0)
-        cost = int(r.avg_cost_minor or 0)
-        val = int(qty * cost)
-        is_low = qty < float(r.reorder_threshold or 0) and float(r.reorder_threshold or 0) > 0
-        if is_low: low += 1
+        batch_total = batch_totals.get(r.id)
+        qty = float(batch_total.qty) if batch_total is not None else 0.0
+        cost = batch_total.weighted_cost_minor if batch_total is not None else 0
+        val = batch_total.valuation_minor if batch_total is not None else 0
+        threshold = float(r.reorder_threshold or 0)
+        is_low = threshold > 0 and qty < threshold
+        if is_low:
+            low += 1
         total += val
-        lines.append(ValuationLineDTO(
-            ingredient_id=r.id, sku=r.sku, name=r.name,
-            base_unit=r.base_unit, current_qty=qty,
-            avg_cost_minor=cost, valuation_minor=val,
-            reorder_threshold=float(r.reorder_threshold or 0),
-            is_low_stock=is_low,
-        ))
+        lines.append(
+            ValuationLineDTO(
+                ingredient_id=r.id,
+                sku=r.sku,
+                name=r.name,
+                base_unit=r.base_unit,
+                current_qty=qty,
+                avg_cost_minor=cost,
+                valuation_minor=val,
+                reorder_threshold=threshold,
+                is_low_stock=is_low,
+            )
+        )
     timezone_name = await company_timezone(session, tenant.company_id)
     return InventoryValuationDTO(
-        as_of=local_today(timezone_name), lines=lines,
-        total_valuation_minor=total, low_stock_count=low,
+        as_of=local_today(timezone_name),
+        branch_id=scoped_branch_id,
+        lines=lines,
+        total_valuation_minor=total,
+        low_stock_count=low,
     )
 
 
@@ -199,6 +236,8 @@ async def recipe_margin(
 ) -> list[RecipeMarginDTO]:
     """For each menu item that has a Recipe, compute cost-to-make and margin %.
     Items without recipes (resold bottled drinks etc.) are skipped."""
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for recipe margins")
     items = (
         await session.execute(
             select(MenuItem).where(
@@ -224,29 +263,60 @@ async def recipe_margin(
     rec_ids = [r.id for r in recipes]
     lines = (
         await session.execute(
-            select(RecipeLine, Ingredient.avg_cost_minor).join(
+            select(RecipeLine, Ingredient).join(
                 Ingredient, Ingredient.id == RecipeLine.ingredient_id,
-            ).where(RecipeLine.recipe_id.in_(rec_ids))
+            ).where(
+                RecipeLine.recipe_id.in_(rec_ids),
+                Ingredient.company_id == tenant.company_id,
+                Ingredient.deleted_at.is_(None),
+            )
         )
     ).all()
-    cost_by_recipe: dict[UUID, int] = {}
-    for rl, avg_cost in lines:
-        qty = float(rl.qty) * (1 + float(rl.wastage_pct or 0))
-        cost_by_recipe[rl.recipe_id] = cost_by_recipe.get(rl.recipe_id, 0) + int(qty * int(avg_cost or 0))
+    branch_totals = await remaining_batch_totals(
+        session,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+    )
+    recipes_by_id = {recipe.id: recipe for recipe in recipes}
+    raw_cost_by_recipe: dict[UUID, Decimal] = {}
+    complete_by_recipe: dict[UUID, bool] = {recipe.id: True for recipe in recipes}
+    for rl, ingredient in lines:
+        recipe = recipes_by_id[rl.recipe_id]
+        recipe_yield = Decimal(
+            str(recipe.yield_qty if recipe.yield_qty is not None else 1)
+        )
+        if recipe_yield <= 0:
+            raise BusinessRuleError(
+                f"active recipe {recipe.id} has an invalid yield; correct the recipe first"
+            )
+        batch_total = branch_totals.get(ingredient.id)
+        unit_cost = batch_total.weighted_cost_minor if batch_total is not None else 0
+        if unit_cost <= 0:
+            complete_by_recipe[rl.recipe_id] = False
+        qty = (
+            Decimal(str(rl.qty))
+            * (Decimal(1) + Decimal(str(rl.wastage_pct or 0)))
+            / recipe_yield
+        )
+        raw_cost_by_recipe[rl.recipe_id] = raw_cost_by_recipe.get(
+            rl.recipe_id, Decimal(0)
+        ) + qty * Decimal(unit_cost)
 
     out: list[RecipeMarginDTO] = []
     for it in items:
         rec = by_item.get(it.id)
         if not rec:
             continue
-        cost = cost_by_recipe.get(rec.id, 0)
+        cost = round_minor(raw_cost_by_recipe.get(rec.id, Decimal(0)))
         sale = int(it.base_price_minor or 0)
         margin = sale - cost
         margin_pct = (margin / sale * 100) if sale > 0 else 0.0
         out.append(RecipeMarginDTO(
+            branch_id=tenant.branch_id,
             menu_item_id=it.id, sku=it.sku, name=it.name, type=it.type,
             sale_price_minor=sale, cost_minor=cost,
             margin_minor=margin, margin_pct=margin_pct,
+            costing_complete=complete_by_recipe.get(rec.id, False),
         ))
     out.sort(key=lambda r: r.margin_pct, reverse=True)
     return out
@@ -261,6 +331,8 @@ def _build_costing_coverage(
     recipe_lines: list[tuple[RecipeLine, Ingredient]],
     branches: list[Branch] | None = None,
     fifo_costed_pairs: set[tuple[UUID, UUID]] | None = None,
+    *,
+    branch_id: UUID,
 ) -> CostingCoverageDTO:
     """Classify catalogue costing without treating an unknown cost as zero.
 
@@ -341,6 +413,7 @@ def _build_costing_coverage(
 
     incomplete = len(issues)
     return CostingCoverageDTO(
+        branch_id=branch_id,
         inventory_item_count=len(items),
         fully_costed_item_count=len(items) - incomplete,
         incomplete_item_count=incomplete,
@@ -399,10 +472,13 @@ async def costing_coverage(
     excluded. Missing costing does not block a cashier sale, but Finance must
     disclose it instead of presenting understated COGS as complete.
     """
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for costing coverage")
     branches = (
         await session.execute(
             select(Branch).where(
                 Branch.company_id == tenant.company_id,
+                Branch.id == tenant.branch_id,
                 Branch.deleted_at.is_(None),
             ).order_by(Branch.name, Branch.id)
         )
@@ -418,7 +494,7 @@ async def costing_coverage(
         )
     ).scalars().all()
     if not items:
-        return _build_costing_coverage([], [], [])
+        return _build_costing_coverage([], [], [], branch_id=tenant.branch_id)
 
     recipes = (
         await session.execute(
@@ -429,7 +505,12 @@ async def costing_coverage(
         )
     ).scalars().all()
     if not recipes:
-        return _build_costing_coverage(list(items), [], [])
+        return _build_costing_coverage(
+            list(items),
+            [],
+            [],
+            branch_id=tenant.branch_id,
+        )
 
     recipe_lines = (
         await session.execute(
@@ -512,16 +593,26 @@ async def costing_coverage(
         list(recipe_lines),
         list(branches),
         fifo_costed_pairs,
+        branch_id=tenant.branch_id,
     )
 
 
 # ---------------------------------------------------------------- GROWTH
-def _date_range_for_period(period: str, today: date) -> tuple[tuple[date, date], tuple[date, date], str, str]:
+def _date_range_for_period(
+    period: str,
+    today: date,
+) -> tuple[tuple[date, date], tuple[date, date], str, str]:
     """Return ((cur_start, cur_end), (prev_start, prev_end), cur_label, prev_label)."""
     if period == "mom":
         cur_start = today.replace(day=1)
-        prev_end = cur_start - timedelta(days=1)
-        prev_start = prev_end.replace(day=1)
+        previous_month_end = cur_start - timedelta(days=1)
+        prev_start = previous_month_end.replace(day=1)
+        # Compare the same number of elapsed calendar days. A partial current
+        # month against a full previous month manufactures a decline.
+        prev_end = min(
+            previous_month_end,
+            prev_start + timedelta(days=today.day - 1),
+        )
         return (
             (cur_start, today),
             (prev_start, prev_end),
@@ -542,10 +633,12 @@ def _date_range_for_period(period: str, today: date) -> tuple[tuple[date, date],
             f"YTD {today.year}",
             f"YTD {today.year - 1}",
         )
-    # default — wow (week-over-week)
+    if period != "wow":
+        raise BusinessRuleError("period must be wow, mom or yoy")
+    # Week-over-week, through the same weekday in both weeks.
     cur_start = today - timedelta(days=today.weekday())
-    prev_end = cur_start - timedelta(days=1)
-    prev_start = prev_end - timedelta(days=6)
+    prev_start = cur_start - timedelta(days=7)
+    prev_end = prev_start + timedelta(days=today.weekday())
     return (
         (cur_start, today),
         (prev_start, prev_end),
@@ -554,12 +647,21 @@ def _date_range_for_period(period: str, today: date) -> tuple[tuple[date, date],
     )
 
 
+def _percentage_delta(current: int, previous: int) -> float | None:
+    """Return a real comparison, never a fabricated 0% baseline."""
+
+    if previous <= 0:
+        return None
+    return (current - previous) / previous * 100
+
+
 async def _period_stats(
     session,
     company_id: UUID,
     d_from: date,
     d_to: date,
     timezone_name: str,
+    branch_id: UUID | None = None,
 ) -> GrowthPeriodDTO:
     f_dt, t_dt = local_date_bounds_utc(d_from, d_to, timezone_name)
     sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
@@ -571,6 +673,7 @@ async def _period_stats(
                 func.count(Order.id).label("n"),
             ).where(
                 Order.company_id == company_id,
+                *((Order.branch_id == branch_id,) if branch_id is not None else ()),
                 sale_at >= f_dt, sale_at < t_dt,
                 Order.status.in_(("paid", "refunded")),
             )
@@ -589,25 +692,68 @@ async def _period_stats(
     # netted in ReportsAggregator, just without that service's proportional
     # cross-period tax allocation, which this simple growth headline doesn't need.
     refund_at = func.coalesce(Refund.settled_at, Refund.created_at)
-    refunds_minor = int(
-        (
-            await session.execute(
-                select(func.coalesce(func.sum(Refund.amount_minor), 0))
-                .select_from(Refund)
-                .join(Order, Order.id == Refund.order_id)
-                .where(
-                    Order.company_id == company_id,
-                    refund_at >= f_dt, refund_at < t_dt,
-                )
+    refund_rows = (
+        await session.execute(
+            select(Refund, Order)
+            .join(Order, Order.id == Refund.order_id)
+            .where(
+                Order.company_id == company_id,
+                *((Order.branch_id == branch_id,) if branch_id is not None else ()),
+                refund_at >= f_dt,
+                refund_at < t_dt,
             )
-        ).scalar_one()
-        or 0
-    )
+            .order_by(refund_at, Refund.id)
+        )
+    ).all()
+    refund_order_ids = {refund.order_id for refund, _order in refund_rows}
+    prior_refunds_by_order: dict[UUID, int] = {}
+    if refund_order_ids:
+        prior_rows = (
+            await session.execute(
+                select(
+                    Refund.order_id,
+                    func.coalesce(func.sum(Refund.amount_minor), 0),
+                )
+                .where(
+                    Refund.order_id.in_(refund_order_ids),
+                    refund_at < f_dt,
+                )
+                .group_by(Refund.order_id)
+            )
+        ).all()
+        prior_refunds_by_order = {
+            order_id: int(amount or 0) for order_id, amount in prior_rows
+        }
+
+    refunds_minor = 0
+    refunded_tips_minor = 0
+    cohort_refunds_for_average = 0
+    running_refunds = dict(prior_refunds_by_order)
+    for refund, order in refund_rows:
+        amount = int(refund.amount_minor or 0)
+        before = running_refunds.get(order.id, 0)
+        after = before + amount
+        refunded_tip_delta = cumulative_refunded_tip_minor(
+            total_minor=int(order.total_minor or 0),
+            tip_minor=int(order.tip_minor or 0),
+            cumulative_refunded_minor=after,
+        ) - cumulative_refunded_tip_minor(
+            total_minor=int(order.total_minor or 0),
+            tip_minor=int(order.tip_minor or 0),
+            cumulative_refunded_minor=before,
+        )
+        refunded_tips_minor += refunded_tip_delta
+        invoice_at = order.invoice_issued_at or order.closed_at
+        if invoice_at is not None and f_dt <= invoice_at < t_dt:
+            cohort_refunds_for_average += amount - refunded_tip_delta
+        running_refunds[order.id] = after
+        refunds_minor += amount
     manual_revenue = int(
         (
             await session.execute(
                 select(func.coalesce(func.sum(ManualCollection.amount_minor), 0)).where(
                     ManualCollection.company_id == company_id,
+                    *((ManualCollection.branch_id == branch_id,) if branch_id is not None else ()),
                     ManualCollection.business_date >= d_from,
                     ManualCollection.business_date <= d_to,
                     ManualCollection.voided_at.is_(None),
@@ -621,6 +767,7 @@ async def _period_stats(
             await session.execute(
                 select(func.coalesce(func.sum(MembershipPayment.amount_minor), 0)).where(
                     MembershipPayment.company_id == company_id,
+                    *((MembershipPayment.branch_id == branch_id,) if branch_id is not None else ()),
                     MembershipPayment.paid_at >= f_dt,
                     MembershipPayment.paid_at < t_dt,
                 )
@@ -635,6 +782,11 @@ async def _period_stats(
                     func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0)
                 ).where(
                     MembershipRefundSettlement.company_id == company_id,
+                    *(
+                        (MembershipRefundSettlement.branch_id == branch_id,)
+                        if branch_id is not None
+                        else ()
+                    ),
                     MembershipRefundSettlement.settled_at >= f_dt,
                     MembershipRefundSettlement.settled_at < t_dt,
                 )
@@ -645,8 +797,17 @@ async def _period_stats(
     # Manual collections are revenue but not orders. They affect growth and
     # cash movement, while AOV remains based only on itemized POS orders.
     refunds_minor += membership_refunds
-    net_order_revenue = order_revenue - (refunds_minor - membership_refunds)
-    avg = net_order_revenue // n if n else 0
+    # order_revenue already excludes tips, so subtract only the bill portion of
+    # POS refunds. The full amount still remains in refunds_minor because that
+    # field describes real cash/provider value returned to customers.
+    net_order_revenue = order_revenue - (
+        refunds_minor - membership_refunds - refunded_tips_minor
+    )
+    avg = average_ticket_minor(
+        gross_sale_cohort_minor=order_revenue,
+        same_cohort_refunds_minor=cohort_refunds_for_average,
+        orders_count=n,
+    )
     return GrowthPeriodDTO(
         label="",
         revenue_minor=(
@@ -670,15 +831,34 @@ async def growth(
     period: str = "mom",  # mom|yoy|wow
 ) -> GrowthDTO:
     timezone_name = await company_timezone(session, tenant.company_id)
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for growth analytics")
     today = local_today(timezone_name)
     (c_s, c_e), (p_s, p_e), c_label, p_label = _date_range_for_period(period, today)
-    cur = await _period_stats(session, tenant.company_id, c_s, c_e, timezone_name)
-    prev = await _period_stats(session, tenant.company_id, p_s, p_e, timezone_name)
+    cur = await _period_stats(
+        session,
+        tenant.company_id,
+        c_s,
+        c_e,
+        timezone_name,
+        branch_id=tenant.branch_id,
+    )
+    prev = await _period_stats(
+        session,
+        tenant.company_id,
+        p_s,
+        p_e,
+        timezone_name,
+        branch_id=tenant.branch_id,
+    )
     cur.label = c_label
     prev.label = p_label
-    rev_delta = ((cur.revenue_minor - prev.revenue_minor) / prev.revenue_minor * 100) if prev.revenue_minor > 0 else 0.0
-    ord_delta = ((cur.orders_count - prev.orders_count) / prev.orders_count * 100) if prev.orders_count > 0 else 0.0
-    return GrowthDTO(current=cur, previous=prev,
+    # A zero/negative previous baseline has no meaningful percentage change.
+    # Returning 0% would falsely claim no movement when the current period has
+    # activity; null lets clients label the metric as a new/no-baseline value.
+    rev_delta = _percentage_delta(cur.revenue_minor, prev.revenue_minor)
+    ord_delta = _percentage_delta(cur.orders_count, prev.orders_count)
+    return GrowthDTO(branch_id=tenant.branch_id, current=cur, previous=prev,
                      revenue_delta_pct=rev_delta, orders_delta_pct=ord_delta)
 
 
@@ -695,30 +875,42 @@ async def top_items(
     from_date = from_date or today.replace(day=1)
     to_date = to_date or today
     f_dt, t_dt = _validated_date_range(from_date, to_date, timezone_name)
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for item analytics")
     sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     rows = (
         await session.execute(
             select(
-                MenuItem.id, MenuItem.name, MenuItem.type,
+                OrderLine.menu_item_id,
+                OrderLine.menu_item_name_snapshot,
+                OrderLine.menu_item_type_snapshot,
                 func.coalesce(func.sum(OrderLine.qty), 0).label("qty"),
                 func.coalesce(func.sum(OrderLine.line_total_minor), 0).label("rev"),
             )
-            .join(OrderLine, OrderLine.menu_item_id == MenuItem.id)
+            .select_from(OrderLine)
             .join(Order, Order.id == OrderLine.order_id)
             .where(
                 Order.company_id == tenant.company_id,
+                Order.branch_id == tenant.branch_id,
                 sale_at >= f_dt, sale_at < t_dt,
                 Order.status.in_(("paid", "refunded")),
                 OrderLine.voided_at.is_(None),
             )
-            .group_by(MenuItem.id, MenuItem.name, MenuItem.type)
+            .group_by(
+                OrderLine.menu_item_id,
+                OrderLine.menu_item_name_snapshot,
+                OrderLine.menu_item_type_snapshot,
+            )
             .order_by(func.sum(OrderLine.line_total_minor).desc())
             .limit(min(limit, 100))
         )
     ).all()
     return [
         TopItemDTO(
-            menu_item_id=r.id, name=r.name, type=r.type,
+            branch_id=tenant.branch_id,
+            menu_item_id=r.menu_item_id,
+            name=r.menu_item_name_snapshot,
+            type=r.menu_item_type_snapshot,
             qty_sold=float(r.qty or 0), revenue_minor=int(r.rev or 0),
         )
         for r in rows
@@ -738,6 +930,8 @@ async def heatmap(
     from_date = from_date or (today - timedelta(days=30))
     to_date = to_date or today
     f_dt, t_dt = _validated_date_range(from_date, to_date, timezone_name)
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for sales heatmap")
     sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     local_sale_at = func.timezone(timezone_name, sale_at)
     rows = (
@@ -751,6 +945,7 @@ async def heatmap(
             )
             .where(
                 Order.company_id == tenant.company_id,
+                Order.branch_id == tenant.branch_id,
                 sale_at >= f_dt, sale_at < t_dt,
                 Order.status.in_(("paid", "refunded")),
             )
@@ -789,34 +984,63 @@ async def losses(
     to_date = to_date or today
     f_dt, t_dt = _validated_date_range(from_date, to_date, timezone_name)
 
-    # Pull waste/damage/adjustment movements joined to ingredient via batch
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for loss analytics")
+    changes = await load_inventory_value_changes(
+        session,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        start_at=f_dt,
+        end_exclusive=t_dt,
+    )
+    loss_changes = [
+        change
+        for change in changes
+        if change.movement.type in {"waste", "damage", "adjustment"}
+        and change.inventory_delta_minor < 0
+    ]
+    movement_ids = [change.movement.id for change in loss_changes]
     rows = (
         await session.execute(
             select(
-                Ingredient.id, Ingredient.sku, Ingredient.name,
-                StockMovement.type,
-                StockMovement.qty_delta,
-                StockMovement.cost_per_unit_minor,
+                StockMovement.id,
+                Ingredient.id,
+                Ingredient.sku,
+                Ingredient.name,
             )
             .join(Batch, Batch.id == StockMovement.batch_id)
             .join(Ingredient, Ingredient.id == Batch.ingredient_id)
             .where(
                 Ingredient.company_id == tenant.company_id,
-                StockMovement.created_at >= f_dt,
-                StockMovement.created_at < t_dt,
-                StockMovement.type.in_(("waste", "damage", "adjustment")),
+                Batch.branch_id == tenant.branch_id,
+                StockMovement.id.in_(movement_ids),
             )
         )
-    ).all()
+    ).all() if movement_ids else []
+    ingredient_by_movement = {
+        movement_id: (ingredient_id, sku, name)
+        for movement_id, ingredient_id, sku, name in rows
+    }
 
     waste_total = 0
     damage_total = 0
     neg_total = 0
     per_ing: dict[UUID, dict] = {}
-    for ing_id, sku, name, mtype, qty_delta, cost in rows:
-        cost_lost = int(abs(float(qty_delta)) * int(cost or 0)) if float(qty_delta) < 0 else 0
-        if mtype == "waste": waste_total += cost_lost
-        elif mtype == "damage": damage_total += cost_lost
+    for change in loss_changes:
+        movement = change.movement
+        identity = ingredient_by_movement.get(movement.id)
+        if identity is None:
+            raise BusinessRuleError(
+                f"inventory movement {movement.id} has no branch-scoped ingredient"
+            )
+        ing_id, sku, name = identity
+        mtype = movement.type
+        qty_delta = float(movement.qty_delta)
+        cost_lost = -change.inventory_delta_minor
+        if mtype == "waste":
+            waste_total += cost_lost
+        elif mtype == "damage":
+            damage_total += cost_lost
         elif mtype == "adjustment" and float(qty_delta) < 0:
             neg_total += cost_lost
         slot = per_ing.setdefault(ing_id, {
@@ -840,6 +1064,7 @@ async def losses(
     lines.sort(key=lambda x: x.cost_lost_minor, reverse=True)
 
     return LossesDTO(
+        branch_id=tenant.branch_id,
         from_date=from_date, to_date=to_date,
         waste_minor=waste_total, damage_minor=damage_total,
         negative_stock_minor=neg_total,

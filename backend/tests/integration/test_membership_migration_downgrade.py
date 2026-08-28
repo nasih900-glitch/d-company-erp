@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import psycopg
@@ -20,7 +21,6 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Branch,
     Company,
     Customer,
     CustomerMembership,
@@ -42,6 +42,29 @@ from app.models import (
 )
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _insert_schema_0034_branch(
+    session: Session,
+    *,
+    company_id: UUID,
+) -> SimpleNamespace:
+    """Insert through the historical schema, not the current Branch ORM.
+
+    These tests deliberately pin PostgreSQL to revision 0034.  The current
+    model contains columns added much later, so flushing it would make the
+    fixture fail on model/schema skew before exercising the migration guard.
+    """
+
+    branch_id = uuid4()
+    session.execute(
+        text(
+            "INSERT INTO branches (id, company_id, name) "
+            "VALUES (:id, :company_id, 'Main')"
+        ),
+        {"id": branch_id, "company_id": company_id},
+    )
+    return SimpleNamespace(id=branch_id)
 
 
 def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -126,7 +149,9 @@ class _PaymentWorkflow:
 def _seed_base(session: Session) -> _Seed:
     now = datetime.now(UTC).replace(microsecond=0)
     company = Company(id=uuid4(), name="0035 downgrade guard")
-    branch = Branch(id=uuid4(), company_id=company.id, name="Main")
+    session.add(company)
+    session.flush()
+    branch = _insert_schema_0034_branch(session, company_id=company.id)
     terminal = Terminal(
         id=uuid4(),
         branch_id=branch.id,
@@ -164,9 +189,7 @@ def _seed_base(session: Session) -> _Seed:
         priority_booking=False,
         sort_order=0,
     )
-    session.add(company)
-    session.flush()
-    session.add_all([branch, owner, customer, tier])
+    session.add_all([owner, customer, tier])
     session.flush()
     session.add(terminal)
     session.flush()

@@ -1276,6 +1276,16 @@ private fun TicketCard(
                     color = Brand.Foreground,
                     fontWeight = FontWeight.SemiBold,
                 )
+                kitchenOptionLabels(
+                    cancellation.variantSnapshot,
+                    cancellation.modifiers,
+                ).takeIf(List<String>::isNotEmpty)?.let { options ->
+                    Text(
+                        options.joinToString(" · "),
+                        color = Brand.Foreground,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 cancellation.notes?.takeIf(String::isNotBlank)?.let { note ->
                     Text("Original request: $note", color = Brand.ForegroundMuted)
                 }
@@ -1313,6 +1323,16 @@ private fun TicketCard(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                kitchenOptionLabels(line.variantSnapshot, line.modifiers)
+                    .takeIf(List<String>::isNotEmpty)?.let { options ->
+                        Text(
+                            options.joinToString(" · "),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Brand.Information,
+                            modifier = Modifier.padding(start = 48.dp, top = 2.dp),
+                        )
+                    }
                 // Notes are the single most expensive thing to miss on a
                 // ticket — "no onions" reaching the table wrong is a remake.
                 line.notes?.takeIf { it.isNotBlank() }?.let { note ->

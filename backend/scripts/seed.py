@@ -97,6 +97,7 @@ async def seed() -> None:
             id=uuid4(),
             company_id=company.id,
             name="Main Branch",
+            invoice_series_code="MN",
             timezone="Asia/Kolkata",
             state_code="32",
         )

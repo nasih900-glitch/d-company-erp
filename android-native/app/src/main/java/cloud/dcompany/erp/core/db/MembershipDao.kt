@@ -14,6 +14,9 @@ interface MembershipDao {
     @Query("SELECT * FROM membership_tier_cache ORDER BY sortOrder ASC, monthlyPriceMinor ASC")
     fun observeTierCache(): Flow<List<MembershipTierCacheEntity>>
 
+    @Query("SELECT * FROM membership_tier_cache WHERE id = :tierId LIMIT 1")
+    suspend fun tierById(tierId: String): MembershipTierCacheEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTierCache(rows: List<MembershipTierCacheEntity>)
 

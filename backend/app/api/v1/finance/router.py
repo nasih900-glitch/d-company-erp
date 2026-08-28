@@ -9,6 +9,7 @@ screen needs.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -19,7 +20,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.errors import (
+    BusinessRuleError,
+    ConflictError,
+    ForbiddenError,
+    IdempotencyConflict,
+    NotFoundError,
+)
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.logging import get_logger
 from app.core.money import apportion
@@ -27,6 +34,7 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
+    GRN,
     Asset,
     Branch,
     CapitalEntry,
@@ -35,21 +43,38 @@ from app.models import (
     CustomerMembership,
     Expense,
     ExpenseCategory,
+    GRNLine,
+    JournalEntry,
     ManualCollection,
     MembershipPayment,
     OcrExtraction,
     OcrUpload,
+    Order,
     Partner,
+    PurchaseOrder,
+    Refund,
     Supplier,
+    SupplierPayment,
     TipPayout,
     User,
 )
-from app.services.accounting import build_operational_ledger
-from app.services.accounting.accounts import TIPS_PAYABLE
+from app.services.accounting import LedgerLine, build_operational_ledger
+from app.services.accounting.accounts import (
+    ACCOUNT_BY_CODE,
+    ACCOUNTS_PAYABLE,
+    BANK,
+    CASH,
+    TIPS_PAYABLE,
+)
 from app.services.accounting.depreciation import (
     STRAIGHT_LINE,
     asset_accumulated_depreciation_minor,
     asset_book_value_minor,
+)
+from app.services.accounting.purchases import (
+    post_two_sided_operational_journal,
+    received_line_total_minor,
+    require_invoice_matches_capitalised_total,
 )
 from app.services.integrations.google_sheets import push_manual_collection_to_sheet
 from app.services.reports import ReportsAggregator
@@ -69,10 +94,18 @@ router = APIRouter()
 # an established one with proven cash flow, so 6 months rather than the
 # 3-month minimum sometimes cited for a mature business.
 DISTRIBUTION_RESERVE_MONTHS = 6
-# Balance-sheet accounts that represent money the business can actually hand
-# out today — excludes inventory, fixed assets, and pending-settlement
-# clearing accounts, which are real value but not spendable cash.
-LIQUID_CASH_ACCOUNT_CODES = frozenset({"1000", "1010", "1110"})  # Cash, Bank, UPI/QR Clearing
+# Only till cash and a posted bank balance are immediately spendable. Provider
+# clearing accounts are receivables until an explicit settlement moves them to
+# Bank; treating UPI/Card/Wallet clearing as cash available for partner draws
+# can distribute money the business has not received yet.
+SPENDABLE_CASH_ACCOUNT_CODES = frozenset({"1000", "1010"})
+# Backwards-compatible headline used by older clients. It intentionally keeps
+# the historical cash+bank+UPI definition, but is no longer used for the safe
+# distribution decision. New clients must use ``spendable_cash_bank_minor``.
+LEGACY_LIQUID_CASH_ACCOUNT_CODES = frozenset({"1000", "1010", "1110"})
+SETTLEMENT_RECEIVABLE_ACCOUNT_CODES = frozenset({"1100", "1110", "1120", "1210"})
+RECONCILIATION_ACCOUNT_CODES = frozenset({"1185", "1190"})
+COMPANY_WIDE_FINANCE_ROLES = frozenset({"owner", "partner", "auditor"})
 
 
 # ---------------------------------------------------------------- DTOs
@@ -108,6 +141,10 @@ class ExpenseRead(BaseModel):
     vendor_name: str | None
     invoice_no: str | None
     note: str | None
+    voided_at: datetime | None = None
+    voided_by: UUID | None = None
+    void_reason: str | None = None
+    is_voided: bool = False
 
 
 class ExpenseUpdate(BaseModel):
@@ -118,6 +155,10 @@ class ExpenseUpdate(BaseModel):
     vendor_name: str | None = Field(default=None, max_length=200)
     invoice_no: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
+
+
+class ExpenseVoid(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
 
 
 class ManualCollectionCreate(BaseModel):
@@ -184,6 +225,42 @@ class TipPayoutRead(BaseModel):
     voided_at: datetime | None
     voided_by: UUID | None
     voided_by_name: str | None = None
+    void_reason: str | None
+    is_voided: bool
+
+
+class SupplierPaymentCreate(BaseModel):
+    branch_id: UUID
+    supplier_id: UUID
+    grn_id: UUID
+    amount_minor: int = Field(gt=0)
+    method: Literal["cash", "bank"]
+    paid_at: datetime
+    payment_reference: str = Field(min_length=1, max_length=160)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class SupplierPaymentVoid(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class SupplierPaymentRead(BaseModel):
+    id: UUID
+    company_id: UUID
+    branch_id: UUID
+    supplier_id: UUID
+    grn_id: UUID
+    journal_entry_id: UUID
+    amount_minor: int
+    method: str
+    paid_at: datetime
+    payment_reference: str
+    note: str | None
+    idempotency_key: str
+    created_by: UUID
+    created_at: datetime
+    voided_at: datetime | None
+    voided_by: UUID | None
     void_reason: str | None
     is_voided: bool
 
@@ -283,14 +360,70 @@ class DistributablePartnerShare(BaseModel):
     distributable_share_minor: int  # this partner's slice of safe_to_distribute_minor
 
 
+class CashPositionRead(BaseModel):
+    """Named ledger balances; clients must not infer spendability from rails."""
+
+    cash_on_hand_minor: int
+    bank_balance_minor: int
+    spendable_cash_bank_minor: int
+    card_clearing_minor: int
+    upi_qr_clearing_minor: int
+    wallet_clearing_minor: int
+    pos_settlement_clearing_minor: int
+    settlement_receivables_minor: int
+    historical_funds_pending_reconciliation_minor: int
+    unreconciled_settlement_minor: int
+    reconciliation_only_minor: int
+
+
+def _cash_position_from_ledger(
+    ledger_lines: list[LedgerLine],
+) -> tuple[CashPositionRead, int]:
+    """Return authoritative spendable/clearing balances and the legacy total."""
+    balances_by_code: dict[str, int] = {}
+    for line in ledger_lines:
+        balances_by_code[line.account_code] = (
+            balances_by_code.get(line.account_code, 0)
+            + line.debit_minor
+            - line.credit_minor
+        )
+
+    def balance(account_code: str) -> int:
+        return balances_by_code.get(account_code, 0)
+
+    position = CashPositionRead(
+        cash_on_hand_minor=balance("1000"),
+        bank_balance_minor=balance("1010"),
+        spendable_cash_bank_minor=sum(
+            balance(code) for code in SPENDABLE_CASH_ACCOUNT_CODES
+        ),
+        card_clearing_minor=balance("1100"),
+        upi_qr_clearing_minor=balance("1110"),
+        wallet_clearing_minor=balance("1120"),
+        pos_settlement_clearing_minor=balance("1210"),
+        settlement_receivables_minor=sum(
+            balance(code) for code in SETTLEMENT_RECEIVABLE_ACCOUNT_CODES
+        ),
+        historical_funds_pending_reconciliation_minor=balance("1185"),
+        unreconciled_settlement_minor=balance("1190"),
+        reconciliation_only_minor=sum(
+            balance(code) for code in RECONCILIATION_ACCOUNT_CODES
+        ),
+    )
+    legacy_liquid_cash_minor = sum(
+        balance(code) for code in LEGACY_LIQUID_CASH_ACCOUNT_CODES
+    )
+    return position, legacy_liquid_cash_minor
+
+
 class DistributableProfitReport(BaseModel):
     """How much the partners can safely take out right now, not just this period's paper profit.
 
     Two independent caps, the SAFE number is whichever is smaller:
       - profit-based: all-time real profit, minus everything ever withdrawn, minus a reserve
-      - cash-based: actual cash/bank/UPI balance on hand, minus the same reserve
+      - cash-based: till cash plus posted bank balance, minus the same reserve
     The cash cap exists because profit on paper and cash in hand aren't the
-    same thing once money is tied up in stock or equipment — a partner should
+    same thing once money is tied up in stock, equipment, or provider clearing — a partner should
     never be told they can withdraw money that doesn't actually exist as cash.
     """
 
@@ -301,7 +434,11 @@ class DistributableProfitReport(BaseModel):
     reserve_months: int
     avg_monthly_cost_minor: int  # trailing 90-day average of (cost of goods sold + running expenses)
     reserve_minor: int
-    liquid_cash_minor: int  # cash + bank + UPI/QR clearing, right now
+    # Deprecated compatibility value: cash + bank + UPI/QR clearing. It is
+    # disclosed but never used for safe distribution capacity.
+    liquid_cash_minor: int
+    spendable_cash_bank_minor: int
+    cash_position: CashPositionRead
     profit_based_capacity_minor: int
     cash_based_capacity_minor: int
     safe_to_distribute_minor: int
@@ -367,6 +504,11 @@ async def _validate_expense_references(
     category = await session.get(ExpenseCategory, category_id)
     if not category or category.company_id != company_id:
         raise NotFoundError("expense category not found")
+    canonical_account = ACCOUNT_BY_CODE.get(getattr(category, "code", None) or "")
+    if canonical_account is not None and canonical_account.type != "expense":
+        raise BusinessRuleError(
+            f"expense category uses non-expense account code {canonical_account.code}"
+        )
     if supplier_id is not None:
         supplier = await session.get(Supplier, supplier_id)
         if not supplier or supplier.company_id != company_id or supplier.deleted_at:
@@ -406,6 +548,52 @@ def _scope_to_tenant_branch(
     return stmt
 
 
+def _require_company_wide_finance(tenant: TenantContext, *, subject: str) -> None:
+    """Reject branch-bound access to facts that have no branch attribution.
+
+    Partner ownership, capital movements and distributable cash are company
+    facts.  Pretending they are branch facts would either leak the other
+    branches or produce a financially meaningless partial distribution.  A
+    caller needs an owner, partner or auditor identity (or the protected-owner
+    claim) to read or mutate them. Operational managers remain branch-scoped.
+    """
+
+    # Auth deliberately attaches a default operational branch even when a
+    # UserRole has branch_id=NULL, so absence of a token branch is not a
+    # usable company-scope signal. Use only server-issued, security-sensitive
+    # identities here. Managers retain branch operational finance, but cannot
+    # read ownership/capital/distribution facts from the whole company.
+    if not (
+        tenant.protected_access
+        or COMPANY_WIDE_FINANCE_ROLES.intersection(tenant.roles)
+    ):
+        raise ForbiddenError(
+            f"{subject} is company-wide and requires company-wide finance access"
+        )
+
+
+def _authoritative_partner_weights(partners: list[Partner]) -> list[Decimal]:
+    """Return ownership weights only when their displayed percentages are true.
+
+    ``apportion`` intentionally normalizes arbitrary weights. That behaviour is
+    useful generally, but using it on incomplete/contradictory ``share_pct``
+    rows would allocate 100% while presenting a different ownership total.
+    Partner allocations therefore fail closed until configured shares total
+    exactly 100%; partner setup/listing remains available for reconciliation.
+    """
+
+    weights = [Decimal(str(partner.share_pct)) for partner in partners]
+    configured_total = sum(weights, start=Decimal(0))
+    if not weights or configured_total != Decimal(100):
+        configured = format(configured_total.normalize(), "f")
+        raise BusinessRuleError(
+            "Partner ownership shares total "
+            f"{configured}%, not 100%. Owner reconciliation is required before "
+            "profit or distribution allocations are authoritative."
+        )
+    return weights
+
+
 @router.get("/branches", response_model=list[FinanceBranchRead])
 async def list_finance_branches(
     session: SessionDep,
@@ -425,6 +613,25 @@ async def list_finance_branches(
 # ============================================================================
 # EXPENSES
 # ============================================================================
+def _expense_read(row: Expense) -> ExpenseRead:
+    return ExpenseRead(
+        id=row.id,
+        branch_id=row.branch_id,
+        category_id=row.category_id,
+        supplier_id=row.supplier_id,
+        amount_minor=int(row.amount_minor),
+        paid_via=row.paid_via,
+        paid_at=row.paid_at,
+        vendor_name=row.vendor_name,
+        invoice_no=row.invoice_no,
+        note=row.note,
+        voided_at=row.voided_at,
+        voided_by=row.voided_by,
+        void_reason=row.void_reason,
+        is_voided=row.voided_at is not None,
+    )
+
+
 @router.get("/expenses", response_model=list[ExpenseRead])
 async def list_expenses(
     session: SessionDep,
@@ -435,6 +642,7 @@ async def list_expenses(
     stmt = select(Expense).where(
         Expense.company_id == tenant.company_id,
         Expense.deleted_at.is_(None),
+        Expense.voided_at.is_(None),
     )
     stmt = _scope_to_tenant_branch(stmt, Expense.branch_id, tenant)
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -446,15 +654,7 @@ async def list_expenses(
         stmt = stmt.where(Expense.paid_at < to_exclusive)
     stmt = stmt.order_by(Expense.paid_at.desc())
     rows = (await session.execute(stmt)).scalars().all()
-    return [
-        ExpenseRead(
-            id=r.id, branch_id=r.branch_id, category_id=r.category_id,
-            supplier_id=r.supplier_id, amount_minor=r.amount_minor,
-            paid_via=r.paid_via, paid_at=r.paid_at, vendor_name=r.vendor_name,
-            invoice_no=r.invoice_no, note=r.note,
-        )
-        for r in rows
-    ]
+    return [_expense_read(row) for row in rows]
 
 
 def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
@@ -508,12 +708,7 @@ async def create_expense(
     )
     session.add(ex)
     await session.flush()
-    response = ExpenseRead(
-        id=ex.id, branch_id=ex.branch_id, category_id=ex.category_id,
-        supplier_id=ex.supplier_id, amount_minor=ex.amount_minor,
-        paid_via=ex.paid_via, paid_at=ex.paid_at, vendor_name=ex.vendor_name,
-        invoice_no=ex.invoice_no, note=ex.note,
-    )
+    response = _expense_read(ex)
     await store_response(
         session,
         key=idempotency_key,
@@ -538,24 +733,70 @@ async def update_expense(
         or not tenant.in_branch(ex.branch_id)
     ):
         raise NotFoundError("expense not found")
-    next_category_id = payload.category_id or ex.category_id
-    await _validate_expense_references(
-        session,
-        company_id=tenant.company_id,
-        branch_id=ex.branch_id,
-        category_id=next_category_id,
-        supplier_id=ex.supplier_id,
-        ocr_extraction_id=ex.ocr_extraction_id,
+    raise BusinessRuleError(
+        "posted expenses are immutable; void this expense and create a corrected replacement"
     )
-    for f, v in payload.model_dump(exclude_unset=True).items():
-        setattr(ex, f, v)
+
+
+async def _void_expense(
+    *,
+    expense_id: UUID,
+    reason: str,
+    session: SessionDep,
+    tenant: TenantContext,
+) -> Expense:
+    probe = await session.get(Expense, expense_id)
+    if (
+        probe is None
+        or probe.company_id != tenant.company_id
+        or probe.deleted_at is not None
+        or not tenant.in_branch(probe.branch_id)
+    ):
+        raise NotFoundError("expense not found")
+    row = (
+        await session.execute(
+            select(Expense)
+            .where(
+                Expense.id == expense_id,
+                Expense.company_id == tenant.company_id,
+                Expense.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None or not tenant.in_branch(row.branch_id):
+        raise NotFoundError("expense not found")
+
+    normalized_reason = reason.strip()
+    if len(normalized_reason) < 3:
+        raise BusinessRuleError("void reason must contain at least 3 characters")
+    if row.voided_at is not None:
+        if row.void_reason != normalized_reason:
+            raise BusinessRuleError("expense is already voided with a different reason")
+        return row
+
+    row.voided_at = datetime.now(timezone.utc)
+    row.voided_by = tenant.user_id
+    row.void_reason = normalized_reason
+    row.source_integrity_revision = 50
     await session.flush()
-    return ExpenseRead(
-        id=ex.id, branch_id=ex.branch_id, category_id=ex.category_id,
-        supplier_id=ex.supplier_id, amount_minor=ex.amount_minor,
-        paid_via=ex.paid_via, paid_at=ex.paid_at, vendor_name=ex.vendor_name,
-        invoice_no=ex.invoice_no, note=ex.note,
+    return row
+
+
+@router.post("/expenses/{expense_id}/void", response_model=ExpenseRead)
+async def void_expense(
+    expense_id: UUID,
+    payload: ExpenseVoid,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> ExpenseRead:
+    row = await _void_expense(
+        expense_id=expense_id,
+        reason=payload.reason,
+        session=session,
+        tenant=tenant,
     )
+    return _expense_read(row)
 
 
 @router.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -564,16 +805,16 @@ async def delete_expense(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ):
-    ex = await session.get(Expense, expense_id)
-    if (
-        not ex
-        or ex.company_id != tenant.company_id
-        or ex.deleted_at
-        or not tenant.in_branch(ex.branch_id)
-    ):
-        raise NotFoundError("expense not found")
-    ex.deleted_at = datetime.now(timezone.utc)
-    await session.flush()
+    # Backwards compatibility for deployed web/iOS clients. This no longer
+    # deletes or hides a source fact without provenance: it performs the same
+    # one-way void as the explicit endpoint. New clients should collect a user
+    # reason and call POST /expenses/{id}/void.
+    await _void_expense(
+        expense_id=expense_id,
+        reason="Voided through legacy expense delete action",
+        session=session,
+        tenant=tenant,
+    )
 
 
 # ============================================================================
@@ -1110,6 +1351,344 @@ async def void_tip_payout(
 
 
 # ============================================================================
+# SUPPLIER PAYMENTS / ACCOUNTS PAYABLE SETTLEMENT
+# ============================================================================
+def _supplier_payment_read(row: SupplierPayment) -> SupplierPaymentRead:
+    return SupplierPaymentRead(
+        id=row.id,
+        company_id=row.company_id,
+        branch_id=row.branch_id,
+        supplier_id=row.supplier_id,
+        grn_id=row.grn_id,
+        journal_entry_id=row.journal_entry_id,
+        amount_minor=int(row.amount_minor),
+        method=row.method,
+        paid_at=row.paid_at,
+        payment_reference=row.payment_reference,
+        note=row.note,
+        idempotency_key=row.idempotency_key,
+        created_by=row.created_by,
+        created_at=row.created_at,
+        voided_at=row.voided_at,
+        voided_by=row.voided_by,
+        void_reason=row.void_reason,
+        is_voided=row.voided_at is not None,
+    )
+
+
+async def _grn_accounting_total_minor(session: SessionDep, grn: GRN) -> int:
+    lines = (
+        await session.execute(
+            select(GRNLine)
+            .where(GRNLine.grn_id == grn.id)
+            .order_by(GRNLine.created_at, GRNLine.id)
+        )
+    ).scalars().all()
+    if not lines:
+        raise BusinessRuleError("GRN has no received lines; supplier payment is blocked")
+    total_minor = sum(
+        received_line_total_minor(line.qty_received, line.cost_per_unit_minor)
+        for line in lines
+    )
+    require_invoice_matches_capitalised_total(
+        supplier_invoice_amount_minor=grn.supplier_invoice_amount_minor,
+        capitalised_total_minor=total_minor,
+    )
+    return total_minor
+
+
+@router.get("/supplier-payments", response_model=list[SupplierPaymentRead])
+async def list_supplier_payments(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.read")),
+    branch_id: UUID | None = None,
+    grn_id: UUID | None = None,
+    supplier_id: UUID | None = None,
+    include_voided: bool = True,
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[SupplierPaymentRead]:
+    scoped_branch_id = branch_id or tenant.branch_id
+    if scoped_branch_id is not None:
+        if not tenant.in_branch(scoped_branch_id):
+            raise NotFoundError("branch not found")
+        branch = await session.get(Branch, scoped_branch_id)
+        if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
+            raise NotFoundError("branch not found")
+
+    stmt = select(SupplierPayment).where(
+        SupplierPayment.company_id == tenant.company_id
+    )
+    if scoped_branch_id is not None:
+        stmt = stmt.where(SupplierPayment.branch_id == scoped_branch_id)
+    if grn_id is not None:
+        stmt = stmt.where(SupplierPayment.grn_id == grn_id)
+    if supplier_id is not None:
+        stmt = stmt.where(SupplierPayment.supplier_id == supplier_id)
+    if not include_voided:
+        stmt = stmt.where(SupplierPayment.voided_at.is_(None))
+    rows = (
+        await session.execute(
+            stmt.order_by(
+                SupplierPayment.paid_at.desc(),
+                SupplierPayment.created_at.desc(),
+                SupplierPayment.id.desc(),
+            ).limit(limit)
+        )
+    ).scalars().all()
+    return [_supplier_payment_read(row) for row in rows]
+
+
+@router.post(
+    "/supplier-payments",
+    response_model=SupplierPaymentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_supplier_payment(
+    payload: SupplierPaymentCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> SupplierPaymentRead:
+    """Settle part or all of one GRN's Accounts Payable balance.
+
+    Locking the GRN serializes every payment for that receipt. Concurrent
+    requests with different idempotency keys cannot both observe the same AP
+    balance and overpay it; replay with the same key returns the durable source
+    row even if the generic response cache has been pruned.
+    """
+
+    idempotency_key, request_hash = _require_idempotency(
+        request, what="supplier payment"
+    )
+    # Canonical lock hierarchy for every supplier-payment path is GRN(s), then
+    # SupplierPayment. Probe replay identity without a row lock, lock the
+    # sorted source set, and only then lock/read the settlement row. This also
+    # handles an idempotency-key conflict whose stored GRN differs from the
+    # request without deadlocking a concurrent void (which locks GRN -> row).
+    replay_grn_id = (
+        await session.execute(
+            select(SupplierPayment.grn_id).where(
+                SupplierPayment.company_id == tenant.company_id,
+                SupplierPayment.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    grn_ids_to_lock = sorted(
+        {payload.grn_id, *([replay_grn_id] if replay_grn_id is not None else [])},
+        key=str,
+    )
+    await session.execute(
+        select(GRN.id)
+        .join(PurchaseOrder, PurchaseOrder.id == GRN.purchase_order_id)
+        .where(
+            GRN.id.in_(grn_ids_to_lock),
+            PurchaseOrder.company_id == tenant.company_id,
+        )
+        .order_by(GRN.id)
+        .with_for_update(of=GRN)
+    )
+    durable_replay = (
+        await session.execute(
+            select(SupplierPayment)
+            .where(
+                SupplierPayment.company_id == tenant.company_id,
+                SupplierPayment.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if durable_replay is not None:
+        if (
+            durable_replay.request_hash != request_hash
+            or durable_replay.created_by != tenant.user_id
+        ):
+            raise IdempotencyConflict(
+                "Idempotency-Key reused with different supplier payment payload or actor",
+                details={"key": idempotency_key},
+            )
+        return _supplier_payment_read(durable_replay)
+
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=None,
+    )
+    if replay:
+        return SupplierPaymentRead.model_validate(replay["body"])
+
+    if not tenant.in_branch(payload.branch_id):
+        raise NotFoundError("branch not found")
+    if payload.paid_at.tzinfo is None or payload.paid_at.utcoffset() is None:
+        raise BusinessRuleError("supplier payment paid_at must include a timezone")
+
+    source = (
+        await session.execute(
+            select(GRN, PurchaseOrder, Supplier)
+            .join(PurchaseOrder, PurchaseOrder.id == GRN.purchase_order_id)
+            .join(Supplier, Supplier.id == PurchaseOrder.supplier_id)
+            .where(GRN.id == payload.grn_id)
+        )
+    ).one_or_none()
+    if source is None:
+        raise NotFoundError("GRN not found")
+    grn, purchase_order, supplier = source
+    if (
+        purchase_order.company_id != tenant.company_id
+        or purchase_order.branch_id != payload.branch_id
+        or purchase_order.supplier_id != payload.supplier_id
+        or supplier.company_id != tenant.company_id
+        or supplier.deleted_at is not None
+    ):
+        raise NotFoundError("GRN not found")
+    if payload.paid_at < grn.received_at:
+        raise BusinessRuleError("supplier payment cannot predate the GRN receipt")
+
+    receipt_total_minor = await _grn_accounting_total_minor(session, grn)
+    if receipt_total_minor <= 0 or grn.journal_entry_id is None:
+        raise BusinessRuleError("this GRN has no posted Accounts Payable balance")
+    paid_minor = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(SupplierPayment.amount_minor), 0)).where(
+                    SupplierPayment.company_id == tenant.company_id,
+                    SupplierPayment.grn_id == grn.id,
+                    SupplierPayment.voided_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    outstanding_minor = receipt_total_minor - paid_minor
+    if outstanding_minor <= 0:
+        raise BusinessRuleError("this GRN is already fully paid")
+    if payload.amount_minor > outstanding_minor:
+        raise BusinessRuleError(
+            f"supplier payment exceeds the outstanding Accounts Payable balance "
+            f"of {outstanding_minor} minor units"
+        )
+
+    payment_id = uuid4()
+    reference = payload.payment_reference.strip()
+    if not reference:
+        raise BusinessRuleError("supplier payment reference cannot be blank")
+    note = payload.note.strip() if payload.note else None
+    journal = await post_two_sided_operational_journal(
+        session,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        ref_type="supplier_payment",
+        ref_id=payment_id,
+        posted_at=payload.paid_at,
+        amount_minor=payload.amount_minor,
+        debit_account=ACCOUNTS_PAYABLE,
+        credit_account=CASH if payload.method == "cash" else BANK,
+        memo=f"Supplier payment {reference}",
+    )
+    if journal is None:  # payload validation already rejects zero; fail closed if drifted.
+        raise BusinessRuleError("supplier payment did not create a journal")
+    row = SupplierPayment(
+        id=payment_id,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        supplier_id=payload.supplier_id,
+        grn_id=payload.grn_id,
+        journal_entry_id=journal.id,
+        amount_minor=payload.amount_minor,
+        method=payload.method,
+        paid_at=payload.paid_at,
+        payment_reference=reference,
+        note=note,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        created_by=tenant.user_id,
+    )
+    session.add(row)
+    await session.flush()
+    response = _supplier_payment_read(row)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.post(
+    "/supplier-payments/{payment_id}/void",
+    response_model=SupplierPaymentRead,
+)
+async def void_supplier_payment(
+    payment_id: UUID,
+    payload: SupplierPaymentVoid,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("finance.write")),
+) -> SupplierPaymentRead:
+    probe = (
+        await session.execute(
+            select(SupplierPayment.grn_id).where(
+                SupplierPayment.id == payment_id,
+                SupplierPayment.company_id == tenant.company_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if probe is None:
+        raise NotFoundError("supplier payment not found")
+    # Match create's lock hierarchy: GRN first, then its settlement source.
+    await session.execute(select(GRN.id).where(GRN.id == probe).with_for_update())
+    row = (
+        await session.execute(
+            select(SupplierPayment)
+            .where(
+                SupplierPayment.id == payment_id,
+                SupplierPayment.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None or not tenant.in_branch(row.branch_id):
+        raise NotFoundError("supplier payment not found")
+
+    reason = payload.reason.strip()
+    if row.voided_at is not None:
+        if row.void_reason != reason:
+            raise BusinessRuleError(
+                "supplier payment is already voided with a different reason"
+            )
+        return _supplier_payment_read(row)
+
+    journal = (
+        await session.execute(
+            select(JournalEntry)
+            .where(
+                JournalEntry.id == row.journal_entry_id,
+                JournalEntry.company_id == tenant.company_id,
+                JournalEntry.branch_id == row.branch_id,
+                JournalEntry.ref_type == "supplier_payment",
+                JournalEntry.ref_id == row.id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if journal is None or journal.voided_at is not None:
+        raise BusinessRuleError(
+            "supplier payment journal is missing or already changed; owner reconciliation required"
+        )
+
+    voided_at = datetime.now(timezone.utc)
+    row.voided_at = voided_at
+    row.voided_by = tenant.user_id
+    row.void_reason = reason
+    journal.voided_at = voided_at
+    journal.voided_by = tenant.user_id
+    journal.void_reason = reason
+    await session.flush()
+    return _supplier_payment_read(row)
+
+
+# ============================================================================
 # PARTNERS
 # ============================================================================
 async def _partner_balance(session, partner_id: UUID) -> int:
@@ -1166,6 +1745,7 @@ async def list_partners(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.read")),
 ) -> list[PartnerRead]:
+    _require_company_wide_finance(tenant, subject="Partner records")
     rows = (
         await session.execute(
             select(Partner).where(Partner.company_id == tenant.company_id)
@@ -1189,14 +1769,49 @@ async def create_partner(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.partner.write")),
 ) -> PartnerRead:
+    _require_company_wide_finance(tenant, subject="Partner records")
+    # The database trigger repeats this company lock and aggregate invariant
+    # for native/bulk writers. Lock here as well for a deterministic API error.
+    company = (
+        await session.execute(
+            select(Company)
+            .where(Company.id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company is None or company.deleted_at is not None:
+        raise NotFoundError("company not found")
     if payload.user_id is not None:
         user = await session.get(User, payload.user_id)
         if not user or user.company_id != tenant.company_id or user.deleted_at:
             raise NotFoundError("user not found")
+    existing_share_total = Decimal(
+        str(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Partner.share_pct), 0)).where(
+                        Partner.company_id == tenant.company_id
+                    )
+                )
+            ).scalar_one()
+        )
+    )
+    requested_share = Decimal(str(payload.share_pct))
+    if existing_share_total + requested_share > Decimal(100):
+        configured = format(existing_share_total.normalize(), "f")
+        raise BusinessRuleError(
+            f"Partner ownership shares already total {configured}%; adding "
+            f"{format(requested_share.normalize(), 'f')}% would exceed 100%."
+        )
+    name = payload.name.strip()
+    if not name:
+        raise BusinessRuleError("partner name cannot be blank")
+    values = payload.model_dump()
+    values["name"] = name
     p = Partner(
         id=uuid4(),
         company_id=tenant.company_id,
-        **payload.model_dump(),
+        **values,
     )
     session.add(p)
     await session.flush()
@@ -1213,11 +1828,19 @@ async def update_partner(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.partner.write")),
 ) -> PartnerRead:
+    _require_company_wide_finance(tenant, subject="Partner records")
     p = await session.get(Partner, partner_id)
     if not p or p.company_id != tenant.company_id:
         raise NotFoundError("partner not found")
-    for f, v in payload.model_dump(exclude_unset=True).items():
-        setattr(p, f, v)
+    changes = payload.model_dump(exclude_unset=True)
+    if {"name", "share_pct"}.intersection(changes):
+        raise BusinessRuleError(
+            "Partner name and ownership share are immutable after creation. "
+            "Owner reconciliation is required; this ERP does not yet support "
+            "effective-dated ownership amendments."
+        )
+    if "notes" in changes:
+        p.notes = changes["notes"]
     await session.flush()
     return PartnerRead(
         id=p.id, name=p.name, share_pct=float(p.share_pct), joined_at=p.joined_at,
@@ -1233,6 +1856,7 @@ async def list_capital_entries(
     tenant: TenantContext = Depends(requires("finance.read")),
     include_voided: bool = True,
 ) -> list[CapitalEntryRead]:
+    _require_company_wide_finance(tenant, subject="Partner capital")
     p = await session.get(Partner, partner_id)
     if not p or p.company_id != tenant.company_id:
         raise NotFoundError("partner not found")
@@ -1275,6 +1899,7 @@ async def create_capital_entry(
     request: Request,
     tenant: TenantContext = Depends(requires("finance.partner.write")),
 ) -> CapitalEntryRead:
+    _require_company_wide_finance(tenant, subject="Partner capital")
     idempotency_key, request_hash = _require_idempotency(request, what="capital entry")
     replay = await check_or_reserve(
         session,
@@ -1364,6 +1989,7 @@ async def void_capital_entry(
     tenant: TenantContext = Depends(requires("finance.partner.write")),
 ) -> CapitalEntryRead:
     """Void an investment/withdrawal without destroying its audit trail."""
+    _require_company_wide_finance(tenant, subject="Partner capital")
     row = (
         await session.execute(
             select(CapitalEntry)
@@ -1466,6 +2092,7 @@ async def create_asset(
     a = Asset(
         id=uuid4(),
         company_id=tenant.company_id,
+        source_integrity_revision=50,
         # Only straight_line is computable today (see
         # app/services/accounting/depreciation.py); the create form has no
         # method picker yet, so every asset is explicitly straight_line
@@ -1508,6 +2135,7 @@ async def profit_loss(
         period_end=period_end,
         period="custom",
         label=f"{period_start.isoformat()} to {period_end.isoformat()}",
+        branch_id=tenant.branch_id,
     )
     return PLReport(
         accounting_basis="operational_receipt",
@@ -1537,6 +2165,7 @@ async def partner_profit_split(
     number. A negative net_profit_minor still splits by share_pct (each
     partner absorbs their share of a loss), same formula either way.
     """
+    _require_company_wide_finance(tenant, subject="Partner profit allocation")
     timezone_name = await company_timezone(session, tenant.company_id)
     today = local_today(timezone_name)
     period_start = period_start or today.replace(day=1)
@@ -1557,7 +2186,10 @@ async def partner_profit_split(
             .order_by(Partner.name)
         )
     ).scalars().all()
-    shares = apportion(report.net_profit_minor, [p.share_pct for p in partners])
+    shares = apportion(
+        report.net_profit_minor,
+        _authoritative_partner_weights(partners),
+    )
     return PartnerPLReport(
         period_start=period_start,
         period_end=period_end,
@@ -1587,8 +2219,9 @@ async def distributable_profit(
     every withdrawal ever taken, minus a reserve sized off real recent
     running costs — then capped by actual liquid cash on hand, since profit
     on the books and cash in the bank are not the same thing once money is
-    tied up in stock or equipment.
+    tied up in stock, equipment, or provider settlement receivables.
     """
+    _require_company_wide_finance(tenant, subject="Partner distribution capacity")
     timezone_name = await company_timezone(session, tenant.company_id)
     today = local_today(timezone_name)
     # A fixed early sentinel date reliably predates any real company's first
@@ -1639,10 +2272,8 @@ async def distributable_profit(
     ledger_lines = await build_operational_ledger(
         session, company_id=tenant.company_id, end_exclusive=end_exclusive
     )
-    liquid_cash_minor = sum(
-        line.debit_minor - line.credit_minor
-        for line in ledger_lines
-        if line.account_code in LIQUID_CASH_ACCOUNT_CODES
+    cash_position, legacy_liquid_cash_minor = _cash_position_from_ledger(
+        ledger_lines
     )
 
     capacity = compute_distributable_capacity(
@@ -1650,11 +2281,11 @@ async def distributable_profit(
         lifetime_withdrawn_minor=lifetime_withdrawn_minor,
         avg_monthly_cost_minor=avg_monthly_cost_minor,
         reserve_months=DISTRIBUTION_RESERVE_MONTHS,
-        liquid_cash_minor=liquid_cash_minor,
+        liquid_cash_minor=cash_position.spendable_cash_bank_minor,
     )
     shares = apportion(
         capacity.safe_to_distribute_minor,
-        [p.share_pct for p in partners],
+        _authoritative_partner_weights(partners),
     )
 
     return DistributableProfitReport(
@@ -1665,7 +2296,9 @@ async def distributable_profit(
         reserve_months=DISTRIBUTION_RESERVE_MONTHS,
         avg_monthly_cost_minor=avg_monthly_cost_minor,
         reserve_minor=capacity.reserve_minor,
-        liquid_cash_minor=liquid_cash_minor,
+        liquid_cash_minor=legacy_liquid_cash_minor,
+        spendable_cash_bank_minor=cash_position.spendable_cash_bank_minor,
+        cash_position=cash_position,
         profit_based_capacity_minor=capacity.profit_based_capacity_minor,
         cash_based_capacity_minor=capacity.cash_based_capacity_minor,
         safe_to_distribute_minor=capacity.safe_to_distribute_minor,
@@ -1708,6 +2341,7 @@ async def business_metrics(
         period_end=period_end,
         period="custom",
         label=f"{period_start.isoformat()} to {period_end.isoformat()}",
+        branch_id=tenant.branch_id,
     )
 
     # Active members follow the current entitlement state, including legacy
@@ -1737,6 +2371,11 @@ async def business_metrics(
                 CustomerMembership.starts_at <= now,
                 CustomerMembership.expires_at > now,
                 CustomerMembership.revoked_at.is_(None),
+                *(
+                    (MembershipPayment.branch_id == tenant.branch_id,)
+                    if tenant.branch_id is not None
+                    else ()
+                ),
             )
         )
     ).all()
@@ -1762,7 +2401,13 @@ async def business_metrics(
                 .join(ExpenseCategory, ExpenseCategory.id == Expense.category_id)
                 .where(
                     Expense.company_id == tenant.company_id,
+                    *(
+                        (Expense.branch_id == tenant.branch_id,)
+                        if tenant.branch_id is not None
+                        else ()
+                    ),
                     Expense.deleted_at.is_(None),
+                    Expense.voided_at.is_(None),
                     ExpenseCategory.name == "Marketing",
                     Expense.paid_at >= period_start_at,
                     Expense.paid_at < period_end_exclusive,
@@ -1770,28 +2415,73 @@ async def business_metrics(
             )
         ).scalar_one()
     )
+    new_customers_stmt = select(func.count(func.distinct(Customer.id))).where(
+        Customer.company_id == tenant.company_id,
+        Customer.deleted_at.is_(None),
+        Customer.first_visit_at >= period_start_at,
+        Customer.first_visit_at < period_end_exclusive,
+    )
+    if tenant.branch_id is not None:
+        # Customer has no branch column. Attribute a new customer to this
+        # branch only when it has a settled order here; never use another
+        # branch's order or company-wide total_spent projection.
+        new_customers_stmt = new_customers_stmt.join(
+            Order, Order.customer_id == Customer.id
+        ).where(
+            Order.company_id == tenant.company_id,
+            Order.branch_id == tenant.branch_id,
+            Order.status.in_(("paid", "refunded")),
+        )
     new_customers_count = int(
-        (
-            await session.execute(
-                select(func.count(Customer.id)).where(
-                    Customer.company_id == tenant.company_id,
-                    Customer.deleted_at.is_(None),
-                    Customer.first_visit_at >= period_start_at,
-                    Customer.first_visit_at < period_end_exclusive,
-                )
-            )
-        ).scalar_one()
+        (await session.execute(new_customers_stmt)).scalar_one()
     )
 
-    # LTV is all-time by definition, never period-scoped.
-    customers_count_raw, total_spend_raw = (
-        await session.execute(
-            select(
-                func.count(Customer.id),
-                func.coalesce(func.sum(Customer.total_spent_minor), 0),
-            ).where(Customer.company_id == tenant.company_id, Customer.deleted_at.is_(None))
+    # LTV is all-time by definition, never period-scoped.  The denormalised
+    # Customer.total_spent_minor is company-wide, so a branch-bound caller
+    # must derive its numerator and denominator from that branch's immutable
+    # orders/refunds rather than leaking the customer's other-branch spend.
+    if tenant.branch_id is None:
+        customers_count_raw, total_spend_raw = (
+            await session.execute(
+                select(
+                    func.count(Customer.id),
+                    func.coalesce(func.sum(Customer.total_spent_minor), 0),
+                ).where(
+                    Customer.company_id == tenant.company_id,
+                    Customer.deleted_at.is_(None),
+                )
+            )
+        ).one()
+    else:
+        customers_count_raw, gross_customer_spend = (
+            await session.execute(
+                select(
+                    func.count(func.distinct(Order.customer_id)),
+                    func.coalesce(func.sum(Order.total_minor), 0),
+                ).where(
+                    Order.company_id == tenant.company_id,
+                    Order.branch_id == tenant.branch_id,
+                    Order.customer_id.is_not(None),
+                    Order.status.in_(("paid", "refunded")),
+                )
+            )
+        ).one()
+        refunded_customer_spend = int(
+            (
+                await session.execute(
+                    select(func.coalesce(func.sum(Refund.amount_minor), 0))
+                    .select_from(Refund)
+                    .join(Order, Order.id == Refund.order_id)
+                    .where(
+                        Order.company_id == tenant.company_id,
+                        Order.branch_id == tenant.branch_id,
+                        Order.customer_id.is_not(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
         )
-    ).one()
+        total_spend_raw = max(0, int(gross_customer_spend) - refunded_customer_spend)
 
     metrics = compute_business_metrics(
         net_revenue_minor=report.net_revenue_minor,

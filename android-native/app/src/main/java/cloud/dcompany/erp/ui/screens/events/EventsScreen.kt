@@ -766,8 +766,14 @@ private fun SellTicketsDialog(event: Event, state: EventsUiState, vm: EventsView
             label = { Text("Customer name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
-            value = customerPhone, onValueChange = { customerPhone = it },
+            value = customerPhone,
+            onValueChange = {
+                customerPhone = it.filter { character ->
+                    character.isDigit() || character == '+'
+                }.take(20)
+            },
             label = { Text("Phone (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
         )
         OutlinedTextField(
             value = seat, onValueChange = { seat = it },

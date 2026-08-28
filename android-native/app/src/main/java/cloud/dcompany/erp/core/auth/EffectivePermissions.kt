@@ -64,6 +64,8 @@ data class MenuAccess(val canManageMenu: Boolean = false)
 data class InventoryAccess(
     val canManageInventory: Boolean = false,
     val canMakeLargeAdjustment: Boolean = false,
+    /** Initial Android rollout: recipe/BOM changes are protected-owner only. */
+    val canManageCosting: Boolean = false,
 )
 data class FinanceAccess(
     val canRecordExpenses: Boolean = false,
@@ -153,6 +155,7 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
     fun inventoryAccess() = InventoryAccess(
         canManageInventory = has(ErpPermission.InventoryWrite),
         canMakeLargeAdjustment = has(ErpPermission.InventoryAdjustLarge),
+        canManageCosting = has(ErpPermission.InventoryWrite) && has(ErpPermission.AdminSystem),
     )
 
     fun financeAccess() = FinanceAccess(

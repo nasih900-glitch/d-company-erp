@@ -5,6 +5,8 @@ import cloud.dcompany.erp.core.db.CafeActionState
 import cloud.dcompany.erp.core.db.CafeBillCacheEntity
 import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
+import cloud.dcompany.erp.core.net.OrderModifierSnapshot
+import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 
 data class CafeBillLineProjection(
     val stableKey: String,
@@ -22,6 +24,8 @@ data class CafeBillLineProjection(
     val voided: Boolean,
     val voidReason: String?,
     val kitchenCancellationPending: Boolean,
+    val variantSnapshot: OrderVariantSnapshot? = null,
+    val modifiers: List<OrderModifierSnapshot> = emptyList(),
 )
 
 data class CafeBillProjection(
@@ -98,6 +102,8 @@ internal fun projectCafeBills(
                         voided = false,
                         voidReason = null,
                         kitchenCancellationPending = false,
+                        variantSnapshot = line.variantSnapshot,
+                        modifiers = line.modifiers,
                     ),
                 )
             }
@@ -120,6 +126,8 @@ internal fun projectCafeBills(
                         voidReason = line.voidReason,
                         kitchenCancellationPending = line.kitchenReleasedAt != null &&
                             line.kitchenVoidAcknowledgedAt == null,
+                        variantSnapshot = line.variantSnapshot,
+                        modifiers = line.modifiers,
                     ),
                 )
             }
@@ -150,6 +158,25 @@ internal fun projectCafeBills(
                             voided = false,
                             voidReason = null,
                             kitchenCancellationPending = false,
+                            variantSnapshot = line.variantId?.let { variantId ->
+                                OrderVariantSnapshot(
+                                    variantId = variantId,
+                                    name = line.variantName.orEmpty(),
+                                    priceDeltaMinor = line.variantPriceDeltaMinor,
+                                    lineDeltaMinor = line.variantPriceDeltaMinor * line.qty,
+                                )
+                            },
+                            modifiers = line.modifiers.map { modifier ->
+                                OrderModifierSnapshot(
+                                    modifierId = modifier.modifierId,
+                                    modifierGroupId = modifier.modifierGroupId,
+                                    name = modifier.name,
+                                    qty = modifier.qty,
+                                    priceDeltaMinor = modifier.priceDeltaMinor,
+                                    perItemDeltaMinor = modifier.priceDeltaMinor * modifier.qty,
+                                    lineDeltaMinor = modifier.priceDeltaMinor * modifier.qty * line.qty,
+                                )
+                            },
                         )
                     }
                 }
@@ -174,6 +201,8 @@ internal fun projectCafeBills(
                                 voided = false,
                                 voidReason = null,
                                 kitchenCancellationPending = false,
+                                variantSnapshot = null,
+                                modifiers = emptyList(),
                             )
                         }
                     }

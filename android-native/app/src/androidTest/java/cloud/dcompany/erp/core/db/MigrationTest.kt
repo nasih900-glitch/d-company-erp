@@ -1815,4 +1815,256 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate30To31_preservesShiftCachesAndAddsPaymentRailBreakdown() {
+        helper.createDatabase(dbName, 30).apply {
+            execSQL(
+                "INSERT INTO server_open_shift_cache " +
+                    "(terminalId, serverShiftId, branchId, status, openingFloatMinor, " +
+                    "expectedMinor, posCollectionsMinor, membershipCollectionsMinor, " +
+                    "grossCollectionsMinor, openedAtMillis, verifiedAtMillis) VALUES " +
+                    "('terminal-1', 'shift-open', 'branch-1', 'open', 21000, 98300, " +
+                    "136300, 0, 136300, 1000, 2000)",
+            )
+            execSQL(
+                "INSERT INTO shift_history_cache " +
+                    "(id, branchId, terminalId, status, openedAtMillis, openingFloatMinor, " +
+                    "posSalesMinor, fetchedAtMillis) VALUES " +
+                    "('shift-old', 'branch-1', 'terminal-1', 'closed', 500, 10000, 25000, 2000)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 31, true, MIGRATION_30_31)
+        migrated.query(
+            "SELECT grossCollectionsMinor, cashCollectionsMinor, cardCollectionsMinor, " +
+                "upiCollectionsMinor, otherCollectionsMinor FROM server_open_shift_cache " +
+                "WHERE serverShiftId = 'shift-open'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(136300L, cursor.getLong(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+        }
+        migrated.query(
+            "SELECT posSalesMinor, cashCollectionsMinor, cardCollectionsMinor, " +
+                "upiCollectionsMinor, otherCollectionsMinor FROM shift_history_cache " +
+                "WHERE id = 'shift-old'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(25000L, cursor.getLong(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate31To32_preservesPreparedSaleAndAddsPointsAndCustomerHistory() {
+        helper.createDatabase(dbName, 31).apply {
+            execSQL(
+                "INSERT INTO local_orders " +
+                    "(localId, serverOrderId, shiftId, type, estimateMinor, serverTotalMinor, " +
+                    "checkoutClaimToken, checkoutVersion, paymentMethod, tenderedMinor, tipMinor, " +
+                    "createdAtMillis, updatedAtMillis, syncState, manualDiscountMinor, revision) " +
+                    "VALUES ('prepared-sale', 'server-order', 'shift-1', 'dine_in', 15000, 15000, " +
+                    "'claim-1', 7, '', 0, 0, 1000, 2000, 'draft', 0, 3)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 32, true, MIGRATION_31_32)
+        migrated.query(
+            "SELECT serverOrderId, serverTotalMinor, checkoutClaimToken, checkoutVersion, " +
+                "serverPointsRedeemedMinor, serverPointsRedeemed FROM local_orders " +
+                "WHERE localId = 'prepared-sale'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("server-order", cursor.getString(0))
+            assertEquals(15000L, cursor.getLong(1))
+            assertEquals("claim-1", cursor.getString(2))
+            assertEquals(7L, cursor.getLong(3))
+            assertTrue(cursor.isNull(4))
+            assertTrue(cursor.isNull(5))
+        }
+        migrated.query("SELECT COUNT(*) FROM customer_order_history_cache").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.execSQL(
+            "INSERT INTO customer_order_history_cache " +
+                "(id, customerId, status, type, totalMinor, paidMinor, refundedMinor, " +
+                "pointsRedeemedMinor, itemsCount, paymentMethods, createdAt) VALUES " +
+                "('order-1', 'customer-1', 'paid', 'dine_in', 14800, 14800, 0, 200, 1, " +
+                "'upi', '2026-08-27T19:00:00Z')",
+        )
+        migrated.query(
+            "SELECT customerId, pointsRedeemedMinor FROM customer_order_history_cache " +
+                "WHERE id = 'order-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("customer-1", cursor.getString(0))
+            assertEquals(200L, cursor.getLong(1))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate32To33_preservesInventoryAndFreezesOfflineGrnProvenance() {
+        helper.createDatabase(dbName, 32).apply {
+            execSQL(
+                "INSERT INTO ingredient_cache " +
+                    "(id, sku, name, baseUnit, currentQty, reorderThreshold, reorderQty, avgCostMinor) " +
+                    "VALUES ('ingredient-1', 'MILK', 'Milk', 'ml', 2500, 500, 1000, 12)",
+            )
+            execSQL(
+                "INSERT INTO batch_cache " +
+                    "(id, ingredientId, receivedAt, qtyOnHand, costPerUnitMinor, lotCode) " +
+                    "VALUES ('batch-1', 'ingredient-1', '2026-08-27T09:00:00Z', 2500, 12, 'LOT-1')",
+            )
+            execSQL(
+                "INSERT INTO local_grns " +
+                    "(localId, branchId, supplierId, supplierInvoiceNo, notes, createdAtMillis, syncState) " +
+                    "VALUES ('grn-1', 'branch-1', 'supplier-1', 'INV-1', 'offline', " +
+                    "1787821200000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 33, true, MIGRATION_32_33)
+        migrated.query(
+            "SELECT currentQty, avgCostMinor, valuationMinor, projectionBranchId " +
+                "FROM ingredient_cache WHERE id = 'ingredient-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2500.0, cursor.getDouble(0), 0.0)
+            assertEquals(12L, cursor.getLong(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+        }
+        migrated.query(
+            "SELECT ingredientId, branchId, qtyOnHand FROM batch_cache WHERE id = 'batch-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("ingredient-1", cursor.getString(0))
+            assertEquals("", cursor.getString(1))
+            assertEquals(2500.0, cursor.getDouble(2), 0.0)
+        }
+        migrated.query(
+            "SELECT supplierInvoiceNo, supplierInvoiceAmountMinor, receivedAt, syncState " +
+                "FROM local_grns WHERE localId = 'grn-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("INV-1", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.getString(2).startsWith("2026-"))
+            assertEquals(SyncState.PENDING, cursor.getString(3))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate33To34_preservesBranchesAndOnlyRecoversExactLegacyInvoiceSeries() {
+        helper.createDatabase(dbName, 33).apply {
+            execSQL(
+                "INSERT INTO branch_cache (id, name, code) VALUES " +
+                    "('branch-exact', 'Second Floor', ' f2 '), " +
+                    "('branch-ambiguous', 'Main North', 'Main-North')",
+            )
+            execSQL(
+                "INSERT INTO local_branches " +
+                    "(localId, name, code, createdAtMillis, syncState) VALUES " +
+                    "('queued-exact', 'Kiosk', ' k1 ', 1000, 'pending'), " +
+                    "('queued-ambiguous', 'Terrace', 'Terrace', 2000, 'pending')",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 34, true, MIGRATION_33_34)
+        migrated.query(
+            "SELECT id, invoiceSeriesCode FROM branch_cache ORDER BY id",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("branch-ambiguous", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("branch-exact", cursor.getString(0))
+            assertEquals("F2", cursor.getString(1))
+        }
+        migrated.query(
+            "SELECT localId, invoiceSeriesCode, syncState FROM local_branches ORDER BY localId",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("queued-ambiguous", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertEquals(SyncState.PENDING, cursor.getString(2))
+            assertTrue(cursor.moveToNext())
+            assertEquals("queued-exact", cursor.getString(0))
+            assertEquals("K1", cursor.getString(1))
+            assertEquals(SyncState.PENDING, cursor.getString(2))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate34To35_preservesRefundMoneyAndLeavesLegacyEvidenceUnknown() {
+        helper.createDatabase(dbName, 34).apply {
+            execSQL(
+                "INSERT INTO refund_order_cache " +
+                    "(id, invoiceNo, status, type, totalMinor, paidMinor, refundableMinor) VALUES " +
+                    "('order-1', 'INV-1', 'paid', 'pos', 20000, 20000, 12500)",
+            )
+            execSQL(
+                "INSERT INTO local_refunds " +
+                    "(localId, clientActionId, orderId, reasonCode, amountMinor, createdAtMillis, state, " +
+                    "settlementMethod, providerSettledAtMillis, externalReference, withdrawalAtMillis) VALUES " +
+                    "('refund-1', 'refund-action-1', 'order-1', 'billing_error', 7500, 1000, " +
+                    "'settled', 'cash', NULL, NULL, NULL), " +
+                    "('refund-conflict', 'refund-action-conflict', 'order-2', 'billing_error', " +
+                    "5000, 1100, 'withdrawn', 'upi', 1200, 'UPI-LEGACY-REF', 1300)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 35, true, MIGRATION_34_35)
+        migrated.query(
+            "SELECT paidMinor, refundableMinor, pendingRefundMinor, paymentMethodsCsv " +
+                "FROM refund_order_cache WHERE id = 'order-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(20_000L, cursor.getLong(0))
+            assertEquals(12_500L, cursor.getLong(1))
+            assertEquals(0L, cursor.getLong(2))
+            assertEquals("", cursor.getString(3))
+        }
+        migrated.query(
+            "SELECT amountMinor, state, acceptedByUserId, capturedTimeReconciled, " +
+                "loyaltyReconciliationState, payoutConflict FROM local_refunds WHERE localId = 'refund-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(7_500L, cursor.getLong(0))
+            assertEquals(RefundState.SETTLED, cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertEquals(0, cursor.getInt(5))
+        }
+        migrated.query(
+            "SELECT state, providerSettledAtMillis, externalReference, withdrawalAtMillis, " +
+                "payoutConflict FROM local_refunds WHERE localId = 'refund-conflict'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(RefundState.WITHDRAWN, cursor.getString(0))
+            assertEquals(1_200L, cursor.getLong(1))
+            assertEquals("UPI-LEGACY-REF", cursor.getString(2))
+            assertEquals(1_300L, cursor.getLong(3))
+            assertEquals(1, cursor.getInt(4))
+        }
+        migrated.close()
+    }
 }

@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,6 +9,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsPresentationPolicyTest {
+
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
     fun `terminal device id matches the backend length contract`() {
@@ -82,6 +86,55 @@ class SettingsPresentationPolicyTest {
         assertTrue(
             SettingsUiState(branchForm = BranchForm(name = "New Branch")).branchFormDirty,
         )
+    }
+
+    @Test
+    fun `invoice series is required normalized and sent on the wire`() {
+        val form = BranchForm(name = "Main Cafe", invoiceSeriesCode = " m1 ")
+
+        assertNull(form.validate())
+        assertEquals("M1", form.toBody().invoiceSeriesCode)
+        assertTrue(
+            json.encodeToString(form.toBody()).contains("\"invoice_series_code\":\"M1\""),
+        )
+    }
+
+    @Test
+    fun `invoice series rejects blank wrong length and punctuation`() {
+        for (series in listOf("", "M", "MAIN", "M-", "₹1")) {
+            assertEquals(
+                "Invoice series must be exactly two letters or digits, for example MN.",
+                BranchForm(name = "Main Cafe", invoiceSeriesCode = series).validate(),
+            )
+        }
+    }
+
+    @Test
+    fun `queued branch recovery never hides corrupt explicit series with display code`() {
+        assertEquals("M1", resolveQueuedInvoiceSeries(null, " m1 "))
+        assertNull(resolveQueuedInvoiceSeries(null, "Main"))
+        assertNull(resolveQueuedInvoiceSeries("??", "M1"))
+        assertEquals("A2", resolveQueuedInvoiceSeries(" a2 ", "M1"))
+    }
+
+    @Test
+    fun `known branch invoice series conflict gives an actionable local error`() {
+        val state = SettingsUiState(
+            branches = listOf(
+                BranchDto(
+                    id = "branch-a",
+                    name = "Main Cafe",
+                    invoiceSeriesCode = "MN",
+                ),
+            ),
+        )
+
+        val conflict = state.invoiceSeriesConflict(
+            BranchForm(name = "Second Cafe", invoiceSeriesCode = "mn"),
+        )
+
+        assertTrue(conflict.orEmpty().contains("Main Cafe"))
+        assertTrue(conflict.orEmpty().contains("Choose another"))
     }
 
     @Test

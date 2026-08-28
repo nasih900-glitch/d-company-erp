@@ -78,6 +78,14 @@ class OperationalAccessTest {
         assertTrue(catalogAndStock.menuAccess().canManageMenu)
         assertTrue(catalogAndStock.inventoryAccess().canManageInventory)
         assertTrue(catalogAndStock.inventoryAccess().canMakeLargeAdjustment)
+        assertFalse(catalogAndStock.inventoryAccess().canManageCosting)
+
+        val protectedCosting = permissions(
+            ErpPermission.InventoryWrite,
+            ErpPermission.AdminSystem,
+        )
+        assertTrue(protectedCosting.inventoryAccess().canManageInventory)
+        assertTrue(protectedCosting.inventoryAccess().canManageCosting)
 
         val gaming = permissions(
             ErpPermission.GamingWrite,

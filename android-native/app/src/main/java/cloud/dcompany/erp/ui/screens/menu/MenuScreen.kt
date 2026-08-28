@@ -95,6 +95,14 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
         if (!access.canManageMenu) ViewOnlyNotice()
         MenuSummary(state)
         state.notice?.let { NoticeBanner(it, vm::dismissNotice) }
+        if (access.canManageMenu) {
+            OperationalBanner(
+                title = "Variants and modifiers",
+                detail = "Configure sizes, add-ons and modifier groups in the web ERP. Android POS downloads and enforces them after sync; this tablet does not edit them yet.",
+                tone = UiTone.Information,
+                icon = Icons.Default.RestaurantMenu,
+            )
+        }
 
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val categoryPanel: @Composable (Modifier) -> Unit = { modifier ->

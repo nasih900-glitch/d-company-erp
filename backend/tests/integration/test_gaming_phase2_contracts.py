@@ -184,6 +184,43 @@ def _offline_action_headers(
     )
 
 
+async def _persist_paid_order_fixture(
+    session,
+    *,
+    order: Order,
+    line: OrderLine,
+    payment: Payment,
+) -> None:
+    """Create a real forward paid snapshot in trigger-safe lifecycle order."""
+
+    assert order.status == "paid"
+    assert order.closed_at is not None
+    assert order.invoice_issued_at is not None
+    assert order.invoice_no
+    assert order.fiscal_year
+    final_closed_at = order.closed_at
+    final_invoice_issued_at = order.invoice_issued_at
+    order.status = "open"
+    order.closed_at = None
+    order.invoice_issued_at = None
+    order.invoice_no = None
+    order.fiscal_year = None
+    session.add(order)
+    await session.flush()
+    session.add(line)
+    await session.flush()
+
+    order.status = "paid"
+    order.closed_at = final_closed_at
+    order.invoice_issued_at = final_invoice_issued_at
+    order.invoice_no = f"D/MN/26-27/{uuid4().int % 100000:05d}"
+    order.fiscal_year = "2026-27"
+    payment.paid_at = final_invoice_issued_at
+    await session.flush()
+    session.add(payment)
+    await session.commit()
+
+
 @pytest.mark.asyncio
 async def test_open_rate_start_rejects_stale_displayed_rate(
     client,
@@ -1366,6 +1403,7 @@ async def test_transfer_rejects_invalid_target_without_moving_session(
             id=uuid4(),
             company_id=seed_owner["company"].id,
             name=f"Other {uuid4().hex[:8]}",
+            invoice_series_code="O2",
         )
         session.add(other_branch)
         await session.flush()
@@ -1508,7 +1546,7 @@ async def test_unbilled_filter_excludes_cancelled_and_already_ordered_history(
         shift_id=shift.id,
         opened_by=seed_owner["owner"].id,
         type="session",
-        status="paid",
+        status="held",
         opened_at=now,
         closed_at=now,
         subtotal_minor=4_000,
@@ -2511,6 +2549,7 @@ async def test_accepted_start_recovery_blocks_wrong_shift_and_partial_receipt_co
         id=uuid4(),
         company_id=seed_owner["company"].id,
         name="Wrong recovery branch",
+        invoice_series_code="WR",
     )
     wrong_shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     wrong_shift.branch_id = wrong_branch.id
@@ -2702,41 +2741,43 @@ async def test_accepted_start_links_exact_manual_paid_order_without_second_charg
         fiscal_year="2026-27",
         invoice_issued_at=datetime.now(UTC) - timedelta(minutes=4),
     )
+    paid_line = OrderLine(
+        id=uuid4(),
+        order_id=paid_order.id,
+        menu_item_id=item.id,
+        qty=1,
+        unit_price_minor=manual_order_amount_minor,
+        line_total_minor=manual_order_amount_minor,
+        discount_minor=0,
+        tax_rate=0,
+        taxable_value_minor=manual_order_amount_minor,
+        cgst_minor=0,
+        sgst_minor=0,
+        igst_minor=0,
+        cess_minor=0,
+        kitchen_status="served",
+        kitchen_served_at=paid_order.closed_at,
+    )
+    payment = Payment(
+        id=uuid4(),
+        order_id=paid_order.id,
+        shift_id=shift.id,
+        method="cash",
+        amount_minor=manual_order_amount_minor,
+        tendered_minor=manual_order_amount_minor,
+        change_minor=0,
+        paid_at=paid_order.invoice_issued_at,
+    )
     session.add_all([station, shift, package, extension_package, category])
     await session.flush()
-    session.add_all([item, paid_order])
+    session.add(item)
     await session.flush()
-    session.add_all(
-        [
-            OrderLine(
-                id=uuid4(),
-                order_id=paid_order.id,
-                menu_item_id=item.id,
-                qty=1,
-                unit_price_minor=manual_order_amount_minor,
-                line_total_minor=manual_order_amount_minor,
-                discount_minor=0,
-                tax_rate=0,
-                taxable_value_minor=manual_order_amount_minor,
-                cgst_minor=0,
-                sgst_minor=0,
-                igst_minor=0,
-                cess_minor=0,
-                kitchen_status="served",
-            ),
-            Payment(
-                id=uuid4(),
-                order_id=paid_order.id,
-                shift_id=shift.id,
-                method="cash",
-                amount_minor=manual_order_amount_minor,
-                tendered_minor=manual_order_amount_minor,
-                change_minor=0,
-                paid_at=datetime.now(UTC) - timedelta(minutes=4),
-            ),
-        ]
+    await _persist_paid_order_fixture(
+        session,
+        order=paid_order,
+        line=paid_line,
+        payment=payment,
     )
-    await session.commit()
     token = await _login(client, seed_owner)
     local_action_id = uuid4()
     start_key = f"gaming-session-start:{local_action_id}"
@@ -2923,7 +2964,7 @@ async def test_accepted_hourly_start_links_paid_order_and_preserves_captured_var
     )
     session.add(category)
     await session.flush()
-    session.add_all([item, paid_order])
+    session.add(item)
     await session.flush()
     line = OrderLine(
         id=uuid4(),
@@ -2940,6 +2981,7 @@ async def test_accepted_hourly_start_links_paid_order_and_preserves_captured_var
         igst_minor=0,
         cess_minor=0,
         kitchen_status="served",
+        kitchen_served_at=paid_order.closed_at,
     )
     payment = Payment(
         id=uuid4(),
@@ -2951,8 +2993,12 @@ async def test_accepted_hourly_start_links_paid_order_and_preserves_captured_var
         change_minor=0,
         paid_at=datetime.now(UTC) - timedelta(minutes=4),
     )
-    session.add_all([line, payment])
-    await session.commit()
+    await _persist_paid_order_fixture(
+        session,
+        order=paid_order,
+        line=line,
+        payment=payment,
+    )
 
     await _grant_protected_owner(session, seed_owner)
     token = await _login(client, seed_owner)
@@ -3104,10 +3150,14 @@ async def test_legacy_outbox_manual_bill_resolution_is_owner_paid_invoice_bound_
     )
     session.add_all([station, shift, category])
     await session.flush()
-    session.add_all([order, item])
+    session.add(item)
     await session.flush()
-    session.add_all([line, payment])
-    await session.commit()
+    await _persist_paid_order_fixture(
+        session,
+        order=order,
+        line=line,
+        payment=payment,
+    )
 
     local_action_id = uuid4()
     payload = {
@@ -3308,7 +3358,26 @@ async def test_legacy_outbox_manual_bill_requires_final_invoice_and_complete_pay
     )
     session.add_all([station, shift])
     await session.flush()
-    session.add_all([held_order, unpaid_paid_order])
+    # 0048 rejects a paid invoice without matching Payment evidence at commit.
+    # Recreate one corrupt legacy row only to prove the runtime recovery route
+    # also fails closed if privileged/manual SQL somehow bypassed migration and
+    # forward-write guards. Restore the production trigger before the request.
+    await session.execute(
+        text(
+            "ALTER TABLE orders DISABLE TRIGGER "
+            "trg_orders_final_payment_balance"
+        )
+    )
+    try:
+        session.add_all([held_order, unpaid_paid_order])
+        await session.flush()
+    finally:
+        await session.execute(
+            text(
+                "ALTER TABLE orders ENABLE TRIGGER "
+                "trg_orders_final_payment_balance"
+            )
+        )
     await session.commit()
     await _grant_protected_owner(session, seed_owner)
     token = await _login(client, seed_owner)
@@ -3406,6 +3475,7 @@ async def test_legacy_outbox_manual_bill_rejects_partially_refunded_paid_order(
         igst_minor=0,
         cess_minor=0,
         kitchen_status="served",
+        kitchen_served_at=order.closed_at,
     )
     payment = Payment(
         id=uuid4(),
@@ -3419,10 +3489,14 @@ async def test_legacy_outbox_manual_bill_rejects_partially_refunded_paid_order(
     )
     session.add_all([station, shift, category])
     await session.flush()
-    session.add_all([item, order])
+    session.add(item)
     await session.flush()
-    session.add_all([line, payment])
-    await session.commit()
+    await _persist_paid_order_fixture(
+        session,
+        order=order,
+        line=line,
+        payment=payment,
+    )
 
     await _grant_protected_owner(session, seed_owner)
     token = await _login(client, seed_owner)
@@ -3596,6 +3670,7 @@ async def test_legacy_outbox_manual_bill_rejects_incompatible_or_voided_line(
         igst_minor=0,
         cess_minor=0,
         kitchen_status="served",
+        kitchen_served_at=order.closed_at,
         voided_at=(now - timedelta(minutes=6)) if invalid_evidence == "voided_gaming" else None,
         voided_by=(seed_owner["owner"].id if invalid_evidence == "voided_gaming" else None),
         void_reason=("Removed before payment" if invalid_evidence == "voided_gaming" else None),
@@ -3612,10 +3687,14 @@ async def test_legacy_outbox_manual_bill_rejects_incompatible_or_voided_line(
     )
     session.add_all([station, shift, category])
     await session.flush()
-    session.add_all([item, order])
+    session.add(item)
     await session.flush()
-    session.add_all([line, payment])
-    await session.commit()
+    await _persist_paid_order_fixture(
+        session,
+        order=order,
+        line=line,
+        payment=payment,
+    )
     await _grant_protected_owner(session, seed_owner)
     token = await _login(client, seed_owner)
     local_action_id = uuid4()

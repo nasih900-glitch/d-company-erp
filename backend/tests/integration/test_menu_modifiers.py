@@ -10,7 +10,6 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 
-from app.api.v1.kitchen import router as kitchen_router
 from app.core.errors import BusinessRuleError
 from app.core.security import issue_access_token
 from app.models import (
@@ -22,6 +21,7 @@ from app.models import (
     MenuModifierGroup,
     MenuVariant,
     Order,
+    OrderLine,
     Role,
     Shift,
     Table,
@@ -78,17 +78,19 @@ async def _menu_item(
 
 async def _owner_headers(client, session, seed_owner) -> dict[str, str]:
     owner = seed_owner["owner"]
-    role = (
-        await session.execute(
-            select(Role)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == owner.id, Role.code == "owner")
-        )
-    ).scalar_one()
-    role.code = "super_owner"
+    protected_role = Role(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        code="super_owner",
+        name="Protected owner",
+        permissions=[],
+    )
+    session.add(protected_role)
+    await session.flush()
     user_role = (
         await session.execute(select(UserRole).where(UserRole.user_id == owner.id))
     ).scalar_one()
+    user_role.role_id = protected_role.id
     user_role.branch_id = seed_owner["branch"].id
     await session.commit()
 
@@ -156,6 +158,7 @@ async def test_modifier_crud_is_nested_tenant_scoped_permissioned_and_unlocked(
         ]
     )
     await session.commit()
+    await session.refresh(staff)
     staff_token = issue_access_token(
         user_id=staff.id,
         company_id=staff.company_id,
@@ -506,6 +509,70 @@ async def test_pricing_rejects_required_duplicate_over_limit_inactive_and_wrong_
     await session.flush()
     with pytest.raises(BusinessRuleError, match="not active for this menu item"):
         await price(modifiers=(ModifierSelection(foreign_option.id, 1),))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pos_create_without_optional_customizations_uses_sql_null_snapshots(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    company = seed_owner["company"]
+    branch = seed_owner["branch"]
+    terminal = seed_owner["terminal"]
+    owner = seed_owner["owner"]
+    company.gst_registration_type = "unregistered"
+    branch.state_code = "32"
+    item = await _menu_item(
+        session,
+        company_id=company.id,
+        name="Plain cappuccino",
+        base_price_minor=18_000,
+    )
+    shift = Shift(
+        id=uuid4(),
+        company_id=company.id,
+        branch_id=branch.id,
+        terminal_id=terminal.id,
+        opened_by=owner.id,
+        opened_at=datetime.now(UTC),
+        opening_float_minor=0,
+        expected_minor=0,
+        status="open",
+    )
+    session.add(shift)
+    await session.commit()
+
+    headers = await _owner_headers(client, session, seed_owner)
+    headers["X-Terminal-Id"] = str(terminal.id)
+    created = await client.post(
+        "/api/v1/pos/orders",
+        headers={**headers, "Idempotency-Key": f"plain-{uuid4()}"},
+        json={
+            "type": "dine_in",
+            "shift_id": str(shift.id),
+            "lines": [
+                {
+                    "client_line_id": str(uuid4()),
+                    "menu_item_id": str(item.id),
+                    "qty": 2,
+                }
+            ],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    response_line = created.json()["lines"][0]
+    assert response_line["variant_snapshot"] is None
+    assert response_line["modifiers"] is None
+    persisted = (
+        await session.execute(
+            select(OrderLine).where(OrderLine.order_id == created.json()["id"])
+        )
+    ).scalar_one()
+    assert persisted.variant_snapshot is None
+    assert persisted.modifiers is None
 
 
 @pytest.mark.integration

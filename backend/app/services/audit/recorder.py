@@ -99,10 +99,12 @@ from app.models import (
     RecipeLine,
     Refund,
     Reservation,
+    RolePermissionOverride,
     Shift,
     Station,
     StockMovement,
     Supplier,
+    SupplierPayment,
     Table,
     Terminal,
     TipPayout,
@@ -198,7 +200,8 @@ TRACKED: set[type] = {
     PosRefundRequest, PosRefundWithdrawal,
     PurchaseOrder, PurchaseOrderLine,
     Recipe, RecipeLine, Refund, Reservation,
-    Shift, Station, StockMovement, Supplier,
+    RolePermissionOverride,
+    Shift, Station, StockMovement, Supplier, SupplierPayment,
     Table, Terminal, TipPayout, Tournament, User, UserRole,
 }
 
@@ -265,6 +268,11 @@ def _captured_diff(obj: Any) -> dict[str, dict]:
 
 
 def _entity_id(obj: Any) -> str:
+    if isinstance(obj, RolePermissionOverride):
+        # A random row UUID does not identify which access cell changed. The
+        # role/module pair is the stable operator-facing target and fits the
+        # audit_log entity_id limit (30 + separator + 30 characters).
+        return f"{obj.role_code}:{obj.module}"
     pk = getattr(obj, "id", None)
     if pk is None:
         return ""

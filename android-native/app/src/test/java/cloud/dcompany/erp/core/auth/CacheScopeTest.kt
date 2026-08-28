@@ -275,12 +275,15 @@ class CacheScopeTest {
 
     @Test
     fun `cache inventory is exhaustive unique and all tables are scope bound`() {
-        assertEquals(35, SERVER_DERIVED_CACHE_TABLES.size)
-        assertEquals(34, LOCAL_DURABLE_TABLES.size)
+        assertEquals(39, SERVER_DERIVED_CACHE_TABLES.size)
+        assertEquals(35, LOCAL_DURABLE_TABLES.size)
         assertEquals(SERVER_DERIVED_CACHE_TABLES.size, SERVER_DERIVED_CACHE_TABLES.toSet().size)
         assertEquals(LOCAL_DURABLE_TABLES.size, LOCAL_DURABLE_TABLES.toSet().size)
-        assertEquals(69, ALL_SCOPE_TABLES.size)
+        assertEquals(74, ALL_SCOPE_TABLES.size)
         assertTrue(SERVER_DERIVED_CACHE_TABLES.toSet().intersect(LOCAL_DURABLE_TABLES).isEmpty())
+        assertTrue("menu_variants" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("menu_modifier_groups" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("menu_modifiers" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("report_snapshots" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("sync_meta" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("server_open_shift_cache" in SERVER_DERIVED_CACHE_TABLES)
@@ -290,6 +293,7 @@ class CacheScopeTest {
         assertTrue("membership_refund_attempt_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("cafe_bill_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("gaming_package_cache" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("customer_order_history_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("local_orders" in LOCAL_DURABLE_TABLES)
         assertTrue("local_shifts" in LOCAL_DURABLE_TABLES)
         assertTrue("local_held_order_payments" in LOCAL_DURABLE_TABLES)
@@ -299,6 +303,7 @@ class CacheScopeTest {
         assertTrue("local_cafe_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_kitchen_cancellation_acks" in LOCAL_DURABLE_TABLES)
         assertTrue("local_gaming_package_extensions" in LOCAL_DURABLE_TABLES)
+        assertTrue("pos_receipts" in LOCAL_DURABLE_TABLES)
     }
 
     private class FakePurger(

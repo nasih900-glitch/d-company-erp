@@ -448,6 +448,7 @@ async def test_unverified_extension_failures_never_emit_discard_proof(
             id=uuid4(),
             company_id=seed_owner["company"].id,
             name=f"Wrong extension scope {uuid4().hex[:8]}",
+            invoice_series_code="WE",
         )
         station = await session.get(Station, gaming_session.station_id)
         session.add(other_branch)

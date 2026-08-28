@@ -67,9 +67,13 @@ import cloud.dcompany.erp.ui.theme.Spacing
 @Composable
 fun SettingsScreen(
     canManageSystem: Boolean,
+    onPasswordChanged: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.passwordChanged) {
+        if (state.passwordChanged) onPasswordChanged()
+    }
     val visibleTabs = if (canManageSystem) SettingsTab.entries else listOf(SettingsTab.Account)
     val activeTab = state.tab.takeIf { it in visibleTabs } ?: SettingsTab.Account
     LaunchedEffect(activeTab) {
@@ -490,11 +494,19 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
                                 )
                                 Text(
                                     listOfNotNull(
-                                        branch.code?.takeIf(String::isNotBlank),
+                                        branch.invoiceSeriesCode.takeIf(String::isNotBlank)
+                                            ?.let { "Invoice series $it" }
+                                            ?: "Invoice series unavailable — refresh before billing",
+                                        branch.code?.takeIf(String::isNotBlank)
+                                            ?.let { "Display code $it" },
                                         branch.timezone?.takeIf(String::isNotBlank),
-                                    ).joinToString(" · ").ifBlank { "No code or timezone recorded" },
+                                    ).joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
+                                    color = if (branch.invoiceSeriesCode.isBlank()) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        Brand.ForegroundMuted
+                                    },
                                 )
                             },
                             trailing = {
@@ -557,7 +569,32 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
                     )
                 }
                 Field("Name", form.name) { v -> vm.updateBranchForm { it.copy(name = v) } }
-                Field("Short code", form.code) { v -> vm.updateBranchForm { it.copy(code = v.uppercase()) } }
+                Field("Invoice series code (2 letters/digits)", form.invoiceSeriesCode) { v ->
+                    vm.updateBranchForm { it.copy(invoiceSeriesCode = v.uppercase()) }
+                }
+                Text(
+                    when {
+                        !form.isNew && form.invoiceSeriesCode.isBlank() ->
+                            "Invoice series has not been refreshed on this tablet. Refresh Branches " +
+                                "before editing or billing."
+                        form.isNew ->
+                            "Required and unique within the company, for example MN. It is printed " +
+                                "on every invoice from this branch."
+                        else ->
+                            "This identifies the branch on fiscal receipts. It can only change " +
+                                "before the branch has issued its first invoice; existing receipt " +
+                                "history is protected by the server."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (!form.isNew && form.invoiceSeriesCode.isBlank()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        Brand.ForegroundMuted
+                    },
+                )
+                Field("Operational short code (optional)", form.code) { v ->
+                    vm.updateBranchForm { it.copy(code = v.uppercase()) }
+                }
                 Field("Address", form.address) { v -> vm.updateBranchForm { it.copy(address = v) } }
                 Field("Timezone", form.timezone) { v -> vm.updateBranchForm { it.copy(timezone = v) } }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

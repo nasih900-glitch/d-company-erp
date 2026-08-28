@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
@@ -54,6 +56,30 @@ class CriticalInputUiTest {
 
         compose.onNodeWithContentDescription("Opening float (₹), 210.50")
             .assertTextContains("210.50")
+    }
+
+    @Test
+    fun moneyFieldDoneActionClearsKeyboardFocus() {
+        compose.setContent {
+            var value by remember { mutableStateOf("") }
+            DCompanyTheme {
+                TouchMoneyEntry(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = "Opening float (₹)",
+                    enabled = true,
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Opening float (₹), zero")
+            .performClick()
+            .performTextReplacement("210")
+
+        compose.onNodeWithContentDescription("Opening float (₹), 210")
+            .performImeAction()
+        compose.onNodeWithContentDescription("Opening float (₹), 210")
+            .assertIsNotFocused()
     }
 
     @Test

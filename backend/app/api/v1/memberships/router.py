@@ -1283,8 +1283,8 @@ async def _allocate_membership_receipt(
             "Cannot issue a membership receipt because the branch identity is invalid."
         )
     return await InvoiceNumberService(session).allocate(
+        company_id=company_id,
         branch_id=branch_id,
-        branch_code=branch.code or "MB",
         prefix="R" if refund else "M",
         series="membership_refund" if refund else "membership",
         at=occurred_at,

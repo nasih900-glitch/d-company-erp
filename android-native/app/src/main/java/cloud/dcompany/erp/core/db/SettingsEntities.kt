@@ -61,6 +61,8 @@ data class BranchCacheEntity(
     @PrimaryKey val id: String,
     val name: String,
     val code: String?,
+    /** Null only for a cache row migrated before the first v34 server refresh. */
+    val invoiceSeriesCode: String? = null,
     val address: String?,
     val timezone: String?,
     val opensAt: String?,
@@ -78,6 +80,8 @@ data class LocalBranchEntity(
     @PrimaryKey val localId: String,
     val name: String,
     val code: String?,
+    /** Null only for a branch create queued by a pre-v34 client. */
+    val invoiceSeriesCode: String? = null,
     val address: String?,
     val timezone: String?,
     val opensAt: String?,

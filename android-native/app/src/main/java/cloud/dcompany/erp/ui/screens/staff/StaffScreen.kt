@@ -127,10 +127,11 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
                 onClockIn = vm::clockIn,
                 onClockOut = vm::clockOut,
                 onDismissError = vm::dismissAttendanceError,
+                onResolveUncertain = vm::retry,
             )
         }
 
-        state.notice?.takeIf { state.canManageDirectory }?.let {
+        state.notice?.let {
             NoticeBanner(it, vm::dismissNotice)
         }
 
@@ -183,6 +184,7 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
         EditDialog(
             editor = editor,
             roles = state.roles,
+            rolesError = state.rolesError,
             saving = state.savingEdit,
             error = state.editError,
             onChange = vm::editorChanged,
@@ -353,6 +355,7 @@ private fun AttendanceCard(
     onClockIn: () -> Unit,
     onClockOut: () -> Unit,
     onDismissError: () -> Unit,
+    onResolveUncertain: () -> Unit,
 ) {
     SectionCard(
         title = "Attendance",
@@ -363,7 +366,7 @@ private fun AttendanceCard(
                 ErpButton(
                     text = if (state.clockedIn) "Clock out" else "Clock in",
                     onClick = if (state.clockedIn) onClockOut else onClockIn,
-                    enabled = !state.clockingInOrOut,
+                    enabled = !state.clockingInOrOut && !state.attendanceUncertain,
                     busy = state.clockingInOrOut,
                     intent = if (state.clockedIn) ActionIntent.Secondary else ActionIntent.Success,
                     leadingIcon = Icons.Default.AccessTime,
@@ -374,11 +377,15 @@ private fun AttendanceCard(
     ) {
         state.attendanceError?.let {
             OperationalBanner(
-                title = "Attendance action failed",
+                title = "Attendance needs attention",
                 detail = it,
                 tone = UiTone.Danger,
                 icon = Icons.Default.SyncProblem,
-                action = { TextButton(onClick = onDismissError) { Text("Dismiss") } },
+                action = {
+                    TextButton(onClick = if (state.attendanceUncertain) onResolveUncertain else onDismissError) {
+                        Text(if (state.attendanceUncertain) "Refresh attendance" else "Dismiss")
+                    }
+                },
             )
         }
         if (state.onShift.isEmpty()) {
@@ -454,6 +461,7 @@ private fun StaffDirectory(state: StaffUiState, vm: StaffViewModel, modifier: Mo
                             onResetPassword = { vm.startPasswordReset(row) },
                             onRetrySync = { vm.retrySync(row) },
                             onCancelRemoval = { vm.cancelPendingRemoval(row) },
+                            onDiscardRejected = { vm.discardRejectedChange(row) },
                             canManage = state.canManageDirectory,
                         )
                         if (index < filtered.lastIndex) PanelDivider()
@@ -472,6 +480,7 @@ private fun StaffRowCard(
     onResetPassword: () -> Unit,
     onRetrySync: () -> Unit,
     onCancelRemoval: () -> Unit,
+    onDiscardRejected: () -> Unit,
     canManage: Boolean,
 ) {
     val statusTone = when {
@@ -509,7 +518,7 @@ private fun StaffRowCard(
                     color = Brand.ForegroundMuted,
                 )
                 Text(
-                    row.phone?.let { "$it · ${row.roles.joinToString(", ").ifBlank { "No role" }}" }
+                    row.phone?.takeIf(String::isNotBlank)?.let { "$it · ${row.roles.joinToString(", ").ifBlank { "No role" }}" }
                         ?: row.roles.joinToString(", ").ifBlank { "No role assigned" },
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
@@ -526,7 +535,7 @@ private fun StaffRowCard(
                     },
                 )
                 if (canManage && !row.pendingDelete) {
-                    StaffActionsMenu(row.isSelf, onEdit, onResetPassword, onDelete)
+                    StaffActionsMenu(row.isSelf, row.canDelete, onEdit, onResetPassword, onDelete)
                 }
             },
         )
@@ -563,6 +572,8 @@ private fun StaffRowCard(
                     // never succeed. Offer a way out of the loop too.
                     if (row.hasQueuedDelete) {
                         TextButton(onClick = onCancelRemoval) { Text("Cancel removal") }
+                    } else {
+                        TextButton(onClick = onDiscardRejected) { Text("Discard local change") }
                     }
                 }
             }
@@ -580,6 +591,7 @@ private fun StaffRowCard(
 @Composable
 private fun StaffActionsMenu(
     isSelf: Boolean,
+    canDelete: Boolean,
     onEdit: () -> Unit,
     onResetPassword: () -> Unit,
     onDelete: () -> Unit,
@@ -600,7 +612,7 @@ private fun StaffActionsMenu(
                 leadingIcon = { Icon(Icons.Default.LockReset, contentDescription = null) },
                 onClick = { expanded = false; onResetPassword() },
             )
-            if (!isSelf) {
+            if (!isSelf && canDelete) {
                 DropdownMenuItem(
                     text = { Text("Remove staff", color = Brand.Danger) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
@@ -618,6 +630,7 @@ private fun StaffActionsMenu(
 private fun EditDialog(
     editor: StaffEditor,
     roles: List<StaffRole>,
+    rolesError: String?,
     saving: Boolean,
     error: String?,
     onChange: (StaffEditor) -> Unit,
@@ -649,14 +662,21 @@ private fun EditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (editor.isSelf) {
+                if (editor.accessChangesLocked) {
                     Text(
-                        "You can't change your own role or status.",
+                        if (editor.isSelf) {
+                            "You can't change your own role or status."
+                        } else {
+                            "Only the protected owner can change another owner account's role or status."
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.ForegroundMuted,
                     )
                 } else {
                     RoleDropdown(roles, editor.roleCode) { onChange(editor.copy(roleCode = it)) }
+                    rolesError?.let {
+                        Text(it, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Suspended", color = Brand.Foreground, modifier = Modifier.weight(1f))
                         Switch(
@@ -665,7 +685,12 @@ private fun EditDialog(
                         )
                     }
                 }
-                if (error != null) Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                val validationError = editor.validationError
+                if (error != null) {
+                    Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
+                } else if (validationError != null) {
+                    Text(validationError, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                }
             }
         },
         confirmButton = {
@@ -758,16 +783,28 @@ private fun CreateLoginDialog(
                         value = draft.password, onValueChange = { onChange(draft.copy(password = it)) },
                         label = { Text("Password (min 10 characters)") }, singleLine = true, enabled = !busy,
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
                         value = draft.confirmPassword, onValueChange = { onChange(draft.copy(confirmPassword = it)) },
                         label = { Text("Confirm password") }, singleLine = true, enabled = !busy,
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    if (draft.password.isNotEmpty() && !draft.passwordsMatch) {
-                        Text("Passwords don't match.", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                    val untouched = draft.name.isEmpty() && draft.email.isEmpty() && draft.phone.isEmpty() &&
+                        draft.password.isEmpty() && draft.confirmPassword.isEmpty()
+                    if (untouched) {
+                        Text(
+                            "Name, email, and a 10–256 character password are required.",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    } else {
+                        draft.validationError?.let { validation ->
+                            Text(validation, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 } else {
                     Text(
@@ -864,16 +901,26 @@ private fun PasswordResetDialog(
                         value = draft.newPassword, onValueChange = { onChange(draft.copy(newPassword = it)) },
                         label = { Text("New password (min 10 characters)") }, singleLine = true, enabled = !busy,
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
                         value = draft.confirmNewPassword, onValueChange = { onChange(draft.copy(confirmNewPassword = it)) },
                         label = { Text("Confirm new password") }, singleLine = true, enabled = !busy,
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    if (draft.newPassword.isNotEmpty() && !draft.passwordsMatch) {
-                        Text("Passwords don't match.", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                    if (draft.newPassword.isEmpty() && draft.confirmNewPassword.isEmpty()) {
+                        Text(
+                            "Enter and confirm a 10–256 character password.",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    } else {
+                        draft.validationError?.let { validation ->
+                            Text(validation, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
                 if (error != null) Text(error, color = Brand.Danger, style = MaterialTheme.typography.bodyMedium)
@@ -911,7 +958,7 @@ private fun PasswordResetDialog(
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     OperationalBanner(
-        title = "Staff updated",
+        title = "Staff activity",
         detail = message,
         tone = UiTone.Information,
         icon = Icons.Default.CheckCircle,

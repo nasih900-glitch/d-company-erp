@@ -11,6 +11,7 @@ always-open Attendance row).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
@@ -82,9 +83,26 @@ def _tenant() -> TenantContext:
     )
 
 
+def test_attendance_model_declares_one_open_row_partial_unique_index() -> None:
+    index = next(
+        index
+        for index in Attendance.__table__.indexes
+        if index.name == "uq_attendance_one_open_per_company_user"
+    )
+
+    assert index.unique is True
+    assert [column.name for column in index.columns] == ["company_id", "user_id"]
+    assert "clock_out_at IS NULL" in str(index.dialect_options["postgresql"]["where"])
+
+
 @pytest.mark.asyncio
 async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> None:
-    branch = Branch(id=BRANCH_ID, company_id=COMPANY_ID, name="Main")
+    branch = Branch(
+        id=BRANCH_ID,
+        company_id=COMPANY_ID,
+        name="Main",
+        invoice_series_code="MN",
+    )
     session = _Session(branch=branch)
     tenant = _tenant()
 
@@ -126,6 +144,7 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     assert on_shift[0].branch_name == "Main"
 
     # --- clock out ---
+    session.queue(_Result())  # user-row lock
     session.queue(_Result(scalar=attendance))
     clock_out_result = await clock_out(session, tenant)
     assert clock_out_result["id"] == str(attendance.id)
@@ -138,11 +157,42 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     assert on_shift_after == []
 
     # --- clocking out again without a new clock-in -> clean rejection, not a 500 ---
+    session.queue(_Result())  # user-row lock
     session.queue(_Result(scalar=None))
     with pytest.raises(BusinessRuleError):
         await clock_out(session, tenant)
     # No further mutation attempted once there is nothing open to close.
     assert session.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_clock_out_locks_the_user_row_before_reading_open_attendance() -> None:
+    branch = Branch(
+        id=BRANCH_ID,
+        company_id=COMPANY_ID,
+        name="Main",
+        invoice_series_code="MN",
+    )
+    session = _Session(branch=branch)
+    tenant = _tenant()
+    attendance = Attendance(
+        id=UUID("44444444-4444-4444-4444-444444444444"),
+        company_id=COMPANY_ID,
+        user_id=USER_ID,
+        branch_id=BRANCH_ID,
+        clock_in_at=datetime.now(timezone.utc),
+    )
+    session.queue(_Result())
+    session.queue(_Result(scalar=attendance))
+
+    await clock_out(session, tenant)
+
+    assert len(session.statements) == 2
+    user_lock_stmt, open_attendance_stmt = session.statements
+    assert "FOR UPDATE" in str(user_lock_stmt).upper()
+    assert "users" in str(user_lock_stmt).lower()
+    assert USER_ID in list(user_lock_stmt.compile().params.values())
+    assert "FOR UPDATE" not in str(open_attendance_stmt).upper()
 
 
 @pytest.mark.asyncio
@@ -155,7 +205,12 @@ async def test_clock_in_locks_the_user_row_before_the_already_open_check() -> No
     clock_in() issues is a `SELECT ... FOR UPDATE` on the user row, ahead of
     the already-open Attendance check.
     """
-    branch = Branch(id=BRANCH_ID, company_id=COMPANY_ID, name="Main")
+    branch = Branch(
+        id=BRANCH_ID,
+        company_id=COMPANY_ID,
+        name="Main",
+        invoice_series_code="MN",
+    )
     session = _Session(branch=branch)
     tenant = _tenant()
 

@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.0.4` |
-| Version code | `5` |
+| Version name | `3.0.5` |
+| Version code | `6` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
@@ -22,12 +22,13 @@ build.
 
 ## Release status
 
-The app is a release candidate, not a declared production rollout. The current
-workflow has been exercised on an Android 15 tablet emulator, including login,
-shift handling, POS payments, Tables/KDS, gaming hand-off, process restart, and
-offline sale recovery. This repository does **not** yet contain acceptance
-evidence from the physical Redmi Pad 2, and the current Android acceptance work
-has not deployed anything to production.
+Version `3.0.5` (`6`) is a source release candidate, not a declared production
+rollout. No final `3.0.5` APK/AAB has been built for distribution yet. Any
+locally signed output remains a candidate until the repository release gates
+pass. Earlier emulator evidence does not transfer to this new build: `3.0.5`
+currently has no emulator or physical-device acceptance proof. Nothing from
+this Android release preparation has deployed the backend or web ERP to
+production.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
@@ -54,8 +55,9 @@ The native app now supports the operational day rather than POS browsing only:
   acknowledgement, refresh/recovery controls, keep-screen-on, and `Exit KDS`;
 - PS5, VR, simulator, streaming, and shisha session timers, stop/cancel actions,
   alarm reminders, and unpaid `Send to POS` hand-off;
-- durable Room caches and outboxes, offline status/feedback, background retry,
-  reconnect reconciliation, and duplicate-payment guards;
+- durable Room caches and outboxes, offline status/feedback, automatic retry
+  while the app is running or when it is next reopened, reconnect
+  reconciliation, and duplicate-payment guards;
 - inventory, menu/pricing, customers, memberships, events, refunds, finance,
   reports, analytics, staff, settings, access control, and protected audit-log
   screens, subject to the signed-in role's permissions.

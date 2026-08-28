@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Cake
 import androidx.compose.material.icons.filled.CheckCircle
@@ -50,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -78,6 +80,7 @@ import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.LoadingSkeleton
+import cloud.dcompany.erp.ui.components.NumericValue
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
@@ -91,6 +94,9 @@ import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * Customers — the phone number is the loyalty identity.
@@ -127,6 +133,21 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val twoPane = maxWidth >= 760.dp
             val selected = state.selected
+
+            // The Customers destination is retained by the app shell. Refresh
+            // the selected customer's server-linked bills whenever the
+            // destination is re-entered, and whenever a completed payment
+            // changes that customer's financial summary. Otherwise the
+            // points/visit cards update after checkout while Purchase history
+            // misleadingly remains one bill behind until a manual refresh.
+            LaunchedEffect(
+                selected?.id,
+                selected?.visitCount,
+                selected?.totalSpentMinor,
+                selected?.lastVisitAt,
+            ) {
+                selected?.let(vm::refreshHistory)
+            }
 
             when {
                 state.loading -> SectionCard(Modifier.fillMaxSize()) {
@@ -190,6 +211,15 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                                 onEdit = { vm.startEdit(selected) },
                                 onBack = null,
                                 onRetrySync = { vm.retrySync(selected) },
+                                history = state.history.takeIf {
+                                    state.historyCustomerId == selected.id
+                                }.orEmpty(),
+                                historyLoading = state.historyLoading &&
+                                    state.historyCustomerId == selected.id,
+                                historyError = state.historyError.takeIf {
+                                    state.historyCustomerId == selected.id
+                                },
+                                onRetryHistory = vm::retryHistory,
                             )
                         }
                     }
@@ -201,6 +231,14 @@ fun CustomersScreen(access: CustomersAccess = CustomersAccess()) {
                     onEdit = { vm.startEdit(selected) },
                     onBack = vm::clearSelection,
                     onRetrySync = { vm.retrySync(selected) },
+                    history = state.history.takeIf {
+                        state.historyCustomerId == selected.id
+                    }.orEmpty(),
+                    historyLoading = state.historyLoading && state.historyCustomerId == selected.id,
+                    historyError = state.historyError.takeIf {
+                        state.historyCustomerId == selected.id
+                    },
+                    onRetryHistory = vm::retryHistory,
                 )
 
                 else -> Column(Modifier.fillMaxSize()) {
@@ -594,6 +632,10 @@ private fun DetailPane(
     onEdit: () -> Unit,
     onBack: (() -> Unit)?,
     onRetrySync: () -> Unit,
+    history: List<CustomerOrderHistory>,
+    historyLoading: Boolean,
+    historyError: String?,
+    onRetryHistory: () -> Unit,
 ) {
     Column(
         Modifier
@@ -684,6 +726,14 @@ private fun DetailPane(
 
         RankCard(customer)
 
+        PurchaseHistoryCard(
+            rows = history,
+            loading = historyLoading,
+            error = historyError,
+            isUnsyncedCustomer = customer.id.startsWith("local:"),
+            onRetry = onRetryHistory,
+        )
+
         SectionCard(
             title = "Profile details",
             subtitle = "Contact details and visit information.",
@@ -706,6 +756,150 @@ private fun DetailPane(
                 customer.notes?.takeIf(String::isNotBlank) ?: "No notes",
             )
         }
+    }
+}
+
+private val HISTORY_TIME_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("d MMM yyyy · h:mm a", Locale.ENGLISH)
+
+@Composable
+private fun PurchaseHistoryCard(
+    rows: List<CustomerOrderHistory>,
+    loading: Boolean,
+    error: String?,
+    isUnsyncedCustomer: Boolean,
+    onRetry: () -> Unit,
+) {
+    SectionCard(
+        title = "Purchase history",
+        subtitle = "Server-linked bills for this exact customer profile.",
+        icon = Icons.AutoMirrored.Filled.ReceiptLong,
+        action = {
+            ErpButton(
+                text = if (loading) "Refreshing…" else "Refresh",
+                onClick = onRetry,
+                intent = ActionIntent.Quiet,
+                enabled = !loading && !isUnsyncedCustomer,
+                busy = loading,
+            )
+        },
+    ) {
+        when {
+            loading && rows.isEmpty() -> LoadingSkeleton(lines = 3)
+
+            isUnsyncedCustomer -> Text(
+                "This new profile will show purchases after it syncs to the server.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            rows.isEmpty() && error != null -> OperationalBanner(
+                title = "Could not load purchase history",
+                detail = error,
+                tone = UiTone.Warning,
+                icon = Icons.Default.ErrorOutline,
+                action = {
+                    ErpButton("Retry", onRetry, intent = ActionIntent.Secondary)
+                },
+            )
+
+            rows.isEmpty() -> Text(
+                "No server-linked purchases yet. New paid, voided, and refunded bills will appear here.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            else -> {
+                error?.let {
+                    OperationalBanner(
+                        title = "Showing saved history",
+                        detail = "$it The bills below are the last copy saved on this tablet.",
+                        tone = UiTone.Warning,
+                        icon = Icons.Default.ErrorOutline,
+                    )
+                }
+                rows.take(10).forEachIndexed { index, row ->
+                    if (index > 0 || error != null) PanelDivider()
+                    PurchaseHistoryRow(row)
+                }
+                if (rows.size > 10) {
+                    PanelDivider()
+                    Text(
+                        "Showing the latest 10 of ${rows.size} cached bills.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PurchaseHistoryRow(row: CustomerOrderHistory) {
+    val source = row.sourceLabel?.takeIf(String::isNotBlank)
+        ?: row.type.replace('_', ' ').replaceFirstChar(Char::uppercase)
+    val timestamp = runCatching {
+        Instant.parse(row.invoiceIssuedAt ?: row.createdAt)
+            .atZone(ZoneId.systemDefault())
+            .format(HISTORY_TIME_FORMAT)
+    }.getOrDefault(row.createdAt.take(10))
+    val tone = when (row.status.lowercase()) {
+        "paid" -> UiTone.Success
+        "refunded" -> UiTone.Information
+        "void" -> UiTone.Danger
+        "held" -> UiTone.Warning
+        else -> UiTone.Neutral
+    }
+
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    row.invoiceNo ?: source,
+                    color = Brand.Foreground,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                OperationalStatusBadge(row.status.replaceFirstChar(Char::uppercase), tone)
+            }
+            Text(
+                "$source · ${row.itemsCount} item${if (row.itemsCount == 1) "" else "s"}",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(timestamp, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            val details = buildList {
+                if (row.paymentMethods.isNotEmpty()) {
+                    add(row.paymentMethods.joinToString(" + ") { it.uppercase(Locale.ENGLISH) })
+                }
+                if (row.pointsRedeemedMinor > 0) add("Points ${row.pointsRedeemedMinor.asRupees()}")
+                if (row.refundedMinor > 0) add("Refunded ${row.refundedMinor.asRupees()}")
+            }
+            if (details.isNotEmpty()) {
+                Text(
+                    details.joinToString(" · "),
+                    color = if (row.refundedMinor > 0) Brand.Warning else Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+        NumericValue(
+            value = row.totalMinor.asRupees(),
+            style = MaterialTheme.typography.titleSmall,
+            color = Brand.Foreground,
+        )
     }
 }
 

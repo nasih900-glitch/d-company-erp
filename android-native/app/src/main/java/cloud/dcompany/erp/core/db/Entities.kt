@@ -113,6 +113,10 @@ data class LocalOrderEntity(
     val serverTotalMinor: Long? = null,
     val serverSubtotalMinor: Long? = null,
     val serverDiscountMinor: Long? = null,
+    /** Server-valued loyalty reduction, kept separate so payment review is explainable. */
+    val serverPointsRedeemedMinor: Long? = null,
+    /** Absolute points reserved against this exact unpaid bill. */
+    val serverPointsRedeemed: Int? = null,
     val serverTaxMinor: Long? = null,
     val serverRoundOffMinor: Long? = null,
     val serverDueMinor: Long? = null,

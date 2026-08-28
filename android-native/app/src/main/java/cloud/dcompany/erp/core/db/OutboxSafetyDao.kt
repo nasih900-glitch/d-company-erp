@@ -2,6 +2,8 @@ package cloud.dcompany.erp.core.db
 
 import androidx.room.Dao
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 /**
  * One row per unresolved outbox state, used by the account-safety gate.
@@ -66,11 +68,15 @@ interface OutboxSafetyDao {
             SELECT 'refunds', state
               FROM local_refunds
              WHERE state IN (
-                 'request_pending', 'request_rejected', 'accepted_cash_due',
+                 'request_pending', 'request_rejected', 'accepted_cash_due', 'accepted_provider_due',
                  'cash_handoff_in_progress', 'cash_settle_pending', 'cash_settle_rejected',
+                 'cash_handed_over_pending_accounting', 'cash_finalize_rejected',
+                 'provider_payout_in_progress', 'provider_completion_pending',
+                 'provider_completion_rejected', 'provider_completed_pending_accounting',
+                 'provider_finalize_rejected',
                  'withdrawal_pending', 'withdrawal_rejected',
                  'legacy_reconciliation_required'
-             )
+             ) OR (state = 'withdrawn' AND payoutConflict = 1)
             UNION ALL
             SELECT 'customers', state
               FROM local_customers WHERE state != 'synced'
@@ -142,5 +148,11 @@ interface OutboxSafetyDao {
         ORDER BY resource, state
         """,
     )
-    suspend fun unresolvedGroups(): List<UnresolvedOutboxGroup>
+    fun observeUnresolvedGroups(): Flow<List<UnresolvedOutboxGroup>>
+
+    /** One-shot form for account gates and background workers. Keeping the
+     * SQL on the observable query also gives the app shell an exact, live
+     * summary without maintaining a second hand-written list of outboxes. */
+    suspend fun unresolvedGroups(): List<UnresolvedOutboxGroup> =
+        observeUnresolvedGroups().first()
 }

@@ -1,5 +1,12 @@
 # D Company ERP Android design QA
 
+> Evidence boundary: this document records the earlier `3.0.4` (`5`) Android
+> snapshot. Material fixes were made before the source identity moved to
+> `3.0.5` (`6`), so none of the emulator, instrumentation, signed-build, or
+> performance results below count as `3.0.5` acceptance evidence. The new
+> candidate still requires its own automated, emulator, and physical-device
+> gates and has not been deployed to production.
+
 ## Visual target and test environment
 
 - Approved visual reference: `/tmp/codex-remote-attachments/019f6149-4483-7750-9466-b04063d78502/8D369ABB-4F08-47B5-ACA4-2FF03554B80F/1-Pasted-Image-1.jpg`

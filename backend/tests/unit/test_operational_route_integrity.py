@@ -1134,6 +1134,9 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
                     "qa-owner@example.test",
                     83_600,
                     199_900,
+                    93_600,
+                    60_000,
+                    100_000,
                     2_000,
                     1_000,
                 )
@@ -1158,6 +1161,10 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
     assert summary.pos_sales_minor == 83_600
     assert summary.membership_sales_minor == 199_900
     assert summary.gross_collections_minor == 283_500
+    assert summary.cash_collections_minor == 93_600
+    assert summary.card_collections_minor == 60_000
+    assert summary.upi_collections_minor == 100_000
+    assert summary.other_collections_minor == 29_900
     assert summary.total_sales_minor == 283_500  # compatibility alias only
     assert summary.settled_pos_refunds_minor == 2_000
     assert summary.settled_membership_refunds_minor == 1_000
@@ -1177,6 +1184,10 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
             "pos_sales_minor",
             "membership_sales_minor",
             "gross_collections_minor",
+            "cash_collections_minor",
+            "card_collections_minor",
+            "upi_collections_minor",
+            "other_collections_minor",
             "settled_pos_refunds_minor",
             "settled_membership_refunds_minor",
             "total_refunds_minor",
@@ -1187,6 +1198,10 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
         "pos_sales_minor": 83_600,
         "membership_sales_minor": 199_900,
         "gross_collections_minor": 283_500,
+        "cash_collections_minor": 93_600,
+        "card_collections_minor": 60_000,
+        "upi_collections_minor": 100_000,
+        "other_collections_minor": 29_900,
         "settled_pos_refunds_minor": 2_000,
         "settled_membership_refunds_minor": 1_000,
         "total_refunds_minor": 3_000,
@@ -1528,7 +1543,12 @@ async def test_session_send_uses_the_sessions_original_shift(monkeypatch) -> Non
     station = _station(tenant)
     original_shift = _shift(tenant)
     gaming_session = _gaming_session(tenant, station.id, original_shift.id)
-    menu_item = SimpleNamespace(id=uuid4(), hsn_code="999692")
+    menu_item = SimpleNamespace(
+        id=uuid4(),
+        name="Gaming session",
+        type="gaming",
+        hsn_code="999692",
+    )
     session = _Session(
         _Result(scalar=gaming_session),
         _Result(scalar=original_shift),
@@ -1821,6 +1841,8 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
     line = SimpleNamespace(
         id=uuid4(),
         menu_item_id=uuid4(),
+        menu_item_name_snapshot="Sandwich",
+        menu_item_type_snapshot="food",
         variant_id=None,
         modifiers=None,
         qty=1,
@@ -1875,7 +1897,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
         _Result(rows=[order]),
         _Result(rows=[(order.id, 1)]),
         _Result(rows=[(order.id, "PS5 1")]),
-        _Result(rows=[]),  # paid_by_order — nothing paid on a held order
+        _Result(rows=[]),  # payment rows — nothing paid on a held order
         _Result(rows=[]),  # refunded_by_order
         _Result(rows=[]),  # accepted, unresolved refund requests
     )
@@ -1891,6 +1913,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
     assert response[0].source_label == "PS5 1"
     assert response[0].paid_minor == 0
     assert response[0].refundable_minor == 0
+    assert response[0].payment_methods == []
     order_params = session.statements[0].compile().params.values()
     assert tenant.company_id in order_params
     assert tenant.branch_id in order_params
@@ -1919,7 +1942,12 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
         _Result(rows=[order]),
         _Result(rows=[(order.id, 3)]),  # counts_by_order
         _Result(rows=[]),  # station_by_order
-        _Result(rows=[(order.id, 1_000)]),  # paid_by_order
+        _Result(
+            rows=[
+                (order.id, "upi", 600),
+                (order.id, "cash", 400),
+            ]
+        ),  # legacy mixed payment rows; response order is canonical
         _Result(rows=[(order.id, 400)]),  # refunded_by_order — one prior partial refund
         _Result(rows=[]),  # accepted, unresolved refund requests
     )
@@ -1929,3 +1957,4 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
     assert response[0].checkout_version == 3
     assert response[0].paid_minor == 1_000
     assert response[0].refundable_minor == 600
+    assert response[0].payment_methods == ["cash", "upi"]

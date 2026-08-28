@@ -4,6 +4,8 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
+import cloud.dcompany.erp.core.net.OrderModifierSnapshot
+import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -35,6 +37,8 @@ data class CafeBillLineSnapshot(
     @SerialName("void_reason") val voidReason: String? = null,
     @SerialName("kitchen_void_acknowledged_at")
     val kitchenVoidAcknowledgedAt: String? = null,
+    @SerialName("variant_snapshot") val variantSnapshot: OrderVariantSnapshot? = null,
+    val modifiers: List<OrderModifierSnapshot> = emptyList(),
 )
 
 /** Complete active table bill returned by GET /pos/table-orders/active. */
@@ -71,6 +75,10 @@ data class CafeActionLine(
     val note: String? = null,
     /** UI estimate only; server pricing always wins after confirmation. */
     val estimateUnitMinor: Long,
+    val variantId: String? = null,
+    val variantName: String? = null,
+    val variantPriceDeltaMinor: Long = 0,
+    val modifiers: List<LocalModifierSelectionSnapshot> = emptyList(),
 )
 
 /** Exact pre-v24 line shape retained only for lossless migration/replay. */

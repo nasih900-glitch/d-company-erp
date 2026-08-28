@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -62,6 +63,7 @@ data class ReportExpenseLine(
 
 @Serializable
 data class ReportData(
+    @Required @SerialName("branch_id") val branchId: String = "",
     @SerialName("accounting_basis") val accountingBasis: String = "operational_receipt",
     val period: String = "",
     val label: String = "",
@@ -72,6 +74,9 @@ data class ReportData(
     @SerialName("orders_count") val ordersCount: Int = 0,
     @SerialName("tickets_count") val ticketsCount: Int = 0,
     @SerialName("avg_ticket_minor") val avgTicketMinor: Long = 0,
+    @Required
+    @SerialName("unissued_paid_orders_count")
+    val unissuedPaidOrdersCount: Int = 0,
 
     val revenue: ReportRevenue = ReportRevenue(),
     @SerialName("tax_collected") val taxCollected: ReportTax = ReportTax(),
@@ -113,11 +118,40 @@ data class ReportData(
     val hasNothing: Boolean
         get() = ordersCount == 0 &&
             ticketsCount == 0 &&
+            avgTicketMinor == 0L &&
+            unissuedPaidOrdersCount == 0 &&
+            revenue.foodMinor == 0L &&
+            revenue.gamingMinor == 0L &&
+            revenue.hookahMinor == 0L &&
+            revenue.eventTicketsMinor == 0L &&
+            revenue.membershipsMinor == 0L &&
+            revenue.deliveryAggregatorMinor == 0L &&
+            revenue.otherMinor == 0L &&
+            revenue.manualCollectionsMinor == 0L &&
+            revenue.discountsAndPointsRedeemedMinor == 0L &&
+            revenue.roundingIncomeMinor == 0L &&
+            revenue.roundingExpenseMinor == 0L &&
             revenue.totalMinor == 0L &&
+            taxCollected.cgstMinor == 0L &&
+            taxCollected.sgstMinor == 0L &&
+            taxCollected.igstMinor == 0L &&
+            taxCollected.cessMinor == 0L &&
             paymentsReceived.totalMinor == 0L &&
             manualCollectionsMinor == 0L &&
+            tipsCollectedMinor == 0L &&
+            refundsIssuedMinor == 0L &&
+            settledRefundsIssuedMinor == 0L &&
+            membershipRefundsIssuedMinor == 0L &&
+            refundedTipsMinor == 0L &&
+            netPaymentsReceivedMinor == 0L &&
+            expenses.isEmpty() &&
             expenseTotalMinor == 0L &&
-            depreciationMinor == 0L
+            cogsMinor == 0L &&
+            depreciationMinor == 0L &&
+            grossRevenueMinor == 0L &&
+            netRevenueMinor == 0L &&
+            grossProfitMinor == 0L &&
+            netProfitMinor == 0L
 }
 
 /** The four P&L windows this screen can ask the server for. */

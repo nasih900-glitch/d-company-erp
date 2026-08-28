@@ -164,6 +164,10 @@ async def _cashier_order(session, seed_owner, *, manual_discount_minor: int = 0)
     )
     session.add(order)
     await session.commit()
+    # Migration 0047 invalidates existing credentials on every role-assignment
+    # mutation. Refresh the actor before minting the test token so it carries
+    # the authoritative version produced by the database trigger.
+    await session.refresh(cashier)
     return order, shift, cashier, cashier_role, assignment
 
 

@@ -8,6 +8,10 @@ import cloud.dcompany.erp.core.net.MeResponse
 fun canManageMemberships(profile: MeResponse): Boolean =
     profile.protectedAccess && EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
 
+/** Settings management follows the same server permission as its write endpoints. */
+fun canManageSystemSettings(profile: MeResponse): Boolean =
+    EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+
 /** The minimum server permission needed for each Android destination. */
 fun allowedDestinations(profile: MeResponse): List<Destination> {
     val permissions = EffectivePermissions.from(profile)

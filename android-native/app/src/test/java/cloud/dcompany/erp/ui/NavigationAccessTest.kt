@@ -173,6 +173,23 @@ class NavigationAccessTest {
         assertTrue(canManageMemberships(authorisedOwner))
     }
 
+    @Test
+    fun `system settings tabs follow admin system permission not audit identity`() {
+        val settingsManager = profile(
+            roles = listOf("manager"),
+            auditAccess = false,
+            effective = listOf(ErpPermission.AdminSystem),
+        )
+        val auditOnly = profile(
+            roles = listOf("auditor"),
+            auditAccess = true,
+            effective = listOf(ErpPermission.AdminAuditRead),
+        )
+
+        assertTrue(canManageSystemSettings(settingsManager))
+        assertFalse(canManageSystemSettings(auditOnly))
+    }
+
     private fun profile(
         roles: List<String>,
         protectedAccess: Boolean = false,

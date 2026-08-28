@@ -187,6 +187,8 @@ interface OrderDao {
     @Query(
         "UPDATE local_orders SET serverOrderId = :serverOrderId, shiftId = :serverShiftId, " +
             "serverSubtotalMinor = :subtotalMinor, serverDiscountMinor = :discountMinor, " +
+            "serverPointsRedeemedMinor = :pointsRedeemedMinor, " +
+            "serverPointsRedeemed = :pointsRedeemed, " +
             "serverTaxMinor = :taxMinor, serverRoundOffMinor = :roundOffMinor, " +
             "serverTotalMinor = :totalMinor, serverDueMinor = :dueMinor, " +
             "checkoutVersion = :checkoutVersion, syncState = 'preparing', lastError = NULL, " +
@@ -199,6 +201,8 @@ interface OrderDao {
         serverShiftId: String,
         subtotalMinor: Long,
         discountMinor: Long,
+        pointsRedeemedMinor: Long,
+        pointsRedeemed: Int,
         taxMinor: Long,
         roundOffMinor: Long,
         totalMinor: Long,
@@ -227,6 +231,8 @@ interface OrderDao {
     @Query(
         "UPDATE local_orders SET serverOrderId = :serverOrderId, serverTotalMinor = :totalMinor, " +
             "serverSubtotalMinor = :subtotalMinor, serverDiscountMinor = :discountMinor, " +
+            "serverPointsRedeemedMinor = :pointsRedeemedMinor, " +
+            "serverPointsRedeemed = :pointsRedeemed, " +
             "serverTaxMinor = :taxMinor, serverRoundOffMinor = :roundOffMinor, " +
             "serverDueMinor = :dueMinor, checkoutClaimToken = :claimToken, " +
             "checkoutClaimExpiresAtMillis = :claimExpiresAtMillis, checkoutVersion = :checkoutVersion, " +
@@ -238,6 +244,8 @@ interface OrderDao {
         serverOrderId: String,
         subtotalMinor: Long,
         discountMinor: Long,
+        pointsRedeemedMinor: Long,
+        pointsRedeemed: Int,
         taxMinor: Long,
         roundOffMinor: Long,
         totalMinor: Long,
@@ -335,8 +343,14 @@ interface SyncMetaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(meta: SyncMetaEntity)
 
+    @Query("SELECT * FROM sync_meta WHERE key = :key LIMIT 1")
+    suspend fun get(key: String): SyncMetaEntity?
+
     @Query("SELECT * FROM sync_meta WHERE key = :key")
     fun observe(key: String): Flow<SyncMetaEntity?>
+
+    @Query("DELETE FROM sync_meta WHERE key = :key")
+    suspend fun delete(key: String): Int
 }
 
 @Database(
@@ -364,6 +378,7 @@ interface SyncMetaDao {
         LocalRefundEntity::class,
         ReportSnapshotEntity::class,
         CustomerCacheEntity::class,
+        CustomerOrderHistoryEntity::class,
         LocalCustomerEntity::class,
         LocalMenuCategoryEntity::class,
         LocalMenuItemEntity::class,
@@ -415,7 +430,7 @@ interface SyncMetaDao {
         LocalKitchenCancellationAckEntity::class,
         PosReceiptEntity::class,
     ],
-    version = 30,
+    version = 35,
     exportSchema = true,
 )
 @TypeConverters(

@@ -51,6 +51,7 @@ async def test_standard_owner_can_read_current_branch_receipt_identity_only(
             id=uuid4(),
             company_id=company.id,
             name="Not the current branch",
+            invoice_series_code="NC",
             address="Must not leak",
             timezone="UTC",
             state_code="29",

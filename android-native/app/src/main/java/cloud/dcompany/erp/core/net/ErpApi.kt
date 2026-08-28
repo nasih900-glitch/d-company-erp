@@ -82,6 +82,14 @@ interface ErpApi {
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Order
 
+    @PATCH("pos/orders/{id}/points")
+    suspend fun updateOrderPoints(
+        @Path("id") id: String,
+        @Body body: OrderPointsRedemptionUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
     @HTTP(method = "DELETE", path = "pos/orders/{id}", hasBody = true)
     suspend fun voidOrder(
         @Path("id") id: String,

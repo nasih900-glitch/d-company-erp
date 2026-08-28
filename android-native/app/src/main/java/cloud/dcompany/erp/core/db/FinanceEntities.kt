@@ -6,9 +6,9 @@ import androidx.room.PrimaryKey
 
 /**
  * Expenses, assets and partner capital entries are all immutable ledger
- * writes — create-only on the tablet (edit/delete for expenses and void for
- * capital entries stay in the web ERP; assets have no edit/delete endpoint
- * at all). That means every local outbox row here uses the insert-only
+ * writes — create-only on the tablet. Corrections are separate authorised,
+ * evidence-preserving actions; assets currently have no edit/delete endpoint.
+ * That means every local outbox row here uses the insert-only
  * Shape D shape (mirrors LocalGrnEntity/LocalAdjustmentEntity — a plain
  * `syncState`, no `serverId`-null-vs-set duality, no `pendingDelete` flag,
  * no CAS `version`), not the master-data create/edit/delete shape

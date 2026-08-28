@@ -14,6 +14,7 @@ import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,6 +26,12 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val ROLES_CACHE_KEY = "staff_roles"
+
+private data class StaffRolesState(
+    val rows: List<StaffRole> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
 
 /** Row shown in the staff list — merged cache + any pending/rejected local write. */
 data class StaffRow(
@@ -47,7 +54,14 @@ data class StaffRow(
      */
     val hasQueuedDelete: Boolean = false,
     val localWriteId: String? = null,
+    val localWriteVersion: Long? = null,
+    /** Backend masks both protected/co-owner roles as `owner`; only auditAccess may change owner access. */
+    val accessChangesLocked: Boolean = false,
+    val canDelete: Boolean = true,
 )
+
+internal val StaffRow.canDiscardRejectedChange: Boolean
+    get() = rejectedError != null && !hasQueuedDelete && localWriteId != null && localWriteVersion != null
 
 /**
  * Draft of the edit dialog. `isSelf` locks role/status, mirroring the web app
@@ -67,8 +81,17 @@ data class StaffEditor(
     val originalStatus: String,
     val originalRoleCode: String,
     val isSelf: Boolean,
+    val accessChangesLocked: Boolean,
 ) {
-    val valid: Boolean get() = name.isNotBlank()
+    val validationError: String?
+        get() = when {
+            name.trim().isEmpty() -> "Enter the staff member's name."
+            name.trim().length > 200 -> "Name must be 200 characters or fewer."
+            phone.trim().length > 20 -> "Phone must be 20 characters or fewer."
+            status !in setOf("active", "suspended") -> "Choose Active or Suspended status."
+            else -> null
+        }
+    val valid: Boolean get() = validationError == null
 }
 
 /** Draft of the "Add staff" two-phase form — request a code, then redeem it. */
@@ -80,8 +103,20 @@ data class CreateLoginDraft(
     val confirmPassword: String = "",
 ) {
     val passwordsMatch: Boolean get() = password == confirmPassword
+    val validationError: String?
+        get() = when {
+            name.trim().isEmpty() -> "Enter the staff member's name."
+            name.trim().length > 200 -> "Name must be 200 characters or fewer."
+            email.trim().length < 3 -> "Enter the staff member's email address."
+            email.trim().length > 254 -> "Email must be 254 characters or fewer."
+            phone.trim().length > 20 -> "Phone must be 20 characters or fewer."
+            password.length < 10 -> "Password must be at least 10 characters."
+            password.length > 256 -> "Password must be 256 characters or fewer."
+            !passwordsMatch -> "Passwords don't match."
+            else -> null
+        }
     val requestValid: Boolean
-        get() = name.isNotBlank() && email.isNotBlank() && password.length >= 10 && passwordsMatch
+        get() = validationError == null
 }
 
 /** Draft of the admin-initiated "Reset password" two-phase form, against an existing user's email. */
@@ -93,8 +128,19 @@ data class PasswordResetDraft(
     val confirmNewPassword: String = "",
 ) {
     val passwordsMatch: Boolean get() = newPassword == confirmNewPassword
-    val newPasswordValid: Boolean get() = newPassword.length >= 10 && passwordsMatch
+    val validationError: String?
+        get() = when {
+            newPassword.length < 10 -> "New password must be at least 10 characters."
+            newPassword.length > 256 -> "New password must be 256 characters or fewer."
+            !passwordsMatch -> "Passwords don't match."
+            else -> null
+        }
+    val newPasswordValid: Boolean get() = validationError == null
 }
+
+internal fun resolveAttendanceBranchId(profileBranchId: String?, terminalBranchId: String?): String? =
+    profileBranchId?.trim()?.takeIf(String::isNotEmpty)
+        ?: terminalBranchId?.trim()?.takeIf(String::isNotEmpty)
 
 /** Every UI-only, ephemeral piece of state consolidated into one flow — same fix as MenuViewModel's EditingState. */
 private data class EditingState(
@@ -118,6 +164,8 @@ private data class EditingState(
 
     val clockingInOut: Boolean = false,
     val attendanceError: String? = null,
+    val clockedInOverride: Boolean? = null,
+    val attendanceUncertain: Boolean = false,
 
     val notice: String? = null,
 )
@@ -130,11 +178,14 @@ data class StaffUiState(
     val syncing: Boolean = false,
     val rows: List<StaffRow> = emptyList(),
     val roles: List<StaffRole> = emptyList(),
+    val rolesError: String? = null,
     val onShift: List<OnShiftRow> = emptyList(),
     val myUserId: String? = null,
     val myBranchId: String? = null,
     val clockingInOrOut: Boolean = false,
     val attendanceError: String? = null,
+    val attendanceUncertain: Boolean = false,
+    val clockedInOverride: Boolean? = null,
 
     val editor: StaffEditor? = null,
     val savingEdit: Boolean = false,
@@ -160,7 +211,8 @@ data class StaffUiState(
         get() = canReadDirectory && !everSynced && rows.isEmpty() && syncing
     val couldNotLoad: Boolean
         get() = canReadDirectory && !everSynced && rows.isEmpty() && !syncing
-    val clockedIn: Boolean get() = myUserId != null && onShift.any { it.userId == myUserId }
+    val clockedIn: Boolean
+        get() = clockedInOverride ?: (myUserId != null && onShift.any { it.userId == myUserId })
 }
 
 /**
@@ -186,18 +238,25 @@ class StaffViewModel(
     private val loadPlan = access.loadPlan()
 
     private val pulling = MutableStateFlow(false)
-    private val rolesFlow = MutableStateFlow<List<StaffRole>>(emptyList())
+    private val rolesState = MutableStateFlow(StaffRolesState())
     private val myProfile = MutableStateFlow<MeResponse?>(profile)
     private val editing = MutableStateFlow(EditingState())
+    private val profileAndAttendanceBranch = combine(
+        myProfile,
+        appCtx.terminalStore.activeValidatedTerminal,
+    ) { currentProfile, terminal ->
+        currentProfile to resolveAttendanceBranchId(currentProfile?.branchId, terminal?.branchId)
+    }
 
     val state: StateFlow<StaffUiState> = combine(
-        combine(db.staffDao().observeCache(), db.staffDao().observeLocal(), myProfile, ::Triple),
+        combine(db.staffDao().observeCache(), db.staffDao().observeLocal(), profileAndAttendanceBranch, ::Triple),
         combine(db.syncMetaDao().observe("staff"), pulling, ::Pair),
         db.attendanceDao().observeOnShift(),
-        rolesFlow,
+        rolesState,
         editing,
-    ) { cacheLocalProfile, metaAndSyncing, onShift, roles, ed ->
-        val (cache, local, profile) = cacheLocalProfile
+    ) { cacheLocalProfile, metaAndSyncing, onShift, rolesState, ed ->
+        val (cache, local, profileAndBranch) = cacheLocalProfile
+        val (profile, attendanceBranchId) = profileAndBranch
         val (meta, isSyncing) = metaAndSyncing
         StaffUiState(
             canReadDirectory = access.canReadDirectory,
@@ -206,13 +265,14 @@ class StaffViewModel(
             everSynced = !access.canReadDirectory || meta != null,
             syncing = isSyncing,
             rows = if (access.canReadDirectory) {
-                mergeStaff(cache, local, profile?.userId)
+                mergeStaff(cache, local, profile?.userId, profile?.auditAccess == true)
             } else {
                 emptyList()
             },
-            roles = if (access.canReadDirectory) roles else emptyList(),
+            roles = if (access.canReadDirectory) rolesState.rows else emptyList(),
+            rolesError = rolesState.error,
             onShift = if (access.canReadDirectory || access.canUseAttendance) onShift
-                .filter { profile?.branchId == null || it.branchId == profile.branchId }
+                .filter { attendanceBranchId == null || it.branchId == attendanceBranchId }
                 .map {
                 OnShiftRow(
                     id = it.attendanceId,
@@ -227,7 +287,7 @@ class StaffViewModel(
                 emptyList()
             },
             myUserId = profile?.userId,
-            myBranchId = profile?.branchId,
+            myBranchId = attendanceBranchId,
             editor = ed.editor,
             savingEdit = ed.savingEdit,
             editError = ed.editError,
@@ -244,6 +304,8 @@ class StaffViewModel(
             deleteConfirmFor = ed.deleteConfirmFor,
             clockingInOrOut = ed.clockingInOut,
             attendanceError = ed.attendanceError,
+            attendanceUncertain = ed.attendanceUncertain,
+            clockedInOverride = ed.clockedInOverride,
             notice = ed.notice,
         )
     }.stateIn(
@@ -257,16 +319,17 @@ class StaffViewModel(
     )
 
     init {
-        if (loadPlan.loadRoles) loadRoles()
         retry()
     }
 
     private fun loadRoles() {
+        if (rolesState.value.loading) return
+        rolesState.value = rolesState.value.copy(loading = true, error = null)
         viewModelScope.launch {
-            db.reportSnapshotDao().cached<List<StaffRole>>(ROLES_CACHE_KEY)?.let { (cached, _) ->
-                rolesFlow.value = cached
-            }
             try {
+                db.reportSnapshotDao().cached<List<StaffRole>>(ROLES_CACHE_KEY)?.let { (cached, _) ->
+                    rolesState.value = rolesState.value.copy(rows = cached)
+                }
                 lateinit var fresh: List<StaffRole>
                 val committed = appCtx.cacheIsolation.fetchAndCommitScoped(
                     fetch = { api.roles() },
@@ -275,12 +338,23 @@ class StaffViewModel(
                         db.reportSnapshotDao().store(ROLES_CACHE_KEY, it)
                     },
                 )
-                if (!committed) return@launch
-                rolesFlow.value = fresh
+                if (!committed) {
+                    rolesState.value = rolesState.value.copy(loading = false)
+                    return@launch
+                }
+                rolesState.value = StaffRolesState(rows = fresh)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Cached roles (if any) stay showing — same "never worse than what we had" rule as ReportSnapshotDao.
+                val hasCache = rolesState.value.rows.isNotEmpty()
+                rolesState.value = rolesState.value.copy(
+                    loading = false,
+                    error = if (hasCache) {
+                        "Live roles could not refresh. Cached role choices remain visible."
+                    } else {
+                        "Role choices could not load. Check the connection and refresh Staff before changing access."
+                    },
+                )
             }
         }
     }
@@ -288,12 +362,27 @@ class StaffViewModel(
     // -------------------------------------------------------------- loading
 
     fun retry() {
+        if (loadPlan.loadRoles) loadRoles()
         if (loadPlan.pushManagementOutbox) appCtx.sync.requestSync()
         pulling.value = true
         viewModelScope.launch {
             try {
                 if (loadPlan.pullDirectory) appCtx.sync.refresh("staff")
-                if (loadPlan.pullAttendance) appCtx.sync.refresh("attendance")
+                if (loadPlan.pullAttendance) {
+                    when (val result = appCtx.sync.refresh("attendance")) {
+                        is ResourceRefreshResult.Refreshed -> editing.update {
+                            it.copy(
+                                attendanceUncertain = false,
+                                clockedInOverride = null,
+                                attendanceError = null,
+                            )
+                        }
+                        is ResourceRefreshResult.Failed -> if (editing.value.attendanceUncertain) {
+                            editing.update { it.copy(attendanceError = result.userMessage) }
+                        }
+                        is ResourceRefreshResult.Skipped -> Unit
+                    }
+                }
             } finally {
                 pulling.value = false
             }
@@ -328,6 +417,33 @@ class StaffViewModel(
         }
     }
 
+    /**
+     * A rejected row is definitive proof that the server changed nothing, so
+     * staff may acknowledge and remove that local attempt. Pending/ambiguous
+     * rows deliberately have no discard path: their request may have applied.
+     */
+    fun discardRejectedChange(row: StaffRow) {
+        if (!access.canManageDirectory || !row.canDiscardRejectedChange) return
+        val localId = row.localWriteId ?: return
+        val expectedVersion = row.localWriteVersion ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            var discarded = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    val current = db.staffDao().getLocal(localId)
+                    if (current?.state == StaffWriteState.REJECTED) {
+                        discarded = db.staffDao().deleteIfVersion(localId, expectedVersion) > 0
+                    }
+                }
+            ) return@launch
+            if (discarded) {
+                editing.update {
+                    it.copy(notice = "Rejected local Staff change discarded. Server data was not changed.")
+                }
+            }
+        }
+    }
+
     // --------------------------------------------------------------- editor
 
     fun startEdit(row: StaffRow) {
@@ -344,6 +460,7 @@ class StaffViewModel(
                     originalStatus = row.status,
                     originalRoleCode = currentRole,
                     isSelf = row.isSelf,
+                    accessChangesLocked = row.accessChangesLocked,
                 ),
                 editError = null,
             )
@@ -378,7 +495,11 @@ class StaffViewModel(
     fun saveEdit() {
         if (!access.canManageDirectory) return
         val ed = editing.value.editor ?: return
-        if (editing.value.savingEdit || !ed.valid) return
+        if (editing.value.savingEdit) return
+        ed.validationError?.let { message ->
+            editing.update { it.copy(editError = message) }
+            return
+        }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(savingEdit = true, editError = null) }
         viewModelScope.launch {
@@ -392,12 +513,14 @@ class StaffViewModel(
                             createdAtMillis = System.currentTimeMillis(),
                         )).copy(
                             name = ed.name.trim(),
-                            phone = ed.phone.trim().ifBlank { null },
+                            // Empty is intentional: Kotlin null means "omit from PATCH",
+                            // while the backend uses an empty string to clear a saved phone.
+                            phone = ed.phone.trim(),
                     // Self can't change these — never send them, so a harmless
                     // resubmit of the current value can never trip the
                     // backend's own self-edit guard (router.py's is_self check).
-                            status = if (ed.isSelf || ed.status == ed.originalStatus) null else ed.status,
-                            roleCode = if (ed.isSelf || ed.roleCode == ed.originalRoleCode) {
+                            status = if (ed.accessChangesLocked || ed.status == ed.originalStatus) null else ed.status,
+                            roleCode = if (ed.accessChangesLocked || ed.roleCode == ed.originalRoleCode) {
                                 null
                             } else {
                                 ed.roleCode.ifBlank { null }
@@ -438,7 +561,7 @@ class StaffViewModel(
     // --------------------------------------------------------------- delete
 
     fun startDelete(row: StaffRow) {
-        if (!access.canManageDirectory) return
+        if (!access.canManageDirectory || !row.canDelete) return
         editing.update { it.copy(deleteConfirmFor = row) }
     }
 
@@ -449,6 +572,15 @@ class StaffViewModel(
     fun confirmDelete() {
         if (!access.canManageDirectory) return
         val row = editing.value.deleteConfirmFor ?: return
+        if (!row.canDelete) {
+            editing.update {
+                it.copy(
+                    deleteConfirmFor = null,
+                    notice = "Only the protected owner can remove another owner account.",
+                )
+            }
+            return
+        }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(deleteConfirmFor = null) }
         viewModelScope.launch {
@@ -540,7 +672,17 @@ class StaffViewModel(
     fun requestCreateLogin() {
         if (!access.canManageDirectory) return
         val draft = editing.value.createDraft ?: return
-        if (editing.value.creating || !draft.requestValid) return
+        if (editing.value.creating) return
+        draft.validationError?.let { message ->
+            editing.update { it.copy(createError = message) }
+            return
+        }
+        if (!appCtx.connectivity.online.value) {
+            editing.update {
+                it.copy(createError = "Creating a login needs an internet connection to send the approval code.")
+            }
+            return
+        }
         editing.update { it.copy(creating = true, createError = null) }
         viewModelScope.launch {
             try {
@@ -581,7 +723,17 @@ class StaffViewModel(
         if (!access.canManageDirectory) return
         val challenge = editing.value.createChallenge ?: return
         val code = editing.value.createCode
-        if (editing.value.creating || code.length != 6) return
+        if (editing.value.creating) return
+        if (code.length != 6) {
+            editing.update { it.copy(createError = "Enter the complete 6-digit code.") }
+            return
+        }
+        if (!appCtx.connectivity.online.value) {
+            editing.update {
+                it.copy(createError = "Reconnect before confirming the approval code. The login has not been created.")
+            }
+            return
+        }
         editing.update { it.copy(creating = true, createError = null) }
         viewModelScope.launch {
             try {
@@ -589,7 +741,7 @@ class StaffViewModel(
                 editing.update {
                     it.copy(
                         createDraft = null, createChallenge = null, createCode = "", creating = false,
-                        notice = "Login created.",
+                        notice = "Login created with Staff access. Edit the account to assign another role if needed.",
                     )
                 }
                 retry()
@@ -634,6 +786,12 @@ class StaffViewModel(
         if (!access.canManageDirectory) return
         val draft = editing.value.passwordReset ?: return
         if (editing.value.resettingPassword) return
+        if (!appCtx.connectivity.online.value) {
+            editing.update {
+                it.copy(passwordResetError = "Password reset needs an internet connection to send the approval code.")
+            }
+            return
+        }
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
         viewModelScope.launch {
             try {
@@ -663,7 +821,21 @@ class StaffViewModel(
         val challenge = editing.value.passwordResetChallenge ?: return
         val draft = editing.value.passwordReset ?: return
         val code = editing.value.passwordResetCode
-        if (editing.value.resettingPassword || code.length != 6 || !draft.newPasswordValid) return
+        if (editing.value.resettingPassword) return
+        val validationError = when {
+            code.length != 6 -> "Enter the complete 6-digit code."
+            else -> draft.validationError
+        }
+        if (validationError != null) {
+            editing.update { it.copy(passwordResetError = validationError) }
+            return
+        }
+        if (!appCtx.connectivity.online.value) {
+            editing.update {
+                it.copy(passwordResetError = "Reconnect before confirming the approval code. The password has not changed.")
+            }
+            return
+        }
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
         viewModelScope.launch {
             try {
@@ -698,11 +870,26 @@ class StaffViewModel(
     fun clockIn() {
         if (!access.canUseAttendance) return
         if (editing.value.clockingInOut) return
-        val branchId = myProfile.value?.branchId
+        if (editing.value.attendanceUncertain) {
+            editing.update {
+                it.copy(attendanceError = "Refresh attendance to resolve the previous unknown result before trying again.")
+            }
+            return
+        }
+        if (!appCtx.connectivity.online.value) {
+            editing.update {
+                it.copy(attendanceError = "Clock-in needs an internet connection. Reconnect, then try again.")
+            }
+            return
+        }
+        val branchId = resolveAttendanceBranchId(
+            myProfile.value?.branchId,
+            appCtx.terminalStore.activeValidatedTerminal.value?.branchId,
+        )
         if (branchId == null) {
             editing.update {
                 it.copy(
-                    attendanceError = "No branch on this account — ask an owner to assign one before clocking in.",
+                    attendanceError = "No branch is selected. Choose a verified terminal for this branch, then try again.",
                 )
             }
             return
@@ -711,11 +898,39 @@ class StaffViewModel(
         viewModelScope.launch {
             try {
                 api.clockIn(ClockInBody(branchId))
-                appCtx.sync.refresh("attendance")
+                when (val refresh = appCtx.sync.refresh("attendance")) {
+                    is ResourceRefreshResult.Refreshed -> editing.update {
+                        it.copy(clockedInOverride = null, attendanceUncertain = false, notice = "Clocked in.")
+                    }
+                    is ResourceRefreshResult.Failed -> editing.update {
+                        it.copy(
+                            clockedInOverride = true,
+                            attendanceUncertain = false,
+                            attendanceError = "Clock-in succeeded, but the roster could not refresh: ${refresh.userMessage}",
+                        )
+                    }
+                    is ResourceRefreshResult.Skipped -> editing.update {
+                        it.copy(
+                            clockedInOverride = true,
+                            attendanceUncertain = false,
+                            attendanceError = "Clock-in succeeded, but this account could not refresh the roster.",
+                        )
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                editing.update { it.copy(attendanceError = (e as? ApiException)?.message ?: "Could not clock in.") }
+                val apiError = e as? ApiException
+                editing.update {
+                    it.copy(
+                        attendanceUncertain = apiError?.isAmbiguous == true,
+                        attendanceError = if (apiError?.isAmbiguous == true) {
+                            "The clock-in response was lost, so its status is unknown. Refresh attendance before trying again."
+                        } else {
+                            apiError?.message ?: "Could not clock in. Check the connection and try again."
+                        },
+                    )
+                }
             } finally {
                 editing.update { it.copy(clockingInOut = false) }
             }
@@ -725,15 +940,55 @@ class StaffViewModel(
     fun clockOut() {
         if (!access.canUseAttendance) return
         if (editing.value.clockingInOut) return
+        if (editing.value.attendanceUncertain) {
+            editing.update {
+                it.copy(attendanceError = "Refresh attendance to resolve the previous unknown result before trying again.")
+            }
+            return
+        }
+        if (!appCtx.connectivity.online.value) {
+            editing.update {
+                it.copy(attendanceError = "Clock-out needs an internet connection. Reconnect, then try again.")
+            }
+            return
+        }
         editing.update { it.copy(clockingInOut = true, attendanceError = null) }
         viewModelScope.launch {
             try {
                 api.clockOut()
-                appCtx.sync.refresh("attendance")
+                when (val refresh = appCtx.sync.refresh("attendance")) {
+                    is ResourceRefreshResult.Refreshed -> editing.update {
+                        it.copy(clockedInOverride = null, attendanceUncertain = false, notice = "Clocked out.")
+                    }
+                    is ResourceRefreshResult.Failed -> editing.update {
+                        it.copy(
+                            clockedInOverride = false,
+                            attendanceUncertain = false,
+                            attendanceError = "Clock-out succeeded, but the roster could not refresh: ${refresh.userMessage}",
+                        )
+                    }
+                    is ResourceRefreshResult.Skipped -> editing.update {
+                        it.copy(
+                            clockedInOverride = false,
+                            attendanceUncertain = false,
+                            attendanceError = "Clock-out succeeded, but this account could not refresh the roster.",
+                        )
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                editing.update { it.copy(attendanceError = (e as? ApiException)?.message ?: "Could not clock out.") }
+                val apiError = e as? ApiException
+                editing.update {
+                    it.copy(
+                        attendanceUncertain = apiError?.isAmbiguous == true,
+                        attendanceError = if (apiError?.isAmbiguous == true) {
+                            "The clock-out response was lost, so its status is unknown. Refresh attendance before trying again."
+                        } else {
+                            apiError?.message ?: "Could not clock out. Check the connection and try again."
+                        },
+                    )
+                }
             } finally {
                 editing.update { it.copy(clockingInOut = false) }
             }
@@ -745,25 +1000,37 @@ class StaffViewModel(
     }
 }
 
-private fun mergeStaff(
+internal fun mergeStaff(
     cache: List<StaffCacheEntity>,
     local: List<LocalStaffEntity>,
     myUserId: String?,
+    callerHasAuditAccess: Boolean,
 ): List<StaffRow> {
     val localByServerId = local.associateBy { it.serverId }
     val result = ArrayList<StaffRow>(cache.size)
     for (c in cache) {
         val pending = localByServerId[c.id]
+        // A definitive refusal changed nothing server-side. Never present its
+        // attempted name/status/role as current authority; keep only the error
+        // and recovery controls over the authoritative cache row.
+        val overlay = pending?.takeUnless { it.state == StaffWriteState.REJECTED }
+        val cachedRoles = c.rolesCsv.split(",").filter(String::isNotBlank)
+        val roles = overlay?.roleCode?.let { listOf(it) } ?: cachedRoles
+        val isSelf = c.id == myUserId
+        // Keep owner protections anchored to last confirmed server authority,
+        // not an optimistic queued demotion that may still be refused.
+        val isOwner = (cachedRoles + roles).any {
+            it == "owner" || it == "co_owner" || it == "super_owner"
+        }
         result += StaffRow(
             id = c.id,
             email = c.email,
-            name = pending?.name ?: c.name,
-            phone = (pending?.phone ?: c.phone),
-            status = pending?.status ?: c.status,
-            roles = pending?.roleCode?.let { listOf(it) }
-                ?: c.rolesCsv.split(",").filter(String::isNotBlank),
+            name = overlay?.name ?: c.name,
+            phone = (overlay?.phone ?: c.phone),
+            status = overlay?.status ?: c.status,
+            roles = roles,
             lastLoginAt = c.lastLoginAt,
-            isSelf = c.id == myUserId,
+            isSelf = isSelf,
             pendingLocalId = pending?.takeIf { it.state != StaffWriteState.REJECTED }?.localId,
             rejectedError = pending?.takeIf { it.state == StaffWriteState.REJECTED }?.lastError,
             // Same REJECTED guard as pendingLocalId above — a rejected delete
@@ -777,6 +1044,9 @@ private fun mergeStaff(
             pendingDelete = pending?.takeIf { it.state != StaffWriteState.REJECTED }?.pendingDelete ?: false,
             hasQueuedDelete = pending?.pendingDelete ?: false,
             localWriteId = pending?.localId,
+            localWriteVersion = pending?.version,
+            accessChangesLocked = isSelf || (isOwner && !callerHasAuditAccess),
+            canDelete = !isSelf && (!isOwner || callerHasAuditAccess),
         )
     }
     return result.sortedBy { it.name }

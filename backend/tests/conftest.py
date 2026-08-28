@@ -49,7 +49,12 @@ async def client() -> AsyncIterator[AsyncClient]:
 async def seed_owner(session: AsyncSession) -> dict:
     """Minimal seed: one company, one branch, one terminal, one owner user."""
     company = Company(id=uuid4(), name="TestCo")
-    branch = Branch(id=uuid4(), company_id=company.id, name="Main")
+    branch = Branch(
+        id=uuid4(),
+        company_id=company.id,
+        name="Main",
+        invoice_series_code="MN",
+    )
     terminal = Terminal(id=uuid4(), branch_id=branch.id, name="POS-T1", device_id=f"t-{uuid4()}")
     owner_role = Role(id=uuid4(), company_id=company.id, code="owner", name="Owner", permissions=[])
     # Self-registration assigns "staff" (see SELF_SERVICE_SIGNUP_ROLE) — needs
@@ -67,6 +72,10 @@ async def seed_owner(session: AsyncSession) -> dict:
     await session.flush()
     session.add(UserRole(id=uuid4(), user_id=owner.id, role_id=owner_role.id))
     await session.commit()
+    # 0047 invalidates role claims for every assignment writer, including the
+    # initial INSERT. Refresh the trigger-managed counter before tests issue
+    # manual tokens from this fixture object.
+    await session.refresh(owner)
     return {
         "company": company,
         "branch": branch,

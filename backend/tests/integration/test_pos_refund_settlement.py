@@ -18,16 +18,20 @@ from app.core.db import AsyncSessionLocal
 from app.core.security import issue_access_token
 from app.models import (
     AuditLog,
+    Batch,
     Company,
     Customer,
     CustomerSpendReconciliation,
     IdempotencyKey,
+    Ingredient,
     InvoiceCounter,
     MenuCategory,
     MenuItem,
     Order,
     OrderLine,
+    OrderLoyaltySettlement,
     Payment,
+    PointsRedemption,
     PosRefundCashHandoff,
     PosRefundCashHandoffCompletion,
     PosRefundEvidenceReconciliation,
@@ -35,17 +39,31 @@ from app.models import (
     PosRefundProviderSettlement,
     PosRefundRequest,
     PosRefundWithdrawal,
+    Recipe,
+    RecipeLine,
     Refund,
+    RefundLoyaltyAdjustment,
     Shift,
+    StockMovement,
     User,
 )
-from app.services.accounting.accounts import SALES_RETURNS, SALES_REVENUE
+from app.services.accounting.accounts import (
+    COST_OF_GOODS_SOLD,
+    INVENTORY,
+    SALES_REVENUE,
+)
 from app.services.accounting.ledger import build_operational_ledger
 from app.services.audit.recorder import install_audit_listeners
 from app.services.reports import ReportsAggregator
 
 _POS_APPEND_ONLY_TRIGGERS = (
+    ("payments", "trg_payments_immutable"),
+    ("payments", "trg_payments_final_order_balance"),
+    ("orders", "trg_orders_paid_source_integrity"),
+    ("orders", "trg_orders_final_payment_balance"),
+    ("order_lines", "trg_order_lines_paid_source_integrity"),
     ("refunds", "trg_refunds_immutable"),
+    ("refunds", "trg_refunds_final_order_balance"),
     ("pos_refund_requests", "trg_pos_refund_requests_immutable"),
     ("pos_refund_cash_handoffs", "trg_pos_refund_cash_handoffs_immutable"),
     (
@@ -73,6 +91,14 @@ _POS_APPEND_ONLY_TRIGGERS = (
         "pos_refund_workflow_guards",
         "trg_pos_refund_workflow_guards_internal",
     ),
+    (
+        "order_loyalty_settlements",
+        "trg_order_loyalty_settlements_immutable",
+    ),
+    (
+        "refund_loyalty_adjustments",
+        "trg_refund_loyalty_adjustments_immutable",
+    ),
 )
 
 
@@ -96,16 +122,22 @@ async def require_pos_refund_schema(session) -> None:
                     "IS NOT NULL "
                     "AND to_regclass('public.pos_refund_cash_handoff_completions') "
                     "IS NOT NULL "
+                    "AND to_regclass('public.order_loyalty_settlements') "
+                    "IS NOT NULL "
+                    "AND to_regclass('public.refund_loyalty_adjustments') "
+                    "IS NOT NULL "
                     "AND EXISTS (SELECT 1 FROM information_schema.columns "
                     "WHERE table_name='refunds' "
-                    "AND column_name='captured_time_reconciled')"
+                    "AND column_name='captured_time_reconciled') "
+                    "AND EXISTS (SELECT 1 FROM pg_trigger "
+                    "WHERE tgname='trg_payments_immutable' AND NOT tgisinternal)"
                 )
             )
         ).scalar_one()
     except Exception as exc:
         pytest.skip(f"local PostgreSQL unavailable: {exc}")
     if not exists:
-        pytest.skip("test database is not migrated through 0036")
+        pytest.skip("test database is not migrated through 0048")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +146,7 @@ class _RefundCase:
     branch_id: UUID
     terminal_id: UUID
     owner_id: UUID
+    owner_auth_version: int
     customer_id: UUID
     shift_id: UUID
     order_id: UUID
@@ -130,6 +163,8 @@ async def _seed_case(
     *,
     payment_method: str,
     invoice_issued: bool = True,
+    defer_settlement: bool = False,
+    points_redeemed_minor: int = 0,
 ) -> _RefundCase:
     company = seed_owner["company"]
     branch = seed_owner["branch"]
@@ -144,8 +179,11 @@ async def _seed_case(
         company_id=company.id,
         name="POS refund customer",
         phone=f"8{uuid4().int % 10**9:09d}",
-        visit_count=1,
-        total_spent_minor=amount,
+        # A deferred case is still an open cart.  Do not pre-credit customer
+        # history before the payment endpoint performs the authoritative sale
+        # finalisation.
+        visit_count=0 if defer_settlement else 1,
+        total_spent_minor=0 if defer_settlement else amount,
         loyalty_points=0,
         lifetime_gaming_points_earned=0,
         first_visit_at=now,
@@ -159,7 +197,9 @@ async def _seed_case(
         opened_by=owner.id,
         opened_at=now - timedelta(hours=1),
         opening_float_minor=opening,
-        expected_minor=opening + (amount if payment_method == "cash" else 0),
+        expected_minor=opening + (
+            amount if payment_method == "cash" and not defer_settlement else 0
+        ),
         status="open",
     )
     order = Order(
@@ -173,14 +213,21 @@ async def _seed_case(
         customer_name=customer.name,
         customer_phone=customer.phone,
         type="takeaway",
-        status="paid",
+        status="open" if defer_settlement else "paid",
         subtotal_minor=amount,
         total_minor=amount,
+        points_redeemed_minor=points_redeemed_minor,
         opened_at=now - timedelta(minutes=30),
-        closed_at=sale_at,
-        invoice_issued_at=sale_at if invoice_issued else None,
-        invoice_no=f"D/RF/26-27/{uuid4().int % 100000:05d}",
-        fiscal_year="2026-27",
+        closed_at=None if defer_settlement else sale_at,
+        invoice_issued_at=(
+            sale_at if invoice_issued and not defer_settlement else None
+        ),
+        invoice_no=(
+            None
+            if defer_settlement
+            else f"D/RF/26-27/{uuid4().int % 100000:05d}"
+        ),
+        fiscal_year=None if defer_settlement else "2026-27",
     )
     payment = Payment(
         id=uuid4(),
@@ -188,6 +235,8 @@ async def _seed_case(
         shift_id=shift.id,
         method=payment_method,
         amount_minor=amount,
+        tendered_minor=amount if payment_method == "cash" else None,
+        change_minor=0 if payment_method == "cash" else None,
         paid_at=sale_at,
         ref_external="sale-provider-ref" if payment_method != "cash" else None,
     )
@@ -195,10 +244,61 @@ async def _seed_case(
     # make the FK insertion order explicit for a clean PostgreSQL database.
     session.add_all([customer, shift])
     await session.flush()
+    if not invoice_issued and not defer_settlement:
+        await session.execute(
+            text(
+                "ALTER TABLE orders DISABLE TRIGGER "
+                "trg_orders_final_payment_balance"
+            )
+        )
     session.add(order)
     await session.flush()
-    session.add(payment)
-    await session.commit()
+    if defer_settlement:
+        await session.commit()
+    elif invoice_issued:
+        session.add(payment)
+        await session.commit()
+    else:
+        # Intentional corruption-compatibility fixture: revision 0048 refuses
+        # to admit this shape during migration or normal writes. Keep one
+        # runtime resilience proof by bypassing only the production insert
+        # trigger in this disposable test transaction, then restore it before
+        # exercising application code.
+        await session.execute(
+            text(
+                "ALTER TABLE payments DISABLE TRIGGER "
+                "trg_payments_insert_integrity"
+            )
+        )
+        await session.execute(
+            text(
+                "ALTER TABLE payments DISABLE TRIGGER "
+                "trg_payments_final_order_balance"
+            )
+        )
+        try:
+            session.add(payment)
+            await session.flush()
+        finally:
+            await session.execute(
+                text(
+                    "ALTER TABLE payments ENABLE TRIGGER "
+                    "trg_payments_insert_integrity"
+                )
+            )
+            await session.execute(
+                text(
+                    "ALTER TABLE payments ENABLE TRIGGER "
+                    "trg_payments_final_order_balance"
+                )
+            )
+            await session.execute(
+                text(
+                    "ALTER TABLE orders ENABLE TRIGGER "
+                    "trg_orders_final_payment_balance"
+                )
+            )
+        await session.commit()
     token = issue_access_token(
         user_id=owner.id,
         company_id=company.id,
@@ -212,6 +312,7 @@ async def _seed_case(
         branch_id=branch.id,
         terminal_id=terminal.id,
         owner_id=owner.id,
+        owner_auth_version=owner.auth_version,
         customer_id=customer.id,
         shift_id=shift.id,
         order_id=order.id,
@@ -633,6 +734,11 @@ async def _cleanup(case: _RefundCase, *, keys: tuple[str, ...]) -> None:
                 PosRefundEvidenceReconciliation.refund_id.in_(refund_ids)
             )
         )
+        await cleanup.execute(
+            delete(RefundLoyaltyAdjustment).where(
+                RefundLoyaltyAdjustment.refund_id.in_(refund_ids)
+            )
+        )
         await cleanup.execute(delete(Refund).where(Refund.request_id.in_(request_ids)))
         await cleanup.execute(
             delete(PosRefundProviderSettlement).where(
@@ -671,6 +777,11 @@ async def _cleanup(case: _RefundCase, *, keys: tuple[str, ...]) -> None:
             delete(PosRefundRequest).where(PosRefundRequest.order_id == case.order_id)
         )
         await cleanup.execute(delete(Payment).where(Payment.order_id == case.order_id))
+        await cleanup.execute(
+            delete(OrderLoyaltySettlement).where(
+                OrderLoyaltySettlement.order_id == case.order_id
+            )
+        )
         await cleanup.execute(delete(Order).where(Order.id == case.order_id))
         await cleanup.execute(
             delete(InvoiceCounter).where(
@@ -682,6 +793,720 @@ async def _cleanup(case: _RefundCase, *, keys: tuple[str, ...]) -> None:
         await cleanup.execute(delete(Customer).where(Customer.id == case.customer_id))
         await _set_disposable_cleanup_triggers(cleanup, enabled=True)
         await cleanup.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_checkout_records_exact_loyalty_snapshot_for_future_refunds(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """Forward checkout persists facts instead of relying on later recompute."""
+    case = await _seed_case(
+        session,
+        seed_owner,
+        payment_method="cash",
+        defer_settlement=True,
+    )
+    order = await session.get(Order, case.order_id)
+    assert order is not None
+    category = MenuCategory(
+        id=uuid4(),
+        company_id=case.company_id,
+        name=f"Loyalty ledger {uuid4().hex[:8]}",
+        sort_order=0,
+    )
+    item = MenuItem(
+        id=uuid4(),
+        company_id=case.company_id,
+        category_id=category.id,
+        sku=f"LOYALTY-{uuid4().hex[:10]}",
+        name="Gaming loyalty proof",
+        type="gaming",
+        base_price_minor=case.amount_minor,
+        tax_rate=0,
+        price_includes_tax=True,
+        is_available=True,
+    )
+    line = OrderLine(
+        id=uuid4(),
+        order_id=case.order_id,
+        menu_item_id=item.id,
+        qty=1,
+        unit_price_minor=case.amount_minor,
+        line_total_minor=case.amount_minor,
+        discount_minor=0,
+        tax_rate=0,
+        taxable_value_minor=case.amount_minor,
+        cgst_minor=0,
+        sgst_minor=0,
+        igst_minor=0,
+        cess_minor=0,
+        kitchen_status="queued",
+    )
+    order.customer_id = None
+    session.add(category)
+    await session.flush()
+    session.add(item)
+    await session.flush()
+    session.add(line)
+    await session.commit()
+
+    payment_key = f"loyalty-checkout:{uuid4()}"
+    try:
+        paid = await client.post(
+            f"/api/v1/pos/orders/{case.order_id}/payments",
+            json={
+                "method": "cash",
+                "amount_minor": case.amount_minor,
+                "tendered_minor": case.amount_minor,
+                "expected_order_total_minor": case.amount_minor,
+                "expected_due_minor": case.amount_minor,
+            },
+            headers=_headers(case, payment_key),
+        )
+        assert paid.status_code == 201, paid.text
+        async with AsyncSessionLocal() as verify:
+            customer = await verify.get(Customer, case.customer_id)
+            ledger = (
+                await verify.execute(
+                select(OrderLoyaltySettlement).where(
+                    OrderLoyaltySettlement.order_id == case.order_id
+                )
+                )
+            ).scalar_one()
+            paid_order = await verify.get(Order, case.order_id)
+            assert customer is not None
+            assert paid_order is not None
+            assert customer.loyalty_points == 49
+            assert customer.lifetime_gaming_points_earned == 49
+            assert ledger.provenance == "exact"
+            assert ledger.customer_id == customer.id
+            assert ledger.order_paid_minor == case.amount_minor
+            assert ledger.points_redeemed == 0
+            assert ledger.points_earned == 49
+            assert ledger.rank_bonus_points == 0
+            assert ledger.settled_at == paid_order.invoice_issued_at
+    finally:
+        await _cleanup(case, keys=(payment_key,))
+        async with AsyncSessionLocal() as cleanup:
+            await cleanup.execute(delete(MenuItem).where(MenuItem.id == item.id))
+            await cleanup.execute(
+                delete(MenuCategory).where(MenuCategory.id == category.id)
+            )
+            await cleanup.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_money_refund_does_not_restock_or_reverse_sale_cogs(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """A payment refund is not evidence that prepared stock was returned."""
+    case = await _seed_case(
+        session,
+        seed_owner,
+        payment_method="cash",
+        defer_settlement=True,
+    )
+    category = MenuCategory(
+        id=uuid4(),
+        company_id=case.company_id,
+        name=f"Refund stock contract {uuid4().hex[:8]}",
+        sort_order=0,
+    )
+    item = MenuItem(
+        id=uuid4(),
+        company_id=case.company_id,
+        category_id=category.id,
+        sku=f"RF-STOCK-{uuid4().hex[:10]}",
+        name="Prepared stock refund proof",
+        type="food",
+        base_price_minor=case.amount_minor,
+        tax_rate=0,
+        price_includes_tax=True,
+        is_available=True,
+    )
+    ingredient = Ingredient(
+        id=uuid4(),
+        company_id=case.company_id,
+        sku=f"RF-ING-{uuid4().hex[:10]}",
+        name="Refund proof ingredient",
+        base_unit="unit",
+        reorder_threshold=0,
+        reorder_qty=0,
+        avg_cost_minor=125,
+        current_qty=10,
+    )
+    batch = Batch(
+        id=uuid4(),
+        ingredient_id=ingredient.id,
+        branch_id=case.branch_id,
+        received_at=case.captured_at - timedelta(days=1),
+        expires_at=None,
+        qty_initial=10,
+        qty_on_hand=10,
+        cost_per_unit_minor=125,
+        lot_code=f"RF-{uuid4().hex[:8]}",
+    )
+    recipe = Recipe(
+        id=uuid4(),
+        menu_item_id=item.id,
+        name="One ingredient per prepared item",
+        yield_qty=1,
+        version=1,
+        is_active=True,
+        cost_minor=125,
+    )
+    recipe_line = RecipeLine(
+        id=uuid4(),
+        recipe_id=recipe.id,
+        ingredient_id=ingredient.id,
+        qty=1,
+        wastage_pct=0,
+    )
+    order_line = OrderLine(
+        id=uuid4(),
+        order_id=case.order_id,
+        menu_item_id=item.id,
+        qty=1,
+        unit_price_minor=case.amount_minor,
+        line_total_minor=case.amount_minor,
+        discount_minor=0,
+        tax_rate=0,
+        taxable_value_minor=case.amount_minor,
+        cgst_minor=0,
+        sgst_minor=0,
+        igst_minor=0,
+        cess_minor=0,
+        kitchen_status="served",
+        kitchen_released_at=case.captured_at - timedelta(minutes=25),
+        kitchen_round_no=1,
+        kitchen_served_at=case.captured_at,
+    )
+    session.add_all([category, ingredient])
+    await session.flush()
+    session.add_all([item, batch])
+    await session.flush()
+    session.add(recipe)
+    await session.flush()
+    session.add_all([recipe_line, order_line])
+    await session.commit()
+
+    payment_key = f"refund-stock-payment:{uuid4()}"
+    request_key = f"refund-stock-request:{uuid4()}"
+    begin_key = f"refund-stock-begin:{uuid4()}"
+    complete_key = f"refund-stock-complete:{uuid4()}"
+    finalize_key = f"refund-stock-finalize:{uuid4()}"
+    keys = (payment_key, request_key, begin_key, complete_key, finalize_key)
+    try:
+        paid = await client.post(
+            f"/api/v1/pos/orders/{case.order_id}/payments",
+            json={
+                "method": "cash",
+                "amount_minor": case.amount_minor,
+                "tendered_minor": case.amount_minor,
+                "expected_order_total_minor": case.amount_minor,
+                "expected_due_minor": case.amount_minor,
+            },
+            headers=_headers(case, payment_key),
+        )
+        assert paid.status_code == 201, paid.text
+
+        async with AsyncSessionLocal() as verify:
+            paid_batch = await verify.get(Batch, batch.id)
+            paid_ingredient = await verify.get(Ingredient, ingredient.id)
+            sale_movements = (
+                (
+                    await verify.execute(
+                        select(StockMovement).where(
+                            StockMovement.ref_type == "order",
+                            StockMovement.ref_id == case.order_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert paid_batch is not None
+            assert paid_ingredient is not None
+            assert float(paid_batch.qty_on_hand) == 9
+            assert float(paid_ingredient.current_qty) == 9
+            assert len(sale_movements) == 1
+            assert sale_movements[0].type == "sale"
+            assert float(sale_movements[0].qty_delta) == -1
+            assert sale_movements[0].cost_per_unit_minor == 125
+            sale_movement_id = sale_movements[0].id
+
+        accepted = await client.post(
+            "/api/v1/pos/refund-requests",
+            json=_request_payload(case, action_id=request_key, mode="cash"),
+            headers=_headers(case, request_key),
+        )
+        assert accepted.status_code == 201, accepted.text
+        request_id = accepted.json()["id"]
+        begun = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/begin-cash-handoff",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": case.amount_minor,
+                "ready_to_handover": True,
+            },
+            headers=_headers(case, begin_key),
+        )
+        assert begun.status_code == 201, begun.text
+        completed = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/settle-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": case.amount_minor,
+                "cash_handed_over": True,
+                "settled_at": begun.json()["handoff_started_at"],
+            },
+            headers=_headers(case, complete_key),
+        )
+        assert completed.status_code == 201, completed.text
+        finalized = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/finalize-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": case.amount_minor,
+            },
+            headers=_headers(case, finalize_key),
+        )
+        assert finalized.status_code == 201, finalized.text
+
+        period_start = datetime.combine(
+            case.captured_at.date() - timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=UTC,
+        )
+        period_end = datetime.combine(
+            case.captured_at.date() + timedelta(days=2),
+            datetime.min.time(),
+            tzinfo=UTC,
+        )
+        async with AsyncSessionLocal() as verify:
+            refunded_batch = await verify.get(Batch, batch.id)
+            refunded_ingredient = await verify.get(Ingredient, ingredient.id)
+            movements = (
+                (
+                    await verify.execute(
+                        select(StockMovement).where(
+                            StockMovement.ref_type == "order",
+                            StockMovement.ref_id == case.order_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert refunded_batch is not None
+            assert refunded_ingredient is not None
+            assert float(refunded_batch.qty_on_hand) == 9
+            assert float(refunded_ingredient.current_qty) == 9
+            assert [(row.id, row.type) for row in movements] == [
+                (sale_movement_id, "sale")
+            ]
+            assert not any(row.type == "refund_restock" for row in movements)
+
+            ledger = await build_operational_ledger(
+                verify,
+                company_id=case.company_id,
+                start_at=period_start,
+                end_exclusive=period_end,
+            )
+            inventory_lines = [
+                line for line in ledger if line.ref_id == sale_movement_id
+            ]
+            assert {
+                (line.account_code, line.debit_minor, line.credit_minor)
+                for line in inventory_lines
+            } == {
+                (COST_OF_GOODS_SOLD.code, 125, 0),
+                (INVENTORY.code, 0, 125),
+            }
+    finally:
+        await _cleanup(case, keys=keys)
+        async with AsyncSessionLocal() as cleanup:
+            await cleanup.execute(
+                delete(StockMovement).where(StockMovement.batch_id == batch.id)
+            )
+            await cleanup.execute(delete(Batch).where(Batch.id == batch.id))
+            await cleanup.execute(delete(RecipeLine).where(RecipeLine.id == recipe_line.id))
+            await cleanup.execute(delete(Recipe).where(Recipe.id == recipe.id))
+            await cleanup.execute(delete(Ingredient).where(Ingredient.id == ingredient.id))
+            await cleanup.execute(delete(MenuItem).where(MenuItem.id == item.id))
+            await cleanup.execute(
+                delete(MenuCategory).where(MenuCategory.id == category.id)
+            )
+            await cleanup.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_partial_refunds_restore_and_reverse_exact_loyalty_once(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """Cumulative allocation is exact, drift-free and replay-idempotent."""
+    case = await _seed_case(
+        session,
+        seed_owner,
+        payment_method="cash",
+        points_redeemed_minor=70,
+    )
+    customer = await session.get(Customer, case.customer_id)
+    order = await session.get(Order, case.order_id)
+    assert customer is not None
+    assert order is not None
+    customer.loyalty_points = 37
+    customer.lifetime_gaming_points_earned = 123
+    redemption = PointsRedemption(
+        id=uuid4(),
+        customer_id=case.customer_id,
+        order_id=case.order_id,
+        points_spent=7,
+        amount_minor=70,
+        consumed_at=case.captured_at - timedelta(minutes=19),
+    )
+    settlement = OrderLoyaltySettlement(
+        id=uuid4(),
+        company_id=case.company_id,
+        customer_id=case.customer_id,
+        order_id=case.order_id,
+        order_paid_minor=case.amount_minor,
+        points_redeemed=7,
+        points_earned=5,
+        rank_bonus_points=3,
+        settled_at=order.invoice_issued_at,
+        provenance="exact",
+    )
+    session.add(redemption)
+    # The database guard intentionally reads the immutable order/redemption
+    # facts before accepting the derived settlement snapshot.
+    await session.flush()
+    session.add(settlement)
+    await session.commit()
+
+    keys: list[str] = []
+
+    async def _settle_partial(
+        *, amount_minor: int, refundable_before: int, label: str
+    ) -> tuple[str, str]:
+        request_key = f"loyalty-{label}-request:{uuid4()}"
+        begin_key = f"loyalty-{label}-begin:{uuid4()}"
+        complete_key = f"loyalty-{label}-complete:{uuid4()}"
+        finalize_key = f"loyalty-{label}-finalize:{uuid4()}"
+        keys.extend((request_key, begin_key, complete_key, finalize_key))
+        payload = _request_payload(case, action_id=request_key, mode="cash")
+        payload["amount_minor"] = amount_minor
+        payload["expected_refundable_minor"] = refundable_before
+        accepted = await client.post(
+            "/api/v1/pos/refund-requests",
+            json=payload,
+            headers=_headers(case, request_key),
+        )
+        assert accepted.status_code == 201, accepted.text
+        request_id = accepted.json()["id"]
+        begun = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/begin-cash-handoff",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": amount_minor,
+                "ready_to_handover": True,
+            },
+            headers=_headers(case, begin_key),
+        )
+        assert begun.status_code == 201, begun.text
+        completed = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/settle-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": amount_minor,
+                "cash_handed_over": True,
+                "settled_at": begun.json()["handoff_started_at"],
+            },
+            headers=_headers(case, complete_key),
+        )
+        assert completed.status_code == 201, completed.text
+        finalized = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/finalize-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": amount_minor,
+            },
+            headers=_headers(case, finalize_key),
+        )
+        assert finalized.status_code == 201, finalized.text
+        return request_id, finalize_key
+
+    first_amount = 8_000
+    try:
+        first_request_id, first_finalize_key = await _settle_partial(
+            amount_minor=first_amount,
+            refundable_before=case.amount_minor,
+            label="first",
+        )
+        async with AsyncSessionLocal() as verify:
+            first_customer = await verify.get(Customer, case.customer_id)
+            first_refund = (
+                await verify.execute(
+                    select(Refund).where(
+                        Refund.request_id == UUID(first_request_id)
+                    )
+                )
+            ).scalar_one()
+            first_adjustment = (
+                await verify.execute(
+                    select(RefundLoyaltyAdjustment).where(
+                        RefundLoyaltyAdjustment.refund_id == first_refund.id
+                    )
+                )
+            ).scalar_one()
+            assert first_customer is not None
+            assert first_customer.loyalty_points == 38
+            assert first_customer.lifetime_gaming_points_earned == 123
+            assert first_refund.loyalty_reconciliation_state == "applied"
+            assert first_adjustment.cumulative_refunded_minor == first_amount
+            assert first_adjustment.redeemed_points_restored == 2
+            assert first_adjustment.points_earned_reversed == 1
+            assert first_adjustment.rank_bonus_points_reversed == 0
+            assert first_adjustment.net_points_delta == 1
+
+        remaining = case.amount_minor - first_amount
+        second_request_id, _ = await _settle_partial(
+            amount_minor=remaining,
+            refundable_before=remaining,
+            label="second",
+        )
+
+        # Response-loss/rapid-tap replay returns the immutable result and does
+        # not insert or apply a third loyalty adjustment.
+        replay = await client.post(
+            f"/api/v1/pos/refund-requests/{first_request_id}/finalize-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": first_amount,
+            },
+            headers=_headers(case, first_finalize_key),
+        )
+        assert replay.status_code == 201, replay.text
+
+        async with AsyncSessionLocal() as verify:
+            final_customer = await verify.get(Customer, case.customer_id)
+            adjustments = (
+                (
+                    await verify.execute(
+                        select(RefundLoyaltyAdjustment)
+                        .where(
+                            RefundLoyaltyAdjustment.order_id == case.order_id
+                        )
+                        .order_by(
+                            RefundLoyaltyAdjustment.cumulative_refunded_minor
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            second_refund = (
+                await verify.execute(
+                    select(Refund).where(
+                        Refund.request_id == UUID(second_request_id)
+                    )
+                )
+            ).scalar_one()
+            assert final_customer is not None
+            assert final_customer.loyalty_points == 36
+            assert final_customer.lifetime_gaming_points_earned == 123
+            assert second_refund.loyalty_reconciliation_state == "applied"
+            assert len(adjustments) == 2
+            assert sum(row.redeemed_points_restored for row in adjustments) == 7
+            assert sum(row.points_earned_reversed for row in adjustments) == 5
+            assert sum(row.rank_bonus_points_reversed for row in adjustments) == 3
+            assert sum(row.net_points_delta for row in adjustments) == -1
+
+        async with AsyncSessionLocal() as tamper:
+            with pytest.raises(DBAPIError, match="append-only"):
+                await tamper.execute(
+                    update(RefundLoyaltyAdjustment)
+                    .where(RefundLoyaltyAdjustment.order_id == case.order_id)
+                    .values(net_points_delta=999)
+                )
+            await tamper.rollback()
+    finally:
+        await _cleanup(case, keys=tuple(keys))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_full_refund_restores_legacy_redemption_without_inventing_earn(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """A 0043 backfill row restores known spend while leaving unknown earn alone."""
+    case = await _seed_case(
+        session,
+        seed_owner,
+        payment_method="cash",
+        points_redeemed_minor=200,
+    )
+    customer = await session.get(Customer, case.customer_id)
+    order = await session.get(Order, case.order_id)
+    assert customer is not None
+    assert order is not None
+    customer.loyalty_points = 10
+    redemption = PointsRedemption(
+        id=uuid4(),
+        customer_id=case.customer_id,
+        order_id=case.order_id,
+        points_spent=20,
+        amount_minor=200,
+        consumed_at=case.captured_at - timedelta(minutes=19),
+    )
+    session.add(redemption)
+    await session.flush()
+
+    # Only migration 0043 may create redemption-only provenance. This narrowly
+    # disabled fixture trigger recreates its output in an already-at-head test
+    # database; the trigger is restored before any refund code runs.
+    await session.execute(
+        text(
+            "ALTER TABLE order_loyalty_settlements DISABLE TRIGGER "
+            "trg_order_loyalty_settlement_guard"
+        )
+    )
+    session.add(
+        OrderLoyaltySettlement(
+            id=uuid4(),
+            company_id=case.company_id,
+            customer_id=case.customer_id,
+            order_id=case.order_id,
+            order_paid_minor=case.amount_minor,
+            points_redeemed=20,
+            points_earned=0,
+            rank_bonus_points=0,
+            settled_at=redemption.consumed_at,
+            provenance="legacy_redemption_only",
+        )
+    )
+    await session.flush()
+    await session.execute(
+        text(
+            "ALTER TABLE order_loyalty_settlements ENABLE TRIGGER "
+            "trg_order_loyalty_settlement_guard"
+        )
+    )
+    await session.commit()
+
+    request_key = f"legacy-loyalty-request:{uuid4()}"
+    begin_key = f"legacy-loyalty-begin:{uuid4()}"
+    complete_key = f"legacy-loyalty-complete:{uuid4()}"
+    finalize_key = f"legacy-loyalty-finalize:{uuid4()}"
+    keys = (request_key, begin_key, complete_key, finalize_key)
+    try:
+        accepted = await client.post(
+            "/api/v1/pos/refund-requests",
+            json=_request_payload(case, action_id=request_key, mode="cash"),
+            headers=_headers(case, request_key),
+        )
+        assert accepted.status_code == 201, accepted.text
+        request_id = accepted.json()["id"]
+        begun = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/begin-cash-handoff",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": case.amount_minor,
+                "ready_to_handover": True,
+            },
+            headers=_headers(case, begin_key),
+        )
+        assert begun.status_code == 201, begun.text
+        completed = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/settle-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": case.amount_minor,
+                "cash_handed_over": True,
+                "settled_at": begun.json()["handoff_started_at"],
+            },
+            headers=_headers(case, complete_key),
+        )
+        assert completed.status_code == 201, completed.text
+        finalized = await client.post(
+            f"/api/v1/pos/refund-requests/{request_id}/finalize-cash",
+            json={
+                "shift_id": str(case.shift_id),
+                "expected_amount_minor": case.amount_minor,
+            },
+            headers=_headers(case, finalize_key),
+        )
+        assert finalized.status_code == 201, finalized.text
+        assert finalized.json()["loyalty_reconciliation_state"] == (
+            "legacy_redemption_restored"
+        )
+
+        async with AsyncSessionLocal() as verify:
+            final_customer = await verify.get(Customer, case.customer_id)
+            refund = (
+                await verify.execute(
+                    select(Refund).where(
+                        Refund.request_id == UUID(request_id)
+                    )
+                )
+            ).scalar_one()
+            adjustment = (
+                await verify.execute(
+                    select(RefundLoyaltyAdjustment).where(
+                        RefundLoyaltyAdjustment.refund_id == refund.id
+                    )
+                )
+            ).scalar_one()
+            assert final_customer is not None
+            assert final_customer.loyalty_points == 30
+            assert refund.loyalty_reconciliation_state == (
+                "legacy_redemption_restored"
+            )
+            assert adjustment.redeemed_points_restored == 20
+            assert adjustment.points_earned_reversed == 0
+            assert adjustment.rank_bonus_points_reversed == 0
+            assert adjustment.net_points_delta == 20
+
+        # Prove the forward-state constraint itself, independently of the
+        # append-only triggers that normally reject every Refund update first.
+        # The DDL and failed mutation are rolled back together, restoring both
+        # triggers before cleanup.
+        async with AsyncSessionLocal() as constraint_probe:
+            await constraint_probe.execute(
+                text(
+                    "ALTER TABLE refunds DISABLE TRIGGER "
+                    "trg_refunds_immutable"
+                )
+            )
+            await constraint_probe.execute(
+                text(
+                    "ALTER TABLE refunds DISABLE TRIGGER "
+                    "trg_refunds_transition_guard"
+                )
+            )
+            with pytest.raises(
+                DBAPIError,
+                match="ck_refund_loyalty_reconciliation_state",
+            ):
+                await constraint_probe.execute(
+                    update(Refund)
+                    .where(Refund.id == refund.id)
+                    .values(loyalty_reconciliation_state=None)
+                )
+            await constraint_probe.rollback()
+    finally:
+        await _cleanup(case, keys=keys)
 
 
 @pytest.mark.integration
@@ -871,7 +1696,11 @@ async def test_cash_refund_completion_survives_before_concurrent_finalize(
         )
         assert finalized.status_code == 201, finalized.text
         assert finalized.json()["status"] == "settled"
-        assert finalized.json()["receipt_no"].startswith("R/RF/")
+        receipt_no = finalized.json()["receipt_no"]
+        assert receipt_no.startswith(
+            f"R/{seed_owner['branch'].invoice_series_code}/"
+        )
+        assert len(receipt_no) == 16
 
         async with AsyncSessionLocal() as verify:
             refunds = (
@@ -1033,11 +1862,11 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
     session,
     seed_owner,
 ) -> None:
-    """A missing legacy invoice timestamp must not hide real money movement.
+    """A corrupt legacy sale remains reportable but cannot move more money.
 
-    The sale remains in its closed-at cohort, while the payment and refund use
-    their own immutable movement timestamps. Reports, Insights and the ledger
-    must therefore agree, and the report must expose the missing provenance.
+    Revision 0048 refuses this shape during upgrade. This narrow fixture proves
+    defence in depth: reporting still exposes the historical collection, while
+    the refund workflow quarantines it before any cash handoff is accepted.
     """
     case = await _seed_case(
         session,
@@ -1067,8 +1896,24 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
     await session.flush()
     session.add(item)
     await session.flush()
-    session.add(
-        OrderLine(
+    # Same intentional legacy shape: the paid-source guard correctly refuses
+    # a new financial line, so install the historical line only while that one
+    # trigger is disabled and restore it before the refund workflow begins.
+    await session.execute(
+        text(
+            "ALTER TABLE order_lines DISABLE TRIGGER "
+            "trg_order_lines_paid_source_integrity"
+        )
+    )
+    await session.execute(
+        text(
+            "ALTER TABLE orders DISABLE TRIGGER "
+            "trg_orders_final_payment_balance"
+        )
+    )
+    try:
+        session.add(
+            OrderLine(
             id=uuid4(),
             order_id=case.order_id,
             menu_item_id=item.id,
@@ -1083,56 +1928,35 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
             igst_minor=0,
             cess_minor=0,
             kitchen_status="served",
+            kitchen_served_at=case.captured_at,
+            )
         )
-    )
+        await session.flush()
+    finally:
+        await session.execute(
+            text(
+                "ALTER TABLE order_lines ENABLE TRIGGER "
+                "trg_order_lines_paid_source_integrity"
+            )
+        )
+        await session.execute(
+            text(
+                "ALTER TABLE orders ENABLE TRIGGER "
+                "trg_orders_final_payment_balance"
+            )
+        )
     await session.commit()
 
     request_key = f"pos-refund-report-request:{uuid4()}"
-    begin_key = f"pos-refund-report-begin:{uuid4()}"
-    completion_key = f"pos-refund-report-complete:{uuid4()}"
-    finalize_key = f"pos-refund-report-finalize:{uuid4()}"
-    keys = (request_key, begin_key, completion_key, finalize_key)
+    keys = (request_key,)
     try:
         accepted = await client.post(
             "/api/v1/pos/refund-requests",
             json=_request_payload(case, action_id=request_key, mode="cash"),
             headers=_headers(case, request_key),
         )
-        assert accepted.status_code == 201, accepted.text
-        request_id = accepted.json()["id"]
-
-        begun = await client.post(
-            f"/api/v1/pos/refund-requests/{request_id}/begin-cash-handoff",
-            json={
-                "shift_id": str(case.shift_id),
-                "expected_amount_minor": case.amount_minor,
-                "ready_to_handover": True,
-            },
-            headers=_headers(case, begin_key),
-        )
-        assert begun.status_code == 201, begun.text
-        handoff_at = begun.json()["handoff_started_at"]
-        completed = await client.post(
-            f"/api/v1/pos/refund-requests/{request_id}/settle-cash",
-            json={
-                "shift_id": str(case.shift_id),
-                "expected_amount_minor": case.amount_minor,
-                "cash_handed_over": True,
-                "settled_at": handoff_at,
-            },
-            headers=_headers(case, completion_key),
-        )
-        assert completed.status_code == 201, completed.text
-        assert completed.json()["status"] == "cash_handed_over_pending_accounting"
-        settled = await client.post(
-            f"/api/v1/pos/refund-requests/{request_id}/finalize-cash",
-            json={
-                "shift_id": str(case.shift_id),
-                "expected_amount_minor": case.amount_minor,
-            },
-            headers=_headers(case, finalize_key),
-        )
-        assert settled.status_code == 201, settled.text
+        assert accepted.status_code == 422, accepted.text
+        assert "missing immutable invoice evidence" in accepted.text
 
         period_start = (case.captured_at - timedelta(days=1)).date()
         period_end = (case.captured_at + timedelta(days=1)).date()
@@ -1150,10 +1974,10 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
             assert report.unissued_paid_orders_count == 1
             assert report.gross_revenue_minor == case.amount_minor
             assert report.payments_received.cash_minor == case.amount_minor
-            assert report.refunds_issued_minor == case.amount_minor
-            assert report.settled_refunds_issued_minor == case.amount_minor
-            assert report.net_revenue_minor == 0
-            assert report.net_payments_received_minor == 0
+            assert report.refunds_issued_minor == 0
+            assert report.settled_refunds_issued_minor == 0
+            assert report.net_revenue_minor == case.amount_minor
+            assert report.net_payments_received_minor == case.amount_minor
             assert _to_dto(report).unissued_paid_orders_count == 1
 
             insights = await _period_stats(
@@ -1180,11 +2004,6 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
                 line.credit_minor
                 for line in ledger
                 if line.account_code == SALES_REVENUE.code
-            ) == case.amount_minor
-            assert sum(
-                line.debit_minor
-                for line in ledger
-                if line.account_code == SALES_RETURNS.code
             ) == case.amount_minor
     finally:
         await _cleanup(case, keys=keys)
@@ -1891,12 +2710,18 @@ async def test_database_rejects_cross_tenant_root_actor_time_and_null_forward_fl
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_original_upi_refund_is_reserved_before_provider_settlement(
+@pytest.mark.parametrize("payment_method", ("card", "upi"))
+async def test_original_provider_refund_is_reserved_before_provider_settlement(
     client,
     session,
     seed_owner,
+    payment_method: str,
 ) -> None:
-    case = await _seed_case(session, seed_owner, payment_method="upi")
+    case = await _seed_case(
+        session,
+        seed_owner,
+        payment_method=payment_method,
+    )
     request_key = f"pos-refund-request:{uuid4()}"
     begin_key = f"pos-refund-provider-begin:{uuid4()}"
     wrong_completion_key = f"pos-refund-provider-wrong-amount:{uuid4()}"
@@ -1921,6 +2746,17 @@ async def test_original_upi_refund_is_reserved_before_provider_settlement(
     # orphan real money after payout; it is recorded and flagged for review.
     provider_reference = "X"
     try:
+        listed = await client.get(
+            "/api/v1/pos/orders",
+            params={"status": "paid"},
+            headers=_headers(case, f"provider-order-list:{uuid4()}"),
+        )
+        assert listed.status_code == 200, listed.text
+        listed_order = next(
+            row for row in listed.json() if row["id"] == str(case.order_id)
+        )
+        assert listed_order["payment_methods"] == [payment_method]
+
         unsafe_prepaid_request = await client.post(
             "/api/v1/pos/refund-requests",
             json={
@@ -2113,7 +2949,7 @@ async def test_original_upi_refund_is_reserved_before_provider_settlement(
         )
         assert settled.status_code == 201, settled.text
         assert settled.json()["status"] == "settled"
-        assert settled.json()["settlement_method"] == "upi"
+        assert settled.json()["settlement_method"] == payment_method
         assert settled.json()["provider_evidence_reconciled"] is False
         conflicting_completion = await client.post(
             f"/api/v1/pos/refund-requests/{request_id}/settle-provider",
@@ -2309,6 +3145,44 @@ async def test_provider_completion_cannot_be_resolved_during_finalization(
         assert begun.status_code == 201, begun.text
         outcome_at = datetime.fromisoformat(begun.json()["provider_payout_started_at"])
 
+        # PostgreSQL CHECK semantics treat UNKNOWN as passing unless every
+        # required provider-evidence field is explicitly non-NULL. Revision
+        # 0048 closes that historical hole independently of API validation.
+        async with AsyncSessionLocal() as asymmetric_evidence:
+            with pytest.raises(
+                DBAPIError,
+                match="ck_pos_refund_withdrawal_verification",
+            ):
+                await asymmetric_evidence.execute(
+                    text(
+                        "INSERT INTO pos_refund_withdrawals ("
+                        "id, company_id, refund_request_id, branch_id, "
+                        "terminal_id, shift_id, resolution, reason, "
+                        "verification_reference, verification_status, "
+                        "verified_at, withdrawn_at, withdrawn_by, "
+                        "idempotency_key) VALUES ("
+                        ":id, :company_id, :request_id, :branch_id, "
+                        ":terminal_id, :shift_id, 'provider_payout_abandoned', "
+                        ":reason, NULL, 'no_matching_transaction', :verified_at, "
+                        ":withdrawn_at, :actor, :key)"
+                    ),
+                    {
+                        "id": uuid4(),
+                        "company_id": case.company_id,
+                        "request_id": UUID(request_id),
+                        "branch_id": case.branch_id,
+                        "terminal_id": case.terminal_id,
+                        "shift_id": case.shift_id,
+                        "reason": "Provider evidence asymmetry proof",
+                        "verified_at": outcome_at,
+                        "withdrawn_at": outcome_at,
+                        "actor": case.owner_id,
+                        "key": f"asymmetric-provider-evidence:{uuid4()}",
+                    },
+                )
+                await asymmetric_evidence.commit()
+            await asymmetric_evidence.rollback()
+
         unsafe_withdrawal = await client.post(
             f"/api/v1/pos/refund-requests/{request_id}/withdraw-provider",
             json={
@@ -2328,6 +3202,7 @@ async def test_provider_completion_cannot_be_resolved_during_finalization(
             company_id=case.company_id,
             branch_id=case.branch_id,
             roles=["staff"],
+            auth_version=case.owner_auth_version,
             extra={"protected_access": False, "audit_access": False},
         )
         unprotected_headers = _headers(case, f"unprotected-resolve:{uuid4()}")
@@ -2768,6 +3643,12 @@ async def test_legacy_refund_is_visible_reconciled_once_and_append_only(
                     "ck_refund_forward_write_linkage"
                 )
             )
+            await writer.execute(
+                text(
+                    "ALTER TABLE refunds DISABLE TRIGGER "
+                    "trg_refunds_final_order_balance"
+                )
+            )
             writer.add(
                 Refund(
                     id=legacy_refund_id,
@@ -2784,6 +3665,12 @@ async def test_legacy_refund_is_visible_reconciled_once_and_append_only(
                     "ALTER TABLE refunds ADD CONSTRAINT "
                     "ck_refund_forward_write_linkage "
                     "CHECK (request_id IS NOT NULL) NOT VALID"
+                )
+            )
+            await writer.execute(
+                text(
+                    "ALTER TABLE refunds ENABLE TRIGGER "
+                    "trg_refunds_final_order_balance"
                 )
             )
             await writer.commit()

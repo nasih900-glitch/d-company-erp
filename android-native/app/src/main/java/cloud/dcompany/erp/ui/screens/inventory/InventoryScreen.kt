@@ -152,11 +152,12 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
                 if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
                     PendingStockChangesPanel(state, access.canManageInventory, vm)
                 }
+                BranchContext(state, vm)
                 StatRow(state)
                 if (state.restockPriority.isNotEmpty()) {
                     RestockStrip(state, vm)
                 }
-                TabBar(state, vm)
+                TabBar(state, access.canManageCosting, vm)
                 InventoryActionBar(state, access.canManageInventory, vm)
                 when (state.tab) {
                     InventoryTab.INGREDIENTS -> IngredientsPane(
@@ -171,6 +172,12 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
                         vm,
                         Modifier.weight(1f),
                     )
+                    InventoryTab.RECIPES -> RecipesPane(
+                        state = state,
+                        canManageCosting = access.canManageCosting,
+                        vm = vm,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }
@@ -181,6 +188,8 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
         is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm)
         is InventoryDialog.Grn -> GrnDialog(state, vm)
         is InventoryDialog.Adjust -> AdjustDialog(d.ingredient, state, vm)
+        is InventoryDialog.RecipeCreate -> RecipeCreateDialog(d.menuItem, state, vm)
+        is InventoryDialog.RecipeLineForm -> RecipeLineDialog(d.recipe, d.editing, state, vm)
         is InventoryDialog.ConfirmDeleteIngredient -> ConfirmDialog(
             title = "Delete ${d.ingredient.name}?",
             body = "Existing batches stay in the audit trail. Recipes that use it will " +
@@ -202,7 +211,56 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
             onConfirm = { vm.deleteSupplier(d.supplier) },
             onDismiss = vm::closeDialog,
         )
+        is InventoryDialog.ConfirmDeleteRecipe -> ConfirmDialog(
+            title = "Deactivate ${d.recipe.name}?",
+            body = "Future sales of this menu item will stop deducting ingredients until a new recipe is linked. Past stock movements remain unchanged.",
+            confirmLabel = "Deactivate recipe",
+            busy = state.busy,
+            error = state.formError,
+            onConfirm = { vm.deleteRecipe(d.recipe) },
+            onDismiss = vm::closeDialog,
+        )
+        is InventoryDialog.ConfirmDeleteRecipeLine -> ConfirmDialog(
+            title = "Remove this ingredient link?",
+            body = "Future sales will no longer deduct this ingredient from the recipe. Past stock movements remain unchanged.",
+            confirmLabel = "Remove line",
+            busy = state.busy,
+            error = state.formError,
+            onConfirm = { vm.deleteRecipeLine(d.recipe, d.line) },
+            onDismiss = vm::closeDialog,
+        )
         null -> Unit
+    }
+}
+
+@Composable
+private fun BranchContext(state: InventoryUiState, vm: InventoryViewModel) {
+    val selected = state.branches.firstOrNull { it.id == state.branchId }
+    if (state.branches.size <= 1) {
+        OperationalBanner(
+            title = selected?.name ?: "Branch unavailable",
+            detail = if (selected == null) {
+                "Refresh Inventory before receiving or adjusting stock."
+            } else {
+                "Quantities, FIFO value, receipts and adjustments below are scoped to this branch."
+            },
+            tone = if (selected == null) UiTone.Warning else UiTone.Information,
+            icon = Icons.Default.Inventory2,
+        )
+    } else {
+        SectionCard(
+            title = "Stock location",
+            subtitle = "Changing branch reloads quantities and FIFO value before stock actions unlock",
+            icon = Icons.Default.Inventory2,
+            contentPadding = PaddingValues(12.dp),
+        ) {
+            PickerField(
+                label = "Branch",
+                selectedLabel = selected?.name ?: "— select —",
+                options = state.branches.map { it.id to it.name },
+                onSelect = vm::selectBranch,
+            )
+        }
     }
 }
 
@@ -228,7 +286,8 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
                     leadingIcon = Icons.Default.Refresh,
                 )
                 if (canWrite) {
-                    if (state.tab == InventoryTab.INGREDIENTS) {
+                    when (state.tab) {
+                    InventoryTab.INGREDIENTS -> {
                         ErpButton(
                             text = if (compact) "Ingredient" else "New ingredient",
                             onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
@@ -243,13 +302,25 @@ private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: I
                                 state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
                             leadingIcon = Icons.Default.LocalShipping,
                         )
-                    } else {
+                    }
+                    InventoryTab.SUPPLIERS -> {
                         ErpButton(
                             text = if (compact) "Supplier" else "New supplier",
                             onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
                             enabled = state.suppliersLoaded,
                             leadingIcon = Icons.Default.Add,
                         )
+                    }
+                    InventoryTab.RECIPES -> state.selectedRecipeMenuItem?.let { item ->
+                        if (state.activeRecipe == null) {
+                            ErpButton(
+                                text = if (compact) "Link" else "Link recipe",
+                                onClick = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
+                                enabled = state.syncedIngredients.isNotEmpty() && !state.recipesLoading,
+                                leadingIcon = Icons.Default.Add,
+                            )
+                        }
+                    }
                     }
                 }
             },
@@ -357,8 +428,12 @@ private fun StatRow(state: InventoryUiState) {
 @Composable
 private fun StockValueMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
     label = "Stock value",
-    value = state.stockValueMinor.asRupees(),
-    detail = "Cost value on hand",
+    value = state.stockValueMinor?.asRupees() ?: "Unavailable",
+    detail = if (state.stockValueMinor == null) {
+        "Exact FIFO valuation has not synced"
+    } else {
+        "Exact remaining FIFO batch value"
+    },
     icon = Icons.Default.Inventory2,
     tone = UiTone.Information,
     modifier = modifier,
@@ -445,15 +520,233 @@ private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
 }
 
 @Composable
-private fun TabBar(state: InventoryUiState, vm: InventoryViewModel) {
+private fun TabBar(state: InventoryUiState, canManageCosting: Boolean, vm: InventoryViewModel) {
     PremiumTabBar(
-        options = listOf(
+        options = buildList {
+            add(
             TabOption(InventoryTab.INGREDIENTS.name, "Ingredients", state.ingredients.size),
+            )
+            add(
             TabOption(InventoryTab.SUPPLIERS.name, "Suppliers", state.suppliers.size),
-        ),
+            )
+            if (canManageCosting) {
+                add(TabOption(InventoryTab.RECIPES.name, "Recipe links", state.recipeMenuItems.size))
+            }
+        },
         selectedId = state.tab.name,
         onSelect = { id -> vm.selectTab(InventoryTab.valueOf(id)) },
     )
+}
+
+// -------------------------------------------------------------- recipe links
+
+@Composable
+private fun RecipesPane(
+    state: InventoryUiState,
+    canManageCosting: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
+    if (!canManageCosting) return
+    if (state.recipeMenuItems.isEmpty()) {
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "No stock-costed menu items",
+                body = "Food, drink, dessert and hookah items appear here after the menu has synced.",
+                icon = Icons.Default.Inventory2,
+                primaryLabel = "Refresh",
+                onPrimary = vm::retry,
+            )
+        }
+        return
+    }
+
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.recipeMenuItems, query) {
+        val needle = query.trim()
+        if (needle.isEmpty()) state.recipeMenuItems else state.recipeMenuItems.filter {
+            it.name.contains(needle, ignoreCase = true) || it.sku.contains(needle, ignoreCase = true)
+        }
+    }
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OperationalBanner(
+            title = "Protected recipe costing",
+            detail = "These links decide which ingredients are deducted after a paid sale. Changes require a live connection and are never queued offline.",
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+        )
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search menu item or SKU",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
+            if (maxWidth >= 820.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    RecipeItemList(filtered, state, vm, Modifier.weight(1f))
+                    RecipeDetail(state, vm, Modifier.width(420.dp).fillMaxHeight())
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    RecipeItemList(filtered, state, vm, Modifier.weight(0.46f))
+                    RecipeDetail(state, vm, Modifier.weight(0.54f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipeItemList(
+    items: List<cloud.dcompany.erp.core.db.MenuItemEntity>,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+    modifier: Modifier,
+) {
+    SectionCard(
+        modifier = modifier,
+        title = "Menu items",
+        subtitle = "Select an item to inspect its active stock link",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(items, key = { it.id }) { item ->
+                val selected = state.selectedRecipeMenuItemId == item.id
+                DataListRow(
+                    modifier = Modifier.background(
+                        if (selected) Brand.SurfaceRaised else Color.Transparent,
+                    ),
+                    onClick = { vm.selectRecipeMenuItem(item) },
+                    content = {
+                        Text(
+                            item.name,
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "${item.sku} · ${item.type}",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
+                )
+                PanelDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifier: Modifier) {
+    val item = state.selectedRecipeMenuItem
+    val active = state.activeRecipe
+    SectionCard(
+        modifier = modifier,
+        title = item?.name ?: "Recipe details",
+        subtitle = item?.let { "${it.sku} · future paid sales only" }
+            ?: "Select a menu item to inspect its stock deductions",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(14.dp),
+    ) {
+        when {
+            item == null -> DesignedEmptyState(
+                title = "Select a menu item",
+                body = "Choose an item to view or create its ingredient deductions.",
+                icon = Icons.Default.Inventory2,
+            )
+            state.recipesLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                CircularProgressIndicator(color = Brand.Gold)
+            }
+            state.recipesError != null -> DesignedEmptyState(
+                title = "Could not load recipe",
+                body = state.recipesError,
+                icon = Icons.Default.CloudOff,
+                primaryLabel = "Retry",
+                onPrimary = vm::retryRecipes,
+            )
+            active == null -> DesignedEmptyState(
+                title = "No active recipe",
+                body = "Sales of ${item.name} do not currently deduct ingredient stock. Link at least one ingredient before relying on COGS.",
+                icon = Icons.Default.WarningAmber,
+                primaryLabel = "Link recipe",
+                onPrimary = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
+            )
+            else -> {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Version ${active.version} · yield ${active.yieldQty.asQty()}",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    TextButton(
+                        onClick = { vm.openDialog(InventoryDialog.ConfirmDeleteRecipe(active)) },
+                    ) { Text("Deactivate", color = Brand.Danger) }
+                }
+                InfoRow("Recorded recipe cost", active.costMinor.asRupees())
+                PanelDivider()
+                Text("Ingredient deductions", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                if (active.lines.isEmpty()) {
+                    OperationalBanner(
+                        title = "Empty recipe",
+                        detail = "This item will not deduct stock until at least one ingredient line is added.",
+                        tone = UiTone.Warning,
+                        icon = Icons.Default.WarningAmber,
+                    )
+                }
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(active.lines, key = { it.id }) { line ->
+                        val ingredient = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
+                        Column(
+                            Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                                .background(Brand.SurfaceRaised).padding(10.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        ingredient?.name ?: "Unavailable ingredient",
+                                        color = if (ingredient == null) Brand.Danger else Brand.Foreground,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        "${line.qty.asQty()} ${ingredient?.baseUnit.orEmpty()}" +
+                                            if (line.wastagePct > 0) " + ${(line.wastagePct * 100).asQty()}% waste" else "",
+                                        color = Brand.ForegroundMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        vm.openDialog(InventoryDialog.RecipeLineForm(active, line))
+                                    },
+                                ) { Text("Edit") }
+                                TextButton(
+                                    onClick = {
+                                        vm.openDialog(
+                                            InventoryDialog.ConfirmDeleteRecipeLine(active, line),
+                                        )
+                                    },
+                                ) { Text("Remove", color = Brand.Danger) }
+                            }
+                        }
+                    }
+                }
+                ErpButton(
+                    text = "Add ingredient",
+                    onClick = { vm.openDialog(InventoryDialog.RecipeLineForm(active, null)) },
+                    enabled = state.syncedIngredients.isNotEmpty(),
+                    leadingIcon = Icons.Default.Add,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
 }
 
 // -------------------------------------------------------------- ingredients
@@ -654,7 +947,7 @@ private fun IngredientRowCard(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    ingredient.stockValueMinor.asRupees(),
+                    ingredient.stockValueMinor?.asRupees() ?: "Value unavailable",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -808,8 +1101,13 @@ private fun DetailPanel(
             valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
         )
         InfoRow(
-            label = "Average cost",
+            label = "Weighted cost",
             value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
+        )
+        InfoRow(
+            label = "Exact FIFO value",
+            value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
+            valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
         )
         if (ingredient.isUnsyncedDraft) {
             OperationalBanner(
@@ -885,7 +1183,11 @@ private fun DetailPanel(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(state.batches, key = { it.id }) { batch ->
-                    BatchRow(batch, ingredient.baseUnit)
+                    BatchRow(
+                        batch,
+                        ingredient.baseUnit,
+                        state.branches.firstOrNull { it.id == batch.branchId }?.name,
+                    )
                 }
             }
         }
@@ -893,7 +1195,7 @@ private fun DetailPanel(
 }
 
 @Composable
-private fun BatchRow(batch: BatchCacheEntity, unit: String) {
+private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(10.dp),
@@ -908,7 +1210,7 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String) {
             Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = Brand.Foreground)
         }
         Text(
-            "Received ${batch.receivedAt.asDay()}" +
+            (branchName?.let { "$it · " } ?: "") + "Received ${batch.receivedAt.asDay()}" +
                 (batch.lotCode?.let { " · lot $it" } ?: ""),
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
@@ -1304,25 +1606,205 @@ private data class GrnLineDraft(
     val lotCode: String = "",
 )
 
+private data class RecipeLineDraft(
+    val ingredientId: String = "",
+    val qty: String = "",
+    val wastagePercent: String = "0",
+) {
+    fun error(lineNumber: Int): String? = when {
+        ingredientId.isBlank() -> "Select an ingredient on recipe line $lineNumber."
+        qty.toDoubleOrNull() == null || qty.toDouble() <= 0 ->
+            "Enter a quantity greater than zero on recipe line $lineNumber."
+        wastagePercent.toDoubleOrNull() == null || wastagePercent.toDouble() !in 0.0..100.0 ->
+            "Wastage on recipe line $lineNumber must be from 0 to 100%."
+        else -> null
+    }
+
+    fun toBody(): RecipeLineBody = RecipeLineBody(
+        ingredientId = ingredientId,
+        qty = qty.toDouble(),
+        wastagePct = wastagePercent.toDouble() / 100.0,
+    )
+}
+
+@Composable
+private fun RecipeCreateDialog(
+    menuItem: cloud.dcompany.erp.core.db.MenuItemEntity,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+) {
+    var name by remember(menuItem.id) { mutableStateOf("${menuItem.name} recipe") }
+    var yieldQty by remember(menuItem.id) { mutableStateOf("1") }
+    var lines by remember(menuItem.id) {
+        mutableStateOf(
+            listOf(RecipeLineDraft(ingredientId = state.syncedIngredients.firstOrNull()?.id.orEmpty())),
+        )
+    }
+    FormDialog(
+        title = "Link recipe to ${menuItem.name}",
+        confirmLabel = "Activate recipe",
+        busy = state.busy,
+        error = state.formError,
+        width = 760.dp,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val parsedYield = yieldQty.toDoubleOrNull()
+            val lineError = lines.mapIndexedNotNull { index, line -> line.error(index + 1) }.firstOrNull()
+            val duplicates = lines.map { it.ingredientId }.filter(String::isNotBlank)
+                .groupingBy { it }.eachCount().any { it.value > 1 }
+            when {
+                name.isBlank() -> vm.showFormError("Enter a recipe name.")
+                parsedYield == null || parsedYield <= 0 ->
+                    vm.showFormError("Yield must be greater than zero.")
+                lineError != null -> vm.showFormError(lineError)
+                duplicates -> vm.showFormError(
+                    "Each ingredient can appear only once. Combine duplicate quantities into one line.",
+                )
+                else -> vm.createRecipe(menuItem, name, parsedYield, lines.map(RecipeLineDraft::toBody))
+            }
+        },
+    ) {
+        OperationalBanner(
+            title = "Future sales only",
+            detail = "Activating this link changes ingredient deductions for future paid sales. Past sales and stock movements are not rewritten.",
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+        )
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Recipe name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(
+            value = yieldQty,
+            onValueChange = { yieldQty = it },
+            label = "Menu units produced by these quantities",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "Example: if the quantities make 4 portions, enter yield 4. The server divides each ingredient deduction by 4 per sale.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        lines.forEachIndexed { index, line ->
+            Column(
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                    .background(Brand.SurfaceRaised).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PickerField(
+                    label = "Ingredient ${index + 1}",
+                    selectedLabel = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
+                        ?.let { "${it.name} (${it.baseUnit})" } ?: "— select —",
+                    options = state.syncedIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
+                    onSelect = { id -> lines = lines.replaceAt(index) { it.copy(ingredientId = id) } },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DecimalField(
+                        value = line.qty,
+                        onValueChange = { value -> lines = lines.replaceAt(index) { it.copy(qty = value) } },
+                        label = "Quantity for full yield",
+                        modifier = Modifier.weight(1f),
+                    )
+                    DecimalField(
+                        value = line.wastagePercent,
+                        onValueChange = { value ->
+                            lines = lines.replaceAt(index) { it.copy(wastagePercent = value) }
+                        },
+                        label = "Wastage %",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (lines.size > 1) {
+                    TextButton(onClick = { lines = lines.removeAt(index) }) {
+                        Text("Remove line", color = Brand.Danger)
+                    }
+                }
+            }
+        }
+        OutlinedButton(
+            onClick = { lines = lines + RecipeLineDraft() },
+            enabled = state.syncedIngredients.isNotEmpty(),
+        ) { Text("Add ingredient") }
+    }
+}
+
+@Composable
+private fun RecipeLineDialog(
+    recipe: Recipe,
+    editing: RecipeLine?,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+) {
+    val initialIngredient = editing?.ingredientId ?: state.syncedIngredients.firstOrNull()?.id.orEmpty()
+    var ingredientId by remember(recipe.id, editing?.id) { mutableStateOf(initialIngredient) }
+    var qty by remember(recipe.id, editing?.id) { mutableStateOf(editing?.qty?.asQty() ?: "") }
+    var wastage by remember(recipe.id, editing?.id) {
+        mutableStateOf(editing?.let { (it.wastagePct * 100).asQty() } ?: "0")
+    }
+    FormDialog(
+        title = if (editing == null) "Add recipe ingredient" else "Edit recipe ingredient",
+        confirmLabel = if (editing == null) "Add line" else "Save line",
+        busy = state.busy,
+        error = state.formError,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val draft = RecipeLineDraft(ingredientId, qty, wastage)
+            val duplicate = editing == null && recipe.lines.any { it.ingredientId == ingredientId }
+            when {
+                draft.error(1) != null -> vm.showFormError(draft.error(1)!!)
+                duplicate -> vm.showFormError(
+                    "This ingredient is already linked. Edit its existing line instead.",
+                )
+                else -> vm.saveRecipeLine(recipe, editing, draft.toBody())
+            }
+        },
+    ) {
+        PickerField(
+            label = "Ingredient",
+            selectedLabel = state.syncedIngredients.firstOrNull { it.id == ingredientId }
+                ?.let { "${it.name} (${it.baseUnit})" } ?: "— select —",
+            options = state.syncedIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
+            onSelect = { ingredientId = it },
+        )
+        DecimalField(
+            value = qty,
+            onValueChange = { qty = it },
+            label = "Quantity for full yield (${recipe.yieldQty.asQty()} menu units)",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(
+            value = wastage,
+            onValueChange = { wastage = it },
+            label = "Wastage %",
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
 @Composable
 private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
     val pickableIngredients = state.syncedIngredients
     val pickableSuppliers = state.syncedSuppliers
     var supplierId by remember { mutableStateOf(pickableSuppliers.firstOrNull()?.id ?: "") }
     var invoiceNo by remember { mutableStateOf("") }
+    var invoiceTotal by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var lines by remember {
         mutableStateOf(listOf(GrnLineDraft(ingredientId = pickableIngredients.firstOrNull()?.id ?: "")))
     }
 
     val branchId = state.branchId
-    // Mirrors the backend's `int(qty * unit_cost_minor)` so the number shown
-    // here is the number the purchase order will actually carry.
-    val totalMinor = lines.sumOf { line ->
-        val qty = line.qty.toDoubleOrNull() ?: 0.0
-        val cost = parseRupeesToMinor(line.unitCostRupees) ?: 0L
-        (qty * cost).toLong()
+    val lineTotals = lines.map { line ->
+        grnLineTotalMinor(line.qty, parseRupeesToMinor(line.unitCostRupees))
     }
+    // The backend rounds each line HALF_UP to whole paise before summing.
+    // Never round the combined receipt or truncate fractional paise here.
+    val totalMinor = grnReceiptTotalMinor(
+        lines.map { it.qty to parseRupeesToMinor(it.unitCostRupees) },
+    )
 
     FormDialog(
         title = "Receive stock (GRN)",
@@ -1336,12 +1818,35 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                 line.validationError(index + 1)
             }.firstOrNull()
             val ready = lines.mapNotNull { it.toBody() }
+            val invoiceTotalMinor = parseRupeesToMinor(invoiceTotal)
             when {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
                 supplierId.isBlank() -> vm.showFormError("Select a supplier.")
                 lineError != null -> vm.showFormError(lineError)
                 ready.isEmpty() -> vm.showFormError("Add at least one line.")
-                else -> vm.postGrn(supplierId, branchId, invoiceNo, notes, ready)
+                invoiceNo.isNotBlank() && invoiceTotal.isBlank() ->
+                    vm.showFormError("Enter the supplier invoice total, or clear the invoice number.")
+                invoiceTotal.isNotBlank() && invoiceNo.isBlank() ->
+                    vm.showFormError("Enter the supplier invoice number, or clear the invoice total.")
+                invoiceTotal.isNotBlank() && invoiceTotalMinor == null ->
+                    vm.showFormError("Enter a valid supplier invoice total.")
+                totalMinor == null -> vm.showFormError(
+                    "Check every quantity and unit cost. Quantities support up to 4 decimal places.",
+                )
+                invoiceTotalMinor != null && invoiceTotalMinor != totalMinor ->
+                    vm.showFormError(
+                        "Invoice total ${invoiceTotalMinor.asRupees()} does not match the " +
+                            "capitalised line total ${totalMinor.asRupees()}. Correct the quantities, " +
+                            "unit costs or invoice total; no receipt was queued.",
+                    )
+                else -> vm.postGrn(
+                    supplierId = supplierId,
+                    branchId = branchId,
+                    invoiceNo = invoiceNo,
+                    supplierInvoiceAmountMinor = invoiceTotalMinor,
+                    notesText = notes,
+                    lines = ready,
+                )
             }
         },
     ) {
@@ -1387,6 +1892,19 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             label = { Text("Supplier invoice no.") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(
+            value = invoiceTotal,
+            onValueChange = { invoiceTotal = it },
+            label = "Supplier invoice total (₹)",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "The invoice total must equal the capitalised line total after each line is rounded to paise. " +
+                "Separate freight, tax, discounts or unexplained variance cannot be queued here. " +
+                "Received time is captured when you tap Queue receipt.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
         )
 
         Text("Lines", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
@@ -1448,11 +1966,9 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                         modifier = Modifier.weight(1f),
                     )
                 }
-                val unitCost = parseRupeesToMinor(line.unitCostRupees)
-                val qty = line.qty.toDoubleOrNull() ?: 0.0
-                if (qty > 0 && unitCost != null) {
+                lineTotals[index]?.let { lineTotal ->
                     Text(
-                        "Line total ${(qty * unitCost).toLong().asRupees()}",
+                        "Line total ${lineTotal.asRupees()}",
                         color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -1466,7 +1982,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         ) {
             OutlinedButton(onClick = { lines = lines + GrnLineDraft() }) { Text("Add line") }
             Text(
-                "Total ${totalMinor.asRupees()}",
+                totalMinor?.let { "Capitalised total ${it.asRupees()}" } ?: "Complete all lines",
                 color = Brand.Foreground,
                 style = MaterialTheme.typography.titleLarge,
             )
@@ -1509,6 +2025,10 @@ private fun AdjustDialog(
                 typed == null -> vm.showFormError("Enter a quantity.")
                 delta == null || delta == 0.0 ->
                     vm.showFormError("A zero adjustment changes nothing — enter an amount.")
+                delta < 0 && -delta > ingredient.currentQty ->
+                    vm.showFormError(
+                        "Only ${ingredient.currentQty.asQty()} ${ingredient.baseUnit} is available in this branch.",
+                    )
                 else -> vm.postAdjustment(ingredient, branchId, type, typed, note)
             }
         },
@@ -1517,11 +2037,14 @@ private fun AdjustDialog(
             "On hand now: ${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
             color = Brand.ForegroundMuted,
         )
-        PickerField(
+        InfoRow(
             label = "Branch",
-            selectedLabel = state.branches.firstOrNull { it.id == branchId }?.name ?: "— select —",
-            options = state.branches.map { it.id to it.name },
-            onSelect = vm::selectBranch,
+            value = state.branches.firstOrNull { it.id == branchId }?.name ?: "Unavailable",
+        )
+        Text(
+            TRANSFER_UNAVAILABLE_MESSAGE,
+            color = Brand.Warning,
+            style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
             label = "Type",
@@ -1571,8 +2094,7 @@ private fun AdjustDialog(
                 )
                 if (delta < 0 && ingredient.currentQty + delta < 0) {
                     Text(
-                        "That is more than the system thinks is on hand — the server will " +
-                            "floor stock at zero.",
+                        "That exceeds this branch's recorded balance and cannot be queued.",
                         color = Brand.Warning,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -1600,8 +2122,15 @@ private fun GrnLineDraft.validationError(lineNumber: Int): String? {
     if (quantity == null || !quantity.isFinite() || quantity <= 0.0) {
         return "Line $lineNumber: quantity must be greater than 0."
     }
-    if (parseRupeesToMinor(unitCostRupees) == null) {
+    if (!isSupportedGrnQuantity(qty)) {
+        return "Line $lineNumber: quantity supports up to 10 whole-number digits and 4 decimal places."
+    }
+    val unitCostMinor = parseRupeesToMinor(unitCostRupees)
+    if (unitCostMinor == null) {
         return "Line $lineNumber: unit cost must be rupees with no more than 2 decimal places."
+    }
+    if (grnLineTotalMinor(qty, unitCostMinor) == null) {
+        return "Line $lineNumber: quantity and unit cost are too large to value safely."
     }
     val expiry = expiresAt.trim()
     if (expiry.isNotEmpty() && !Regex("""\d{4}-\d{2}-\d{2}""").matches(expiry)) {

@@ -116,8 +116,9 @@ interface ShiftCloseSafetyDao {
               WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_refunds
-              WHERE state NOT IN ('request_pending', 'cash_settle_pending', 'withdrawal_pending',
-                                  'settled', 'withdrawn', 'cancelled', 'synced') AND
+              WHERE (state NOT IN ('request_pending', 'cash_settle_pending', 'withdrawal_pending',
+                                   'settled', 'withdrawn', 'cancelled', 'synced')
+                     OR (state = 'withdrawn' AND payoutConflict = 1)) AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId)
                  OR (:serverShiftId IS NOT NULL AND serverShiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_subscriptions

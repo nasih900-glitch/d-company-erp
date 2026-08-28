@@ -1,5 +1,8 @@
 package cloud.dcompany.erp.ui.screens.kitchen
 
+import cloud.dcompany.erp.core.net.OrderModifierSnapshot
+import cloud.dcompany.erp.core.net.OrderVariantSnapshot
+import cloud.dcompany.erp.ui.orderOptionLabels
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -24,6 +27,10 @@ data class KitchenLine(
      * single ticket. Not money, so a Double is safe here.
      */
     val qty: Double = 0.0,
+    @SerialName("variant_snapshot")
+    val variantSnapshot: OrderVariantSnapshot? = null,
+    /** Immutable modifier names chosen at the till; cooks must see these. */
+    val modifiers: List<OrderModifierSnapshot> = emptyList(),
     val notes: String? = null,
     @SerialName("released_at") val releasedAt: String = "",
     @SerialName("round_no") val roundNo: Int = 1,
@@ -37,6 +44,9 @@ data class KitchenCancellation(
     val name: String,
     val type: String,
     val qty: Double,
+    @SerialName("variant_snapshot")
+    val variantSnapshot: OrderVariantSnapshot? = null,
+    val modifiers: List<OrderModifierSnapshot> = emptyList(),
     val notes: String? = null,
     @SerialName("released_at") val releasedAt: String,
     @SerialName("round_no") val roundNo: Int,
@@ -127,3 +137,9 @@ fun Double.asQtyPrefix(): String {
     val whole = this == Math.floor(this) && !this.isInfinite()
     return if (whole) toLong().toString() else toString().trimEnd('0').trimEnd('.')
 }
+
+/** Compact, price-free preparation detail for the wall display. */
+fun kitchenOptionLabels(
+    variant: OrderVariantSnapshot?,
+    modifiers: List<OrderModifierSnapshot>,
+): List<String> = orderOptionLabels(variant, modifiers)

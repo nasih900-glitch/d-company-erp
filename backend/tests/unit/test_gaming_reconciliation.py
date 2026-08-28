@@ -133,7 +133,12 @@ def _route_permissions(endpoint) -> tuple[str, ...]:
 def _install_order_dependencies(monkeypatch) -> None:
     async def _menu_item(_session, *, company_id, station):
         assert company_id == station.company_id
-        return SimpleNamespace(id=uuid4(), hsn_code="999692")
+        return SimpleNamespace(
+            id=uuid4(),
+            name="Gaming session",
+            type="gaming",
+            hsn_code="999692",
+        )
 
     class _Pricing:
         def __init__(self, _session) -> None:

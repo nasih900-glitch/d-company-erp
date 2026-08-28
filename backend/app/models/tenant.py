@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -69,7 +76,14 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    code: Mapped[str | None] = mapped_column(String(10))  # short branch code for invoice numbering (e.g. "MN")
+    # Operational/display code. Invoice identity is deliberately separate:
+    # this value may be long or edited without silently starting a new fiscal
+    # receipt series.
+    code: Mapped[str | None] = mapped_column(String(10))
+    # Explicit two-character fiscal document namespace. It is unique only
+    # inside a company because invoice numbers belong to that legal tenant,
+    # not to the shared multi-tenant database as a whole.
+    invoice_series_code: Mapped[str] = mapped_column(String(2), nullable=False)
     address: Mapped[str | None] = mapped_column(String(500))
     timezone: Mapped[str | None] = mapped_column(String(64))
     opens_at: Mapped[str | None] = mapped_column(String(8))   # "09:00"
@@ -92,6 +106,15 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
 
     __table_args__ = (
         UniqueConstraint("company_id", "name", name="uq_branch_name_per_company"),
+        UniqueConstraint(
+            "company_id",
+            "invoice_series_code",
+            name="uq_branch_invoice_series_per_company",
+        ),
+        CheckConstraint(
+            "invoice_series_code ~ '^[A-Z0-9]{2}$'",
+            name="ck_branch_invoice_series_code_format",
+        ),
     )
 
 

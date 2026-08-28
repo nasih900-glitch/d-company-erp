@@ -175,7 +175,7 @@ class OutboxSafetyTest {
         )
 
         assertTrue(message.contains("2 ended gaming sessions"))
-        assertTrue(message.contains("1 cash refund still needs a safe handover decision"))
+        assertTrue(message.contains("1 refund still needs a safe payout or accounting decision"))
         assertTrue(message.contains("Open Refunds"))
         assertTrue(message.contains("do not pay twice"))
         assertTrue(message.contains("1 saved change is waiting for server confirmation"))

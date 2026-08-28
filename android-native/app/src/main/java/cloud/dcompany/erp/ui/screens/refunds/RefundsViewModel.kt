@@ -11,6 +11,7 @@ import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.ShiftResolutionPolicy
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.Order
+import cloud.dcompany.erp.core.net.asRupees
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.UUID
 
 /** The reasons an owner actually gives; free text goes in the note. */
@@ -29,8 +31,55 @@ val REFUND_REASONS = listOf(
     "other" to "Other",
 )
 
+internal enum class RefundRailKind { UNKNOWN, CASH, SINGLE_PROVIDER, MIXED }
+
+internal data class RefundRailPolicy(
+    val kind: RefundRailKind,
+    val methods: List<String>,
+) {
+    val requestReady: Boolean get() = kind != RefundRailKind.UNKNOWN
+    val defaultMode: String get() =
+        if (kind == RefundRailKind.SINGLE_PROVIDER) "original" else "cash"
+
+    fun allows(mode: String): Boolean = when (kind) {
+        RefundRailKind.UNKNOWN -> false
+        RefundRailKind.CASH, RefundRailKind.MIXED -> mode == "cash"
+        RefundRailKind.SINGLE_PROVIDER -> mode == "cash" || mode == "original"
+    }
+}
+
+private val REFUND_PAYMENT_METHODS = setOf("cash", "card", "upi", "qr", "wallet")
+
+/** Never guesses a payout rail from totals, labels or prior UI state. */
+internal fun refundRailPolicy(rawMethods: List<String>): RefundRailPolicy {
+    val methods = rawMethods.map { it.trim().lowercase(Locale.ROOT) }
+        .filter(String::isNotEmpty)
+        .distinct()
+    if (methods.isEmpty() || methods.any { it !in REFUND_PAYMENT_METHODS }) {
+        return RefundRailPolicy(RefundRailKind.UNKNOWN, methods)
+    }
+    return RefundRailPolicy(
+        kind = when {
+            methods.size > 1 -> RefundRailKind.MIXED
+            methods.single() == "cash" -> RefundRailKind.CASH
+            else -> RefundRailKind.SINGLE_PROVIDER
+        },
+        methods = methods,
+    )
+}
+
+internal fun refundPaymentMethodLabel(method: String): String = when (method) {
+    "cash" -> "Cash"
+    "card" -> "Card"
+    "upi" -> "UPI"
+    "qr" -> "QR"
+    "wallet" -> "Wallet"
+    else -> "Unknown"
+}
+
 data class RefundTask(
     val localId: String,
+    val orderId: String,
     val invoiceNo: String?,
     val amountMinor: Long,
     val reasonCode: String,
@@ -42,8 +91,27 @@ data class RefundTask(
     val acceptedAtMillis: Long?,
     val handoffStartedAtMillis: Long?,
     val settledAtMillis: Long?,
+    val localPayoutAtMillis: Long?,
     val withdrawalAtMillis: Long?,
     val receiptNo: String?,
+    val externalReference: String?,
+    val acceptedByUserId: String?,
+    val acceptedByName: String?,
+    val moneyStartedByUserId: String?,
+    val moneyStartedByName: String?,
+    val moneyCompletedByUserId: String?,
+    val moneyCompletedByName: String?,
+    val settledByUserId: String?,
+    val settledByName: String?,
+    val withdrawnByUserId: String?,
+    val withdrawnByName: String?,
+    val providerVerificationStatus: String?,
+    val providerVerificationReference: String?,
+    val customerSpendReconciled: Boolean?,
+    val loyaltyReconciliationState: String?,
+    val capturedTimeReconciled: Boolean?,
+    val providerEvidenceReconciled: Boolean?,
+    val payoutConflict: Boolean,
     val error: String?,
 )
 
@@ -64,6 +132,7 @@ data class RefundsUiState(
     val everSynced: Boolean = false,
     val online: Boolean = false,
     val tasks: List<RefundTask> = emptyList(),
+    val recentTasks: List<RefundTask> = emptyList(),
     val canManageMoney: Boolean = false,
     val protectedAccess: Boolean = false,
     val moneyAccessMessage: String? = null,
@@ -100,7 +169,11 @@ class RefundsViewModel : ViewModel() {
 
     val state: StateFlow<RefundsUiState> = combine(
         db.refundDao().observeRefundableOrders(),
-        db.refundDao().observeUnresolvedRefunds(),
+        combine(
+            db.refundDao().observeUnresolvedRefunds(),
+            db.refundDao().observeRecentCompletedRefunds(),
+            ::Pair,
+        ),
         combine(query, selectedId, ::Pair),
         combine(busy, notice, ::Pair),
         combine(
@@ -118,7 +191,8 @@ class RefundsViewModel : ViewModel() {
                 protectedAccess = profile?.protectedAccess == true,
             )
         },
-    ) { cache, unresolved, qs, ui, context ->
+    ) { cache, refundRows, qs, ui, context ->
+        val (unresolved, recent) = refundRows
         val (q, selId) = qs
         val (isBusy, noticeMsg) = ui
         val unresolvedOrderIds = unresolved.mapTo(mutableSetOf()) { it.orderId }
@@ -137,6 +211,7 @@ class RefundsViewModel : ViewModel() {
             everSynced = context.everSynced,
             online = context.online,
             tasks = unresolved.map(LocalRefundEntity::toTask),
+            recentTasks = recent.map(LocalRefundEntity::toTask),
             canManageMoney = canManageMoney,
             protectedAccess = context.protectedAccess,
             moneyAccessMessage = when {
@@ -176,19 +251,18 @@ class RefundsViewModel : ViewModel() {
         amountMinor: Long,
         reasonCode: String,
         mode: String,
-        externalReference: String?,
         note: String?,
     ) {
         if (busy.value) return
-        val cleanReference = externalReference?.trim()?.takeIf(String::isNotEmpty)
         val validation = when {
             amountMinor <= 0 -> "Refund amount must be greater than ₹0."
             amountMinor > order.refundableMinor ->
                 "The amount is above this tablet's latest refundable balance. Refresh and try again."
             REFUND_REASONS.none { it.first == reasonCode } -> "Choose a valid refund reason."
-            mode !in setOf("cash", "original") -> "Choose cash or the original non-cash rail."
-            mode == "original" && (cleanReference?.length ?: 0) < 3 ->
-                "Complete the original card/UPI/QR/wallet refund first and enter its provider reference."
+            !refundRailPolicy(order.paymentMethods).requestReady ->
+                "The server did not provide this order's original payment rail. Refresh before requesting a refund."
+            !refundRailPolicy(order.paymentMethods).allows(mode) ->
+                "That payout rail does not match the order's authoritative payment history. Refresh and review it."
             else -> null
         }
         if (validation != null) {
@@ -242,8 +316,10 @@ class RefundsViewModel : ViewModel() {
                                 expectedRefundableMinor = order.refundableMinor,
                                 mode = mode,
                                 note = note?.trim()?.takeIf(String::isNotEmpty)?.take(500),
-                                externalReference = if (mode == "original") cleanReference else null,
-                                providerSettledAtMillis = if (mode == "original") capturedAt else null,
+                                // Money must never move before the server accepts
+                                // the request and opens a guarded handover/payout.
+                                externalReference = null,
+                                providerSettledAtMillis = null,
                                 createdAtMillis = capturedAt,
                             ),
                         )
@@ -256,12 +332,8 @@ class RefundsViewModel : ViewModel() {
                 }
                 selectedId.value = null
                 if (!appCtx.connectivity.online.value) {
-                    notice.value = if (mode == "cash") {
-                        "Refund request saved offline. Do not give cash. Server acceptance is required after reconnection."
-                    } else {
-                        "Provider payout evidence is saved offline. Do not repeat the provider refund. " +
-                            "This shift stays blocked until the ERP records it after reconnection."
-                    }
+                    notice.value = "Refund request saved offline. No cash or provider payout is authorised " +
+                        "until the server accepts it after reconnection."
                     appCtx.sync.requestSync()
                     return@launch
                 }
@@ -270,15 +342,13 @@ class RefundsViewModel : ViewModel() {
                 val saved = db.refundDao().refundById(localId)
                 notice.value = when (saved?.state) {
                     RefundState.ACCEPTED_CASH_DUE ->
-                        "Server accepted ${saved.amountMinor}. Start the server-confirmed handover before touching cash."
+                        "Server accepted ${saved.amountMinor.asRupees()}. Start the server-confirmed handover before touching cash."
+                    RefundState.ACCEPTED_PROVIDER_DUE ->
+                        "Server accepted ${saved.amountMinor.asRupees()}. Start the server-confirmed provider payout before opening the provider app."
                     RefundState.SETTLED ->
                         "Refund settled on ${saved.settlementMethod ?: "the original rail"}. " +
                             (saved.receiptNo?.let { "Receipt $it." } ?: "The server receipt is recorded.")
-                    RefundState.REQUEST_REJECTED -> if (mode == "original") {
-                        "The ERP refused the record after provider evidence was captured: " +
-                            (saved.lastError ?: "review required") +
-                            ". Do not repeat the external refund; retry this same task or ask an owner."
-                    } else {
+                    RefundState.REQUEST_REJECTED -> {
                         "Server refused the request: ${saved.lastError ?: "review required"}. No cash is authorised."
                     }
                     else ->
@@ -297,7 +367,17 @@ class RefundsViewModel : ViewModel() {
     fun retryRejected(localId: String) = guardedAction { scopeLease ->
         var queued = false
         if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
-                queued = db.refundDao().retryRejected(localId) == 1
+                val row = db.refundDao().refundById(localId)
+                if (
+                    row?.state == RefundState.REQUEST_REJECTED &&
+                    row.mode == "original" &&
+                    (!row.externalReference.isNullOrBlank() || row.providerSettledAtMillis != null)
+                ) {
+                    notice.value = "This older task captured provider evidence before server acceptance. " +
+                        "Do not retry or repeat the payout; a protected owner must reconcile it."
+                } else {
+                    queued = db.refundDao().retryRejected(localId) == 1
+                }
             }
         ) return@guardedAction
         if (queued) {
@@ -313,16 +393,17 @@ class RefundsViewModel : ViewModel() {
         if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                 val row = db.refundDao().refundById(localId)
                 mode = row?.mode
-                if (mode == "cash") {
+                if (row?.externalReference.isNullOrBlank() && row?.providerSettledAtMillis == null) {
                     cancelled = db.refundDao().cancelRejectedRequest(localId) == 1
                 }
             }
         ) return@guardedAction
-        if (mode != "cash") {
+        if (!cancelled && mode != null) {
             notice.value =
-                "A non-cash provider payout cannot be discarded locally. Retry the same task or ask an owner to reconcile it."
+                "This refused request contains older payout evidence and cannot be discarded. Ask a protected owner to reconcile it."
         } else if (cancelled) {
-            notice.value = "Refused cash request cancelled. The server authorised no payout."
+            notice.value = "Refused ${if (mode == "original") "provider" else "cash"} request cancelled. " +
+                "The server authorised no payout."
         }
     }
 
@@ -339,7 +420,7 @@ class RefundsViewModel : ViewModel() {
             try {
                 val result = appCtx.sync.beginPosRefundCashHandoff(localId)
                 notice.value = if (result.status == RefundState.CASH_HANDOFF_IN_PROGRESS) {
-                    "Server handover opened for ${result.amountMinor}. Verify the customer, hand over that amount once, then confirm immediately."
+                    "Server handover opened for ${result.amountMinor.asRupees()}. Verify the customer, hand over that amount once, then confirm immediately."
                 } else {
                     "Refund is already ${result.status}. Refresh before touching cash."
                 }
@@ -358,6 +439,70 @@ class RefundsViewModel : ViewModel() {
             } finally {
                 busy.value = false
             }
+        }
+    }
+
+    fun beginProviderPayout(localId: String) {
+        if (busy.value) return
+        if (!appCtx.connectivity.online.value) {
+            notice.value =
+                "Starting a provider payout requires live server confirmation. Reconnect; do not open the provider app yet."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        busy.value = true
+        viewModelScope.launch {
+            try {
+                val result = appCtx.sync.beginPosRefundProviderPayout(localId)
+                notice.value = if (result.status == RefundState.PROVIDER_PAYOUT_IN_PROGRESS) {
+                    "Server opened the provider payout for ${result.amountMinor.asRupees()}. Complete it once, then record the successful reference."
+                } else {
+                    "Provider refund is already ${result.status}. Refresh before moving money."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.refundDao().noteAmbiguousServerResult(
+                        localId,
+                        "Could not verify whether the provider payout started: ${e.message ?: "connection lost"}",
+                    )
+                }
+                notice.value = "Could not verify the provider start. Do not run the payout. Refresh first; retries use the same reference."
+                appCtx.sync.requestSync()
+            } finally {
+                busy.value = false
+            }
+        }
+    }
+
+    fun confirmProviderCompleted(localId: String, externalReference: String) = guardedAction { scopeLease ->
+        val cleanReference = externalReference.trim()
+        if (cleanReference.isEmpty()) {
+            notice.value = "Enter the successful card/UPI/QR/wallet refund reference."
+            return@guardedAction
+        }
+        val completedAt = System.currentTimeMillis()
+        var changed = false
+        if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                changed = db.refundDao().confirmProviderCompleted(
+                    localId = localId,
+                    externalReference = cleanReference.take(200),
+                    providerSettledAtMillis = completedAt,
+                ) == 1
+            }
+        ) return@guardedAction
+        if (!changed) {
+            notice.value = "Provider completion was not queued because the server task changed. " +
+                "Do not repeat the payout; refresh and verify the existing task."
+            return@guardedAction
+        }
+        if (appCtx.connectivity.online.value) appCtx.sync.sync() else appCtx.sync.requestSync()
+        val saved = db.refundDao().refundById(localId)
+        notice.value = if (saved?.state == RefundState.SETTLED) {
+            "Provider refund settled." + (saved.receiptNo?.let { " Receipt $it." } ?: "")
+        } else {
+            "Provider completion is saved. Do not run it again; keep this shift open until accounting finishes."
         }
     }
 
@@ -416,6 +561,107 @@ class RefundsViewModel : ViewModel() {
         }
     }
 
+    fun resolveStartedCashHandoff(localId: String, reason: String) {
+        val cleanReason = reason.trim()
+        runOnlineProtectedRecovery(
+            invalidMessage = if (cleanReason.length < 3) {
+                "Enter why the started cash handover did not pay the customer."
+            } else null,
+        ) {
+            val result = appCtx.sync.resolvePosRefundCashHandoff(localId, cleanReason)
+            if (result.status == RefundState.WITHDRAWN) {
+                "Started cash handover resolved. The server recorded that no cash left the drawer."
+            } else {
+                "Cash handover is ${result.status}. Refresh and verify the drawer before any other action."
+            }
+        }
+    }
+
+    fun withdrawProviderRefund(localId: String, reason: String) {
+        val cleanReason = reason.trim()
+        runOnlineProtectedRecovery(
+            invalidMessage = if (cleanReason.length < 3) {
+                "Enter why the accepted provider payout will not be started."
+            } else null,
+        ) {
+            val result = appCtx.sync.withdrawPosRefundProvider(localId, cleanReason)
+            if (result.status == RefundState.WITHDRAWN) {
+                "Provider refund withdrawn. The server recorded that no provider payout started."
+            } else {
+                "Provider refund is ${result.status}. Refresh before using the provider."
+            }
+        }
+    }
+
+    fun resolveStartedProviderPayout(
+        localId: String,
+        providerStatus: String,
+        verificationReference: String,
+        reason: String,
+    ) {
+        val cleanReference = verificationReference.trim()
+        val cleanReason = reason.trim()
+        val invalid = when {
+            providerStatus !in setOf(
+                "no_matching_transaction", "provider_declined", "provider_reversed",
+            ) -> "Choose the verified provider outcome."
+            cleanReference.length < 3 ->
+                "Enter the provider search, case, reversal, or transaction reference."
+            cleanReason.length < 3 -> "Enter why no provider payout completed."
+            else -> null
+        }
+        runOnlineProtectedRecovery(invalidMessage = invalid) {
+            val result = appCtx.sync.resolvePosRefundProviderPayout(
+                localId = localId,
+                providerStatus = providerStatus,
+                verificationReference = cleanReference,
+                reason = cleanReason,
+            )
+            if (result.status == RefundState.WITHDRAWN) {
+                "Provider payout resolved. The server recorded the verified no-payout outcome."
+            } else {
+                "Provider payout is ${result.status}. Refresh and verify the provider before any other action."
+            }
+        }
+    }
+
+    private fun runOnlineProtectedRecovery(
+        invalidMessage: String?,
+        action: suspend () -> String,
+    ) {
+        if (busy.value) return
+        if (invalidMessage != null) {
+            notice.value = invalidMessage
+            return
+        }
+        if (appCtx.shiftCache.profile.value?.protectedAccess != true) {
+            notice.value = "Only a protected owner may resolve a payout that did not complete."
+            return
+        }
+        if (!appCtx.connectivity.online.value) {
+            notice.value = "Reconnect before recovery. The server must verify this exact payout state."
+            return
+        }
+        busy.value = true
+        viewModelScope.launch {
+            try {
+                notice.value = action()
+                // Direct protected-owner recovery can end the refund without
+                // entering the queued outbox. Let the sync engine refresh the
+                // invalidated order/drawer/customer/finance projections.
+                appCtx.sync.requestSync()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                notice.value = "Could not verify the recovery: ${e.message ?: "connection lost"}. " +
+                    "Do not repeat or change the payout; refresh this exact task."
+                appCtx.sync.requestSync()
+            } finally {
+                busy.value = false
+            }
+        }
+    }
+
     private fun guardedAction(action: suspend (cloud.dcompany.erp.core.auth.CacheScopeLease) -> Unit) {
         if (busy.value) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
@@ -442,10 +688,13 @@ private fun RefundOrderCacheEntity.toOrder(): Order = Order(
     totalMinor = totalMinor,
     paidMinor = paidMinor,
     refundableMinor = refundableMinor,
+    pendingRefundMinor = pendingRefundMinor,
+    paymentMethods = paymentMethodsCsv.split(',').map(String::trim).filter(String::isNotEmpty),
 )
 
 private fun LocalRefundEntity.toTask() = RefundTask(
     localId = localId,
+    orderId = orderId,
     invoiceNo = invoiceNo,
     amountMinor = amountMinor,
     reasonCode = reasonCode,
@@ -457,7 +706,46 @@ private fun LocalRefundEntity.toTask() = RefundTask(
     acceptedAtMillis = acceptedAtMillis,
     handoffStartedAtMillis = cashHandoffStartedAtMillis,
     settledAtMillis = settledAtMillis,
+    localPayoutAtMillis = if (settlementMethod == "cash") {
+        settledAtMillis
+    } else {
+        providerSettledAtMillis
+    },
     withdrawalAtMillis = withdrawalAtMillis,
     receiptNo = receiptNo,
+    externalReference = externalReference,
+    acceptedByUserId = acceptedByUserId,
+    acceptedByName = acceptedByName,
+    moneyStartedByUserId = if (settlementMethod == "cash") {
+        cashHandoffStartedByUserId
+    } else {
+        providerPayoutStartedByUserId
+    },
+    moneyStartedByName = if (settlementMethod == "cash") {
+        cashHandoffStartedByName
+    } else {
+        providerPayoutStartedByName
+    },
+    moneyCompletedByUserId = if (settlementMethod == "cash") {
+        cashHandedOverByUserId
+    } else {
+        providerCompletedByUserId
+    },
+    moneyCompletedByName = if (settlementMethod == "cash") {
+        cashHandedOverByName
+    } else {
+        providerCompletedByName
+    },
+    settledByUserId = settledByUserId,
+    settledByName = settledByName,
+    withdrawnByUserId = withdrawnByUserId,
+    withdrawnByName = withdrawnByName,
+    providerVerificationStatus = providerVerificationStatus,
+    providerVerificationReference = providerVerificationReference,
+    customerSpendReconciled = customerSpendReconciled,
+    loyaltyReconciliationState = loyaltyReconciliationState,
+    capturedTimeReconciled = capturedTimeReconciled,
+    providerEvidenceReconciled = providerEvidenceReconciled,
+    payoutConflict = payoutConflict,
     error = lastError,
 )

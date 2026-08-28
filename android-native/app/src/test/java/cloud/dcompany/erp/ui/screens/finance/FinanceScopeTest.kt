@@ -24,6 +24,20 @@ class FinanceScopeTest {
     }
 
     @Test
+    fun companyWidePartnerSnapshotsCannotCrossIntoManagerCacheAtSameBranch() {
+        val owner = FinanceCacheScope.from(
+            profile("company-a", "branch-a", roles = listOf("owner")),
+        )!!
+        val manager = FinanceCacheScope.from(
+            profile("company-a", "branch-a", roles = listOf("manager")),
+        )!!
+
+        assertTrue(owner.companyWidePartnerFinance)
+        assertTrue(!manager.companyWidePartnerFinance)
+        assertNotEquals(owner.key("finance_partners"), manager.key("finance_partners"))
+    }
+
+    @Test
     fun rowCacheFailsClosedUntilScopeMarkerIsVerified() {
         val rows = listOf(Row("branch-a"), Row("branch-b"))
 
@@ -79,11 +93,15 @@ class FinanceScopeTest {
         branch: String? = null,
     ): FinanceCacheScope = FinanceCacheScope.from(profile(company, branch))!!
 
-    private fun profile(company: String, branch: String?) = MeResponse(
+    private fun profile(
+        company: String,
+        branch: String?,
+        roles: List<String> = listOf("owner"),
+    ) = MeResponse(
         userId = "user-a",
         email = "owner@example.com",
         name = "Owner",
-        roles = listOf("owner"),
+        roles = roles,
         companyId = company,
         branchId = branch,
     )

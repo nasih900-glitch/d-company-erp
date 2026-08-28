@@ -47,6 +47,7 @@ import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.allowedDestinations
 import cloud.dcompany.erp.ui.canManageMemberships
+import cloud.dcompany.erp.ui.canManageSystemSettings
 import cloud.dcompany.erp.ui.workspaceLocationLabel
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
@@ -82,6 +83,7 @@ import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
 import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
+import cloud.dcompany.erp.core.sync.summarizeOutboxWork
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
 
 class MainActivity : ComponentActivity() {
@@ -130,6 +132,13 @@ private fun AppRoot(
     val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsStateWithLifecycle()
     val backendReachability by ApiClient.backendReachability.state.collectAsStateWithLifecycle()
     val syncAvailability = syncAvailabilityProblem(networkValidated, backendReachability)
+    val unresolvedOutboxGroups by DCompanyApp.instance.db.outboxSafetyDao()
+        .observeUnresolvedGroups()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val outboxWorkStatus = remember(unresolvedOutboxGroups) {
+        summarizeOutboxWork(unresolvedOutboxGroups)
+    }
+    val syncing by DCompanyApp.instance.sync.syncing.collectAsStateWithLifecycle()
     val state by session.state.collectAsStateWithLifecycle()
     val signingIn by session.signingIn.collectAsStateWithLifecycle()
     val loginError by session.loginError.collectAsStateWithLifecycle()
@@ -319,6 +328,8 @@ private fun AppRoot(
                     employeeName = s.me.name,
                     locationLabel = locationLabel,
                     connectivityProblem = syncAvailability,
+                    outboxWorkStatus = outboxWorkStatus,
+                    syncing = syncing,
                     canChangeTill = s.me.protectedAccess && requiresTill,
                     onChangeTill = session::requestTerminalReassignment,
                     onSignOut = { confirmSignOut = true },
@@ -365,6 +376,7 @@ private fun AppRoot(
                                     onPrepareDirectCheckout = pos::prepareDirectCheckout,
                                     onDismissDirectCheckout = pos::dismissDirectCheckout,
                                     onConfirmDirectZero = pos::confirmDirectZero,
+                                    onRedeemDirectPoints = pos::redeemDirectPoints,
                                     onCapture = pos::captureSale,
                                     onRetryRejectedSale = pos::retryRejectedSale,
                                     onRetryHeldPayment = pos::retryRejectedHeldPayment,
@@ -438,7 +450,8 @@ private fun AppRoot(
                             Destination.AuditLog -> AuditLogScreen()
                             Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen(
-                                canManageSystem = s.me.auditAccess,
+                                canManageSystem = canManageSystemSettings(s.me),
+                                onPasswordChanged = session::expireAfterPasswordChange,
                             )
                     }
                 }

@@ -8,6 +8,7 @@ import cloud.dcompany.erp.core.db.CafeBillCacheEntity
 import cloud.dcompany.erp.core.db.CafeBillLineSnapshot
 import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,7 +28,25 @@ class CafeOrderProjectionTest {
                     kind = CafeActionKind.APPEND_ROUND,
                     payload = CafeActionPayload(
                         lines = listOf(
-                            CafeActionLine("client-b", "menu-b", "Fries", 2, "No salt", 250),
+                            CafeActionLine(
+                                clientLineId = "client-b",
+                                menuItemId = "menu-b",
+                                name = "Fries",
+                                qty = 2,
+                                note = "No salt",
+                                estimateUnitMinor = 400,
+                                variantId = "variant-large",
+                                variantName = "Large",
+                                variantPriceDeltaMinor = 100,
+                                modifiers = listOf(
+                                    LocalModifierSelectionSnapshot(
+                                        modifierId = "modifier-cheese",
+                                        name = "Cheese",
+                                        priceDeltaMinor = 50,
+                                        qty = 1,
+                                    ),
+                                ),
+                            ),
                         ),
                     ),
                     capturedVersion = 3,
@@ -47,13 +66,15 @@ class CafeOrderProjectionTest {
 
         assertEquals("sending_to_pos", projected.status)
         assertEquals(3, projected.pendingActionCount)
-        assertEquals(500L, projected.totalMinor)
+        assertEquals(800L, projected.totalMinor)
         assertEquals(1_000L, projected.confirmedTotalMinor)
         assertTrue(projected.amountPending)
         assertTrue(projected.lines.single { it.clientLineId == "client-a" }.voided)
         val newLine = projected.lines.single { it.clientLineId == "client-b" }
         assertEquals("No salt", newLine.note)
-        assertEquals(500L, newLine.lineTotalMinor)
+        assertEquals(800L, newLine.lineTotalMinor)
+        assertEquals("Large", newLine.variantSnapshot?.name)
+        assertEquals(listOf("Cheese"), newLine.modifiers.map { it.name })
         assertTrue(newLine.locallyPending)
     }
 

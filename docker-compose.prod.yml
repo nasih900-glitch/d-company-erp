@@ -97,10 +97,10 @@ services:
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
       REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
-      # This backend's Gaming writes require the v5 snapshot contract. Keep the
-      # fallback fail-closed; distribute v5 and drain old outboxes before deploy.
+      # Gaming writes require the v5 snapshot contract. Keep v5 as the minimum;
+      # v6 is the next candidate and must pass release gates before deployment.
       ANDROID_MIN_SUPPORTED_VERSION_CODE: ${ANDROID_MIN_SUPPORTED_VERSION_CODE:-5}
-      ANDROID_LATEST_VERSION_CODE: ${ANDROID_LATEST_VERSION_CODE:-5}
+      ANDROID_LATEST_VERSION_CODE: ${ANDROID_LATEST_VERSION_CODE:-6}
       ANDROID_UPDATE_URL: ${ANDROID_UPDATE_URL:-}
       IOS_MIN_SUPPORTED_VERSION_CODE: ${IOS_MIN_SUPPORTED_VERSION_CODE:-1}
       IOS_LATEST_VERSION_CODE: ${IOS_LATEST_VERSION_CODE:-1}

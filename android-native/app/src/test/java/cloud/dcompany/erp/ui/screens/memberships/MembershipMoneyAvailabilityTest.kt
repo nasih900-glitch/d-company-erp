@@ -8,11 +8,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 
 class MembershipMoneyAvailabilityTest {
 
     @Test
     fun liveConnectionAllowsPaidMembershipInitiation() {
+        assertNull(
+            membershipMoneyOfflineMessage(
+                online = true,
+                operation = MembershipMoneyOperation.PREPARE,
+            ),
+        )
         assertNull(
             membershipMoneyOfflineMessage(
                 online = true,
@@ -23,6 +30,16 @@ class MembershipMoneyAvailabilityTest {
             membershipMoneyOfflineMessage(
                 online = true,
                 operation = MembershipMoneyOperation.REFUND,
+            ),
+        )
+    }
+
+    @Test
+    fun offlinePreparationIsAllowedBecauseItCannotMoveMoney() {
+        assertNull(
+            membershipMoneyOfflineMessage(
+                online = false,
+                operation = MembershipMoneyOperation.PREPARE,
             ),
         )
     }
@@ -92,6 +109,39 @@ class MembershipMoneyAvailabilityTest {
         assertFalse(canManageMembershipMoney(protectedWithoutPermission))
         assertTrue(canManageMembershipMoney(protectedAdmin))
     }
+
+    @Test
+    fun cachedMembershipFailsClosedAfterExpiryOrWithInvalidDates() {
+        val now = Instant.parse("2026-08-27T12:00:00Z")
+        val active = subscription(
+            startsAt = "2026-08-01T00:00:00Z",
+            expiresAt = "2026-09-01T00:00:00Z",
+        )
+
+        assertTrue(active.isActiveAt(now))
+        assertTrue(active.copy(cancelledAt = "2026-08-20T00:00:00Z").isActiveAt(now))
+        assertFalse(active.copy(expiresAt = "2026-08-27T12:00:00Z").isActiveAt(now))
+        assertFalse(active.copy(startsAt = "2026-08-28T00:00:00Z").isActiveAt(now))
+        assertFalse(active.copy(isActive = false).isActiveAt(now))
+        assertFalse(active.copy(revokedAt = "2026-08-20T00:00:00Z").isActiveAt(now))
+        assertFalse(active.copy(expiresAt = "not-a-timestamp").isActiveAt(now))
+    }
+
+    private fun subscription(startsAt: String, expiresAt: String) = Subscription(
+        id = "membership-1",
+        customerId = "customer-1",
+        tierId = "tier-1",
+        tierCode = "gold",
+        tierName = "Gold",
+        billingCycle = "monthly",
+        startsAt = startsAt,
+        expiresAt = expiresAt,
+        cancelledAt = null,
+        revokedAt = null,
+        autoRenew = false,
+        amountPaidMinor = 100_00,
+        isActive = true,
+    )
 
     private fun profile(
         protectedAccess: Boolean,

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from app.api.v1.pos.router import claim_order_for_checkout
 from app.core.db import AsyncSessionLocal
@@ -29,6 +29,21 @@ from app.models import (
     Table,
     User,
 )
+
+
+async def _set_paid_source_cleanup_triggers(session, *, enabled: bool) -> None:
+    """Narrow test-only cleanup bypass; production exposes no bypass path."""
+    verb = "ENABLE" if enabled else "DISABLE"
+    for table_name, trigger_name in (
+        ("payments", "trg_payments_immutable"),
+        ("payments", "trg_payments_final_order_balance"),
+        ("orders", "trg_orders_paid_source_integrity"),
+        ("orders", "trg_orders_final_payment_balance"),
+        ("order_lines", "trg_order_lines_paid_source_integrity"),
+    ):
+        await session.execute(
+            text(f"ALTER TABLE {table_name} {verb} TRIGGER {trigger_name}")
+        )
 
 
 @pytest.mark.integration
@@ -536,6 +551,7 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
             assert len(payments) == 1
     finally:
         async with AsyncSessionLocal() as cleanup:
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=False)
             await cleanup.execute(delete(Payment).where(Payment.order_id == order.id))
             await cleanup.execute(
                 delete(OrderCheckoutClaim).where(OrderCheckoutClaim.order_id == order.id)
@@ -551,6 +567,7 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
             await cleanup.execute(
                 delete(IdempotencyKey).where(IdempotencyKey.key == payment_key)
             )
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=True)
             await cleanup.commit()
 
 
@@ -686,6 +703,7 @@ async def test_http_zero_total_finalization_requires_and_consumes_claim(
             assert paid_order.invoice_no
     finally:
         async with AsyncSessionLocal() as cleanup:
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=False)
             await cleanup.execute(
                 delete(OrderCheckoutClaim).where(OrderCheckoutClaim.order_id == order.id)
             )
@@ -702,4 +720,5 @@ async def test_http_zero_total_finalization_requires_and_consumes_claim(
                     IdempotencyKey.key.in_([missing_key, finalize_key])
                 )
             )
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=True)
             await cleanup.commit()

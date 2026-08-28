@@ -41,11 +41,15 @@ DerivedData/
 xcuserdata/
 *.mobileprovision
 *.p12
+*.p8
+*.jks
 *.cer
 *.key
 *.pem
 *.keystore
 keystore.properties
+frontend/android/google-services.json
+frontend/ios/GoogleService-Info.plist
 
 # Local data
 pgdata/

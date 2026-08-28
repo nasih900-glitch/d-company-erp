@@ -98,6 +98,8 @@ data class BranchDto(
     val id: String,
     val name: String,
     val code: String? = null,
+    /** Stable fiscal-document namespace, separate from the editable display code. */
+    @SerialName("invoice_series_code") val invoiceSeriesCode: String = "",
     val address: String? = null,
     val timezone: String? = null,
     @SerialName("opens_at") val opensAt: String? = null,
@@ -113,6 +115,12 @@ data class BranchDto(
 data class BranchWriteBody(
     val name: String,
     val code: String? = null,
+    /**
+     * Nullable only for recovery of a pre-v3.0.4 queued branch. New forms
+     * always send this explicitly; the transition backend accepts omission
+     * only when [code] is itself exactly two alphanumeric characters.
+     */
+    @SerialName("invoice_series_code") val invoiceSeriesCode: String? = null,
     val address: String? = null,
     val timezone: String? = null,
     @SerialName("opens_at") val opensAt: String? = null,
@@ -169,11 +177,30 @@ data class AccountActionDto(val message: String = "")
  * round trip. A server that disagrees still wins: its 422 is shown verbatim.
  */
 private val ianaZoneIds: Set<String> by lazy { ZoneId.getAvailableZoneIds() }
+private val invoiceSeriesPattern = Regex("^[A-Z0-9]{2}$")
 
 /** Word-for-word the backend's own message, so both paths read identically. */
 const val TIMEZONE_MESSAGE = "timezone must be a valid IANA name like Asia/Kolkata"
 
 fun isIanaTimezone(value: String): Boolean = value.trim() in ianaZoneIds
+
+/** Same normalization and format accepted by BranchCreate/BranchUpdate. */
+internal fun normalizeInvoiceSeries(value: String): String = value.trim().uppercase()
+
+internal fun isValidInvoiceSeries(value: String): Boolean =
+    invoiceSeriesPattern.matches(normalizeInvoiceSeries(value))
+
+/**
+ * Recover only the exact backward-compatible case accepted by the server.
+ * Never truncate a longer operational code: doing so could silently choose
+ * the wrong legal invoice namespace.
+ */
+internal fun resolveQueuedInvoiceSeries(explicit: String?, operationalCode: String?): String? {
+    if (explicit != null) {
+        return normalizeInvoiceSeries(explicit).takeIf(::isValidInvoiceSeries)
+    }
+    return operationalCode?.let(::normalizeInvoiceSeries)?.takeIf(::isValidInvoiceSeries)
+}
 
 /** A handful of matches for the tablet keyboard — nobody types a tz list by hand. */
 fun timezoneSuggestions(typed: String, limit: Int = 6): List<String> {
@@ -269,6 +296,7 @@ data class BranchForm(
     val id: String? = null,
     val name: String = "",
     val code: String = "",
+    val invoiceSeriesCode: String = "",
     val address: String = "",
     val timezone: String = "Asia/Kolkata",
     val opensAt: String = "09:00",
@@ -285,6 +313,7 @@ fun BranchDto.toForm() = BranchForm(
     id = id,
     name = name,
     code = code.orEmpty(),
+    invoiceSeriesCode = invoiceSeriesCode,
     address = address.orEmpty(),
     timezone = timezone.orEmpty(),
     opensAt = opensAt.orEmpty(),
@@ -299,6 +328,9 @@ fun BranchForm.validate(): String? {
     if (name.isBlank()) return "Branch name cannot be empty."
     if (name.trim().length > 200) return "Branch name must be 200 characters or fewer."
     if (code.trim().length > 10) return "Short code must be 10 characters or fewer."
+    if (!isValidInvoiceSeries(invoiceSeriesCode)) {
+        return "Invoice series must be exactly two letters or digits, for example MN."
+    }
     if (address.trim().length > 500) return "Address must be 500 characters or fewer."
     val tz = timezone.trim()
     if (tz.isNotEmpty() && !isIanaTimezone(tz)) return TIMEZONE_MESSAGE
@@ -331,6 +363,7 @@ fun BranchForm.validate(): String? {
 fun BranchForm.toBody() = BranchWriteBody(
     name = name.trim(),
     code = code.trim().uppercase().ifBlank { null },
+    invoiceSeriesCode = normalizeInvoiceSeries(invoiceSeriesCode),
     address = address.trim().ifBlank { null },
     timezone = timezone.trim().ifBlank { null },
     opensAt = opensAt.trim().ifBlank { null },

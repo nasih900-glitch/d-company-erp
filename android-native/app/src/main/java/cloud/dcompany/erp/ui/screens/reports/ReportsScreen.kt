@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
@@ -98,6 +100,7 @@ fun ReportsScreen() {
             onPickQuarter = vm::setQuarter,
             onJumpToCurrent = vm::jumpToCurrent,
         )
+        CostingCoverageBanner(state)
 
         Box(Modifier.fillMaxSize()) {
             val report = state.report
@@ -139,6 +142,35 @@ fun ReportsScreen() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CostingCoverageBanner(state: ReportsUiState) {
+    val coverage = state.costingCoverage
+    val error = state.costingError
+    when {
+        coverage != null && !coverage.isComplete -> OperationalBanner(
+            title = coverage.warningTitle,
+            detail = coverage.warningDetail,
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs),
+        )
+        error != null -> OperationalBanner(
+            title = "Costing status unavailable",
+            detail = error,
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs),
+        )
+        coverage == null && state.report != null -> OperationalBanner(
+            title = "Checking inventory costing",
+            detail = "Profit figures remain provisional until recipe and ingredient-cost coverage is verified.",
+            tone = UiTone.Information,
+            icon = Icons.Default.Assessment,
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs),
+        )
     }
 }
 
@@ -534,6 +566,17 @@ private fun ReportBody(
         ) {
             ReportHeading(report, period, refreshing, fetchedAtMillis)
 
+            if (report.unissuedPaidOrdersCount > 0) {
+                OperationalBanner(
+                    title = "Invoice reconciliation required",
+                    detail = "${report.unissuedPaidOrdersCount} settled order(s) in this period " +
+                        "have no immutable invoice timestamp. They are included using their " +
+                        "recorded close time until an owner reconciles them.",
+                    tone = UiTone.Warning,
+                    icon = Icons.Filled.WarningAmber,
+                )
+            }
+
             KpiGrid(report, columns)
             SecondaryMetrics(report)
 
@@ -568,7 +611,8 @@ private fun ReportBody(
             BottomLine(report)
 
             Text(
-                "Computed live from orders and journal entries. " +
+                "Computed from paid orders, payment and refund evidence, manual collections, " +
+                    "memberships, expenses, depreciation and the FIFO inventory subledger. " +
                     "Collected GST is shown for accountant review — input tax credit is not applied.",
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.ForegroundMuted,

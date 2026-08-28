@@ -1,10 +1,15 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.ui.components.UiTone
 import java.time.LocalDate
 import java.time.YearMonth
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -101,6 +106,44 @@ class ReportsPresentationPolicyTest {
         assertEquals(UiTone.Danger, metrics[1].tone)
         assertEquals("0.0%", metrics[2].value)
         assertEquals(UiTone.Neutral, metrics[2].tone)
+    }
+
+    @Test
+    fun `refund and cost only periods are not presented as no activity`() {
+        assertFalse(ReportData(refundsIssuedMinor = 500).hasNothing)
+        assertFalse(ReportData(cogsMinor = 500).hasNothing)
+        assertFalse(ReportData(expenseTotalMinor = 500).hasNothing)
+    }
+
+    @Test
+    fun `report wire contract requires branch scope and invoice integrity count`() {
+        val decoded = ApiClient.json.decodeFromString<ReportData>(
+            """{"branch_id":"branch-a","unissued_paid_orders_count":0}""",
+        )
+        assertEquals("branch-a", decoded.branchId)
+
+        assertThrows(SerializationException::class.java) {
+            ApiClient.json.decodeFromString<ReportData>(
+                """{"unissued_paid_orders_count":0}""",
+            )
+        }
+        assertThrows(SerializationException::class.java) {
+            ApiClient.json.decodeFromString<ReportData>(
+                """{"branch_id":"branch-a"}""",
+            )
+        }
+    }
+
+    @Test
+    fun `costing coverage wire contract requires its selected branch`() {
+        val decoded = ApiClient.json.decodeFromString<CostingCoverage>(
+            """{"branch_id":"branch-a"}""",
+        )
+        assertEquals("branch-a", decoded.branchId)
+
+        assertThrows(SerializationException::class.java) {
+            ApiClient.json.decodeFromString<CostingCoverage>("{}")
+        }
     }
 
     private fun state(report: ReportData?, error: String? = null) = ReportsUiState(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -12,7 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.errors import (
+    BusinessRuleError,
+    ConflictError,
+    IdempotencyConflict,
+    NotFoundError,
+)
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
@@ -30,8 +36,35 @@ from app.models import (
     StockMovement,
     Supplier,
 )
+from app.services.accounting.accounts import ACCOUNTS_PAYABLE, INVENTORY
+from app.services.accounting.purchases import (
+    post_two_sided_operational_journal,
+    received_line_total_minor,
+    received_total_minor,
+    require_invoice_matches_capitalised_total,
+)
+from app.services.inventory.valuation import remaining_batch_totals
 
 router = APIRouter()
+_INVENTORY_QUANTITY_QUANTUM = Decimal("0.0001")
+
+
+def _exact_inventory_quantity(value: object, *, field_name: str) -> Decimal:
+    """Reject values the Numeric(14,4) inventory columns cannot preserve."""
+
+    try:
+        supplied = Decimal(str(value))
+        stored = supplied.quantize(
+            _INVENTORY_QUANTITY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise BusinessRuleError(f"{field_name} must be a finite number") from exc
+    if not supplied.is_finite() or supplied != stored:
+        raise BusinessRuleError(
+            f"{field_name} supports at most four decimal places"
+        )
+    return stored
 
 
 def _optional_idempotency(request: Request) -> tuple[str, str] | tuple[None, None]:
@@ -84,6 +117,33 @@ async def _require_writable_branch(
     if not branch or not tenant.in_branch(branch_id):
         raise NotFoundError("branch not found")
     return branch
+
+
+async def _inventory_branch_scope(
+    session: SessionDep,
+    tenant: TenantContext,
+    requested_branch_id: UUID | None,
+) -> UUID | None:
+    """Resolve a read scope without letting a branch-bound token widen it."""
+
+    if tenant.branch_id is not None:
+        if requested_branch_id is not None and requested_branch_id != tenant.branch_id:
+            raise NotFoundError("branch not found")
+        return tenant.branch_id
+    if requested_branch_id is None:
+        return None
+    branch = (
+        await session.execute(
+            select(Branch.id).where(
+                Branch.id == requested_branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if branch is None:
+        raise NotFoundError("branch not found")
+    return requested_branch_id
 
 
 async def _get_menu_item_for_tenant(
@@ -157,7 +217,7 @@ class IngredientUpdate(BaseModel):
 class StockAdjustment(BaseModel):
     ingredient_id: UUID
     branch_id: UUID
-    qty_delta: float  # can be negative
+    qty_delta: float = Field(allow_inf_nan=False)  # can be negative
     type: Literal["waste", "damage", "transfer", "adjustment"]
     note: str | None = None
 
@@ -194,7 +254,10 @@ class SupplierUpdate(BaseModel):
 
 class GrnLineIn(BaseModel):
     ingredient_id: UUID
-    qty: float = Field(gt=0)
+    # Persisted inventory quantities are NUMERIC(14, 4). Reject excess scale
+    # before calculating the purchase journal so PostgreSQL cannot round the
+    # stored GRN/batch quantity away from the amount already posted.
+    qty: Decimal = Field(gt=0, max_digits=14, decimal_places=4, allow_inf_nan=False)
     unit_cost_minor: int = Field(ge=0)
     expires_at: datetime | None = None
     lot_code: str | None = None
@@ -204,7 +267,14 @@ class GrnPost(BaseModel):
     branch_id: UUID
     supplier_id: UUID | None = None
     supplier_invoice_no: str | None = None
-    supplier_invoice_amount_minor: int | None = None
+    supplier_invoice_amount_minor: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Must equal the sum of line-wise capitalised costs. Separate freight, "
+            "recoverable tax, discounts, and invoice variance are not supported."
+        ),
+    )
     received_at: datetime | None = None
     notes: str | None = None
     lines: list[GrnLineIn] = Field(min_length=1)
@@ -219,17 +289,17 @@ class RecipeLineRead(BaseModel):
 
 class RecipeLineIn(BaseModel):
     ingredient_id: UUID
-    qty: float = Field(gt=0)
+    qty: float = Field(gt=0, allow_inf_nan=False)
     # Fraction, not a percent — 0.05 means 5% wastage. Matches the column
     # comment/semantics in app/models/inventory.py and how deduction.py
     # consumes it: qty * (1 + wastage_pct).
-    wastage_pct: float = Field(default=0, ge=0, le=1)
+    wastage_pct: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
 
 
 class RecipeLineUpdate(BaseModel):
     ingredient_id: UUID | None = None
-    qty: float | None = Field(default=None, gt=0)
-    wastage_pct: float | None = Field(default=None, ge=0, le=1)
+    qty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    wastage_pct: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
 class RecipeRead(BaseModel):
@@ -246,13 +316,13 @@ class RecipeRead(BaseModel):
 class RecipeCreate(BaseModel):
     menu_item_id: UUID
     name: str = Field(min_length=1, max_length=200)
-    yield_qty: float = Field(default=1, gt=0)
+    yield_qty: float = Field(default=1, gt=0, allow_inf_nan=False)
     lines: list[RecipeLineIn] = Field(default_factory=list)
 
 
 class RecipeUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    yield_qty: float | None = Field(default=None, gt=0)
+    yield_qty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 # ============================================================================
@@ -279,7 +349,9 @@ async def list_inventory_branches(
 async def list_ingredients(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("inventory.read")),
+    branch_id: UUID | None = None,
 ) -> list[IngredientRead]:
+    scoped_branch_id = await _inventory_branch_scope(session, tenant, branch_id)
     rows = (
         await session.execute(
             select(Ingredient).where(
@@ -288,13 +360,18 @@ async def list_ingredients(
             )
         )
     ).scalars().all()
+    totals = await remaining_batch_totals(
+        session,
+        company_id=tenant.company_id,
+        branch_id=scoped_branch_id,
+    )
     return [
         IngredientRead(
             id=r.id, sku=r.sku, name=r.name, base_unit=r.base_unit,
-            current_qty=float(r.current_qty),
+            current_qty=float(totals[r.id].qty) if r.id in totals else 0.0,
             reorder_threshold=float(r.reorder_threshold),
             reorder_qty=float(r.reorder_qty or 0),
-            avg_cost_minor=int(r.avg_cost_minor or 0),
+            avg_cost_minor=(totals[r.id].weighted_cost_minor if r.id in totals else 0),
         )
         for r in rows
     ]
@@ -367,6 +444,29 @@ async def update_ingredient(
     ing = await session.get(Ingredient, ingredient_id)
     if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
         raise NotFoundError("ingredient not found")
+    if payload.base_unit is not None and payload.base_unit != ing.base_unit:
+        batch_id = (
+            await session.execute(
+                select(Batch.id).where(Batch.ingredient_id == ingredient_id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if batch_id is not None:
+            raise ConflictError(
+                "base unit cannot be changed after stock or recipe history exists; "
+                "create a new ingredient SKU with the correct unit instead"
+            )
+        recipe_line_id = (
+            await session.execute(
+                select(RecipeLine.id)
+                .where(RecipeLine.ingredient_id == ingredient_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if recipe_line_id is not None:
+            raise ConflictError(
+                "base unit cannot be changed after stock or recipe history exists; "
+                "create a new ingredient SKU with the correct unit instead"
+            )
     if payload.name is not None: ing.name = payload.name
     if payload.base_unit is not None: ing.base_unit = payload.base_unit
     if payload.reorder_threshold is not None: ing.reorder_threshold = payload.reorder_threshold
@@ -390,6 +490,31 @@ async def delete_ingredient(
     ing = await session.get(Ingredient, ingredient_id)
     if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
         raise NotFoundError("ingredient not found")
+    batch_history = (
+        await session.execute(
+            select(Batch.id).where(Batch.ingredient_id == ingredient_id).limit(1)
+        )
+    ).scalar_one_or_none()
+    if batch_history is not None:
+        raise ConflictError(
+            "ingredient has stock history and cannot be deleted; keep it inactive in the "
+            "catalogue or create a replacement SKU without hiding its inventory audit trail"
+        )
+    active_recipe_line = (
+        await session.execute(
+            select(RecipeLine.id)
+            .join(Recipe, Recipe.id == RecipeLine.recipe_id)
+            .where(
+                RecipeLine.ingredient_id == ingredient_id,
+                Recipe.is_active.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if active_recipe_line is not None:
+        raise ConflictError(
+            "ingredient is used by an active recipe; remove or replace the recipe line first"
+        )
     ing.deleted_at = datetime.now(timezone.utc)
     await session.flush()
 
@@ -764,6 +889,32 @@ async def delete_supplier(
 # ============================================================================
 # GRN — Goods Received Note (receive stock)
 # ============================================================================
+async def _grn_post_response(session: SessionDep, grn: GRN) -> dict:
+    lines = (
+        await session.execute(
+            select(GRNLine)
+            .where(GRNLine.grn_id == grn.id)
+            .order_by(GRNLine.created_at, GRNLine.id)
+        )
+    ).scalars().all()
+    total_minor = sum(
+        received_line_total_minor(line.qty_received, line.cost_per_unit_minor)
+        for line in lines
+    )
+    return {
+        "ok": True,
+        "id": str(grn.id),
+        "purchase_order_id": str(grn.purchase_order_id),
+        "batches_created": sum(line.batch_id is not None for line in lines),
+        "batch_ids": [str(line.batch_id) for line in lines if line.batch_id is not None],
+        "line_ids": [str(line.id) for line in lines],
+        "total_minor": total_minor,
+        "supplier_invoice_no": grn.supplier_invoice_no,
+        "journal_entry_id": str(grn.journal_entry_id) if grn.journal_entry_id else None,
+        "accounting_status": "posted" if grn.journal_entry_id else "no_balance",
+    }
+
+
 @router.post("/grn", status_code=status.HTTP_201_CREATED)
 async def post_grn(
     payload: GrnPost,
@@ -776,18 +927,51 @@ async def post_grn(
     The simple receive-stock path creates an implicit closed purchase order so
     every stock receipt has a durable GRN header, line, batch, and movement trail.
 
-    Idempotency-Key is required (see `_require_idempotency`) — every row this
-    endpoint creates gets a fresh uuid4() PK with nothing a duplicate
-    submission could collide against, so a resubmitted GRN would otherwise
-    silently double stock and spend with no error and no trace it happened.
+    Idempotency-Key is required (see `_require_idempotency`) and retained on
+    the GRN itself. A response-loss replay therefore returns the original GRN
+    even after generic idempotency-cache pruning; it cannot duplicate stock,
+    Accounts Payable, or the source-linked journal.
     """
     idempotency_key, request_hash = _require_idempotency(request)
+
     existing_response = await check_or_reserve(
         session, key=idempotency_key, request_hash=request_hash,
         user_id=tenant.user_id, terminal_id=tenant.terminal_id,
     )
     if existing_response is not None:
         return existing_response["body"]
+
+    # The GRN itself retains replay identity after generic response-cache
+    # pruning. When the generic lookup had to reserve a fresh cache row, this
+    # durable source check still returns the original receipt and repopulates
+    # the cache; it never receives stock or posts AP twice.
+    durable_replay = (
+        await session.execute(
+            select(GRN, PurchaseOrder)
+            .join(PurchaseOrder, PurchaseOrder.id == GRN.purchase_order_id)
+            .where(GRN.idempotency_key == idempotency_key)
+            .with_for_update(of=GRN)
+        )
+    ).one_or_none()
+    if durable_replay is not None:
+        existing_grn, existing_po = durable_replay
+        if (
+            existing_grn.request_hash != request_hash
+            or existing_po.company_id != tenant.company_id
+            or existing_grn.received_by != tenant.user_id
+        ):
+            raise IdempotencyConflict(
+                "Idempotency-Key reused with different GRN payload or actor",
+                details={"key": idempotency_key},
+            )
+        response = await _grn_post_response(session, existing_grn)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response,
+        )
+        return response
 
     if not payload.lines:
         raise BusinessRuleError("at least one line required")
@@ -799,7 +983,11 @@ async def post_grn(
         raise NotFoundError("supplier not found")
 
     received_at = payload.received_at or datetime.now(timezone.utc)
-    total_minor = sum(int(ln.qty * ln.unit_cost_minor) for ln in payload.lines)
+    total_minor = received_total_minor(payload.lines)
+    require_invoice_matches_capitalised_total(
+        supplier_invoice_amount_minor=payload.supplier_invoice_amount_minor,
+        capitalised_total_minor=total_minor,
+    )
     po = PurchaseOrder(
         id=uuid4(),
         company_id=tenant.company_id,
@@ -821,13 +1009,12 @@ async def post_grn(
         received_by=tenant.user_id,
         supplier_invoice_no=payload.supplier_invoice_no,
         supplier_invoice_amount_minor=payload.supplier_invoice_amount_minor,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
         notes=payload.notes,
     )
     session.add(grn)
     await session.flush()
-
-    batch_ids: list[str] = []
-    line_ids: list[str] = []
 
     # Ingredient is company-scoped, not branch-scoped, and this loop takes a
     # row lock per line — sorted by id first so two concurrent GRNs against
@@ -904,20 +1091,25 @@ async def post_grn(
         ing.current_qty = new_qty
         ing.avg_cost_minor = int(new_val / new_qty) if new_qty > 0 else int(ln.unit_cost_minor)
 
-        batch_ids.append(str(batch.id))
-        line_ids.append(str(grn_line.id))
-
+    journal = await post_two_sided_operational_journal(
+        session,
+        company_id=tenant.company_id,
+        branch_id=payload.branch_id,
+        ref_type="grn_receipt",
+        ref_id=grn.id,
+        posted_at=received_at,
+        amount_minor=total_minor,
+        debit_account=INVENTORY,
+        credit_account=ACCOUNTS_PAYABLE,
+        memo=(
+            f"Inventory receipt {payload.supplier_invoice_no}"
+            if payload.supplier_invoice_no
+            else f"Inventory receipt {grn.id}"
+        ),
+    )
+    grn.journal_entry_id = journal.id if journal else None
     await session.flush()
-    response = {
-        "ok": True,
-        "id": str(grn.id),
-        "purchase_order_id": str(po.id),
-        "batches_created": len(batch_ids),
-        "batch_ids": batch_ids,
-        "line_ids": line_ids,
-        "total_minor": total_minor,
-        "supplier_invoice_no": payload.supplier_invoice_no,
-    }
+    response = await _grn_post_response(session, grn)
     await store_response(
         session, key=idempotency_key,
         status_code=status.HTTP_201_CREATED, body=response,
@@ -937,8 +1129,9 @@ async def post_adjustment(
 ) -> dict:
     """Manual stock adjustment (waste, damage, transfer, count correction).
 
-    Picks the oldest batch with remaining stock (FIFO for negative deltas).
-    Updates Ingredient.current_qty.
+    Consumes every required batch in FIFO order for negative deltas and
+    rejects a reduction larger than the selected branch's recorded balance.
+    Updates Ingredient.current_qty by the same delta journalled in movements.
 
     Idempotency-Key is required, same reasoning as post_grn — a resubmitted
     adjustment would otherwise silently double-apply a stock change with
@@ -952,8 +1145,23 @@ async def post_adjustment(
     if existing_response is not None:
         return existing_response["body"]
 
-    if payload.qty_delta == 0:
+    applied_delta = _exact_inventory_quantity(
+        payload.qty_delta,
+        field_name="qty_delta",
+    )
+    if applied_delta == 0:
         raise BusinessRuleError("qty_delta must be non-zero")
+    if payload.type == "transfer":
+        raise BusinessRuleError(
+            "Stock transfer requires an atomic source and destination movement. "
+            "The current adjustment endpoint cannot record a paired destination; "
+            "use waste/damage for a real write-off or wait for the dedicated "
+            "transfer workflow."
+        )
+    if payload.type in {"waste", "damage"} and applied_delta >= 0:
+        raise BusinessRuleError(
+            f"{payload.type} must reduce stock; enter qty_delta as a negative number"
+        )
 
     await _require_writable_branch(session, tenant, payload.branch_id)
 
@@ -967,9 +1175,13 @@ async def post_adjustment(
     if not ing or ing.company_id != tenant.company_id or ing.deleted_at:
         raise NotFoundError("ingredient not found")
 
-    if payload.qty_delta < 0:
-        # Need to consume from oldest batch with stock
-        batch = (
+    movements: list[StockMovement] = []
+    if applied_delta < 0:
+        # A manual reduction can span several receipts. Lock every eligible
+        # batch in deterministic FIFO order before mutating any of them; using
+        # only the oldest batch would leave newer stock untouched while the
+        # ingredient total was reduced by the full requested quantity.
+        batches = (
             await session.execute(
                 select(Batch)
                 .where(
@@ -978,15 +1190,46 @@ async def post_adjustment(
                     Batch.qty_on_hand > 0,
                 )
                 .order_by(Batch.received_at, Batch.id)
-                .limit(1)
                 .with_for_update()
             )
-        ).scalar_one_or_none()
-        if not batch:
+        ).scalars().all()
+        if not batches:
             raise BusinessRuleError("no stock available to reduce")
-        consume = min(float(batch.qty_on_hand), -float(payload.qty_delta))
-        batch.qty_on_hand = float(batch.qty_on_hand) - consume
-        cost_per_unit = int(batch.cost_per_unit_minor)
+
+        requested = -applied_delta
+        available = sum(
+            (Decimal(str(batch.qty_on_hand)) for batch in batches),
+            start=Decimal(0),
+        )
+        if requested > available:
+            available_display = format(available.normalize(), "f")
+            raise BusinessRuleError(
+                f"only {available_display} units are available in the selected branch; "
+                "refresh stock and enter an amount no greater than the branch balance"
+            )
+
+        remaining = requested
+        for batch in batches:
+            if remaining <= 0:
+                break
+            batch_qty = Decimal(str(batch.qty_on_hand))
+            consume = min(batch_qty, remaining)
+            if consume <= 0:
+                continue
+            batch.qty_on_hand = batch_qty - consume
+            movement = StockMovement(
+                id=uuid4(),
+                batch_id=batch.id,
+                branch_id=payload.branch_id,
+                type=payload.type,
+                qty_delta=-consume,
+                cost_per_unit_minor=int(batch.cost_per_unit_minor),
+                created_by=tenant.user_id,
+                note=payload.note,
+            )
+            session.add(movement)
+            movements.append(movement)
+            remaining -= consume
     else:
         # Positive adjustment: append to latest batch (or could create a new one).
         batch = (
@@ -1005,25 +1248,25 @@ async def post_adjustment(
             raise BusinessRuleError(
                 "no batch exists for this ingredient — record a GRN first"
             )
-        batch.qty_on_hand = float(batch.qty_on_hand) + float(payload.qty_delta)
-        cost_per_unit = int(batch.cost_per_unit_minor)
+        batch.qty_on_hand = Decimal(str(batch.qty_on_hand)) + applied_delta
+        movement = StockMovement(
+            id=uuid4(),
+            batch_id=batch.id,
+            branch_id=payload.branch_id,
+            type=payload.type,
+            qty_delta=applied_delta,
+            cost_per_unit_minor=int(batch.cost_per_unit_minor),
+            created_by=tenant.user_id,
+            note=payload.note,
+        )
+        session.add(movement)
+        movements.append(movement)
 
-    mv = StockMovement(
-        id=uuid4(),
-        batch_id=batch.id,
-        branch_id=payload.branch_id,
-        type=payload.type,
-        qty_delta=payload.qty_delta,
-        cost_per_unit_minor=cost_per_unit,
-        created_by=tenant.user_id,
-        note=payload.note,
-    )
-    session.add(mv)
-    ing.current_qty = float(ing.current_qty or 0) + float(payload.qty_delta)
+    ing.current_qty = Decimal(str(ing.current_qty or 0)) + applied_delta
     if ing.current_qty < 0:
         ing.current_qty = 0
     await session.flush()
-    response = {"id": str(mv.id), "remaining": float(ing.current_qty)}
+    response = {"id": str(movements[0].id), "remaining": float(ing.current_qty)}
     await store_response(
         session, key=idempotency_key,
         status_code=status.HTTP_201_CREATED, body=response,
@@ -1037,6 +1280,7 @@ async def post_adjustment(
 class BatchRead(BaseModel):
     id: UUID
     ingredient_id: UUID
+    branch_id: UUID
     received_at: datetime
     expires_at: datetime | None
     qty_on_hand: float
@@ -1049,20 +1293,41 @@ async def list_batches(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("inventory.read")),
     ingredient_id: UUID | None = None,
+    branch_id: UUID | None = None,
 ) -> list[BatchRead]:
-    """List active batches, optionally filtered by ingredient."""
+    """List active batches within the caller's company and branch scope.
+
+    A branch-bound terminal can never widen this query. Company-level owners
+    may inspect every branch, or select one explicitly. Returning ``branch_id``
+    keeps multi-branch stock from being presented as one indistinguishable
+    balance by clients.
+    """
+    if branch_id is not None and not tenant.in_branch(branch_id):
+        # Match the write endpoints' non-disclosing cross-branch behaviour.
+        raise NotFoundError("branch not found")
+
+    scoped_branch_id = tenant.branch_id or branch_id
     stmt = (
         select(Batch)
         .join(Ingredient, Ingredient.id == Batch.ingredient_id)
-        .where(Ingredient.company_id == tenant.company_id, Batch.qty_on_hand > 0)
+        .join(Branch, Branch.id == Batch.branch_id)
+        .where(
+            Ingredient.company_id == tenant.company_id,
+            Ingredient.deleted_at.is_(None),
+            Branch.company_id == tenant.company_id,
+            Branch.deleted_at.is_(None),
+            Batch.qty_on_hand > 0,
+        )
         .order_by(Batch.received_at)
     )
+    if scoped_branch_id is not None:
+        stmt = stmt.where(Batch.branch_id == scoped_branch_id)
     if ingredient_id:
         stmt = stmt.where(Batch.ingredient_id == ingredient_id)
     rows = (await session.execute(stmt)).scalars().all()
     return [
         BatchRead(
-            id=r.id, ingredient_id=r.ingredient_id,
+            id=r.id, ingredient_id=r.ingredient_id, branch_id=r.branch_id,
             received_at=r.received_at, expires_at=r.expires_at,
             qty_on_hand=float(r.qty_on_hand),
             cost_per_unit_minor=int(r.cost_per_unit_minor),

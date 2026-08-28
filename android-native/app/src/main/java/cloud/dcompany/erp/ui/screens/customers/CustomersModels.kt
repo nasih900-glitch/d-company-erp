@@ -107,6 +107,24 @@ data class CustomerUpdateBody(
     val notes: String? = null,
 )
 
+/** Stable customer-linked purchase history from GET /customers/{id}/history. */
+@Serializable
+data class CustomerOrderHistory(
+    val id: String,
+    @SerialName("invoice_no") val invoiceNo: String? = null,
+    val status: String,
+    val type: String,
+    @SerialName("source_label") val sourceLabel: String? = null,
+    @SerialName("total_minor") val totalMinor: Long = 0,
+    @SerialName("paid_minor") val paidMinor: Long = 0,
+    @SerialName("refunded_minor") val refundedMinor: Long = 0,
+    @SerialName("points_redeemed_minor") val pointsRedeemedMinor: Long = 0,
+    @SerialName("items_count") val itemsCount: Int = 0,
+    @SerialName("payment_methods") val paymentMethods: List<String> = emptyList(),
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
+)
+
 // ------------------------------------------------------------------ dates
 
 private val DAY_FORMAT: DateTimeFormatter =

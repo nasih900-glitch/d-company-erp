@@ -38,6 +38,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -81,6 +82,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -115,6 +117,7 @@ import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.VoidReasonInput
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.gaming.OperationalAlarmPermissionCard
+import cloud.dcompany.erp.ui.screens.customers.MINOR_PER_POINT
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
@@ -148,6 +151,7 @@ fun PosScreen(
     onPrepareDirectCheckout: () -> Unit,
     onDismissDirectCheckout: () -> Unit,
     onConfirmDirectZero: () -> Unit,
+    onRedeemDirectPoints: (Int) -> Unit,
     onCapture: (String, Long, DirectPaymentConfirmation) -> Unit,
     onRetryRejectedSale: (String) -> Unit,
     onRetryHeldPayment: (String) -> Unit,
@@ -189,6 +193,7 @@ fun PosScreen(
     }
     val hasOperationalAlerts = hasPosOperationalAlerts(state)
     val configuringItem = state.items.firstOrNull { it.id == configuringItemId }
+    val heldOrderBlockReason = heldOrderSelectionBlockReason(state, access)
     val visibleReceipt = unacknowledgedReceipt
         ?.takeUnless { it.receiptId == hiddenAutomaticReceiptId }
         ?: selectedReceiptId?.let { id -> recentReceipts.firstOrNull { it.receiptId == id } }
@@ -215,11 +220,19 @@ fun PosScreen(
         voidTarget?.orderId,
         state.preparedDirectCheckout?.orderId,
         state.preparedHeldCheckout?.orderId,
+        state.checkoutBusy,
     ) {
         val target = voidTarget ?: return@LaunchedEffect
-        val stillPrepared = target.orderId == state.preparedDirectCheckout?.orderId ||
-            target.orderId == state.preparedHeldCheckout?.orderId
-        if (!stillPrepared && !state.checkoutBusy) voidTarget = null
+        if (
+            shouldDismissPosVoidTarget(
+                targetOrderId = target.orderId,
+                preparedDirectOrderId = state.preparedDirectCheckout?.orderId,
+                preparedHeldOrderId = state.preparedHeldCheckout?.orderId,
+                checkoutBusy = state.checkoutBusy,
+            )
+        ) {
+            voidTarget = null
+        }
     }
 
     val requestDirectPayment: () -> Unit = {
@@ -445,11 +458,8 @@ fun PosScreen(
                             overdueOrderIds = overdueOrderIds,
                             focusedOrderId = state.focusedHeldOrderId,
                             preparingOrderId = state.preparingHeldOrderId,
-                            enabled = state.canCollectPayment &&
-                                access.canCreateAndCollect &&
-                                !state.checkoutBusy && !state.heldSelectionBlocked &&
-                                state.preparedHeldCheckout == null &&
-                                state.draftState !in setOf(SyncState.PREPARING, SyncState.AWAITING_PAYMENT),
+                            enabled = heldOrderBlockReason == null,
+                            blockedReason = heldOrderBlockReason,
                             onSelect = { order ->
                                 showHeldOrders = false
                                 onPrepareHeldOrder(order)
@@ -483,7 +493,7 @@ fun PosScreen(
     state.preparedDirectCheckout
         ?.takeIf { access.canCreateAndCollect && voidTarget == null }
         ?.let { checkout ->
-        key(checkout.orderId) {
+        key(checkout.orderId, checkout.claimOrderVersion) {
             if (checkout.dueMinor == 0L && checkout.totalMinor == 0L) {
                 DirectZeroTotalCompletionDialog(
                     checkout = checkout,
@@ -514,6 +524,12 @@ fun PosScreen(
                     taxMinor = checkout.taxMinor,
                     roundOffMinor = checkout.roundOffMinor,
                     totalMinor = checkout.totalMinor,
+                    loyaltyPointsBalance = state.customerLoyaltyPoints,
+                    pointsRedeemed = checkout.pointsRedeemed,
+                    pointsRedeemedMinor = checkout.pointsRedeemedMinor,
+                    onApplyPoints = onRedeemDirectPoints.takeIf {
+                        !state.customerPhone.isNullOrBlank()
+                    },
                     onDismiss = onDismissDirectCheckout,
                     onVoid = if (access.canVoid) {
                         {
@@ -629,12 +645,30 @@ fun PosScreen(
 
 private data class PosVoidTarget(val orderId: String, val label: String)
 
+/**
+ * A successful void removes the prepared checkout before the request's busy
+ * flag is cleared. Both transitions must participate in the effect key or the
+ * dismissed success notice can reveal a stale, repeatable void dialog.
+ */
+internal fun shouldDismissPosVoidTarget(
+    targetOrderId: String?,
+    preparedDirectOrderId: String?,
+    preparedHeldOrderId: String?,
+    checkoutBusy: Boolean,
+): Boolean = targetOrderId != null &&
+    !checkoutBusy &&
+    targetOrderId != preparedDirectOrderId &&
+    targetOrderId != preparedHeldOrderId
+
 @Composable
 private fun PosReceiptDialog(
     receipt: PosReceiptEntity,
     onDismiss: () -> Unit,
 ) {
     val lines = remember(receipt.linesJson) { receipt.decodedLines() }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var printLaunching by remember(receipt.receiptId) { mutableStateOf(false) }
+    var printError by remember(receipt.receiptId) { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Brand.SurfaceOverlay,
@@ -755,6 +789,36 @@ private fun PosReceiptDialog(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
+                printError?.let { error ->
+                    item {
+                        Text(
+                            error,
+                            color = Brand.Danger,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !printLaunching,
+                onClick = {
+                    if (printLaunching) return@TextButton
+                    printLaunching = true
+                    printError = null
+                    launchPosReceiptPrint(
+                        context = context,
+                        receipt = receipt,
+                        onLaunched = { printLaunching = false },
+                        onFailure = { message ->
+                            printLaunching = false
+                            printError = message
+                        },
+                    )
+                },
+            ) {
+                Text(if (printLaunching) "OPENING…" else "PRINT / SAVE")
             }
         },
         confirmButton = { PrimaryButton(onClick = onDismiss) { Text("DONE") } },
@@ -1471,6 +1535,7 @@ private fun HeldOrdersStrip(
     focusedOrderId: String?,
     preparingOrderId: String?,
     enabled: Boolean,
+    blockedReason: String?,
     onSelect: (HeldOrderCacheEntity) -> Unit,
     onDismissFocus: () -> Unit,
 ) {
@@ -1490,6 +1555,15 @@ private fun HeldOrdersStrip(
             fontWeight = FontWeight.SemiBold,
             color = if (overdueOrderIds.isEmpty()) Brand.ForegroundMuted else Brand.Danger,
         )
+        blockedReason?.let { reason ->
+            Text(
+                reason,
+                modifier = Modifier.padding(top = Spacing.xs)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+                color = Brand.Warning,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
         focusedOrderId?.let { id ->
             val focused = orders.firstOrNull { it.id == id }
             if (focused != null) {
@@ -1564,6 +1638,26 @@ private fun HeldOrdersStrip(
     }
 }
 
+/** Disabled held-order cards must always explain the operational dependency. */
+internal fun heldOrderSelectionBlockReason(state: PosUiState, access: PosAccess): String? = when {
+    !access.canCreateAndCollect ->
+        "This account can view held orders but cannot collect them. Ask the shift cashier or a manager."
+    !state.online ->
+        "Held orders require a live server total. Reconnect before selecting one for payment."
+    state.shiftAccessMessage != null -> state.shiftAccessMessage
+    state.preparingHeldOrderId != null || state.checkoutBusy ->
+        "A bill is already being verified or saved. Wait for that action to finish before selecting another."
+    state.heldSelectionBlocked ->
+        "The previous held payment is being secured against duplicate taps. Wait for its status update."
+    state.preparedHeldCheckout != null ->
+        "Finish or cancel the open held bill before selecting another order."
+    state.draftState in setOf(SyncState.PREPARING, SyncState.AWAITING_PAYMENT) ->
+        "Finish or recover the current direct POS bill before selecting a held order."
+    !state.canCollectPayment ->
+        "Open the correct shift on this terminal before collecting a held order."
+    else -> null
+}
+
 internal fun filterPosMenuItems(
     items: List<MenuItemEntity>,
     query: String,
@@ -1623,7 +1717,7 @@ private fun EmptyMenuPanel(
 }
 
 @Composable
-private fun ProductConfigurationDialog(
+internal fun ProductConfigurationDialog(
     item: MenuItemEntity,
     variants: List<MenuVariantEntity>,
     modifierGroups: List<MenuModifierGroupEntity>,
@@ -2441,6 +2535,16 @@ internal fun cashTenderPresets(dueMinor: Long): List<Long> {
     ).distinct()
 }
 
+internal fun pointsEntryError(pointsText: String, lastSyncedBalance: Int?): String? {
+    val requested = pointsText.toIntOrNull()
+        ?: return "Enter a whole number of points."
+    if (requested < 0) return "Points cannot be negative."
+    if (lastSyncedBalance != null && requested > lastSyncedBalance) {
+        return "Only $lastSyncedBalance points are shown available."
+    }
+    return null
+}
+
 @Composable
 private fun PayDialog(
     dueMinor: Long,
@@ -2455,6 +2559,10 @@ private fun PayDialog(
     taxMinor: Long? = null,
     roundOffMinor: Long? = null,
     totalMinor: Long? = null,
+    loyaltyPointsBalance: Int? = null,
+    pointsRedeemed: Int = 0,
+    pointsRedeemedMinor: Long = 0,
+    onApplyPoints: ((Int) -> Unit)? = null,
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
     onConfirm: (String, Long) -> Unit,
@@ -2462,6 +2570,10 @@ private fun PayDialog(
     var method by rememberSaveable(confirmationIdentity) { mutableStateOf("cash") }
     var tendered by rememberSaveable(confirmationIdentity) { mutableStateOf("") }
     var confirmationConsumed by remember(confirmationIdentity) { mutableStateOf(false) }
+    var editingPoints by rememberSaveable(confirmationIdentity) { mutableStateOf(false) }
+    var pointsText by rememberSaveable(confirmationIdentity) {
+        mutableStateOf(pointsRedeemed.takeIf { it > 0 }?.toString().orEmpty())
+    }
     val oneShotConfirmation = remember(confirmationIdentity) {
         confirmationIdentity?.let(::OneShotHeldPaymentConfirmation)
     }
@@ -2515,8 +2627,17 @@ private fun PayDialog(
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
                         subtotalMinor?.let { PaymentAmountRow("Subtotal", it) }
-                        discountMinor?.takeIf { it > 0L }?.let {
-                            PaymentAmountRow("Discount", -it, Brand.Good)
+                        val nonPointsDiscount = ((discountMinor ?: 0L) - pointsRedeemedMinor)
+                            .coerceAtLeast(0L)
+                        nonPointsDiscount.takeIf { it > 0L }?.let {
+                            PaymentAmountRow("Other discounts", -it, Brand.Good)
+                        }
+                        pointsRedeemedMinor.takeIf { it > 0L }?.let {
+                            PaymentAmountRow(
+                                "Loyalty points ($pointsRedeemed)",
+                                -it,
+                                Brand.Good,
+                            )
                         }
                         taxMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
                         roundOffMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
@@ -2543,17 +2664,131 @@ private fun PayDialog(
                         )
                     }
                 }
+                if (onApplyPoints != null) {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .padding(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Loyalty points",
+                                    color = Brand.Foreground,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    loyaltyPointsBalance?.let {
+                                        "$it last synced · worth ${(it.toLong() * MINOR_PER_POINT).asRupees()}"
+                                    } ?: "Balance will be verified by the server",
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            if (pointsRedeemed > 0) {
+                                OperationalStatusBadge("$pointsRedeemed applied", UiTone.Success)
+                            }
+                        }
+
+                        if (editingPoints) {
+                            val pointsError = pointsEntryError(pointsText, loyaltyPointsBalance)
+                            val applyEnteredPoints = {
+                                if (pointsError == null) {
+                                    val requested = requireNotNull(pointsText.toIntOrNull())
+                                    editingPoints = false
+                                    onApplyPoints(requested)
+                                }
+                            }
+                            OutlinedTextField(
+                                value = pointsText,
+                                onValueChange = { pointsText = it.filter(Char::isDigit).take(7) },
+                                label = { Text("Points to use") },
+                                supportingText = {
+                                    Text(
+                                        pointsError
+                                            ?: "10 points = ₹1 · the server verifies active reservations",
+                                    )
+                                },
+                                isError = pointsError != null,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
+                                    imeAction = ImeAction.Done,
+                                ),
+                                keyboardActions = KeyboardActions(onDone = { applyEnteredPoints() }),
+                                singleLine = true,
+                                enabled = !confirmationConsumed && confirmEnabled,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
+                                loyaltyPointsBalance?.takeIf { it > 0 }?.let { balance ->
+                                    ErpButton(
+                                        text = "Use all $balance",
+                                        onClick = { pointsText = balance.toString() },
+                                        intent = ActionIntent.Quiet,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                ErpButton(
+                                    text = "Apply points",
+                                    onClick = applyEnteredPoints,
+                                    intent = ActionIntent.Secondary,
+                                    enabled = pointsError == null &&
+                                        !confirmationConsumed && confirmEnabled,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        } else {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
+                                ErpButton(
+                                    text = if (pointsRedeemed > 0) "Adjust points" else "Use points",
+                                    onClick = {
+                                        pointsText = pointsRedeemed.takeIf { it > 0 }
+                                            ?.toString()
+                                            ?: loyaltyPointsBalance?.takeIf { it > 0 }?.toString().orEmpty()
+                                        editingPoints = true
+                                    },
+                                    intent = ActionIntent.Secondary,
+                                    enabled = !confirmationConsumed && confirmEnabled &&
+                                        ((loyaltyPointsBalance ?: 0) > 0 || pointsRedeemed > 0),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (pointsRedeemed > 0) {
+                                    ErpButton(
+                                        text = "Remove",
+                                        onClick = { onApplyPoints(0) },
+                                        intent = ActionIntent.Quiet,
+                                        enabled = !confirmationConsumed && confirmEnabled,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (method == "cash") {
-                    TouchMoneyEntry(
-                        value = tendered,
-                        onValueChange = { tendered = it },
-                        enabled = !confirmationConsumed,
-                        label = "Cash received (₹)",
-                        presetsMinor = cashTenderPresets(dueMinor),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    AnimatedVisibility(tendered.isNotBlank(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                    // Keep the counter's most important result above the
+                    // touch keypad. On a 600dp landscape tablet the keypad is
+                    // intentionally scrollable, but staff must see the change
+                    // before confirming without having to hunt below it.
+                    AnimatedVisibility(
+                        tendered.isNotBlank(),
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically(),
+                    ) {
                         if (changeMinor >= 0) {
                             Text(
                                 "Change due  ${changeMinor.asRupees()}",
@@ -2568,6 +2803,14 @@ private fun PayDialog(
                             )
                         }
                     }
+                    TouchMoneyEntry(
+                        value = tendered,
+                        onValueChange = { tendered = it },
+                        enabled = !confirmationConsumed,
+                        label = "Cash received (₹)",
+                        presetsMinor = cashTenderPresets(dueMinor),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
 
                 if (!online) {
@@ -2677,8 +2920,17 @@ private fun DirectZeroTotalCompletionDialog(
                     style = MaterialTheme.typography.labelMedium,
                 )
                 PaymentAmountRow("Subtotal", checkout.subtotalMinor)
-                if (checkout.discountMinor > 0L) {
-                    PaymentAmountRow("Discount", -checkout.discountMinor, Brand.Good)
+                val nonPointsDiscount = (checkout.discountMinor - checkout.pointsRedeemedMinor)
+                    .coerceAtLeast(0L)
+                if (nonPointsDiscount > 0L) {
+                    PaymentAmountRow("Other discounts", -nonPointsDiscount, Brand.Good)
+                }
+                if (checkout.pointsRedeemedMinor > 0L) {
+                    PaymentAmountRow(
+                        "Loyalty points (${checkout.pointsRedeemed})",
+                        -checkout.pointsRedeemedMinor,
+                        Brand.Good,
+                    )
                 }
                 PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
                 Text(
@@ -2841,7 +3093,7 @@ private fun Long.asPosTime(): String =
         .withZone(ZoneId.systemDefault())
         .format(Instant.ofEpochMilli(this))
 
-private fun String.paymentMethodLabel(): String = when (lowercase(Locale.ROOT)) {
+internal fun String.paymentMethodLabel(): String = when (lowercase(Locale.ROOT)) {
     "cash" -> "Cash"
     "upi" -> "UPI"
     "card" -> "Card"

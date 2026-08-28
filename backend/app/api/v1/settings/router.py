@@ -6,21 +6,33 @@ company_id from the JWT so multi-company is plug-and-play.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
-from app.core.errors import BusinessRuleError, NotFoundError, ConflictError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import Branch, Company, ExpenseCategory, Terminal
+from app.models import (
+    Branch,
+    Company,
+    ExpenseCategory,
+    InvoiceCounter,
+    MembershipPayment,
+    MembershipRefundSettlement,
+    Order,
+    Refund,
+    Terminal,
+)
+from app.services.accounting.accounts import ACCOUNT_BY_CODE
 
 router = APIRouter()
 
@@ -28,6 +40,7 @@ router = APIRouter()
 # makes Intl.DateTimeFormat throw in the POS webview while printing a receipt,
 # so a bad timezone must never be allowed to persist.
 _IANA_TIMEZONES = available_timezones()
+_INVOICE_SERIES_RE = re.compile(r"^[A-Z0-9]{2}$")
 
 
 def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
@@ -56,6 +69,33 @@ def _require_iana_timezone(value: str | None) -> str | None:
     if normalized not in _IANA_TIMEZONES:
         raise ValueError("timezone must be a valid IANA name like Asia/Kolkata")
     return normalized
+
+
+def _normalize_invoice_series(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().upper()
+    if _INVOICE_SERIES_RE.fullmatch(normalized) is None:
+        raise ValueError("invoice series must be exactly two letters or digits")
+    return normalized
+
+
+def _new_branch_invoice_series(payload: BranchCreate) -> str:
+    """Resolve the explicit series while old clients transition safely.
+
+    Current clients already send ``code``. Accept it only when it is itself
+    the exact two-character series; never repeat the old silent truncation.
+    """
+
+    if payload.invoice_series_code is not None:
+        return payload.invoice_series_code
+    legacy_explicit = (payload.code or "").strip().upper()
+    if _INVOICE_SERIES_RE.fullmatch(legacy_explicit):
+        return legacy_explicit
+    raise BusinessRuleError(
+        "invoice_series_code is required for a new branch; enter a unique "
+        "two-character letter/number code such as MN"
+    )
 
 
 # ---------------------------------------------------------------- DTOs
@@ -109,6 +149,7 @@ class BranchRead(BaseModel):
     id: UUID
     name: str
     code: str | None
+    invoice_series_code: str
     address: str | None
     timezone: str | None
     opens_at: str | None
@@ -122,6 +163,7 @@ class BranchRead(BaseModel):
 class BranchCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     code: str | None = Field(default=None, max_length=10)
+    invoice_series_code: str | None = Field(default=None)
     address: str | None = Field(default=None, max_length=500)
     timezone: str | None = Field(default="Asia/Kolkata", max_length=64)
     opens_at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -136,10 +178,16 @@ class BranchCreate(BaseModel):
     def require_iana_timezone(cls, value: str | None) -> str | None:
         return _require_iana_timezone(value)
 
+    @field_validator("invoice_series_code")
+    @classmethod
+    def normalize_invoice_series(cls, value: str | None) -> str | None:
+        return _normalize_invoice_series(value)
+
 
 class BranchUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     code: str | None = Field(default=None, max_length=10)
+    invoice_series_code: str | None = Field(default=None)
     address: str | None = Field(default=None, max_length=500)
     timezone: str | None = Field(default=None, max_length=64)
     opens_at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -153,6 +201,11 @@ class BranchUpdate(BaseModel):
     @classmethod
     def require_iana_timezone(cls, value: str | None) -> str | None:
         return _require_iana_timezone(value)
+
+    @field_validator("invoice_series_code")
+    @classmethod
+    def normalize_invoice_series(cls, value: str | None) -> str | None:
+        return _normalize_invoice_series(value)
 
 
 class TerminalRead(BaseModel):
@@ -178,6 +231,24 @@ class ExpenseCategoryRead(BaseModel):
 class ExpenseCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     code: str | None = Field(default=None, min_length=1, max_length=20)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("expense category name cannot be blank")
+        return normalized
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("expense category code cannot be blank")
+        return normalized
 
 
 # ============================================================================
@@ -252,7 +323,8 @@ async def list_branches(
     ).scalars().all()
     return [
         BranchRead(
-            id=r.id, name=r.name, code=r.code, address=r.address,
+            id=r.id, name=r.name, code=r.code,
+            invoice_series_code=r.invoice_series_code, address=r.address,
             timezone=r.timezone, opens_at=r.opens_at, closes_at=r.closes_at,
             state_code=r.state_code, fssai_license_no=r.fssai_license_no,
             trade_license_no=r.trade_license_no, branch_gstin=r.branch_gstin,
@@ -276,7 +348,22 @@ async def create_branch(
     if replay:
         return BranchRead.model_validate(replay["body"])
 
-    existing = (
+    invoice_series_code = _new_branch_invoice_series(payload)
+
+    # Serialize branch identity creation inside one company. This turns two
+    # concurrent requests for the same name/series into one deterministic 409
+    # instead of letting a uniqueness failure escape during request commit.
+    company_id = (
+        await session.execute(
+            select(Company.id)
+            .where(Company.id == tenant.company_id, Company.deleted_at.is_(None))
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company_id is None:
+        raise NotFoundError("company not found")
+
+    existing_name = (
         await session.execute(
             select(Branch.id).where(
                 Branch.company_id == tenant.company_id,
@@ -285,17 +372,32 @@ async def create_branch(
             )
         )
     ).scalar_one_or_none()
-    if existing:
+    if existing_name:
         raise ConflictError("an active branch with this name already exists")
+    existing_series = (
+        await session.execute(
+            select(Branch.id).where(
+                Branch.company_id == tenant.company_id,
+                Branch.invoice_series_code == invoice_series_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_series:
+        raise ConflictError(
+            f"invoice series '{invoice_series_code}' is already assigned to another branch"
+        )
+    values = payload.model_dump(exclude={"invoice_series_code"})
     b = Branch(
         id=uuid4(),
         company_id=tenant.company_id,
-        **payload.model_dump(),
+        invoice_series_code=invoice_series_code,
+        **values,
     )
     session.add(b)
     await session.flush()
     response = BranchRead(
-        id=b.id, name=b.name, code=b.code, address=b.address,
+        id=b.id, name=b.name, code=b.code,
+        invoice_series_code=b.invoice_series_code, address=b.address,
         timezone=b.timezone, opens_at=b.opens_at, closes_at=b.closes_at,
         state_code=b.state_code, fssai_license_no=b.fssai_license_no,
         trade_license_no=b.trade_license_no, branch_gstin=b.branch_gstin,
@@ -314,16 +416,85 @@ async def update_branch(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("admin.system")),
 ) -> BranchRead:
-    b = await session.get(Branch, branch_id)
-    if not b or b.company_id != tenant.company_id or b.deleted_at:
+    company_id = (
+        await session.execute(
+            select(Company.id)
+            .where(Company.id == tenant.company_id, Company.deleted_at.is_(None))
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company_id is None:
+        raise NotFoundError("company not found")
+    b = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not b:
         raise NotFoundError("branch not found")
-    for f in payload.model_fields.keys():
+    requested_series = payload.invoice_series_code
+    if requested_series is not None and requested_series != b.invoice_series_code:
+        fiscal_history_exists = bool(
+            (
+                await session.execute(
+                    select(
+                        or_(
+                            exists().where(InvoiceCounter.branch_id == branch_id),
+                            exists().where(
+                                Order.branch_id == branch_id,
+                                Order.invoice_no.is_not(None),
+                            ),
+                            exists().where(
+                                Refund.branch_id == branch_id,
+                                Refund.receipt_no.is_not(None),
+                            ),
+                            exists().where(
+                                MembershipPayment.branch_id == branch_id,
+                                MembershipPayment.receipt_no.is_not(None),
+                            ),
+                            exists().where(
+                                MembershipRefundSettlement.branch_id == branch_id,
+                                MembershipRefundSettlement.receipt_no.is_not(None),
+                            ),
+                        )
+                    )
+                )
+            ).scalar_one()
+        )
+        if fiscal_history_exists:
+            raise ConflictError(
+                "invoice series cannot be changed after fiscal document history exists; "
+                "keep the current series so receipts remain continuous"
+            )
+        duplicate_series = (
+            await session.execute(
+                select(Branch.id)
+                .where(
+                    Branch.company_id == tenant.company_id,
+                    Branch.invoice_series_code == requested_series,
+                    Branch.id != branch_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if duplicate_series is not None:
+            raise ConflictError(
+                f"invoice series '{requested_series}' is already assigned to another branch"
+            )
+    for f in payload.model_fields:
         v = getattr(payload, f)
         if v is not None:
             setattr(b, f, v)
     await session.flush()
     return BranchRead(
-        id=b.id, name=b.name, code=b.code, address=b.address,
+        id=b.id, name=b.name, code=b.code,
+        invoice_series_code=b.invoice_series_code, address=b.address,
         timezone=b.timezone, opens_at=b.opens_at, closes_at=b.closes_at,
         state_code=b.state_code, fssai_license_no=b.fssai_license_no,
         trade_license_no=b.trade_license_no, branch_gstin=b.branch_gstin,
@@ -352,10 +523,22 @@ async def list_terminals(
     tenant: TenantContext = Depends(requires("pos.read")),
     branch_id: UUID | None = None,
 ) -> list[TerminalRead]:
+    # Ordinary POS users may discover tills only in their authenticated
+    # branch.  The protected system administrator is the one deliberate
+    # exception: the Settings screen is company-wide for that identity and
+    # must be able to inspect a branch before assigning a new terminal there.
+    if tenant.branch_id is not None and not tenant.audit_access:
+        if branch_id is not None and branch_id != tenant.branch_id:
+            # Do not reveal whether another branch or terminal exists.
+            raise NotFoundError("branch not found")
+        branch_id = tenant.branch_id
     stmt = (
         select(Terminal)
         .join(Branch, Branch.id == Terminal.branch_id)
-        .where(Branch.company_id == tenant.company_id)
+        .where(
+            Branch.company_id == tenant.company_id,
+            Branch.deleted_at.is_(None),
+        )
     )
     if branch_id:
         stmt = stmt.where(Terminal.branch_id == branch_id)
@@ -457,6 +640,11 @@ async def create_expense_category(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("finance.write")),
 ) -> ExpenseCategoryRead:
+    canonical = ACCOUNT_BY_CODE.get(payload.code or "")
+    if canonical is not None and canonical.type != "expense":
+        raise BusinessRuleError(
+            f"account code {canonical.code} is a {canonical.type} account, not an expense"
+        )
     duplicate = (
         await session.execute(
             select(ExpenseCategory.id).where(

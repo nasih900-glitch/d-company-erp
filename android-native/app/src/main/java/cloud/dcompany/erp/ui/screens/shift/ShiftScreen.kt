@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -102,7 +103,13 @@ fun ShiftScreen(
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
                     Column(Modifier.weight(1f)) {
                         if (state.open == null) OpenShiftCard(state, vm, access.canOpen)
-                        else CloseShiftCard(state, vm, access.canClose, access.canOpen)
+                        else CloseShiftCard(
+                            state,
+                            vm,
+                            access.canClose,
+                            access.canOpen,
+                            compactLayout = false,
+                        )
                     }
                     PastShiftsPanel(state, Modifier.width(350.dp))
                 }
@@ -111,7 +118,13 @@ fun ShiftScreen(
                     stateIdentity = state.open?.let(::shiftCloseUiIdentity) ?: "closed",
                     currentPanel = {
                         if (state.open == null) OpenShiftCard(state, vm, access.canOpen)
-                        else CloseShiftCard(state, vm, access.canClose, access.canOpen)
+                        else CloseShiftCard(
+                            state,
+                            vm,
+                            access.canClose,
+                            access.canOpen,
+                            compactLayout = true,
+                        )
                     },
                     historyPanel = {
                         PastShiftsPanel(state, Modifier.heightIn(min = 280.dp, max = 320.dp))
@@ -339,6 +352,7 @@ internal fun OpenShiftForm(
     blockedByRejectedShift: Boolean,
     onOpenShift: (Long) -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
     var float by remember { mutableStateOf("") }
     val parsedFloat = remember(float) { parseRupeesToMinor(float) }
     val floatMinor = parsedFloat ?: 0L
@@ -371,7 +385,13 @@ internal fun OpenShiftForm(
         )
         ErpButton(
             text = "Open shift with ${floatMinor.asRupees()}",
-            onClick = { onOpenShift(floatMinor) },
+            onClick = {
+                // The form is replaced immediately after a successful open.
+                // Clear its IME focus first so the old numeric keyboard cannot
+                // cover the newly rendered close-shift panel.
+                focusManager.clearFocus(force = true)
+                onOpenShift(floatMinor)
+            },
             enabled = canOpen && validFloat && !blockedByRejectedShift,
             busy = busy,
             modifier = Modifier.fillMaxWidth(),
@@ -440,6 +460,7 @@ private fun CloseShiftCard(
     vm: ShiftViewModel,
     canClosePermission: Boolean,
     canOpenPermission: Boolean,
+    compactLayout: Boolean,
 ) {
     val shift = state.open!!
     val closing = shift.local?.state == ShiftState.CLOSE_PENDING
@@ -468,8 +489,9 @@ private fun CloseShiftCard(
     var confirmationGuardMessage by remember { mutableStateOf<String?>(null) }
     var accountingExpanded by remember(shiftIdentity) { mutableStateOf(false) }
 
+    val cardModifier = if (compactLayout) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
     Column(
-        Modifier.fillMaxSize().clip(Radius.shapeLg)
+        cardModifier.clip(Radius.shapeLg)
             .background(Brand.Surface).border(1.dp, Brand.BorderSubtle, Radius.shapeLg).padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -558,6 +580,36 @@ private fun CloseShiftCard(
                 CollectionMetric(
                     label = "Net",
                     value = accounting.netCollectionsMinor.asRupees(),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Text(
+                "Payment methods (gross collections)",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                CollectionMetric(
+                    label = "Cash",
+                    value = accounting.cashCollectionsMinor.asRupees(),
+                    modifier = Modifier.weight(1f),
+                )
+                CollectionMetric(
+                    label = "Card",
+                    value = accounting.cardCollectionsMinor.asRupees(),
+                    modifier = Modifier.weight(1f),
+                )
+                CollectionMetric(
+                    label = "UPI",
+                    value = accounting.upiCollectionsMinor.asRupees(),
+                    modifier = Modifier.weight(1f),
+                )
+                CollectionMetric(
+                    label = "Other",
+                    value = accounting.otherCollectionsMinor.asRupees(),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -679,47 +731,20 @@ private fun CloseShiftCard(
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelSmall,
             )
-            Spacer(Modifier.weight(1f))
+            if (!compactLayout) Spacer(Modifier.weight(1f))
         } else {
             Text("Count the drawer", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(DENOMINATIONS.chunked(3)) { rowNotes ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        rowNotes.forEach { note ->
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text("₹$note", color = Brand.Foreground)
-                                    Text(
-                                        (note * 100 * (counts[note]?.toLongOrNull() ?: 0L)).asRupees(),
-                                        color = Brand.ForegroundMuted,
-                                    )
-                                }
-                                WholeNumberStepper(
-                                    value = counts[note] ?: "",
-                                    onValueChange = { counts[note] = it },
-                                    description = "Count of ₹$note notes",
-                                    enabled = closePresentation.canEditCount,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                        }
-                        repeat(3 - rowNotes.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-            }
+            DenominationCountGrid(
+                compactLayout = compactLayout,
+                counts = counts,
+                onCountChange = { note, value -> counts[note] = value },
+                enabled = closePresentation.canEditCount,
+                modifier = if (compactLayout) {
+                    Modifier.fillMaxWidth()
+                } else {
+                    Modifier.fillMaxWidth().weight(1f)
+                },
+            )
         }
 
         val displayedCountedMinor = closePresentation.displayedCountedMinor
@@ -827,6 +852,76 @@ private fun CloseShiftCard(
                 TextButton(onClick = { confirmationGuardMessage = null }) { Text("Review shift") }
             },
         )
+    }
+}
+
+@Composable
+internal fun DenominationCountGrid(
+    compactLayout: Boolean,
+    counts: Map<Long, String>,
+    onCountChange: (Long, String) -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val denominationRows = DENOMINATIONS.chunked(3)
+    if (compactLayout) {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            denominationRows.forEach { rowNotes ->
+                DenominationCountRow(rowNotes, counts, onCountChange, enabled)
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            items(denominationRows) { rowNotes ->
+                DenominationCountRow(rowNotes, counts, onCountChange, enabled)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DenominationCountRow(
+    rowNotes: List<Long>,
+    counts: Map<Long, String>,
+    onCountChange: (Long, String) -> Unit,
+    enabled: Boolean,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        rowNotes.forEach { note ->
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("₹$note", color = Brand.Foreground)
+                    Text(
+                        (note * 100 * (counts[note]?.toLongOrNull() ?: 0L)).asRupees(),
+                        color = Brand.ForegroundMuted,
+                    )
+                }
+                WholeNumberStepper(
+                    value = counts[note] ?: "",
+                    onValueChange = { value -> onCountChange(note, value) },
+                    description = "Count of ₹$note notes",
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        repeat(3 - rowNotes.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 
@@ -943,6 +1038,25 @@ private fun HistoryRow(s: ShiftHistoryRow) {
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.ForegroundMuted,
             )
+            if (
+                s.cashCollectionsMinor != null &&
+                s.cardCollectionsMinor != null &&
+                s.upiCollectionsMinor != null &&
+                s.otherCollectionsMinor != null
+            ) {
+                val other = if (s.otherCollectionsMinor > 0L) {
+                    " · other ${s.otherCollectionsMinor.asRupees()}"
+                } else {
+                    ""
+                }
+                Text(
+                    "cash ${s.cashCollectionsMinor.asRupees()} · " +
+                        "card ${s.cardCollectionsMinor.asRupees()} · " +
+                        "UPI ${s.upiCollectionsMinor.asRupees()}$other",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Brand.ForegroundMuted,
+                )
+            }
         }
     }
 }

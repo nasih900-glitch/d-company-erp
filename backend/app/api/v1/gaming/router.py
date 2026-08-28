@@ -3780,6 +3780,8 @@ async def _create_session_pos_order(
             id=uuid4(),
             order_id=order.id,
             menu_item_id=item.id,
+            menu_item_name_snapshot=item.name,
+            menu_item_type_snapshot=item.type,
             qty=1,
             unit_price_minor=priced.total_minor,
             line_total_minor=priced.total_minor,

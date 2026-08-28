@@ -37,6 +37,7 @@ internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "refund_order_cache",
     "report_snapshots",
     "customer_cache",
+    "customer_order_history_cache",
     "staff_cache",
     "on_shift_cache",
     "ingredient_cache",
@@ -183,6 +184,11 @@ class CacheScopeException(message: String, cause: Throwable? = null) : Exception
 
 enum class CacheScopeActivation { RETAINED, PURGED }
 
+internal data class CachedScopeLeaseActivation(
+    val activation: CacheScopeActivation,
+    val lease: CacheScopeLease,
+)
+
 /**
  * Capability captured before a server request. A response may mutate a
  * replaceable cache only while this exact lease is still active.
@@ -253,6 +259,13 @@ class CacheIsolationCoordinator internal constructor(
         deactivateLocked()
     }
 
+    /** Background bootstrap may revoke only the exact lease it created. */
+    internal suspend fun deactivateIfCurrent(lease: CacheScopeLease): Boolean = mutex.withLock {
+        if (activeLease != lease) return@withLock false
+        deactivateLocked()
+        true
+    }
+
     /**
      * Sign-out's final outbox recheck and lease revocation are one critical
      * section. A feature write therefore either lands first and blocks the
@@ -277,25 +290,31 @@ class CacheIsolationCoordinator internal constructor(
     }
 
     /** Offline restore may retain only a scope previously validated and committed online. */
-    suspend fun activateCached(scope: CacheScope): CacheScopeActivation = mutex.withLock {
-        val stored = try {
-            marker.current()
-        } catch (error: Exception) {
-            deactivateLocked()
-            throw CacheScopeException(
-                "The tablet could not verify the saved account scope. Connect and try again.",
-                error,
-            )
+    suspend fun activateCached(scope: CacheScope): CacheScopeActivation =
+        activateCachedWithLease(scope).activation
+
+    /** Atomic lease-returning form for a cold background worker. */
+    internal suspend fun activateCachedWithLease(scope: CacheScope): CachedScopeLeaseActivation =
+        mutex.withLock {
+            val stored = try {
+                marker.current()
+            } catch (error: Exception) {
+                deactivateLocked()
+                throw CacheScopeException(
+                    "The tablet could not verify the saved account scope. Connect and try again.",
+                    error,
+                )
+            }
+            if (stored != scope) {
+                deactivateLocked()
+                throw CacheScopeException(
+                    "Connect once to verify this account, branch, and terminal before opening cached data.",
+                )
+            }
+            val lease = newLease(scope)
+            activeLease = lease
+            CachedScopeLeaseActivation(CacheScopeActivation.RETAINED, lease)
         }
-        if (stored != scope) {
-            deactivateLocked()
-            throw CacheScopeException(
-                "Connect once to verify this account, branch, and terminal before opening cached data.",
-            )
-        }
-        activeLease = newLease(scope)
-        CacheScopeActivation.RETAINED
-    }
 
     /** A server-validated scope may replace another scope after an atomic full-data purge. */
     suspend fun activateValidated(scope: CacheScope): CacheScopeActivation = mutex.withLock {

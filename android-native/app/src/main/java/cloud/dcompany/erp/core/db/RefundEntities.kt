@@ -25,7 +25,17 @@ data class RefundOrderCacheEntity(
     val totalMinor: Long,
     val paidMinor: Long,
     val refundableMinor: Long,
+    val pendingRefundMinor: Long = 0,
+    /** Canonical comma-separated server rails; values themselves never contain commas. */
+    val paymentMethodsCsv: String = "",
 )
+
+/**
+ * Durable, cache-scope-owned obligation to refresh every projection affected
+ * by a terminal POS refund. A process restart must not make stale customer,
+ * drawer or finance data look current after the money fact was committed.
+ */
+const val POS_REFUND_EFFECTS_DIRTY_SYNC_KEY = "dirty:pos_refund_effects"
 
 object RefundState {
     /** Captured on this tablet; the server has not accepted any payout yet. */
@@ -34,12 +44,30 @@ object RefundState {
     /** Server accepted and reserved this cash refund; the drawer must not be touched yet. */
     const val ACCEPTED_CASH_DUE = "accepted_cash_due"
 
+    /** Server accepted and reserved an original-rail refund; the provider app is untouched. */
+    const val ACCEPTED_PROVIDER_DUE = "accepted_provider_due"
+
     /** Server opened the guarded handover window. A restart must not trigger a second payout. */
     const val CASH_HANDOFF_IN_PROGRESS = "cash_handoff_in_progress"
 
     /** Staff confirmed the physical payout; settlement is waiting for the server. */
     const val CASH_SETTLE_PENDING = "cash_settle_pending"
     const val CASH_SETTLE_REJECTED = "cash_settle_rejected"
+
+    /** Cash handover is server-backed; only append-only accounting finalisation remains. */
+    const val CASH_HANDED_OVER_PENDING_ACCOUNTING = "cash_handed_over_pending_accounting"
+    const val CASH_FINALIZE_REJECTED = "cash_finalize_rejected"
+
+    /** Server durably recorded that this exact provider payout may now be attempted. */
+    const val PROVIDER_PAYOUT_IN_PROGRESS = "provider_payout_in_progress"
+
+    /** Provider value moved once; immutable evidence is durably queued for the server. */
+    const val PROVIDER_COMPLETION_PENDING = "provider_completion_pending"
+    const val PROVIDER_COMPLETION_REJECTED = "provider_completion_rejected"
+
+    /** Provider completion is server-backed; only accounting materialisation remains. */
+    const val PROVIDER_COMPLETED_PENDING_ACCOUNTING = "provider_completed_pending_accounting"
+    const val PROVIDER_FINALIZE_REJECTED = "provider_finalize_rejected"
 
     /** Owner confirmed that no cash left the drawer; the withdrawal is queued. */
     const val WITHDRAWAL_PENDING = "withdrawal_pending"
@@ -116,9 +144,37 @@ data class LocalRefundEntity(
     val serverRequestId: String? = null,
     val serverRefundId: String? = null,
     val acceptedAtMillis: Long? = null,
+    val acceptedByUserId: String? = null,
+    val acceptedByName: String? = null,
     val cashHandoffStartedAtMillis: Long? = null,
+    val cashHandoffStartedByUserId: String? = null,
+    val cashHandoffStartedByName: String? = null,
+    val cashHandedOverAtMillis: Long? = null,
+    val cashHandedOverRecordedAtMillis: Long? = null,
+    val cashHandedOverByUserId: String? = null,
+    val cashHandedOverByName: String? = null,
+    val providerPayoutStartedAtMillis: Long? = null,
+    val providerPayoutStartedByUserId: String? = null,
+    val providerPayoutStartedByName: String? = null,
     val settledAtMillis: Long? = null,
+    val providerCompletionRecordedAtMillis: Long? = null,
+    val providerCompletedByUserId: String? = null,
+    val providerCompletedByName: String? = null,
+    val settledByUserId: String? = null,
+    val settledByName: String? = null,
+    val clientOccurredAtMillis: Long? = null,
+    val capturedTimeReconciled: Boolean? = null,
+    val providerEvidenceReconciled: Boolean? = null,
+    /** Server withdrawal contradicted locally captured physical payout evidence. */
+    val payoutConflict: Boolean = false,
     val withdrawalAtMillis: Long? = null,
+    val withdrawnByUserId: String? = null,
+    val withdrawnByName: String? = null,
+    val providerVerificationStatus: String? = null,
+    val providerVerificationReference: String? = null,
+    val providerVerifiedAtMillis: Long? = null,
+    val customerSpendReconciled: Boolean? = null,
+    val loyaltyReconciliationState: String? = null,
     val withdrawalReason: String? = null,
     val receiptNo: String? = null,
     val lastError: String? = null,

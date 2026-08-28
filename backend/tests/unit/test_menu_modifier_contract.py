@@ -33,6 +33,8 @@ def test_menu_customization_models_are_tenant_scoped_constrained_and_audited() -
     assert "ck_menu_modifier_max_quantity" in option_constraints
     assert "fk_menu_variants_company_item" in variant_constraints
     assert "ck_order_line_variant_snapshot_object" in order_line_constraints
+    assert OrderLine.__table__.c.variant_snapshot.type.none_as_null is True
+    assert OrderLine.__table__.c.modifiers.type.none_as_null is True
     assert "uq_menu_modifier_groups_company_item_name_ci" in group_indexes
     assert "ix_menu_modifiers_company_item_group_active_sort" in option_indexes
     assert {MenuModifierGroup, MenuModifier, MenuVariant} <= TRACKED

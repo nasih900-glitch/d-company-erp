@@ -2,7 +2,8 @@
 
 Reserve-then-consume against a customer's real points balance, mirroring
 membership_benefits.py's concurrency-safe discipline (row stays for audit if
-the order voids; only a live or consumed row counts against the balance) —
+the order voids; only an unresolved live reservation is held in addition to
+the customer's already-net spendable balance) —
 but with no period allowance, since points aren't tied to a paid membership
 tier: any customer with a phone on file can earn and spend them.
 """
@@ -14,10 +15,16 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 from app.core.errors import BusinessRuleError
-from app.models import Customer, Order, PointsRedemption
+from app.models import (
+    Customer,
+    Order,
+    OrderLoyaltySettlement,
+    PointsRedemption,
+    RefundLoyaltyAdjustment,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -219,7 +226,18 @@ class PointsRedemptionResult:
 async def _used_or_reserved_points(
     session: AsyncSession, *, customer_id: UUID, excluding_order_id: UUID
 ) -> int:
-    """Points already locked up by this customer's other live/consumed orders."""
+    """Points locked by this customer's other unresolved reservations.
+
+    Consumed redemptions must not be counted here: settlement has already
+    deducted them from ``Customer.loyalty_points``. Counting both the reduced
+    balance and the consumed audit row subtracts the same points twice and can
+    prevent a customer from spending a legitimate remaining balance.
+
+    An unconsumed row on a paid/refunded order is still conservatively held.
+    That state should not normally commit, but treating it as unresolved is
+    safer than making the points available twice if historical data is
+    inconsistent.
+    """
     return int(
         (
             await session.execute(
@@ -229,10 +247,8 @@ async def _used_or_reserved_points(
                 .where(
                     PointsRedemption.customer_id == customer_id,
                     PointsRedemption.order_id != excluding_order_id,
-                    or_(
-                        PointsRedemption.consumed_at.is_not(None),
-                        Order.status.in_(_COUNTED_ORDER_STATUSES),
-                    ),
+                    PointsRedemption.consumed_at.is_(None),
+                    Order.status.in_(_COUNTED_ORDER_STATUSES),
                 )
             )
         ).scalar_one()
@@ -416,3 +432,265 @@ async def points_redeemed_for_order(session: AsyncSession, *, order: Order) -> i
         )
     ).scalar_one_or_none()
     return int(row or 0)
+
+
+def proportional_cumulative_points(
+    *, points: int, cumulative_refunded_minor: int, order_paid_minor: int
+) -> int:
+    """Allocate integer points over cumulative refunds without rounding drift.
+
+    Each refund applies the difference between this cumulative target and the
+    targets already posted.  Therefore two half-refunds and one full refund
+    always finish at exactly the same point total, including odd values.
+    """
+    if points <= 0 or cumulative_refunded_minor <= 0 or order_paid_minor <= 0:
+        return 0
+    bounded = min(int(cumulative_refunded_minor), int(order_paid_minor))
+    return int(points) * bounded // int(order_paid_minor)
+
+
+async def record_order_loyalty_settlement(
+    session: AsyncSession,
+    *,
+    order: Order,
+    customer: Customer,
+    points_earned: int,
+    rank_bonus_points_awarded: int,
+    at: datetime,
+) -> OrderLoyaltySettlement | None:
+    """Snapshot exact checkout loyalty facts in the sale transaction.
+
+    This row is the only safe source for a later earned-points reversal:
+    current menu types, prices, and membership multipliers may no longer match
+    what the customer actually received at checkout.
+    """
+    # The database guard validates this immutable snapshot against the paid
+    # order, consumed redemption and payment rows.  Flush those source facts
+    # first so a newly attached customer (or a redemption consumed in this
+    # same transaction) is visible to the trigger.  This remains inside the
+    # caller's transaction; it deliberately does not commit partial checkout
+    # state.
+    await session.flush()
+    existing = (
+        await session.execute(
+            select(OrderLoyaltySettlement)
+            .where(OrderLoyaltySettlement.order_id == order.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    redemption = (
+        await session.execute(
+            select(PointsRedemption).where(PointsRedemption.order_id == order.id)
+        )
+    ).scalar_one_or_none()
+    redeemed = int(redemption.points_spent) if redemption is not None else 0
+    expected = (
+        order.company_id,
+        customer.id,
+        int(order.total_minor or 0),
+        redeemed,
+        max(0, int(points_earned)),
+        max(0, int(rank_bonus_points_awarded)),
+        "exact",
+    )
+    if existing is not None:
+        actual = (
+            existing.company_id,
+            existing.customer_id,
+            int(existing.order_paid_minor),
+            int(existing.points_redeemed),
+            int(existing.points_earned),
+            int(existing.rank_bonus_points),
+            existing.provenance,
+        )
+        if actual != expected:
+            raise BusinessRuleError(
+                "The order loyalty settlement already exists with different facts."
+            )
+        return existing
+    if order.total_minor <= 0:
+        # No monetary refund can later exist for a zero-value membership-funded
+        # bill, and the database intentionally requires a positive allocation
+        # denominator.
+        return None
+    row = OrderLoyaltySettlement(
+        id=uuid4(),
+        company_id=order.company_id,
+        customer_id=customer.id,
+        order_id=order.id,
+        order_paid_minor=int(order.total_minor),
+        points_redeemed=redeemed,
+        points_earned=max(0, int(points_earned)),
+        rank_bonus_points=max(0, int(rank_bonus_points_awarded)),
+        settled_at=at,
+        provenance="exact",
+    )
+    session.add(row)
+    return row
+
+
+async def apply_refund_loyalty_adjustment(
+    session: AsyncSession,
+    *,
+    refund_id: UUID,
+    order: Order,
+    company_id: UUID,
+    paid_total_minor: int,
+    cumulative_refunded_minor: int,
+    at: datetime,
+) -> str:
+    """Apply one refund's idempotent loyalty delta and return audit state.
+
+    Redeemed points are restored and checkout-awarded spendable points are
+    reversed proportionally.  Rank-up bonus points are also spendable sale
+    awards, so they follow the same allocation.  The deliberately monotonic
+    ``lifetime_gaming_points_earned`` rank counter is not reduced: it records
+    historical participation and, importantly, prevents a refunded threshold
+    crossing from paying the one-time rank bonus a second time later.
+
+    A negative spendable balance is intentional if a customer spent awarded
+    points before refunding the source sale.  Future awards first clear that
+    debt and reservation logic exposes zero spendable points in the meantime.
+    """
+    prior_for_refund = (
+        await session.execute(
+            select(RefundLoyaltyAdjustment).where(
+                RefundLoyaltyAdjustment.refund_id == refund_id
+            )
+        )
+    ).scalar_one_or_none()
+    if prior_for_refund is not None:
+        settlement = await session.get(
+            OrderLoyaltySettlement,
+            prior_for_refund.order_loyalty_settlement_id,
+        )
+        return (
+            "legacy_redemption_restored"
+            if settlement is not None
+            and settlement.provenance == "legacy_redemption_only"
+            else "applied"
+        )
+
+    settlement = (
+        await session.execute(
+            select(OrderLoyaltySettlement)
+            .where(OrderLoyaltySettlement.order_id == order.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    redemption_exists = (
+        await session.execute(
+            select(PointsRedemption.id).where(PointsRedemption.order_id == order.id)
+        )
+    ).scalar_one_or_none()
+    if settlement is None:
+        return (
+            "not_applicable"
+            if order.customer_id is None and redemption_exists is None
+            else "legacy_unknown"
+        )
+    if (
+        settlement.company_id != company_id
+        or settlement.order_id != order.id
+        or int(settlement.order_paid_minor) != int(paid_total_minor)
+        or paid_total_minor <= 0
+        or cumulative_refunded_minor <= 0
+        or cumulative_refunded_minor > paid_total_minor
+        or (
+            order.customer_id is not None
+            and settlement.customer_id != order.customer_id
+        )
+    ):
+        return "legacy_unknown"
+
+    customer = (
+        await session.execute(
+            select(Customer)
+            .where(
+                Customer.id == settlement.customer_id,
+                Customer.company_id == company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if customer is None:
+        return "legacy_unknown"
+
+    prior = (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(RefundLoyaltyAdjustment.redeemed_points_restored), 0
+                ),
+                func.coalesce(
+                    func.sum(RefundLoyaltyAdjustment.points_earned_reversed), 0
+                ),
+                func.coalesce(
+                    func.sum(
+                        RefundLoyaltyAdjustment.rank_bonus_points_reversed
+                    ),
+                    0,
+                ),
+            ).where(
+                RefundLoyaltyAdjustment.order_loyalty_settlement_id
+                == settlement.id
+            )
+        )
+    ).one()
+    prior_restored, prior_earned, prior_bonus = map(int, prior)
+    target_restored = proportional_cumulative_points(
+        points=int(settlement.points_redeemed),
+        cumulative_refunded_minor=cumulative_refunded_minor,
+        order_paid_minor=paid_total_minor,
+    )
+    exact_earn_history = settlement.provenance == "exact"
+    target_earned = proportional_cumulative_points(
+        points=int(settlement.points_earned) if exact_earn_history else 0,
+        cumulative_refunded_minor=cumulative_refunded_minor,
+        order_paid_minor=paid_total_minor,
+    )
+    target_bonus = proportional_cumulative_points(
+        points=int(settlement.rank_bonus_points) if exact_earn_history else 0,
+        cumulative_refunded_minor=cumulative_refunded_minor,
+        order_paid_minor=paid_total_minor,
+    )
+    if (
+        prior_restored > target_restored
+        or prior_earned > target_earned
+        or prior_bonus > target_bonus
+    ):
+        # Existing append-only facts contradict this cumulative target. Money
+        # must still settle, but an owner must review loyalty instead of the API
+        # silently applying a negative catch-up over corrupted history.
+        return "legacy_unknown"
+
+    restored_delta = target_restored - prior_restored
+    earned_delta = target_earned - prior_earned
+    bonus_delta = target_bonus - prior_bonus
+    net_delta = restored_delta - earned_delta - bonus_delta
+    balance_before = int(customer.loyalty_points or 0)
+    balance_after = balance_before + net_delta
+    customer.loyalty_points = balance_after
+    session.add(
+        RefundLoyaltyAdjustment(
+            id=uuid4(),
+            company_id=company_id,
+            customer_id=customer.id,
+            order_id=order.id,
+            order_loyalty_settlement_id=settlement.id,
+            refund_id=refund_id,
+            cumulative_refunded_minor=int(cumulative_refunded_minor),
+            redeemed_points_restored=restored_delta,
+            points_earned_reversed=earned_delta,
+            rank_bonus_points_reversed=bonus_delta,
+            net_points_delta=net_delta,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            applied_at=at,
+        )
+    )
+    return (
+        "applied"
+        if exact_earn_history
+        else "legacy_redemption_restored"
+    )

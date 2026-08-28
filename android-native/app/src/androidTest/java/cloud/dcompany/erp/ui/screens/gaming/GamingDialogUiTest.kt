@@ -2,7 +2,10 @@ package cloud.dcompany.erp.ui.screens.gaming
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -38,6 +41,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+
+@Composable
+private fun rememberedWallClock(epochMillis: Long): MutableLongState =
+    remember(epochMillis) { mutableLongStateOf(epochMillis) }
 
 /**
  * Exercises the actual gaming dialogs rather than isolated input primitives.
@@ -79,7 +86,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(now),
+                        wallClock = rememberedWallClock(now),
                         actionInProgress = false,
                         busyHere = false,
                         focused = false,
@@ -143,7 +150,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T17:15:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,
@@ -206,7 +213,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T18:00:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,
@@ -259,7 +266,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T18:00:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,
@@ -315,7 +322,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T17:30:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,
@@ -383,7 +390,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = action,
-                        wallClock = mutableLongStateOf(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
+                        wallClock = rememberedWallClock(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
                         actionInProgress = false,
                         busyHere = false,
                         focused = false,
@@ -430,7 +437,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
+                        wallClock = rememberedWallClock(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
                         actionInProgress = false,
                         busyHere = false,
                         focused = false,
@@ -475,7 +482,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
+                        wallClock = rememberedWallClock(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
                         actionInProgress = false,
                         busyHere = false,
                         focused = false,
@@ -522,7 +529,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T18:00:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,
@@ -575,7 +582,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T18:00:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,
@@ -830,7 +837,7 @@ class GamingDialogUiTest {
                         station = station,
                         session = session,
                         packageExtensionAction = null,
-                        wallClock = mutableLongStateOf(
+                        wallClock = rememberedWallClock(
                             Instant.parse("2026-08-26T18:00:00Z").toEpochMilli(),
                         ),
                         actionInProgress = false,

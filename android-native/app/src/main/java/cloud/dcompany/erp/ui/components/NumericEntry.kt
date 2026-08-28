@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -14,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -179,6 +181,8 @@ fun TouchMoneyEntry(
     allowDecimal: Boolean = true,
     presetsMinor: List<Long> = emptyList(),
 ) {
+    val focusManager = LocalFocusManager.current
+
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = value,
@@ -192,6 +196,9 @@ fun TouchMoneyEntry(
             keyboardOptions = KeyboardOptions(
                 keyboardType = if (allowDecimal) KeyboardType.Decimal else KeyboardType.Number,
                 imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(
+                onDone = { focusManager.clearFocus(force = true) },
             ),
             modifier = Modifier.fillMaxWidth().semantics {
                 contentDescription = "$label, ${value.ifBlank { "zero" }}"

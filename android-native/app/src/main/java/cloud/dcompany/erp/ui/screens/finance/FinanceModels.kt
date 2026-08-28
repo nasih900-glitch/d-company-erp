@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
@@ -163,6 +164,22 @@ data class DistributablePartnerShare(
 )
 
 @Serializable
+data class FinanceCashPosition(
+    @SerialName("cash_on_hand_minor") val cashOnHandMinor: Long,
+    @SerialName("bank_balance_minor") val bankBalanceMinor: Long,
+    @SerialName("spendable_cash_bank_minor") val spendableCashBankMinor: Long,
+    @SerialName("card_clearing_minor") val cardClearingMinor: Long,
+    @SerialName("upi_qr_clearing_minor") val upiQrClearingMinor: Long,
+    @SerialName("wallet_clearing_minor") val walletClearingMinor: Long,
+    @SerialName("pos_settlement_clearing_minor") val posSettlementClearingMinor: Long,
+    @SerialName("settlement_receivables_minor") val settlementReceivablesMinor: Long,
+    @SerialName("historical_funds_pending_reconciliation_minor")
+    val historicalFundsPendingReconciliationMinor: Long,
+    @SerialName("unreconciled_settlement_minor") val unreconciledSettlementMinor: Long,
+    @SerialName("reconciliation_only_minor") val reconciliationOnlyMinor: Long,
+)
+
+@Serializable
 data class DistributableProfit(
     @SerialName("as_of") val asOf: String,
     @SerialName("lifetime_net_profit_minor") val lifetimeNetProfitMinor: Long,
@@ -171,12 +188,50 @@ data class DistributableProfit(
     @SerialName("reserve_months") val reserveMonths: Int,
     @SerialName("avg_monthly_cost_minor") val avgMonthlyCostMinor: Long,
     @SerialName("reserve_minor") val reserveMinor: Long,
+    /** Deprecated backend compatibility total: cash + bank + UPI clearing. */
     @SerialName("liquid_cash_minor") val liquidCashMinor: Long,
+    /** Null while a cached response still comes from a pre-0050 backend. */
+    @SerialName("spendable_cash_bank_minor") val spendableCashBankMinor: Long? = null,
+    @SerialName("cash_position") val cashPosition: FinanceCashPosition? = null,
     @SerialName("profit_based_capacity_minor") val profitBasedCapacityMinor: Long,
     @SerialName("cash_based_capacity_minor") val cashBasedCapacityMinor: Long,
     @SerialName("safe_to_distribute_minor") val safeToDistributeMinor: Long,
     val partners: List<DistributablePartnerShare> = emptyList(),
 )
+
+/** Return value only when both new 0050 fields agree; never trust the legacy aggregate. */
+internal fun DistributableProfit.authoritativeSpendableCashMinor(): Long? =
+    spendableCashBankMinor?.takeIf { cashPosition?.spendableCashBankMinor == it }
+
+internal const val SPENDABLE_FUNDS_LABEL = "Spendable cash · till + bank"
+internal const val SPENDABLE_FUNDS_DETAIL =
+    "Only posted Cash and Bank balances. Card, UPI/QR, Wallet and POS settlement " +
+        "clearing remain receivables until the provider settles them to Bank."
+internal const val CASH_CONTRACT_UNAVAILABLE =
+    "Finance cash capacity is unverified. Refresh after the server is upgraded; do not " +
+        "use the older cash + bank + UPI aggregate for a partner withdrawal."
+
+/** Mirrors the backend's company-wide finance identity gate. Auth attaches a
+ * default branch to normal logins, so branchId cannot distinguish an owner
+ * from an operational manager. */
+internal fun MeResponse.canViewCompanyWidePartnerFinance(): Boolean =
+    protectedAccess || roles.any { it in setOf("owner", "partner", "auditor") }
+
+internal fun financeWriteQueuedMessage(subject: String, online: Boolean): String =
+    "$subject saved on this tablet. " + if (online) {
+        "Syncing with the server now; do not enter it again."
+    } else {
+        "It will sync automatically when the connection returns; do not enter it again."
+    }
+
+internal fun financeLoadFailureMessage(hasSavedFigures: Boolean, online: Boolean): String = when {
+    !online && hasSavedFigures ->
+        "Finance is offline. Saved figures remain visible and will refresh automatically after reconnection."
+    !online ->
+        "Finance has not loaded for this account yet. Reconnect, then refresh once to make saved figures available offline."
+    hasSavedFigures -> "Could not refresh Finance. Saved figures remain visible; try again."
+    else -> "Could not load Finance. Check access and the connection, then try again."
+}
 
 @Serializable
 data class BusinessMetrics(
@@ -193,7 +248,7 @@ data class BusinessMetrics(
     @SerialName("marketing_spend_minor") val marketingSpendMinor: Long,
     @SerialName("ltv_minor") val ltvMinor: Long,
     @SerialName("customers_count") val customersCount: Int,
-    /** Positive = money lost this period. Negative = profitable. */
+    /** Loss amount for the period; zero means break-even or profitable. */
     @SerialName("burn_rate_minor") val burnRateMinor: Long,
 )
 

@@ -19,12 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import BusinessRuleError
 from app.core.timezone import company_timezone
 from app.models import (
+    GRN,
     Account,
     Asset,
-    Branch,
     CapitalEntry,
     Expense,
     ExpenseCategory,
+    GRNLine,
     JournalEntry,
     JournalLine,
     ManualCollection,
@@ -34,12 +35,14 @@ from app.models import (
     Order,
     Partner,
     Payment,
+    PurchaseOrder,
     Refund,
-    StockMovement,
+    SupplierPayment,
     TipPayout,
 )
 from app.services.accounting.accounts import (
     ACCOUNT_BY_CODE,
+    ACCOUNTS_PAYABLE,
     ACCUMULATED_DEPRECIATION,
     BANK,
     CARD_CLEARING,
@@ -71,6 +74,12 @@ from app.services.accounting.accounts import (
     WALLET_CLEARING,
 )
 from app.services.accounting.depreciation import asset_depreciation_expense_minor
+from app.services.accounting.purchases import (
+    received_line_total_minor,
+    require_invoice_matches_capitalised_total,
+)
+from app.services.accounting.refund_allocation import cumulative_refunded_tip_minor
+from app.services.inventory.accounting import load_inventory_value_changes
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +117,13 @@ CAPITAL_SETTLEMENT_ACCOUNTS: dict[str, tuple[str, str, str]] = {
     "historical_funds": HISTORICAL_FUNDS.ledger_tuple,
 }
 
-POSTED_JOURNAL_REF_TYPES = frozenset({"historical_setup_reconciliation"})
+POSTED_JOURNAL_REF_TYPES = frozenset(
+    {
+        "historical_setup_reconciliation",
+        "grn_receipt",
+        "supplier_payment",
+    }
+)
 
 
 def _method_account(method: str | None) -> tuple[str, str, str]:
@@ -116,6 +131,24 @@ def _method_account(method: str | None) -> tuple[str, str, str]:
         (method or "").lower(),
         UNRECONCILED_SETTLEMENT.ledger_tuple,
     )
+
+
+def _expense_payment_account(paid_via: str) -> tuple[str, str, str]:
+    """Map an outgoing expense to the asset that actually funded it.
+
+    Card/UPI on this form mean a business debit card or a bank-account UPI
+    transfer. Provider clearing accounts represent incoming customer funds
+    awaiting settlement; crediting them for an outgoing vendor payment would
+    fabricate a reduction in receivables and overstate spendable Bank cash.
+    A future business credit-card workflow needs an explicit liability source,
+    not reuse of the customer Card Clearing account.
+    """
+
+    if paid_via == "cash":
+        return CASH.ledger_tuple
+    if paid_via in {"bank", "card", "upi"}:
+        return BANK.ledger_tuple
+    raise BusinessRuleError(f"unsupported expense payment rail: {paid_via}")
 
 
 def _capital_settlement_account(value: str) -> tuple[str, str, str]:
@@ -327,6 +360,13 @@ async def _posted_journal_ledger_lines(
             raise BusinessRuleError("posted journal references an account from another company")
         grouped[journal_line.journal_entry_id].append((journal_line, account))
 
+    await _validate_purchase_journal_sources(
+        session,
+        company_id=company_id,
+        entries=entries,
+        grouped=grouped,
+    )
+
     output: list[LedgerLine] = []
     for entry in entries:
         if (
@@ -363,6 +403,142 @@ async def _posted_journal_ledger_lines(
                 f"posted journal {entry.id} is not balanced to its declared total"
             )
     return output
+
+
+def _require_exact_two_sided_shape(
+    *,
+    rows: list[tuple[JournalLine, Account]],
+    debit_account: tuple[str, str, str],
+    credit_account: tuple[str, str, str],
+    amount_minor: int,
+    label: str,
+) -> None:
+    actual = [
+        (account.code, account.name, account.type, line.side, int(line.amount_minor))
+        for line, account in rows
+    ]
+    expected = sorted(
+        [
+            (*debit_account, "dr", int(amount_minor)),
+            (*credit_account, "cr", int(amount_minor)),
+        ]
+    )
+    if sorted(actual) != expected:
+        raise BusinessRuleError(f"{label} journal does not match its source contract")
+
+
+async def _validate_purchase_journal_sources(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    entries: list[JournalEntry],
+    grouped: dict[UUID, list[tuple[JournalLine, Account]]],
+) -> None:
+    """Prove operational journals are exact mirrors of immutable sources.
+
+    Merely using a reserved ``ref_type`` is not authority to post. A valid
+    purchase journal must be linked back from its GRN/SupplierPayment source,
+    belong to the same tenant and branch, and contain exactly the canonical
+    two-sided entry. This keeps manually inserted look-alike journals out of
+    Trial Balance and Balance Sheet.
+    """
+
+    grn_entries = [entry for entry in entries if entry.ref_type == "grn_receipt"]
+    if grn_entries:
+        entry_ids = [entry.id for entry in grn_entries]
+        source_rows = (
+            await session.execute(
+                select(GRN, PurchaseOrder)
+                .join(PurchaseOrder, PurchaseOrder.id == GRN.purchase_order_id)
+                .where(GRN.journal_entry_id.in_(entry_ids))
+            )
+        ).all()
+        by_journal = {grn.journal_entry_id: (grn, po) for grn, po in source_rows}
+        grn_ids = [grn.id for grn, _po in source_rows]
+        line_rows = (
+            await session.execute(
+                select(GRNLine).where(GRNLine.grn_id.in_(grn_ids))
+            )
+        ).scalars().all()
+        lines_by_grn: dict[UUID, list[GRNLine]] = {}
+        for line in line_rows:
+            lines_by_grn.setdefault(line.grn_id, []).append(line)
+
+        for entry in grn_entries:
+            source = by_journal.get(entry.id)
+            if source is None:
+                raise BusinessRuleError("GRN receipt journal has no linked GRN source")
+            grn, purchase_order = source
+            source_lines = lines_by_grn.get(grn.id, [])
+            if not source_lines:
+                raise BusinessRuleError("GRN receipt journal source has no received lines")
+            total_minor = sum(
+                received_line_total_minor(line.qty_received, line.cost_per_unit_minor)
+                for line in source_lines
+            )
+            require_invoice_matches_capitalised_total(
+                supplier_invoice_amount_minor=grn.supplier_invoice_amount_minor,
+                capitalised_total_minor=total_minor,
+            )
+            if (
+                purchase_order.company_id != company_id
+                or purchase_order.branch_id != entry.branch_id
+                or entry.ref_id != grn.id
+                or entry.posted_at != grn.received_at
+                or int(entry.total_minor) != total_minor
+            ):
+                raise BusinessRuleError("GRN receipt journal provenance does not match its source")
+            _require_exact_two_sided_shape(
+                rows=grouped[entry.id],
+                debit_account=INVENTORY.ledger_tuple,
+                credit_account=ACCOUNTS_PAYABLE.ledger_tuple,
+                amount_minor=total_minor,
+                label="GRN receipt",
+            )
+
+    payment_entries = [
+        entry for entry in entries if entry.ref_type == "supplier_payment"
+    ]
+    if payment_entries:
+        entry_ids = [entry.id for entry in payment_entries]
+        payments = (
+            await session.execute(
+                select(SupplierPayment).where(
+                    SupplierPayment.journal_entry_id.in_(entry_ids)
+                )
+            )
+        ).scalars().all()
+        by_journal = {payment.journal_entry_id: payment for payment in payments}
+        for entry in payment_entries:
+            payment = by_journal.get(entry.id)
+            if payment is None:
+                raise BusinessRuleError(
+                    "supplier payment journal has no linked settlement source"
+                )
+            if (
+                payment.company_id != company_id
+                or payment.branch_id != entry.branch_id
+                or payment.voided_at is not None
+                or entry.ref_id != payment.id
+                or entry.posted_at != payment.paid_at
+                or int(entry.total_minor) != int(payment.amount_minor)
+            ):
+                raise BusinessRuleError(
+                    "supplier payment journal provenance does not match its source"
+                )
+            settlement_account = {
+                "cash": CASH.ledger_tuple,
+                "bank": BANK.ledger_tuple,
+            }.get(payment.method)
+            if settlement_account is None:
+                raise BusinessRuleError("supplier payment uses an unsupported settlement rail")
+            _require_exact_two_sided_shape(
+                rows=grouped[entry.id],
+                debit_account=ACCOUNTS_PAYABLE.ledger_tuple,
+                credit_account=settlement_account,
+                amount_minor=int(payment.amount_minor),
+                label="supplier payment",
+            )
 
 
 def _validate_account_code_meanings(lines: list[LedgerLine]) -> None:
@@ -587,50 +763,63 @@ async def build_operational_ledger(
                 )
             )
 
-    stock_stmt = (
-        select(StockMovement)
-        .join(Branch, Branch.id == StockMovement.branch_id)
-        .where(
-            Branch.company_id == company_id,
-            StockMovement.type.in_(("sale", "refund_restock")),
-            StockMovement.created_at < end_exclusive,
-        )
-        .order_by(StockMovement.created_at, StockMovement.id)
+    # Replay each batch from its initial quantity instead of valuing each
+    # fractional movement independently. Whole-paise deltas are the change
+    # between HALF_UP-rounded before/after batch values, so sub-paise residuals
+    # carry into the next movement and a fully consumed batch clears its exact
+    # receipt value. Pre-range rows must remain in the replay even though they
+    # do not emit lines, otherwise a date-range report could allocate the same
+    # fractional residual differently from the all-time ledger.
+    inventory_changes = await load_inventory_value_changes(
+        session,
+        company_id=company_id,
+        start_at=start_at,
+        end_exclusive=end_exclusive,
     )
-    if start_at is not None:
-        stock_stmt = stock_stmt.where(StockMovement.created_at >= start_at)
-    for movement in (await session.execute(stock_stmt)).scalars().all():
-        quantity = Decimal(str(movement.qty_delta or 0))
-        # A sale consumes stock (negative delta); a refund restock reverses
-        # that consumption (positive delta) and must post the mirror-image
-        # entry, or a refunded recipe-linked sale permanently overstates
-        # COGS and understates profit even though the stock itself is back.
-        is_restock = movement.type == "refund_restock"
-        if is_restock:
-            if quantity <= 0:
-                continue
-        else:
-            if quantity >= 0:
-                continue
-        amount = int(abs(quantity) * int(movement.cost_per_unit_minor or 0))
-        if amount <= 0:
+    for change in inventory_changes:
+        movement = change.movement
+        inventory_delta = change.inventory_delta_minor
+        if inventory_delta == 0:
             continue
-        memo = movement.note or ("Inventory restocked by refund" if is_restock else "Inventory consumed by sale")
-        cogs_side = dict(credit=amount) if is_restock else dict(debit=amount)
-        inventory_side = dict(debit=amount) if is_restock else dict(credit=amount)
+        amount = abs(inventory_delta)
+        is_sale_flow = movement.type in {"sale", "refund_restock"}
+        offset_account = (
+            COST_OF_GOODS_SOLD.ledger_tuple
+            if is_sale_flow
+            else OTHER_EXPENSES.ledger_tuple
+        )
+        ref_type = "stock_sale" if is_sale_flow else "stock_adjustment"
+        default_memo = {
+            "sale": "Inventory consumed by sale",
+            "refund_restock": "Inventory restocked by refund",
+            "waste": "Inventory written off as waste",
+            "damage": "Damaged inventory written off",
+            "adjustment": "Inventory count variance",
+        }[movement.type]
+        # A positive count correction credits Other Expenses as a
+        # contra-expense; a negative correction/waste/damage debits it.
+        # This keeps the balance sheet tied to physical batch value without
+        # pretending that a count variance is supplier AP or sales COGS.
+        offset_side = (
+            {"credit": amount} if inventory_delta > 0 else {"debit": amount}
+        )
+        inventory_side = (
+            {"debit": amount} if inventory_delta > 0 else {"credit": amount}
+        )
+        memo = movement.note or default_memo
         lines.extend(
             [
                 _line(
                     occurred_at=movement.created_at,
-                    ref_type="stock_sale",
+                    ref_type=ref_type,
                     ref_id=movement.id,
-                    account=COST_OF_GOODS_SOLD.ledger_tuple,
+                    account=offset_account,
                     memo=memo,
-                    **cogs_side,
+                    **offset_side,
                 ),
                 _line(
                     occurred_at=movement.created_at,
-                    ref_type="stock_sale",
+                    ref_type=ref_type,
                     ref_id=movement.id,
                     account=INVENTORY.ledger_tuple,
                     memo=memo,
@@ -689,8 +878,16 @@ async def build_operational_ledger(
         # excess beyond that (capped at order.tip_minor, since taxable_total +
         # tip_minor == total_minor) is tip.
         total_minor = int(order.total_minor or 0)
-        current_tip = max(0, min(cumulative, total_minor) - taxable_total)
-        prior_tip = max(0, min(previous, total_minor) - taxable_total)
+        current_tip = cumulative_refunded_tip_minor(
+            total_minor=total_minor,
+            tip_minor=int(order.tip_minor or 0),
+            cumulative_refunded_minor=cumulative,
+        )
+        prior_tip = cumulative_refunded_tip_minor(
+            total_minor=total_minor,
+            tip_minor=int(order.tip_minor or 0),
+            cumulative_refunded_minor=previous,
+        )
         tip_amount = current_tip - prior_tip
 
         return_amount = max(0, refund.amount_minor - tax_total - tip_amount)
@@ -792,6 +989,7 @@ async def build_operational_ledger(
         .where(
             Expense.company_id == company_id,
             Expense.deleted_at.is_(None),
+            Expense.voided_at.is_(None),
             Expense.paid_at < end_exclusive,
         )
         .order_by(Expense.paid_at, Expense.id)
@@ -814,7 +1012,7 @@ async def build_operational_ledger(
                     occurred_at=expense.paid_at,
                     ref_type="expense",
                     ref_id=expense.id,
-                    account=_method_account(expense.paid_via),
+                    account=_expense_payment_account(expense.paid_via),
                     credit=expense.amount_minor,
                     memo=memo,
                 ),

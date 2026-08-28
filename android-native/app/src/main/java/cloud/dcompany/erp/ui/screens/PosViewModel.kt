@@ -14,6 +14,7 @@ import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
+import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
@@ -36,6 +37,7 @@ import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.core.net.OrderDiscountUpdateRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
+import cloud.dcompany.erp.core.net.OrderPointsRedemptionUpdateRequest
 import cloud.dcompany.erp.core.net.asRupees
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +79,8 @@ data class PreparedDirectCheckout(
     val shiftIdAtClaim: String,
     val subtotalMinor: Long,
     val discountMinor: Long,
+    val pointsRedeemedMinor: Long,
+    val pointsRedeemed: Int,
     val taxMinor: Long,
     val roundOffMinor: Long,
     val totalMinor: Long,
@@ -156,6 +160,7 @@ private data class PosMenuSnapshot(
     val modifierGroups: List<MenuModifierGroupEntity>,
     val modifiers: List<MenuModifierEntity>,
     val draft: LocalOrderWithLines?,
+    val customers: List<CustomerCacheEntity>,
 )
 
 data class PosUiState(
@@ -221,6 +226,8 @@ data class PosUiState(
     val draftRevision: Long? = null,
     val customerName: String? = null,
     val customerPhone: String? = null,
+    /** Last synced display balance only; the backend authorises every redemption. */
+    val customerLoyaltyPoints: Int? = null,
     val orderNote: String? = null,
     val manualDiscountMinor: Long = 0,
 ) {
@@ -295,15 +302,20 @@ class PosViewModel : ViewModel() {
                 db.menuDao().observeModifiers(),
                 ::Pair,
             ),
-            db.orderDao().observeActiveDraft(),
-        ) { items, categories, variants, modifierConfig, draft ->
+            combine(
+                db.orderDao().observeActiveDraft(),
+                db.customerDao().observeCache(),
+                ::Pair,
+            ),
+        ) { items, categories, variants, modifierConfig, draftAndCustomers ->
             PosMenuSnapshot(
                 items,
                 categories,
                 variants,
                 modifierConfig.first,
                 modifierConfig.second,
-                draft,
+                draftAndCustomers.first,
+                draftAndCustomers.second,
             )
         },
         combine(
@@ -395,6 +407,8 @@ class PosViewModel : ViewModel() {
                     shiftIdAtClaim = draft.shiftId,
                     subtotalMinor = draft.serverSubtotalMinor ?: 0L,
                     discountMinor = draft.serverDiscountMinor ?: 0L,
+                    pointsRedeemedMinor = draft.serverPointsRedeemedMinor ?: 0L,
+                    pointsRedeemed = draft.serverPointsRedeemed ?: 0,
                     taxMinor = draft.serverTaxMinor ?: 0L,
                     roundOffMinor = draft.serverRoundOffMinor ?: 0L,
                     totalMinor = draft.serverTotalMinor ?: return@let null,
@@ -474,6 +488,9 @@ class PosViewModel : ViewModel() {
             draftRevision = draftOrder?.revision,
             customerName = draftOrder?.customerName,
             customerPhone = draftOrder?.customerPhone,
+            customerLoyaltyPoints = draftOrder?.customerPhone?.let { phone ->
+                menu.customers.firstOrNull { it.phone == phone }?.loyaltyPoints
+            },
             orderNote = draftOrder?.orderNote,
             manualDiscountMinor = draftOrder?.manualDiscountMinor ?: 0L,
         )
@@ -901,6 +918,8 @@ class PosViewModel : ViewModel() {
                             serverShiftId = serverShiftId,
                             subtotalMinor = created.subtotalMinor,
                             discountMinor = created.discountMinor,
+                            pointsRedeemedMinor = created.pointsRedeemedMinor,
+                            pointsRedeemed = created.pointsRedeemed,
                             taxMinor = created.taxMinor,
                             roundOffMinor = created.roundOffMinor,
                             totalMinor = created.totalMinor,
@@ -956,6 +975,8 @@ class PosViewModel : ViewModel() {
                             serverShiftId = serverShiftId,
                             subtotalMinor = priced.subtotalMinor,
                             discountMinor = priced.discountMinor,
+                            pointsRedeemedMinor = priced.pointsRedeemedMinor,
+                            pointsRedeemed = priced.pointsRedeemed,
                             taxMinor = priced.taxMinor,
                             roundOffMinor = priced.roundOffMinor,
                             totalMinor = priced.totalMinor,
@@ -976,6 +997,8 @@ class PosViewModel : ViewModel() {
                             serverOrderId = priced.id,
                             subtotalMinor = priced.subtotalMinor,
                             discountMinor = priced.discountMinor,
+                            pointsRedeemedMinor = priced.pointsRedeemedMinor,
+                            pointsRedeemed = priced.pointsRedeemed,
                             taxMinor = priced.taxMinor,
                             roundOffMinor = priced.roundOffMinor,
                             totalMinor = priced.totalMinor,
@@ -1004,12 +1027,7 @@ class PosViewModel : ViewModel() {
                         e.message,
                     )
                 }
-                notice.value = when (e) {
-                    is ApiException -> e.message
-                        ?: "The server could not prepare this bill. No payment was recorded."
-                    else -> e.message
-                        ?: "The bill could not be prepared. No payment was recorded; review and retry."
-                }
+                notice.value = directCheckoutPreparationNotice(e)
             } finally {
                 checkoutBusy.value = false
             }
@@ -1027,6 +1045,112 @@ class PosViewModel : ViewModel() {
                     SyncState.PREPARING,
                     System.currentTimeMillis(),
                 )
+            }
+        }
+    }
+
+    /**
+     * Apply an absolute points amount to the exact server bill currently under
+     * review. The deterministic key includes the frozen optimistic version and
+     * body, so an ambiguous retry replays the same mutation rather than
+     * reserving points twice. The cache balance is display-only; the locked
+     * backend customer/order transaction is the authority.
+     */
+    fun redeemDirectPoints(points: Int) {
+        if (!requireWrite()) return
+        if (points < 0) {
+            notice.value = "Enter zero or more loyalty points."
+            return
+        }
+        val prepared = state.value.preparedDirectCheckout ?: run {
+            notice.value = "Verify the live bill before applying loyalty points."
+            return
+        }
+        if (state.value.customerPhone.isNullOrBlank()) {
+            notice.value = "Add the customer's phone number before using loyalty points."
+            return
+        }
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect before using loyalty points so the live balance can be reserved safely."
+            return
+        }
+        if (checkoutBusy.value) return
+        val currentShiftId = authorisedShiftId() ?: return
+        if (currentShiftId != prepared.shiftIdAtClaim) {
+            notice.value = "The open shift changed. Verify this bill again before using points."
+            prepareDirectCheckout()
+            return
+        }
+        if (!HeldOrderClaimPolicy.hasConfirmationWindow(
+                prepared.claimExpiresAtMillis,
+                System.currentTimeMillis(),
+            )
+        ) {
+            notice.value = "The verified total expired. Refreshing it before points are changed."
+            prepareDirectCheckout()
+            return
+        }
+        if (points == prepared.pointsRedeemed) return
+
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        checkoutBusy.value = true
+        viewModelScope.launch {
+            try {
+                val updated = ApiClient.api.updateOrderPoints(
+                    id = prepared.orderId,
+                    body = OrderPointsRedemptionUpdateRequest(
+                        points = points,
+                        expectedCheckoutVersion = prepared.claimOrderVersion,
+                    ),
+                    idempotencyKey = pointsRedemptionIdempotencyKey(
+                        localId = prepared.localId,
+                        orderId = prepared.orderId,
+                        checkoutVersion = prepared.claimOrderVersion,
+                        points = points,
+                    ),
+                )
+                check(updated.id == prepared.orderId && updated.status == "open") {
+                    "The server returned the wrong bill after applying points."
+                }
+                val verificationExpiresAt = System.currentTimeMillis() + 2L * 60L * 1_000L
+                val saved = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                    db.orderDao().markDraftPrepared(
+                        localId = prepared.localId,
+                        serverOrderId = updated.id,
+                        subtotalMinor = updated.subtotalMinor,
+                        discountMinor = updated.discountMinor,
+                        pointsRedeemedMinor = updated.pointsRedeemedMinor,
+                        pointsRedeemed = updated.pointsRedeemed,
+                        taxMinor = updated.taxMinor,
+                        roundOffMinor = updated.roundOffMinor,
+                        totalMinor = updated.totalMinor,
+                        dueMinor = updated.dueMinor,
+                        claimToken = null,
+                        claimExpiresAtMillis = verificationExpiresAt,
+                        checkoutVersion = updated.checkoutVersion,
+                        updatedAtMillis = System.currentTimeMillis(),
+                    )
+                }
+                check(
+                    saved is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
+                        saved.value == 1,
+                ) { "The points-adjusted bill could not be saved on this tablet." }
+                notice.value = if (updated.pointsRedeemed > 0) {
+                    "${updated.pointsRedeemed} points reserved for " +
+                        "${updated.pointsRedeemedMinor.asRupees()}. New total ${updated.totalMinor.asRupees()}."
+                } else {
+                    "Loyalty points removed. New total ${updated.totalMinor.asRupees()}."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: ApiException) {
+                notice.value = error.message
+                    ?: "The server could not reserve those points. No payment was recorded."
+            } catch (error: Exception) {
+                notice.value = error.message
+                    ?: "The points change could not be verified. No payment was recorded; try again."
+            } finally {
+                checkoutBusy.value = false
             }
         }
     }
@@ -1931,6 +2055,18 @@ private inline fun <T> MutableStateFlow<T>.update(block: (T) -> T) {
     value = block(value)
 }
 
+/** Stable across an ambiguous retry, distinct for every versioned absolute set. */
+internal fun pointsRedemptionIdempotencyKey(
+    localId: String,
+    orderId: String,
+    checkoutVersion: Long,
+    points: Int,
+): String {
+    require(localId.isNotBlank() && orderId.isNotBlank())
+    require(checkoutVersion >= 1L && points >= 0)
+    return "order-points:$localId:$orderId:$checkoutVersion:$points"
+}
+
 /** Kept pure so confirmation/refusal wording is regression-testable on the JVM. */
 internal fun directSaleOutcomeNotice(order: LocalOrderEntity): String? = when (order.syncState) {
     SyncState.SYNCED -> {
@@ -1945,6 +2081,27 @@ internal fun directSaleOutcomeNotice(order: LocalOrderEntity): String? = when (o
             "Fix the cause, then use Retry after fix on this failed sale."
     }
     else -> null
+}
+
+/**
+ * Keep backend implementation failures out of the cashier workflow. A generic
+ * 5xx envelope such as "An unexpected error occurred" gives staff neither a
+ * recovery action nor the financially important confirmation that no payment
+ * was captured. Specific business-rule messages remain intact.
+ */
+internal fun directCheckoutPreparationNotice(error: Exception): String {
+    if (error is ApiException) {
+        val serverMessage = error.message?.trim().orEmpty()
+        val genericServerFailure = error.status?.let { it >= 500 } == true ||
+            serverMessage.equals("An unexpected error occurred.", ignoreCase = true) ||
+            serverMessage.equals("Internal server error", ignoreCase = true)
+        if (!genericServerFailure && serverMessage.isNotEmpty()) return serverMessage
+        return "The server could not prepare this bill. No payment was recorded. " +
+            "Try again; if it continues, ask a manager to check the POS connection."
+    }
+
+    return error.message?.trim()?.takeIf(String::isNotEmpty)
+        ?: "The bill could not be prepared. No payment was recorded; review it and try again."
 }
 
 /** Definitive feedback for money already captured against a shared held order. */

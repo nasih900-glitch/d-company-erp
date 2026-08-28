@@ -16,6 +16,7 @@ import cloud.dcompany.erp.core.auth.OutboxGateResult
 import cloud.dcompany.erp.core.auth.OutboxSafetyGate
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.auth.verifyBranchScopedPayload
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.AssetCacheEntity
@@ -90,6 +91,7 @@ import cloud.dcompany.erp.core.db.OnShiftEntity
 import cloud.dcompany.erp.core.db.ReportSnapshotEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
 import cloud.dcompany.erp.core.db.RefundState
+import cloud.dcompany.erp.core.db.POS_REFUND_EFFECTS_DIRTY_SYNC_KEY
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryResult
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryStatus
 import cloud.dcompany.erp.core.db.StaffCacheEntity
@@ -163,7 +165,13 @@ import cloud.dcompany.erp.ui.screens.menu.CategoryUpdateBody
 import cloud.dcompany.erp.ui.screens.menu.ItemDetailsUpdateBody
 import cloud.dcompany.erp.ui.screens.menu.MenuApi
 import cloud.dcompany.erp.ui.screens.refunds.PosRefundCashSettlementBody
+import cloud.dcompany.erp.ui.screens.refunds.PosRefundAccountingFinalizationBody
+import cloud.dcompany.erp.ui.screens.refunds.PosRefundCashHandoffResolutionBody
 import cloud.dcompany.erp.ui.screens.refunds.PosRefundHandoffBody
+import cloud.dcompany.erp.ui.screens.refunds.PosRefundProviderPayoutStartBody
+import cloud.dcompany.erp.ui.screens.refunds.PosRefundProviderPayoutResolutionBody
+import cloud.dcompany.erp.ui.screens.refunds.PosRefundProviderSettlementBody
+import cloud.dcompany.erp.ui.screens.refunds.PosRefundProviderWithdrawalBody
 import cloud.dcompany.erp.ui.screens.refunds.PosRefundRequestBody
 import cloud.dcompany.erp.ui.screens.refunds.PosRefundRequestResult
 import cloud.dcompany.erp.ui.screens.refunds.PosRefundWithdrawalBody
@@ -172,6 +180,7 @@ import cloud.dcompany.erp.ui.screens.settings.BranchWriteBody
 import cloud.dcompany.erp.ui.screens.settings.CompanyUpdateBody
 import cloud.dcompany.erp.ui.screens.settings.SettingsApi
 import cloud.dcompany.erp.ui.screens.settings.TerminalCreateBody
+import cloud.dcompany.erp.ui.screens.settings.resolveQueuedInvoiceSeries
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftCloseBody
 import cloud.dcompany.erp.ui.screens.shift.ShiftOpenBody
@@ -256,11 +265,15 @@ internal class ConnectivityObserver(
         manager?.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) = refresh()
-                override fun onLost(network: Network) = refresh()
+                // This is the *default* network callback. A loss is therefore
+                // authoritative even if activeNetwork still returns the old
+                // handle for a short system race; waiting on another lookup
+                // used to miss the false -> true edge and strand the outbox.
+                override fun onLost(network: Network) = updateNetworkValidation(false)
                 override fun onCapabilitiesChanged(
                     network: Network,
                     caps: NetworkCapabilities,
-                ) = refresh()
+                ) = updateNetworkValidation(caps.isValidatedInternet())
             },
         )
     }
@@ -281,9 +294,11 @@ internal class ConnectivityObserver(
         // If internet returned while the last API probe was unreachable, the
         // effective state intentionally remains offline. Trigger one probe so
         // a successful HTTP response can prove recovery and clear the banner.
-        if (
-            nowValidated && networkWasUnavailable &&
-            latestBackendReachability == BackendReachability.UNREACHABLE
+        if (shouldProbeBackendOnValidatedReconnect(
+                wasValidated = !networkWasUnavailable,
+                nowValidated = nowValidated,
+                backendReachability = latestBackendReachability,
+            )
         ) {
             onRegained?.invoke()
         }
@@ -298,10 +313,20 @@ internal class ConnectivityObserver(
     private fun currentlyValidated(): Boolean {
         val active = manager?.activeNetwork ?: return false
         val caps = manager.getNetworkCapabilities(active) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        return caps.isValidatedInternet()
     }
 }
+
+private fun NetworkCapabilities.isValidatedInternet(): Boolean =
+    hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+internal fun shouldProbeBackendOnValidatedReconnect(
+    wasValidated: Boolean,
+    nowValidated: Boolean,
+    backendReachability: BackendReachability,
+): Boolean =
+    !wasValidated && nowValidated && backendReachability == BackendReachability.UNREACHABLE
 
 /**
  * Thread-safe state machine for conflating fire-and-forget sync requests.
@@ -761,6 +786,7 @@ class SyncEngine(
     private val scope: CoroutineScope,
     private val outboxSafety: OutboxSafetyGate,
     private val cacheIsolation: CacheIsolationCoordinator,
+    private val scheduleDurableSync: () -> Unit,
 ) {
 
     private val shiftApi = ApiClient.create<ShiftApi>()
@@ -804,10 +830,18 @@ class SyncEngine(
 
     private data class ActiveBatchTarget(
         val ingredientId: String,
+        val branchId: String?,
         val lease: CacheScopeLease,
     )
 
     private val activeBatchTarget = AtomicReference<ActiveBatchTarget?>(null)
+    /** Company-level owners may inspect one branch at a time on Inventory. */
+    private data class ActiveInventoryProjection(
+        val branchId: String,
+        val lease: CacheScopeLease,
+    )
+
+    private val activeInventoryProjection = AtomicReference<ActiveInventoryProjection?>(null)
     /**
      * Set when a write may have reached the server but no definitive response
      * came back. A close must never overtake that unknown write: if it did,
@@ -1308,6 +1342,7 @@ class SyncEngine(
 
     fun requestSync() {
         val sessionLease = captureSessionWorkLease() ?: return
+        scheduleDurableSync()
         val workerLease = syncRequests.request(sessionLease.cache.generation) ?: return
         launchSessionWorker(
             lease = sessionLease,
@@ -1324,6 +1359,7 @@ class SyncEngine(
      */
     fun requestKitchenSync() {
         val sessionLease = captureSessionWorkLease() ?: return
+        scheduleDurableSync()
         val workerLease = kitchenSyncRequests.request(sessionLease.cache.generation) ?: return
         launchSessionWorker(
             lease = sessionLease,
@@ -1339,7 +1375,17 @@ class SyncEngine(
      * older fire-and-forget request that this pass is about to satisfy.
      */
     suspend fun sync() {
+        syncInternal(scheduleForProcessDeath = true)
+    }
+
+    /** WorkManager already owns the durable request; do not enqueue itself again. */
+    internal suspend fun syncFromBackgroundWorker() {
+        syncInternal(scheduleForProcessDeath = false)
+    }
+
+    private suspend fun syncInternal(scheduleForProcessDeath: Boolean) {
         val sessionLease = captureSessionWorkLease() ?: return
+        if (scheduleForProcessDeath) scheduleDurableSync()
         sessionWorkGuard.withLease(sessionLease) {
             mutex.withLock {
                 ensureCurrentSessionWork(sessionLease)
@@ -1567,9 +1613,183 @@ class SyncEngine(
                 body = PosRefundHandoffBody(
                     shiftId = serverShiftId,
                     expectedAmountMinor = row.amountMinor,
+                    readyToHandover = true,
                 ),
                 key = actionId,
                 provenance = outboxProvenanceHeaders(System.currentTimeMillis(), actionId),
+            )
+            applyPosRefundServerResult(result, row, scopeLease)
+            result
+        }
+    }
+
+    /**
+     * Creates the durable server-side provider-payout start before staff leave
+     * the ERP for a card/UPI/QR/wallet application. This must stay online and
+     * response-backed: a locally optimistic start can cause a duplicate payout
+     * after process death or another employee taking over the task.
+     */
+    suspend fun beginPosRefundProviderPayout(localId: String): PosRefundRequestResult = mutex.withLock {
+        withResourceSerialisation("orders") {
+            val scopeLease = cacheIsolation.currentLease()
+                ?: error("The active account scope is unavailable. Reopen the workspace before using the provider.")
+            when (val safety = outboxSafety.canSync()) {
+                is OutboxGateResult.Blocked -> error(safety.message)
+                OutboxGateResult.Allowed -> Unit
+            }
+            val row = requireNotNull(db.refundDao().refundById(localId)) {
+                "This refund task is no longer stored on this tablet. Refresh before using the provider."
+            }
+            require(row.state == RefundState.ACCEPTED_PROVIDER_DUE) {
+                if (row.state == RefundState.PROVIDER_PAYOUT_IN_PROGRESS) {
+                    "The provider payout is already open. Check the provider; do not start it twice."
+                } else {
+                    "This refund is not ready to begin a provider payout. Refresh its server status first."
+                }
+            }
+            val serverRequestId = requireNotNull(row.serverRequestId) {
+                "The accepted refund is missing its server reference. Refresh before using the provider."
+            }
+            val serverShiftId = requireExactRefundShift(row, includeClosingIntent = false)
+            val actionId = "pos-refund-provider-start:${row.localId}"
+            val result = refundsApi.beginProviderPayout(
+                id = serverRequestId,
+                body = PosRefundProviderPayoutStartBody(
+                    shiftId = serverShiftId,
+                    expectedAmountMinor = row.amountMinor,
+                    readyToStartProviderPayout = true,
+                ),
+                key = actionId,
+                provenance = outboxProvenanceHeaders(System.currentTimeMillis(), actionId),
+            )
+            applyPosRefundServerResult(result, row, scopeLease)
+            result
+        }
+    }
+
+    suspend fun resolvePosRefundCashHandoff(
+        localId: String,
+        reason: String,
+    ): PosRefundRequestResult = mutex.withLock {
+        withResourceSerialisation("orders") {
+            require(DCompanyApp.instance.shiftCache.profile.value?.protectedAccess == true) {
+                "Only a protected owner may resolve a started cash handover."
+            }
+            val scopeLease = cacheIsolation.currentLease()
+                ?: error("The active account scope is unavailable. Reopen Refunds before recovery.")
+            val row = requireNotNull(db.refundDao().refundById(localId)) {
+                "This refund task is no longer stored on this tablet. Refresh before recovery."
+            }
+            require(row.state == RefundState.CASH_HANDOFF_IN_PROGRESS) {
+                "Only a started cash handover can use drawer-unchanged recovery. Refresh the task."
+            }
+            val serverRequestId = requireNotNull(row.serverRequestId) {
+                "This cash handover is missing its server reference. Refresh before recovery."
+            }
+            val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+            val resolvedAt = System.currentTimeMillis()
+            val actionId = "pos-refund-cash-resolve:${row.localId}"
+            val result = refundsApi.resolveCashHandoff(
+                id = serverRequestId,
+                body = PosRefundCashHandoffResolutionBody(
+                    shiftId = serverShiftId,
+                    expectedAmountMinor = row.amountMinor,
+                    cashNotHandedOver = true,
+                    drawerUnchanged = true,
+                    reason = reason.trim().take(500),
+                    resolvedAt = Instant.ofEpochMilli(resolvedAt).toString(),
+                ),
+                key = actionId,
+                provenance = outboxProvenanceHeaders(resolvedAt, actionId),
+            )
+            applyPosRefundServerResult(result, row, scopeLease)
+            result
+        }
+    }
+
+    suspend fun withdrawPosRefundProvider(
+        localId: String,
+        reason: String,
+    ): PosRefundRequestResult = mutex.withLock {
+        withResourceSerialisation("orders") {
+            require(DCompanyApp.instance.shiftCache.profile.value?.protectedAccess == true) {
+                "Only a protected owner may withdraw an accepted provider refund."
+            }
+            val scopeLease = cacheIsolation.currentLease()
+                ?: error("The active account scope is unavailable. Reopen Refunds before recovery.")
+            val row = requireNotNull(db.refundDao().refundById(localId)) {
+                "This refund task is no longer stored on this tablet. Refresh before recovery."
+            }
+            require(row.state == RefundState.ACCEPTED_PROVIDER_DUE) {
+                "Only a provider refund that has not started can be withdrawn. Refresh the task."
+            }
+            val serverRequestId = requireNotNull(row.serverRequestId) {
+                "This provider refund is missing its server reference. Refresh before recovery."
+            }
+            val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+            val withdrawnAt = System.currentTimeMillis()
+            val actionId = "pos-refund-provider-withdraw:${row.localId}"
+            val result = refundsApi.withdrawProvider(
+                id = serverRequestId,
+                body = PosRefundProviderWithdrawalBody(
+                    shiftId = serverShiftId,
+                    expectedAmountMinor = row.amountMinor,
+                    providerNotCompleted = true,
+                    reason = reason.trim().take(500),
+                    withdrawnAt = Instant.ofEpochMilli(withdrawnAt).toString(),
+                ),
+                key = actionId,
+                provenance = outboxProvenanceHeaders(withdrawnAt, actionId),
+            )
+            applyPosRefundServerResult(result, row, scopeLease)
+            result
+        }
+    }
+
+    suspend fun resolvePosRefundProviderPayout(
+        localId: String,
+        providerStatus: String,
+        verificationReference: String,
+        reason: String,
+    ): PosRefundRequestResult = mutex.withLock {
+        withResourceSerialisation("orders") {
+            require(DCompanyApp.instance.shiftCache.profile.value?.protectedAccess == true) {
+                "Only a protected owner may resolve a started provider payout."
+            }
+            require(providerStatus in setOf(
+                "no_matching_transaction", "provider_declined", "provider_reversed",
+            )) { "Choose the verified provider outcome." }
+            require(verificationReference.trim().length >= 3) {
+                "Enter the provider search, case, reversal, or transaction reference."
+            }
+            require(reason.trim().length >= 3) { "Enter why no provider payout completed." }
+            val scopeLease = cacheIsolation.currentLease()
+                ?: error("The active account scope is unavailable. Reopen Refunds before recovery.")
+            val row = requireNotNull(db.refundDao().refundById(localId)) {
+                "This refund task is no longer stored on this tablet. Refresh before recovery."
+            }
+            require(row.state == RefundState.PROVIDER_PAYOUT_IN_PROGRESS) {
+                "Only a started provider payout can use verified no-payout recovery. Refresh the task."
+            }
+            val serverRequestId = requireNotNull(row.serverRequestId) {
+                "This provider payout is missing its server reference. Refresh before recovery."
+            }
+            val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+            val checkedAt = System.currentTimeMillis()
+            val actionId = "pos-refund-provider-resolve:${row.localId}"
+            val result = refundsApi.resolveProviderPayout(
+                id = serverRequestId,
+                body = PosRefundProviderPayoutResolutionBody(
+                    shiftId = serverShiftId,
+                    expectedAmountMinor = row.amountMinor,
+                    providerNotCompleted = true,
+                    providerStatus = providerStatus,
+                    verificationReference = verificationReference.trim().take(200),
+                    providerCheckedAt = Instant.ofEpochMilli(checkedAt).toString(),
+                    reason = reason.trim().take(500),
+                ),
+                key = actionId,
+                provenance = outboxProvenanceHeaders(checkedAt, actionId),
             )
             applyPosRefundServerResult(result, row, scopeLease)
             result
@@ -1718,6 +1938,9 @@ class SyncEngine(
                 sessionAwareLastError = null
             }
             passHadAmbiguousFailure = false
+            var refreshPostedRefundEffects =
+                db.syncMetaDao().get(POS_REFUND_EFFECTS_DIRTY_SYNC_KEY) != null
+            val refundEffectsRefreshGate = PosRefundEffectsRefreshGate()
             // Shifts before orders: an order captured against a shift that
             // hasn't synced yet has nothing to attach to until the shift's
             // open leg resolves (see pushPendingOrders).
@@ -1746,6 +1969,21 @@ class SyncEngine(
                 // section as manual/realtime GETs.
                 pushHeldOrderPayments()
                 pushRefunds()
+                refreshPostedRefundEffects =
+                    db.syncMetaDao().get(POS_REFUND_EFFECTS_DIRTY_SYNC_KEY) != null
+                if (refreshPostedRefundEffects && resourceAccess.canPull("orders")) {
+                    // applyPosRefundServerResult already removed the stale
+                    // refundable row. Repopulate only from the server's new
+                    // paid/refunded/reserved balance before another request
+                    // can be selected on this tablet.
+                    val result = refreshAlreadyLocked("orders", sessionLease.cache)
+                    refundEffectsRefreshGate.recordRequired("orders", result)
+                } else if (refreshPostedRefundEffects) {
+                    refundEffectsRefreshGate.recordRequired(
+                        "orders",
+                        ResourceRefreshResult.Skipped("orders"),
+                    )
+                }
             }
             // These outboxes also update the same Room projections their
             // screen/realtime pulls replace. Share the resource locks so an
@@ -1777,7 +2015,18 @@ class SyncEngine(
                     )
                 }
             }
-            withSessionResourceSerialisation(sessionLease, "customers") { pushCustomers() }
+            withSessionResourceSerialisation(sessionLease, "customers") {
+                pushCustomers()
+                if (refreshPostedRefundEffects && resourceAccess.canPull("customers")) {
+                    val result = refreshAlreadyLocked("customers", sessionLease.cache)
+                    refundEffectsRefreshGate.recordRequired("customers", result)
+                } else if (refreshPostedRefundEffects) {
+                    refundEffectsRefreshGate.recordRequired(
+                        "customers",
+                        ResourceRefreshResult.Skipped("customers"),
+                    )
+                }
+            }
             withSessionResourceSerialisation(sessionLease, "staff") { pushStaff() }
             // Ingredients/suppliers before GRN/adjustments: both depend on an
             // already-synced ingredient/supplier server id (the GRN/adjust
@@ -1805,10 +2054,10 @@ class SyncEngine(
                 pushExpenses()
                 pushAssets()
                 pushCapitalEntries()
-                if (hadFinanceWork && resourceAccess.canPull("finance")) {
+                if ((hadFinanceWork || refreshPostedRefundEffects) && resourceAccess.canPull("finance")) {
                     // Keep the pass alive if only the follow-up read fails;
                     // every confirmed POST remains replay-safe in its outbox.
-                    runAndRecordRefreshAlreadyLocked(
+                    val result = runAndRecordRefreshAlreadyLocked(
                         key = "finance",
                         pull = {
                             val missingReferences = pullFinanceSnapshots()
@@ -1817,6 +2066,14 @@ class SyncEngine(
                             }
                         },
                         feedbackLease = sessionLease.cache,
+                    )
+                    if (refreshPostedRefundEffects) {
+                        refundEffectsRefreshGate.recordRequired("finance", result)
+                    }
+                } else if (refreshPostedRefundEffects) {
+                    refundEffectsRefreshGate.recordRequired(
+                        "finance",
+                        ResourceRefreshResult.Skipped("finance"),
                     )
                 }
             }
@@ -1871,9 +2128,23 @@ class SyncEngine(
             // close queued for the next pass so idempotent recovery happens
             // before the till can close.
             withSessionResourceSerialisation(sessionLease, "shifts") {
+                if (refreshPostedRefundEffects && resourceAccess.canPull("shifts")) {
+                    val result = refreshAlreadyLocked("shifts", sessionLease.cache)
+                    refundEffectsRefreshGate.recordRequired("shifts", result)
+                } else if (refreshPostedRefundEffects) {
+                    refundEffectsRefreshGate.recordRequired(
+                        "shifts",
+                        ResourceRefreshResult.Skipped("shifts"),
+                    )
+                }
                 val closeAttempted = if (!passHadAmbiguousFailure) pushShiftCloses() else false
                 if (closeAttempted && resourceAccess.canPull("shifts")) {
                     pullOpenShiftBestEffort()
+                }
+            }
+            if (refreshPostedRefundEffects) {
+                commitToCurrentScope(sessionLease.cache) {
+                    refundEffectsRefreshGate.clearDirtyMarkerIfReady(db.syncMetaDao())
                 }
             }
         } catch (e: ApiException) {
@@ -2803,6 +3074,39 @@ class SyncEngine(
             )
         ) return
 
+        val cashFinalizations = mutableListOf<LocalRefundEntity>()
+        for (row in dao.pushableCashFinalizations()) {
+            if (refundShiftCanResolve(row)) cashFinalizations += row
+        }
+        if (!drainOutbox(
+                rows = cashFinalizations,
+                markRejected = { row, msg -> dao.markCashFinalizationRejected(row.localId, msg) },
+                push = ::pushRefundCashFinalizationOne,
+            )
+        ) return
+
+        val providerCompletions = mutableListOf<LocalRefundEntity>()
+        for (row in dao.pushableProviderCompletions()) {
+            if (refundShiftCanResolve(row)) providerCompletions += row
+        }
+        if (!drainOutbox(
+                rows = providerCompletions,
+                markRejected = { row, msg -> dao.markProviderCompletionRejected(row.localId, msg) },
+                push = ::pushRefundProviderCompletionOne,
+            )
+        ) return
+
+        val providerFinalizations = mutableListOf<LocalRefundEntity>()
+        for (row in dao.pushableProviderFinalizations()) {
+            if (refundShiftCanResolve(row)) providerFinalizations += row
+        }
+        if (!drainOutbox(
+                rows = providerFinalizations,
+                markRejected = { row, msg -> dao.markProviderFinalizationRejected(row.localId, msg) },
+                push = ::pushRefundProviderFinalizationOne,
+            )
+        ) return
+
         val withdrawals = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableWithdrawals()) {
             if (refundShiftCanResolve(row)) withdrawals += row
@@ -2850,10 +3154,10 @@ class SyncEngine(
                 expectedRefundableMinor = expectedRefundable,
                 mode = mode,
                 clientActionId = clientActionId,
-                externalReference = row.externalReference,
-                providerSettledAt = row.providerSettledAtMillis?.let {
-                    Instant.ofEpochMilli(it).toString()
-                },
+                // Server acceptance must precede any cash/provider movement.
+                // Completion evidence belongs to the later staged endpoint.
+                externalReference = null,
+                providerSettledAt = null,
                 note = row.note,
             ),
             key = "pr:${row.localId}",
@@ -2879,10 +3183,83 @@ class SyncEngine(
             body = PosRefundCashSettlementBody(
                 shiftId = serverShiftId,
                 expectedAmountMinor = row.amountMinor,
+                cashHandedOver = true,
                 settledAt = Instant.ofEpochMilli(settledAt).toString(),
             ),
             key = actionId,
             provenance = outboxProvenanceHeaders(settledAt, actionId),
+        )
+        applyPosRefundServerResult(result, row, scopeLease)
+    }
+
+    private suspend fun pushRefundCashFinalizationOne(row: LocalRefundEntity) {
+        val scopeLease = cacheIsolation.currentLease()
+            ?: error("The active account scope changed before cash refund accounting could finish.")
+        val requestId = requireNotNull(row.serverRequestId) {
+            "Cash refund accounting is missing its server request. Refresh; do not pay the customer again."
+        }
+        val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+        val actionId = "pos-refund-cash-finalize:${row.localId}"
+        val occurredAt = row.settledAtMillis ?: row.createdAtMillis
+        val result = refundsApi.finalizeCash(
+            id = requestId,
+            body = PosRefundAccountingFinalizationBody(
+                shiftId = serverShiftId,
+                expectedAmountMinor = row.amountMinor,
+            ),
+            key = actionId,
+            provenance = outboxProvenanceHeaders(occurredAt, actionId),
+        )
+        applyPosRefundServerResult(result, row, scopeLease)
+    }
+
+    private suspend fun pushRefundProviderCompletionOne(row: LocalRefundEntity) {
+        val scopeLease = cacheIsolation.currentLease()
+            ?: error("The active account scope changed before this provider completion could be sent.")
+        val requestId = requireNotNull(row.serverRequestId) {
+            "Provider completion is missing its server request. Refresh; do not run the payout again."
+        }
+        val externalReference = row.externalReference?.trim().orEmpty()
+        require(externalReference.isNotEmpty()) {
+            "Provider completion is missing its successful reference. Verify the provider; do not repeat the payout."
+        }
+        val providerSettledAt = requireNotNull(row.providerSettledAtMillis) {
+            "Provider completion time is missing. Ask an owner to reconcile this refund."
+        }
+        val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+        val actionId = "pos-refund-provider-settle:${row.localId}"
+        val result = refundsApi.settleProvider(
+            id = requestId,
+            body = PosRefundProviderSettlementBody(
+                shiftId = serverShiftId,
+                expectedAmountMinor = row.amountMinor,
+                providerCompleted = true,
+                externalReference = externalReference,
+                providerSettledAt = Instant.ofEpochMilli(providerSettledAt).toString(),
+            ),
+            key = actionId,
+            provenance = outboxProvenanceHeaders(providerSettledAt, actionId),
+        )
+        applyPosRefundServerResult(result, row, scopeLease)
+    }
+
+    private suspend fun pushRefundProviderFinalizationOne(row: LocalRefundEntity) {
+        val scopeLease = cacheIsolation.currentLease()
+            ?: error("The active account scope changed before provider accounting could finish.")
+        val requestId = requireNotNull(row.serverRequestId) {
+            "Provider accounting is missing its server request. Refresh; do not run the payout again."
+        }
+        val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
+        val actionId = "pos-refund-provider-finalize:${row.localId}"
+        val occurredAt = row.providerSettledAtMillis ?: row.createdAtMillis
+        val result = refundsApi.finalizeProvider(
+            id = requestId,
+            body = PosRefundAccountingFinalizationBody(
+                shiftId = serverShiftId,
+                expectedAmountMinor = row.amountMinor,
+            ),
+            key = actionId,
+            provenance = outboxProvenanceHeaders(occurredAt, actionId),
         )
         applyPosRefundServerResult(result, row, scopeLease)
     }
@@ -2905,6 +3282,7 @@ class SyncEngine(
             body = PosRefundWithdrawalBody(
                 shiftId = serverShiftId,
                 expectedAmountMinor = row.amountMinor,
+                cashNotHandedOver = true,
                 reason = reason,
                 withdrawnAt = Instant.ofEpochMilli(withdrawnAt).toString(),
             ),
@@ -3002,7 +3380,11 @@ class SyncEngine(
     ) {
         require(result.status in setOf(
             RefundState.ACCEPTED_CASH_DUE,
+            RefundState.ACCEPTED_PROVIDER_DUE,
             RefundState.CASH_HANDOFF_IN_PROGRESS,
+            RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING,
+            RefundState.PROVIDER_PAYOUT_IN_PROGRESS,
+            RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING,
         )) { "Only unresolved server refund work may be adopted." }
         val terminalId = DCompanyApp.instance.terminalStore.terminalId()
         val branchId = DCompanyApp.instance.shiftCache.profile.value?.branchId
@@ -3030,11 +3412,52 @@ class SyncEngine(
             serverRequestId = result.id,
             serverRefundId = result.refundId,
             acceptedAtMillis = acceptedAt,
+            acceptedByUserId = result.acceptedBy,
+            acceptedByName = result.acceptedByName,
             cashHandoffStartedAtMillis = result.handoffStartedAt?.let {
                 Instant.parse(it).toEpochMilli()
             },
+            cashHandoffStartedByUserId = result.handoffStartedBy,
+            cashHandoffStartedByName = result.handoffStartedByName,
+            cashHandedOverAtMillis = result.cashHandedOverAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            cashHandedOverRecordedAtMillis = result.cashHandedOverRecordedAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            cashHandedOverByUserId = result.cashHandedOverBy,
+            cashHandedOverByName = result.cashHandedOverByName,
+            providerPayoutStartedAtMillis = result.providerPayoutStartedAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            providerPayoutStartedByUserId = result.providerPayoutStartedBy,
+            providerPayoutStartedByName = result.providerPayoutStartedByName,
+            providerSettledAtMillis = result.providerCompletedAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            providerCompletionRecordedAtMillis = result.providerCompletionRecordedAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            providerCompletedByUserId = result.providerCompletedBy,
+            providerCompletedByName = result.providerCompletedByName,
             settledAtMillis = result.settledAt?.let { Instant.parse(it).toEpochMilli() },
+            settledByUserId = result.settledBy,
+            settledByName = result.settledByName,
+            clientOccurredAtMillis = result.clientOccurredAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            capturedTimeReconciled = result.capturedTimeReconciled,
+            providerEvidenceReconciled = result.providerEvidenceReconciled,
             withdrawalAtMillis = result.withdrawnAt?.let { Instant.parse(it).toEpochMilli() },
+            withdrawnByUserId = result.withdrawnBy,
+            withdrawnByName = result.withdrawnByName,
+            providerVerificationStatus = result.providerVerificationStatus,
+            providerVerificationReference = result.providerVerificationReference,
+            providerVerifiedAtMillis = result.providerVerifiedAt?.let {
+                Instant.parse(it).toEpochMilli()
+            },
+            customerSpendReconciled = result.customerSpendReconciled,
+            loyaltyReconciliationState = result.loyaltyReconciliationState,
             receiptNo = result.receiptNo,
         )
         commitToCurrentScope(scopeLease) {
@@ -3065,52 +3488,133 @@ class SyncEngine(
         }
         val serverState = when (result.status) {
             RefundState.ACCEPTED_CASH_DUE,
+            RefundState.ACCEPTED_PROVIDER_DUE,
             RefundState.CASH_HANDOFF_IN_PROGRESS,
+            RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING,
+            RefundState.PROVIDER_PAYOUT_IN_PROGRESS,
+            RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING,
             RefundState.SETTLED,
             RefundState.WITHDRAWN,
             -> result.status
             else -> error("Unknown server refund state '${result.status}'. Update the app before continuing.")
         }
-        val mergedState = when {
-            serverState == RefundState.SETTLED || serverState == RefundState.WITHDRAWN -> serverState
-            local.state in setOf(
-                RefundState.CASH_SETTLE_PENDING,
-                RefundState.CASH_SETTLE_REJECTED,
-                RefundState.WITHDRAWAL_PENDING,
-                RefundState.WITHDRAWAL_REJECTED,
-            ) -> local.state
-            local.state == RefundState.CASH_HANDOFF_IN_PROGRESS &&
-                serverState == RefundState.ACCEPTED_CASH_DUE -> local.state
-            else -> serverState
-        }
-        val warning = if (
-            serverState == RefundState.SETTLED && result.customerSpendReconciled == false
-        ) {
-            "Refund settled, but this legacy order had no stable customer link. Owner LTV reconciliation is required."
-        } else {
-            null
-        }
+        val mergedState = mergePosRefundState(local.state, serverState)
+        val payoutConflict = serverState == RefundState.WITHDRAWN && (
+            local.payoutConflict || hasPosRefundWithdrawalPayoutConflict(
+                localState = local.state,
+                serverState = serverState,
+                settledAtMillis = local.settledAtMillis,
+                providerSettledAtMillis = local.providerSettledAtMillis,
+                externalReference = local.externalReference,
+            )
+        )
+        val warning = buildList {
+            if (payoutConflict) {
+                add(
+                    "This tablet recorded a completed physical payout, but the server now records " +
+                        "this refund as withdrawn with no payout. Do not pay the customer again or " +
+                        "repeat the provider action. Keep the shift open and ask a protected owner " +
+                        "to reconcile the customer, drawer or provider reference, timestamps, and " +
+                        "audit evidence. Contact support if the evidence cannot be reconciled.",
+                )
+            }
+            if (serverState == RefundState.SETTLED && result.customerSpendReconciled == false) {
+                add("Customer lifetime spend was not reconciled; a protected owner must repair it.")
+            }
+            if (serverState == RefundState.SETTLED && result.loyaltyReconciliationState == "legacy_unknown") {
+                add("Legacy loyalty redemption could not be reconciled automatically; owner review is required.")
+            }
+            if (serverState == RefundState.SETTLED && result.capturedTimeReconciled == false) {
+                add("The recorded payout time still needs owner evidence reconciliation.")
+            }
+            if (serverState == RefundState.SETTLED && result.providerEvidenceReconciled == false) {
+                add("Provider payout evidence still needs owner reconciliation.")
+            }
+        }.takeIf { it.isNotEmpty() }?.joinToString(" ")
+        val terminalResult = serverState in setOf(RefundState.SETTLED, RefundState.WITHDRAWN)
         var changed = 0
         if (!commitToCurrentScope(scopeLease) {
-                changed = db.refundDao().applyServerState(
-                    localId = local.localId,
-                    state = mergedState,
-                    serverRequestId = result.id,
-                    serverRefundId = result.refundId,
-                    serverShiftId = result.shiftId,
-                    branchId = result.branchId,
-                    terminalId = result.terminalId,
-                    settlementMethod = result.settlementMethod,
-                    acceptedAtMillis = Instant.parse(result.acceptedAt).toEpochMilli(),
-                    cashHandoffStartedAtMillis = result.handoffStartedAt?.let {
-                        Instant.parse(it).toEpochMilli()
-                    },
-                    settledAtMillis = result.settledAt?.let { Instant.parse(it).toEpochMilli() },
-                    withdrawalAtMillis = result.withdrawnAt?.let { Instant.parse(it).toEpochMilli() },
-                    externalReference = result.externalReference,
-                    receiptNo = result.receiptNo,
-                    lastError = warning,
-                )
+                db.withTransaction {
+                    changed = db.refundDao().applyServerState(
+                        localId = local.localId,
+                        state = mergedState,
+                        serverRequestId = result.id,
+                        serverRefundId = result.refundId,
+                        serverShiftId = result.shiftId,
+                        branchId = result.branchId,
+                        terminalId = result.terminalId,
+                        settlementMethod = result.settlementMethod,
+                        acceptedAtMillis = Instant.parse(result.acceptedAt).toEpochMilli(),
+                        acceptedByUserId = result.acceptedBy,
+                        acceptedByName = result.acceptedByName,
+                        cashHandoffStartedAtMillis = result.handoffStartedAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        cashHandoffStartedByUserId = result.handoffStartedBy,
+                        cashHandoffStartedByName = result.handoffStartedByName,
+                        cashHandedOverAtMillis = result.cashHandedOverAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        cashHandedOverRecordedAtMillis = result.cashHandedOverRecordedAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        cashHandedOverByUserId = result.cashHandedOverBy,
+                        cashHandedOverByName = result.cashHandedOverByName,
+                        providerPayoutStartedAtMillis = result.providerPayoutStartedAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        providerPayoutStartedByUserId = result.providerPayoutStartedBy,
+                        providerPayoutStartedByName = result.providerPayoutStartedByName,
+                        providerSettledAtMillis = result.providerCompletedAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        providerCompletionRecordedAtMillis = result.providerCompletionRecordedAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        providerCompletedByUserId = result.providerCompletedBy,
+                        providerCompletedByName = result.providerCompletedByName,
+                        settledAtMillis = result.settledAt?.let { Instant.parse(it).toEpochMilli() },
+                        settledByUserId = result.settledBy,
+                        settledByName = result.settledByName,
+                        clientOccurredAtMillis = result.clientOccurredAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        capturedTimeReconciled = result.capturedTimeReconciled,
+                        providerEvidenceReconciled = result.providerEvidenceReconciled,
+                        payoutConflict = payoutConflict,
+                        withdrawalAtMillis = result.withdrawnAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        withdrawnByUserId = result.withdrawnBy,
+                        withdrawnByName = result.withdrawnByName,
+                        providerVerificationStatus = result.providerVerificationStatus,
+                        providerVerificationReference = result.providerVerificationReference,
+                        providerVerifiedAtMillis = result.providerVerifiedAt?.let {
+                            Instant.parse(it).toEpochMilli()
+                        },
+                        customerSpendReconciled = result.customerSpendReconciled,
+                        loyaltyReconciliationState = result.loyaltyReconciliationState,
+                        externalReference = result.externalReference,
+                        receiptNo = result.receiptNo,
+                        lastError = warning,
+                    )
+                    if (changed == 1 && terminalResult) {
+                        db.refundDao().deleteOrderCacheById(local.orderId)
+                        // This marker is written in the same transaction as
+                        // the terminal refund. It therefore survives process
+                        // death until every authorised affected projection
+                        // has been refreshed successfully.
+                        db.syncMetaDao().put(
+                            SyncMetaEntity(
+                                POS_REFUND_EFFECTS_DIRTY_SYNC_KEY,
+                                System.currentTimeMillis(),
+                            ),
+                        )
+                        if (serverState == RefundState.SETTLED) {
+                            db.reportSnapshotDao().invalidateAll()
+                        }
+                    }
+                }
             }
         ) return
         check(changed == 1) {
@@ -3124,7 +3628,7 @@ class SyncEngine(
      * Refunds, an "orders" realtime event, or this device's own refund
      * being accepted (see pushRefundOne) triggers it, not every sync().
      *
-     * Passing status=paid explicitly (rather than the unfiltered call the
+     * Passing the paid/refunded statuses explicitly (rather than the unfiltered call the
      * pre-offline screen made) matters for two reasons: it skips the
      * backend's default same-day date window, so an order paid yesterday is
      * still refundable today, and it's what makes the backend compute and
@@ -3134,7 +3638,7 @@ class SyncEngine(
      */
     private suspend fun pullRefundableOrders() {
         cacheIsolation.fetchAndCommitScoped(
-            fetch = { refundsApi.orders(status = "paid") },
+            fetch = { refundsApi.orders(status = listOf("paid", "refunded")) },
             store = { orders ->
                 db.withTransaction {
                     db.refundDao().replaceOrderCache(
@@ -3147,6 +3651,8 @@ class SyncEngine(
                                 totalMinor = it.totalMinor,
                                 paidMinor = it.paidMinor,
                                 refundableMinor = it.refundableMinor,
+                                pendingRefundMinor = it.pendingRefundMinor,
+                                paymentMethodsCsv = it.paymentMethods.joinToString(","),
                             )
                         },
                     )
@@ -3493,7 +3999,17 @@ class SyncEngine(
                     expectedVersion = row.version,
                 )
             },
-            push = ::pushStaffOne,
+            push = { row ->
+                try {
+                    pushStaffOne(row)
+                } catch (failure: ApiException) {
+                    if (!isStaffWriteAuthorityRevoked(failure)) throw failure
+                    val discarded = dao.deleteIfVersion(row.localId, row.version)
+                    if (discarded > 0) {
+                        sessionAwareLastError = STAFF_AUTHORITY_REVOKED_NOTICE
+                    }
+                }
+            },
         )
     }
 
@@ -3685,24 +4201,49 @@ class SyncEngine(
         if (applied > 0) dao.deleteSyncedIngredients()
     }
 
-    private suspend fun pullIngredients() {
+    private suspend fun pullIngredients(branchId: String? = inventoryProjectionBranchId()) {
         cacheIsolation.fetchAndCommitScoped(
-            fetch = { inventoryApi.ingredients() },
-            store = { rows ->
+            fetch = {
+                coroutineScope {
+                    val ingredients = async { inventoryApi.ingredients(branchId) }
+                    val valuation = async { inventoryApi.valuation(branchId) }
+                    ingredients.await() to valuation.await()
+                }
+            },
+            store = { (rows, valuation) ->
+                check(valuation.branchId == branchId) {
+                    "Inventory valuation returned for a different branch. Nothing was cached."
+                }
+                val values = valuation.lines.associateBy { it.ingredientId }
                 db.withTransaction {
                     db.inventoryDao().replaceIngredientCache(
                         rows.map {
+                            val exact = values[it.id]
                             IngredientCacheEntity(
                                 id = it.id, sku = it.sku, name = it.name, baseUnit = it.baseUnit,
                                 currentQty = it.currentQty, reorderThreshold = it.reorderThreshold,
                                 reorderQty = it.reorderQty, avgCostMinor = it.avgCostMinor,
+                                valuationMinor = exact?.valuationMinor,
+                                projectionBranchId = valuation.branchId ?: branchId,
                             )
                         },
                     )
-                    db.syncMetaDao().put(SyncMetaEntity("ingredients", System.currentTimeMillis()))
+                    db.syncMetaDao().put(
+                        SyncMetaEntity(ingredientProjectionKey(branchId), System.currentTimeMillis()),
+                    )
                 }
             },
         )
+    }
+
+    private fun ingredientProjectionKey(branchId: String?): String =
+        "ingredients:${branchId ?: "all"}"
+
+    private fun inventoryProjectionBranchId(): String? {
+        val lease = cacheIsolation.currentLease() ?: return null
+        lease.scope.branchId?.let { return it }
+        val selected = activeInventoryProjection.get()
+        return selected?.takeIf { it.lease == lease }?.branchId
     }
 
     // ------------------------------------------------------------ suppliers
@@ -3791,7 +4332,8 @@ class SyncEngine(
     }
 
     private suspend fun pullInventoryOnDemand() {
-        pullIngredients()
+        val projectionBranchId = inventoryProjectionBranchId()
+        pullIngredients(projectionBranchId)
         pullSuppliers()
         // Batch rows are demand-scoped. Refresh the active detail projection
         // on realtime/manual inventory invalidation instead of leaving a
@@ -3799,9 +4341,39 @@ class SyncEngine(
         val currentLease = cacheIsolation.currentLease()
         val target = activeBatchTarget.get()
         if (target != null && target.lease == currentLease) {
-            pullBatchesForAlreadyLocked(target.ingredientId)
+            pullBatchesForAlreadyLocked(target.ingredientId, target.branchId)
         } else if (target != null) {
             activeBatchTarget.compareAndSet(target, null)
+        }
+    }
+
+    /**
+     * Switch the company-level Inventory projection without ever presenting a
+     * company aggregate as one branch's balance. Branch-bound accounts are
+     * pinned by their cache lease and cannot widen this selection.
+     */
+    suspend fun pullInventoryForBranch(branchId: String): ResourceRefreshResult {
+        val requestedBranch = branchId.trim()
+        if (requestedBranch.isEmpty()) return ResourceRefreshResult.Skipped("inventory")
+        return withResourceSerialisation("inventory") {
+            val lease = cacheIsolation.currentLease()
+                ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("inventory")
+            if (!currentResourceAccess().canPull("inventory")) {
+                return@withResourceSerialisation ResourceRefreshResult.Skipped("inventory")
+            }
+            val fixedBranch = lease.scope.branchId
+            if (fixedBranch != null && fixedBranch != requestedBranch) {
+                return@withResourceSerialisation ResourceRefreshResult.Failed(
+                    "inventory",
+                    "This terminal is assigned to another branch. Refresh the terminal assignment and try again.",
+                )
+            }
+            activeInventoryProjection.set(ActiveInventoryProjection(requestedBranch, lease))
+            runAndRecordRefreshAlreadyLocked(
+                key = "inventory",
+                pull = { pullInventoryOnDemand() },
+                feedbackLease = lease,
+            )
         }
     }
 
@@ -3811,7 +4383,10 @@ class SyncEngine(
      * is keyed by which ingredient a screen currently has open). Called
      * directly by InventoryViewModel.select().
      */
-    suspend fun pullBatchesFor(ingredientId: String): ResourceRefreshResult {
+    suspend fun pullBatchesFor(
+        ingredientId: String,
+        branchId: String? = inventoryProjectionBranchId(),
+    ): ResourceRefreshResult {
         val requestedId = ingredientId.trim()
         if (requestedId.isEmpty()) return ResourceRefreshResult.Skipped("inventory")
         return withResourceSerialisation("inventory") {
@@ -3823,10 +4398,10 @@ class SyncEngine(
             }
             val lease = feedbackLease
                 ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("inventory")
-            activeBatchTarget.set(ActiveBatchTarget(requestedId, lease))
+            activeBatchTarget.set(ActiveBatchTarget(requestedId, branchId, lease))
             runAndRecordRefreshAlreadyLocked(
                 key = "inventory",
-                pull = { pullBatchesForAlreadyLocked(requestedId) },
+                pull = { pullBatchesForAlreadyLocked(requestedId, branchId) },
                 feedbackLease = feedbackLease,
             )
         }
@@ -3837,24 +4412,39 @@ class SyncEngine(
      * after that detail closes. The expected id prevents an older ViewModel's
      * onCleared callback from erasing a newer screen's selection.
      */
-    fun clearActiveBatchTarget(expectedIngredientId: String?) {
+    fun clearActiveBatchTarget(expectedIngredientId: String?, expectedBranchId: String?) {
+        if (expectedIngredientId == null) return
         while (true) {
             val current = activeBatchTarget.get() ?: return
-            if (expectedIngredientId != null && current.ingredientId != expectedIngredientId) return
+            if (
+                current.ingredientId != expectedIngredientId ||
+                current.branchId != expectedBranchId
+            ) return
             if (activeBatchTarget.compareAndSet(current, null)) return
         }
     }
 
     /** Canonical inventory-resource lock is already held. */
-    private suspend fun pullBatchesForAlreadyLocked(ingredientId: String) {
+    private suspend fun pullBatchesForAlreadyLocked(
+        ingredientId: String,
+        branchId: String? = inventoryProjectionBranchId(),
+    ) {
         cacheIsolation.fetchAndCommitScoped(
-            fetch = { inventoryApi.batches(ingredientId) },
+            fetch = { inventoryApi.batches(ingredientId, branchId) },
             store = { rows ->
+                check(rows.all { it.ingredientId == ingredientId }) {
+                    "Inventory batches returned for a different ingredient. Nothing was cached."
+                }
+                check(branchId == null || rows.all { it.branchId == branchId }) {
+                    "Inventory batches returned for a different branch. Nothing was cached."
+                }
                 db.inventoryDao().replaceBatchesFor(
                     ingredientId,
+                    branchId,
                     rows.map {
                         BatchCacheEntity(
-                            id = it.id, ingredientId = it.ingredientId, receivedAt = it.receivedAt,
+                            id = it.id, ingredientId = it.ingredientId, branchId = it.branchId,
+                            receivedAt = it.receivedAt,
                             expiresAt = it.expiresAt, qtyOnHand = it.qtyOnHand,
                             costPerUnitMinor = it.costPerUnitMinor, lotCode = it.lotCode,
                         )
@@ -3890,6 +4480,8 @@ class SyncEngine(
                 branchId = grn.branchId,
                 supplierId = grn.supplierId,
                 supplierInvoiceNo = grn.supplierInvoiceNo,
+                supplierInvoiceAmountMinor = grn.supplierInvoiceAmountMinor,
+                receivedAt = grn.receivedAt,
                 notes = grn.notes,
                 lines = lines.map {
                     GrnLineBody(
@@ -4126,8 +4718,31 @@ class SyncEngine(
         return coroutineScope {
             val plDeferred = async { financeApi.profitAndLoss() }
             val metricsDeferred = async { financeApi.metrics() }
-            val distributableDeferred = async { financeApi.distributable() }
-            val partnersDeferred = async { financeApi.partners() }
+            // Partner ownership, capital and distribution capacity are
+            // company-wide facts with no safe branch attribution. A
+            // branch-bound manager still receives branch P&L/metrics but must
+            // never fetch or cache another branch's partner information.
+            val distributableDeferred = if (cacheScope.companyWidePartnerFinance) {
+                async { financeApi.distributable() }
+            } else {
+                null
+            }
+            val partnersDeferred = if (cacheScope.companyWidePartnerFinance) {
+                async { financeApi.partners() }
+            } else {
+                null
+            }
+            val costingDeferred = async {
+                optionalFinanceReference("inventory costing status") {
+                    financeApi.costingCoverage().also {
+                        verifyBranchScopedPayload(
+                            lease.scope.branchId,
+                            it.branchId,
+                            "inventory costing status",
+                        )
+                    }
+                }
+            }
             val branchesDeferred = async {
                 optionalFinanceReference("branches") { financeApi.branches() }
             }
@@ -4137,8 +4752,9 @@ class SyncEngine(
 
             val freshPl = plDeferred.await()
             val freshMetrics = metricsDeferred.await()
-            val freshDistributable = distributableDeferred.await()
-            val freshPartners = partnersDeferred.await()
+            val freshDistributable = distributableDeferred?.await()
+            val freshPartners = partnersDeferred?.await()
+            val freshCosting = costingDeferred.await()
             val freshBranches = branchesDeferred.await()
             val freshCategories = categoriesDeferred.await()
             val fetchedAt = System.currentTimeMillis()
@@ -4153,6 +4769,15 @@ class SyncEngine(
                             fetchedAt,
                         ),
                     )
+                    freshCosting.value?.let {
+                        snapshots.put(
+                            ReportSnapshotEntity(
+                                cacheScope.key(FinanceSnapshotKeys.COSTING),
+                                ApiClient.json.encodeToString(it),
+                                fetchedAt,
+                            ),
+                        )
+                    }
                     snapshots.put(
                         ReportSnapshotEntity(
                             cacheScope.key(FinanceSnapshotKeys.METRICS),
@@ -4160,20 +4785,24 @@ class SyncEngine(
                             fetchedAt,
                         ),
                     )
-                    snapshots.put(
-                        ReportSnapshotEntity(
-                            cacheScope.key(FinanceSnapshotKeys.DISTRIBUTABLE),
-                            ApiClient.json.encodeToString(freshDistributable),
-                            fetchedAt,
-                        ),
-                    )
-                    snapshots.put(
-                        ReportSnapshotEntity(
-                            cacheScope.key(FinanceSnapshotKeys.PARTNERS),
-                            ApiClient.json.encodeToString(freshPartners),
-                            fetchedAt,
-                        ),
-                    )
+                    freshDistributable?.let {
+                        snapshots.put(
+                            ReportSnapshotEntity(
+                                cacheScope.key(FinanceSnapshotKeys.DISTRIBUTABLE),
+                                ApiClient.json.encodeToString(it),
+                                fetchedAt,
+                            ),
+                        )
+                    }
+                    freshPartners?.let {
+                        snapshots.put(
+                            ReportSnapshotEntity(
+                                cacheScope.key(FinanceSnapshotKeys.PARTNERS),
+                                ApiClient.json.encodeToString(it),
+                                fetchedAt,
+                            ),
+                        )
+                    }
                     freshBranches.value?.let {
                         snapshots.put(
                             ReportSnapshotEntity(
@@ -4197,6 +4826,7 @@ class SyncEngine(
             return@coroutineScope listOfNotNull(
                 "branches".takeIf { freshBranches.failure != null },
                 "expense categories".takeIf { freshCategories.failure != null },
+                "inventory costing status".takeIf { freshCosting.failure != null },
             )
         }
     }
@@ -5562,6 +6192,7 @@ class SyncEngine(
                     rows.map {
                         BranchCacheEntity(
                             id = it.id, name = it.name, code = it.code, address = it.address,
+                            invoiceSeriesCode = it.invoiceSeriesCode,
                             timezone = it.timezone, opensAt = it.opensAt, closesAt = it.closesAt,
                             stateCode = it.stateCode, fssaiLicenseNo = it.fssaiLicenseNo,
                             tradeLicenseNo = it.tradeLicenseNo, branchGstin = it.branchGstin,
@@ -5618,17 +6249,35 @@ class SyncEngine(
      * retry could safely collide against (see SettingsApi's class doc). */
     private suspend fun pushBranches() {
         val dao = db.settingsDao()
+        val rows = dao.pushableBranches()
+        val ready = rows.filter { row ->
+            val series = resolveQueuedInvoiceSeries(row.invoiceSeriesCode, row.code)
+            if (series == null) {
+                dao.markBranchRejected(
+                    row.localId,
+                    "This branch was queued by an older app without a valid invoice series. " +
+                        "Discard it and add it again with a unique two-character series.",
+                )
+                false
+            } else {
+                true
+            }
+        }
         drainOutbox(
-            rows = dao.pushableBranches(),
+            rows = ready,
             markRejected = { row, msg -> dao.markBranchRejected(row.localId, msg) },
             push = ::pushBranchOne,
         )
     }
 
     private suspend fun pushBranchOne(row: LocalBranchEntity) {
+        val invoiceSeries = checkNotNull(
+            resolveQueuedInvoiceSeries(row.invoiceSeriesCode, row.code),
+        ) { "Queued branch has no valid invoice series." }
         settingsApi.createBranch(
             BranchWriteBody(
                 name = row.name, code = row.code, address = row.address, timezone = row.timezone,
+                invoiceSeriesCode = invoiceSeries,
                 opensAt = row.opensAt, closesAt = row.closesAt, stateCode = row.stateCode,
                 fssaiLicenseNo = row.fssaiLicenseNo, tradeLicenseNo = row.tradeLicenseNo,
                 branchGstin = row.branchGstin,

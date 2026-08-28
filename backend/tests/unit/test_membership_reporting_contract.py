@@ -20,6 +20,7 @@ from app.services.reports.aggregator import (
 
 COMPANY_ID = UUID("11111111-1111-1111-1111-111111111111")
 USER_ID = UUID("22222222-2222-2222-2222-222222222222")
+BRANCH_ID = UUID("33333333-3333-3333-3333-333333333333")
 DAY = date(2026, 8, 25)
 
 
@@ -27,7 +28,7 @@ def _tenant() -> TenantContext:
     return TenantContext(
         user_id=USER_ID,
         company_id=COMPANY_ID,
-        branch_id=None,
+        branch_id=BRANCH_ID,
         terminal_id=None,
         roles=("owner",),
         protected_access=True,
@@ -101,8 +102,8 @@ async def test_analytics_exposes_membership_as_a_named_revenue_stream(monkeypatc
     monkeypatch.setattr(analytics_router, "company_timezone", timezone)
     monkeypatch.setattr(analytics_router, "ReportsAggregator", _Aggregator)
     session = _Session(
-        _Result(rows=[]),  # inventory value rows
-        _Result(scalar=0),  # low-stock count
+        _Result(rows=[]),  # remaining FIFO batch totals
+        _Result(rows=[]),  # ingredient reorder thresholds
         _Result(scalar=0),  # active gaming sessions
     )
 
@@ -183,9 +184,10 @@ async def test_withdrawn_cash_refund_restores_active_member_kpi(monkeypatch) -> 
             ]
         ),
         _Result(scalar=0),  # marketing spend
-        _Result(scalar=0),  # new customers
-        _Result(one=(1, 199_900)),  # all-time customer spend/LTV
-    )
+            _Result(scalar=0),  # new customers
+            _Result(one=(1, 199_900)),  # all-time customer spend/LTV
+            _Result(scalar=0),  # branch customer refunds
+        )
 
     metrics = await finance_router.business_metrics(
         session,

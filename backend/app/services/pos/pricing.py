@@ -158,6 +158,7 @@ class ResolvedLineCustomization:
 class PricedLine:
     menu_item_id: UUID
     name: str
+    item_type: str
     sku: str
     hsn_or_sac: str
     qty: int
@@ -648,6 +649,7 @@ class OrderPricingService:
                 PricedLine(
                     menu_item_id=item.id,
                     name=item.name,
+                    item_type=item.type,
                     sku=item.sku,
                     hsn_or_sac=item.hsn_code or "",
                     qty=lr.qty,
@@ -854,14 +856,40 @@ class InvoiceNumberService:
     async def allocate(
         self,
         *,
+        company_id: UUID,
         branch_id: UUID,
-        branch_code: str,
         prefix: str = "D",
         series: str = "invoice",
         at: datetime | None = None,
         timezone_name: str = "Asia/Kolkata",
     ) -> tuple[str, str]:
         """Return (invoice_no, fiscal_year)."""
+        # Lock the branch identity before reading its explicit fiscal series.
+        # Settings takes the same lock before a series edit, closing the race
+        # where the first invoice and a configuration change could otherwise
+        # commit under different assumptions.
+        branch = (
+            await self.session.execute(
+                select(Branch)
+                .where(
+                    Branch.id == branch_id,
+                    Branch.company_id == company_id,
+                    Branch.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if branch is None:
+            raise BusinessRuleError(
+                "cannot issue a fiscal document because the branch identity is invalid"
+            )
+        invoice_series_code = (branch.invoice_series_code or "").strip().upper()
+        if re.fullmatch(r"[A-Z0-9]{2}", invoice_series_code) is None:
+            raise BusinessRuleError(
+                "branch invoice series is missing or invalid; set a unique two-character "
+                "invoice series in Settings before billing"
+            )
+
         now = at or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -891,7 +919,7 @@ class InvoiceNumberService:
 
         invoice_no = format_invoice_number(
             prefix=prefix,
-            branch_code=branch_code,
+            branch_code=invoice_series_code,
             fiscal_year=fy,
             sequence=seq,
         )

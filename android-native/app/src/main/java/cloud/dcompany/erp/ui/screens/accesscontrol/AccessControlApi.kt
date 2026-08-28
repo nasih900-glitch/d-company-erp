@@ -14,7 +14,18 @@ data class AccessCell(
     @SerialName("default_allowed") val defaultAllowed: Boolean,
     val override: Boolean? = null,
     val allowed: Boolean,
+    @SerialName("default_access_level")
+    val defaultAccessLevel: String = if (defaultAllowed) "partial" else "blocked",
+    @SerialName("access_level")
+    val accessLevel: String = if (allowed) "partial" else "blocked",
+    @SerialName("effective_permissions") val effectivePermissions: List<String> = emptyList(),
+    @SerialName("unavailable_permissions") val unavailablePermissions: List<String> = emptyList(),
+    @SerialName("ceiling_limited_permissions") val ceilingLimitedPermissions: List<String> = emptyList(),
 )
+
+internal val AccessCell.hasExactPermissionEvidence: Boolean
+    get() = effectivePermissions.isNotEmpty() || unavailablePermissions.isNotEmpty() ||
+        ceilingLimitedPermissions.isNotEmpty()
 
 @Serializable
 data class AccessControlDto(

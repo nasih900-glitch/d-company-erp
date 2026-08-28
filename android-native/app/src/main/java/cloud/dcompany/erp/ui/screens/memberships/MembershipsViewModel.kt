@@ -117,17 +117,22 @@ data class MembershipsUiState(
     val notice: String? = null,
 )
 
-internal enum class MembershipMoneyOperation { SALE, REFUND }
+internal enum class MembershipMoneyOperation { PREPARE, SALE, REFUND }
 
-/** Paid membership initiation is intentionally online-only for this release.
- * Returning the exact recovery copy from a pure function keeps the policy
- * testable without constructing Android application state. */
+/** Only the zero-value preparation may start offline. Every operation that can
+ * move customer/provider/drawer value remains online-only. Returning the exact
+ * policy result from a pure function keeps this boundary testable without
+ * constructing Android application state. */
 internal fun membershipMoneyOfflineMessage(
     online: Boolean,
     operation: MembershipMoneyOperation,
 ): String? {
     if (online) return null
     return when (operation) {
+        // A preparation is a zero-value durable draft. The server still owns
+        // price, entitlement, shift and overlap validation after reconnect,
+        // and the UI never authorises money movement from this local row.
+        MembershipMoneyOperation.PREPARE -> null
         MembershipMoneyOperation.SALE ->
             "Membership payments require a live ERP connection. Do not collect cash or " +
                 "approve UPI/card while offline; reconnect and try again."
@@ -175,11 +180,13 @@ internal fun membershipRefundStageMessage(status: String): String = when (status
  * read-only cache (tier create/edit stays web-only, Settings → Memberships
  * already covers it). Subscribe (Shape D, mandatory idempotency) and
  * cancel (Shape C, targets an already-synced subscription only) are real
- * durable outbox resources. New paid membership acceptance is deliberately
- * online-only for this release: unlike a menu draft, a rejected cash/provider
- * row can leave physical money requiring owner reconciliation. The stable
- * local row still protects an in-flight request if connectivity drops after
- * submission, and shift close remains blocked until that exact action resolves.
+ * durable outbox resources. Zero-value payment preparation can be queued
+ * offline from a cached price snapshot; the server verifies that snapshot
+ * after reconnect. Starting collection and recording value movement remain
+ * online-only: unlike a menu draft, a rejected cash/provider row can leave
+ * physical money requiring owner reconciliation. The stable local row protects
+ * every in-flight stage if connectivity drops after submission, and shift close
+ * remains blocked until that exact action resolves.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MembershipsViewModel : ViewModel() {
@@ -474,7 +481,7 @@ class MembershipsViewModel : ViewModel() {
         viewModelScope.launch {
             membershipMoneyOfflineMessage(
                 appCtx.connectivity.online.value,
-                MembershipMoneyOperation.SALE,
+                MembershipMoneyOperation.PREPARE,
             )?.let { message ->
                 busy.value = false
                 formError.value = message
@@ -489,16 +496,21 @@ class MembershipsViewModel : ViewModel() {
             }
             // Preparing is zero-value: no staff/customer money may move until
             // the server accepts this snapshot and a second begin step succeeds.
-            val tier = try {
-                api.listTiers().firstOrNull { it.id == tierId }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                busy.value = false
-                formError.value =
-                    "Could not verify the live membership price. No membership was posted; " +
-                        "do not collect payment until the ERP reconnects."
-                return@launch
+            // A cached price is safe for an offline preparation because the
+            // backend rejects drift before it creates a server task.
+            val cachedTier = db.membershipDao().tierById(tierId)?.toTier()
+            var priceVerifiedLive = appCtx.connectivity.online.value
+            val tier = if (priceVerifiedLive) {
+                try {
+                    api.listTiers().firstOrNull { it.id == tierId }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    priceVerifiedLive = false
+                    cachedTier
+                }
+            } else {
+                cachedTier
             }
             val expectedAmount = when (billingCycle) {
                 "annual" -> tier?.annualPriceMinor ?: tier?.monthlyPriceMinor?.times(12)
@@ -566,6 +578,15 @@ class MembershipsViewModel : ViewModel() {
                     return@launch
                 }
                 val capturedActionId = requireNotNull(actionId)
+                if (!priceVerifiedLive) {
+                    busy.value = false
+                    dialog.value = null
+                    notice.value =
+                        "Payment preparation saved offline. No money is authorised yet. " +
+                            "After reconnect, wait for server confirmation and review the live price before collection."
+                    appCtx.sync.requestSync()
+                    return@launch
+                }
                 appCtx.sync.sync()
                 when (val saved = db.membershipPaymentDao().actionById(capturedActionId)) {
                     null -> formError.value =
@@ -843,6 +864,23 @@ class MembershipsViewModel : ViewModel() {
                 }
             ) return@launch
             appCtx.sync.requestSync()
+        }
+    }
+
+    fun discardRejectedPreparation(actionId: String) {
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            var discarded = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    discarded =
+                        db.membershipPaymentDao().discardRejectedPreparation(actionId) == 1
+                }
+            ) return@launch
+            notice.value = if (discarded) {
+                "Rejected preparation discarded. No membership or payment had been created."
+            } else {
+                "This record cannot be discarded because its server or money state needs reconciliation."
+            }
         }
     }
 

@@ -118,12 +118,16 @@ class TerminalStore(private val context: Context) {
 
     /** Activate an offline label only when the already-validated cache marker matches exactly. */
     fun activateCachedValidated(terminalId: String?, branchId: String?): Boolean {
-        val active = persistedDisplay?.takeIf {
-            it.terminalId == terminalId?.trim() && it.branchId == branchId?.trim()
-        }
+        val active = persistedDisplay?.takeIf { hasCachedValidated(terminalId, branchId) }
         _activeValidatedTerminal.value = active
         return active != null
     }
+
+    /** Read-only preflight used before a background worker reopens the cache marker. */
+    internal fun hasCachedValidated(terminalId: String?, branchId: String?): Boolean =
+        persistedDisplay?.let {
+            it.terminalId == terminalId?.trim() && it.branchId == branchId?.trim()
+        } == true
 
     fun deactivateValidatedDisplay() {
         _activeValidatedTerminal.value = null

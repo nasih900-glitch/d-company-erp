@@ -44,6 +44,9 @@ data class AccessControlUiState(
      */
     val busyKeys: Set<String> = emptySet(),
     val actionError: String? = null,
+    val notice: String? = null,
+    /** An ambiguous PATCH may have committed; no further edits are safe until GET reconciles it. */
+    val authorityUnknown: Boolean = false,
 ) {
     fun cellFor(roleCode: String, module: String): AccessCell? =
         cells.firstOrNull { it.roleCode == roleCode && it.module == module }
@@ -56,9 +59,9 @@ data class AccessControlUiState(
  * app's AccessControlTab exactly — including the reset-to-default-via-
  * null-override affordance.
  */
-class AccessControlViewModel : ViewModel() {
-
-    private val api = ApiClient.create<AccessControlApi>()
+class AccessControlViewModel(
+    private val api: AccessControlApi = ApiClient.create<AccessControlApi>(),
+) : ViewModel() {
 
     private val _state = MutableStateFlow(AccessControlUiState())
     val state: StateFlow<AccessControlUiState> = _state.asStateFlow()
@@ -74,13 +77,21 @@ class AccessControlViewModel : ViewModel() {
                     roles = dto.roles,
                     modules = dto.modules,
                     cells = dto.cells,
+                    authorityUnknown = false,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: ApiException) {
-                _state.value = _state.value.copy(
-                    error = e.message ?: "Could not load access control.",
-                )
+                _state.value = if (e.status == 403) {
+                    _state.value.copy(
+                        error = "Access Control is no longer permitted for this account.",
+                        roles = emptyMap(),
+                        modules = emptyList(),
+                        cells = emptyList(),
+                    )
+                } else {
+                    _state.value.copy(error = e.message ?: "Could not load access control.")
+                }
             } catch (_: Exception) {
                 _state.value = _state.value.copy(
                     error = "Could not load access control. Check the connection and try again.",
@@ -91,16 +102,32 @@ class AccessControlViewModel : ViewModel() {
         }
     }
 
-    fun toggle(cell: AccessCell) = setCell(cell.roleCode, cell.module, JsonPrimitive(!cell.allowed))
+    fun toggle(cell: AccessCell) = setCell(
+        cell.roleCode,
+        cell.module,
+        JsonPrimitive(cell.accessLevel == "blocked"),
+    )
 
     fun resetToDefault(cell: AccessCell) = setCell(cell.roleCode, cell.module, JsonNull)
 
     fun dismissActionError() { _state.value = _state.value.copy(actionError = null) }
 
+    fun dismissNotice() { _state.value = _state.value.copy(notice = null) }
+
     private fun setCell(roleCode: String, module: String, allowed: JsonElement) {
         val key = "$roleCode:$module"
         if (key in _state.value.busyKeys) return
-        _state.value = _state.value.copy(busyKeys = _state.value.busyKeys + key, actionError = null)
+        if (_state.value.authorityUnknown) {
+            _state.value = _state.value.copy(
+                actionError = "Refresh the live permission matrix before making another change.",
+            )
+            return
+        }
+        _state.value = _state.value.copy(
+            busyKeys = _state.value.busyKeys + key,
+            actionError = null,
+            notice = null,
+        )
         viewModelScope.launch {
             try {
                 val updated = api.update(AccessControlUpdateBody(roleCode, module, allowed))
@@ -108,20 +135,69 @@ class AccessControlViewModel : ViewModel() {
                     cells = _state.value.cells.map {
                         if (it.roleCode == roleCode && it.module == module) updated else it
                     },
+                    notice = accessChangeNotice(updated),
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: ApiException) {
+                _state.value = if (e.status == 403) {
+                    _state.value.copy(
+                        roles = emptyMap(),
+                        modules = emptyList(),
+                        cells = emptyList(),
+                        error = "Access Control is no longer permitted for this account.",
+                        authorityUnknown = false,
+                        actionError = "Access Control permission was removed. No permission was changed.",
+                    )
+                } else {
+                    val feedback = accessMutationFailure(e)
+                    _state.value.copy(
+                        authorityUnknown = feedback.authorityUnknown,
+                        actionError = feedback.message,
+                    )
+                }
+            } catch (failure: Exception) {
+                val feedback = accessMutationFailure(failure)
                 _state.value = _state.value.copy(
-                    actionError = e.message ?: "Could not update this permission.",
-                )
-            } catch (_: Exception) {
-                _state.value = _state.value.copy(
-                    actionError = "Could not update this permission. Check the connection and try again.",
+                    authorityUnknown = feedback.authorityUnknown,
+                    actionError = feedback.message,
                 )
             } finally {
                 _state.value = _state.value.copy(busyKeys = _state.value.busyKeys - key)
             }
         }
     }
+}
+
+internal data class AccessMutationFailure(
+    val authorityUnknown: Boolean,
+    val message: String,
+)
+
+internal fun accessMutationFailure(failure: Exception): AccessMutationFailure {
+    val apiFailure = failure as? ApiException
+    val unknown = apiFailure?.isAmbiguous != false
+    return AccessMutationFailure(
+        authorityUnknown = unknown,
+        message = if (unknown) {
+            "The server response was lost, so this permission's result is unknown. Refresh before making another change."
+        } else {
+            apiFailure.message ?: "The server refused this permission change."
+        },
+    )
+}
+
+internal fun accessChangeNotice(cell: AccessCell): String = when {
+    !cell.hasExactPermissionEvidence ->
+        "Saved, but this server did not return exact permission evidence. Treat this module as partial until the live matrix is refreshed after a backend update."
+    cell.accessLevel == "full" -> "Saved: full ${MODULE_LABELS[cell.module] ?: cell.module} access is effective for this role."
+    cell.accessLevel == "partial" -> buildString {
+        append("Saved: partial ${MODULE_LABELS[cell.module] ?: cell.module} access is effective; ")
+        append("${cell.unavailablePermissions.size} permission(s) are currently unavailable")
+        if (cell.ceilingLimitedPermissions.isNotEmpty()) {
+            append(", including ${cell.ceilingLimitedPermissions.size} that cannot be granted through this matrix")
+        }
+        append('.')
+    }
+    else -> "Saved: ${MODULE_LABELS[cell.module] ?: cell.module} access is blocked for this role."
 }

@@ -154,6 +154,11 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
  * about to load so the layout doesn't jump when it arrives. */
 @Composable
 fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radius.shapeMd) {
+    ShimmerBlock(modifier, shape, rememberShimmerBrush())
+}
+
+@Composable
+private fun rememberShimmerBrush(): Brush {
     val transition = rememberInfiniteTransition(label = "shimmer")
     val translate by transition.animateFloat(
         initialValue = -400f,
@@ -161,16 +166,28 @@ fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radi
         animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart),
         label = "shimmerTranslate",
     )
-    val brush = Brush.linearGradient(
+    return Brush.linearGradient(
         colors = listOf(Brand.SurfaceRaised, Brand.SurfaceOverlay, Brand.SurfaceRaised),
         start = Offset(translate - 200f, 0f),
         end = Offset(translate + 200f, 200f),
     )
+}
+
+@Composable
+private fun ShimmerBlock(
+    modifier: Modifier,
+    shape: RoundedCornerShape,
+    brush: Brush,
+) {
     Box(modifier.clip(shape).background(brush))
 }
 
 @Composable
 fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
+    // One animation clock drives the whole placeholder. Starting a separate
+    // infinite transition for every row needlessly multiplies frame work on
+    // the tablet while a slow network response is already under pressure.
+    val brush = rememberShimmerBrush()
     Column(
         modifier
             .fillMaxWidth()
@@ -183,7 +200,11 @@ fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         repeat(lines) { i ->
-            ShimmerBlock(Modifier.fillMaxWidth().height(if (i == 0) 28.dp else 18.dp))
+            ShimmerBlock(
+                Modifier.fillMaxWidth().height(if (i == 0) 28.dp else 18.dp),
+                Radius.shapeMd,
+                brush,
+            )
         }
     }
 }

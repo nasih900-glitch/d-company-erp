@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
@@ -64,8 +65,8 @@ import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Spacing
 
-private val ROLE_COLUMN_WIDTH = 180.dp
-private val MODULE_COLUMN_WIDTH = 156.dp
+private val ROLE_COLUMN_WIDTH = 220.dp
+private val MODULE_COLUMN_WIDTH = 200.dp
 
 private data class PendingAccessChange(
     val cell: AccessCell,
@@ -78,6 +79,7 @@ private data class PendingAccessChange(
 fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var pendingChange by remember { mutableStateOf<PendingAccessChange?>(null) }
+    var detailsCell by remember { mutableStateOf<AccessCell?>(null) }
     val customOverrideCount = remember(state.cells) { state.cells.count { it.override != null } }
 
     Column(
@@ -135,16 +137,26 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
         }
 
         OperationalBanner(
-            title = "Changes apply immediately",
-            detail = "Each confirmed cell is saved separately. The protected owner role cannot be restricted and is intentionally absent.",
+            title = "Module access has protected ceilings",
+            detail = "Changes apply immediately, but an enabled module may be Partial: refunds, role administration, sensitive finance writes, and other high-trust actions cannot be granted beyond the role's secure defaults. The protected owner is intentionally absent.",
             tone = UiTone.Information,
             icon = Icons.Default.Security,
         )
 
+        state.notice?.let { message ->
+            OperationalBanner(
+                title = "Access Control saved",
+                detail = message,
+                tone = UiTone.Success,
+                icon = Icons.Default.Check,
+                action = { TextButton(onClick = vm::dismissNotice) { Text("Dismiss") } },
+            )
+        }
+
         SectionCard(
             modifier = Modifier.weight(1f),
             title = "Role permission matrix",
-            subtitle = "Tap Allowed or Blocked to review a change. Swipe horizontally for every module; reset appears only for custom overrides.",
+            subtitle = "Tap Full, Partial, or Blocked to review a change. Use the info button for exact permissions; reset appears only for custom overrides.",
             icon = Icons.Default.Security,
             elevated = true,
             contentPadding = PaddingValues(0.dp),
@@ -183,13 +195,14 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
                     AccessGrid(
                         modifier = Modifier.weight(1f),
                         state = state,
-                        enabled = !state.loading,
+                        enabled = !state.loading && !state.authorityUnknown,
                         onToggle = { cell, roleLabel, moduleLabel ->
                             pendingChange = PendingAccessChange(cell, roleLabel, moduleLabel, reset = false)
                         },
                         onReset = { cell, roleLabel, moduleLabel ->
                             pendingChange = PendingAccessChange(cell, roleLabel, moduleLabel, reset = true)
                         },
+                        onInspect = { detailsCell = it },
                     )
                 }
             }
@@ -198,11 +211,11 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
 
     pendingChange?.let { change ->
         val targetState = if (change.reset) {
-            if (change.cell.defaultAllowed) "allowed" else "blocked"
-        } else if (change.cell.allowed) {
+            change.cell.defaultAccessLevel
+        } else if (change.cell.accessLevel != "blocked") {
             "blocked"
         } else {
-            "allowed"
+            "the maximum level permitted for this role"
         }
         AlertDialog(
             containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
@@ -211,7 +224,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
             title = { Text(if (change.reset) "Reset permission?" else "Change permission?") },
             text = {
                 Text(
-                    "${change.roleLabel} access to ${change.moduleLabel} will be $targetState immediately for every user in that role.",
+                    "${change.roleLabel} access to ${change.moduleLabel} will become $targetState immediately for every user in that role. Protected permission ceilings will still apply.",
                     color = Brand.ForegroundMuted,
                 )
             },
@@ -239,6 +252,56 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
             text = { Text(msg) },
         )
     }
+
+
+    detailsCell?.let { cell ->
+        AlertDialog(
+            containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
+            onDismissRequest = { detailsCell = null },
+            confirmButton = { TextButton(onClick = { detailsCell = null }) { Text("Done") } },
+            title = { Text("${MODULE_LABELS[cell.module] ?: cell.module} access: ${cell.accessLevel.replaceFirstChar { it.uppercase() }}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    if (!cell.hasExactPermissionEvidence) {
+                        Text(
+                            "This server did not return exact permission evidence. Treat the enabled module as partial until the backend is updated and the matrix is refreshed.",
+                            color = Brand.Warning,
+                        )
+                    } else {
+                        Text(
+                            "Effective permissions",
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            cell.effectivePermissions.ifEmpty { listOf("None") }.joinToString("\n"),
+                            color = Brand.ForegroundMuted,
+                        )
+                        if (cell.unavailablePermissions.isNotEmpty()) {
+                            Text(
+                                "Currently unavailable",
+                                color = Brand.Warning,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(cell.unavailablePermissions.joinToString("\n"), color = Brand.ForegroundMuted)
+                        }
+                        if (cell.ceilingLimitedPermissions.isNotEmpty()) {
+                            Text(
+                                "Cannot be granted through this matrix for this role",
+                                color = Brand.Danger,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                cell.ceilingLimitedPermissions.joinToString("\n"),
+                                color = Brand.ForegroundMuted,
+                            )
+                        }
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -248,6 +311,7 @@ private fun AccessGrid(
     enabled: Boolean,
     onToggle: (AccessCell, String, String) -> Unit,
     onReset: (AccessCell, String, String) -> Unit,
+    onInspect: (AccessCell) -> Unit,
 ) {
     val cellsByKey = remember(state.cells) {
         state.cells.associateBy { it.roleCode to it.module }
@@ -285,7 +349,7 @@ private fun AccessGrid(
         PanelDivider()
 
         LazyColumn(Modifier.weight(1f)) {
-            itemsIndexed(roleEntries, key = { _, entry -> entry.key }) { index, (roleCode, label) ->
+            itemsIndexed(roleEntries, key = { _, entry -> entry.key }) { index, (roleCode, description) ->
                 Row(
                     modifier = Modifier.background(if (index % 2 == 0) Brand.Surface else Brand.SurfaceRaised.copy(alpha = 0.42f))
                         .heightIn(min = 68.dp),
@@ -296,10 +360,16 @@ private fun AccessGrid(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(
-                            label,
+                            roleDisplayName(roleCode),
                             color = Brand.Foreground,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            description,
+                            color = Brand.ForegroundFaint,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
                         )
                         val overrideCount = overrideCounts[roleCode] ?: 0
                         Text(
@@ -314,12 +384,13 @@ private fun AccessGrid(
                             if (cell != null) {
                                 AccessCellToggle(
                                     cell = cell,
-                                    roleLabel = label,
+                                    roleLabel = roleDisplayName(roleCode),
                                     moduleLabel = MODULE_LABELS[module] ?: module,
                                     busy = "$roleCode:$module" in state.busyKeys,
                                     enabled = enabled,
-                                    onToggle = { onToggle(cell, label, MODULE_LABELS[module] ?: module) },
-                                    onReset = { onReset(cell, label, MODULE_LABELS[module] ?: module) },
+                                    onToggle = { onToggle(cell, roleDisplayName(roleCode), MODULE_LABELS[module] ?: module) },
+                                    onReset = { onReset(cell, roleDisplayName(roleCode), MODULE_LABELS[module] ?: module) },
+                                    onInspect = { onInspect(cell) },
                                 )
                             } else {
                                 OperationalStatusBadge("N/A", UiTone.Neutral)
@@ -342,6 +413,7 @@ private fun AccessCellToggle(
     enabled: Boolean,
     onToggle: () -> Unit,
     onReset: () -> Unit,
+    onInspect: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Box(
@@ -351,12 +423,13 @@ private fun AccessCellToggle(
                     stateDescription = when {
                         busy -> "Updating"
                         !enabled -> "Refreshing server permissions"
-                        cell.allowed -> "Allowed"
+                        cell.accessLevel == "full" -> "Full access"
+                        cell.accessLevel == "partial" -> "Partial access"
                         else -> "Blocked"
                     }
                 }
                 .toggleable(
-                    value = cell.allowed,
+                    value = cell.accessLevel != "blocked",
                     enabled = enabled && !busy,
                     role = Role.Switch,
                     onValueChange = { onToggle() },
@@ -367,11 +440,27 @@ private fun AccessCellToggle(
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Brand.Gold)
             } else {
                 OperationalStatusBadge(
-                    label = if (cell.allowed) "Allowed" else "Blocked",
-                    tone = if (cell.allowed) UiTone.Success else UiTone.Danger,
-                    icon = if (cell.allowed) Icons.Filled.Check else Icons.Filled.Close,
+                    label = when (cell.accessLevel) {
+                        "full" -> "Full"
+                        "partial" -> "Partial"
+                        else -> "Blocked"
+                    },
+                    tone = when (cell.accessLevel) {
+                        "full" -> UiTone.Success
+                        "partial" -> UiTone.Warning
+                        else -> UiTone.Danger
+                    },
+                    icon = if (cell.accessLevel == "blocked") Icons.Filled.Close else Icons.Filled.Check,
                 )
             }
+        }
+        IconButton(onClick = onInspect, enabled = !busy, modifier = Modifier.size(48.dp)) {
+            Icon(
+                Icons.Default.Info,
+                contentDescription = "Show effective and unavailable permissions",
+                tint = Brand.ForegroundMuted,
+                modifier = Modifier.size(18.dp),
+            )
         }
         // Only shown when this cell has an explicit override — an
         // unmodified cell is just following the role's static default and
@@ -380,11 +469,17 @@ private fun AccessCellToggle(
             IconButton(onClick = onReset, enabled = enabled && !busy, modifier = Modifier.size(48.dp)) {
                 Icon(
                     Icons.Filled.Refresh,
-                    contentDescription = "Reset to default (${if (cell.defaultAllowed) "allowed" else "blocked"})",
+                    contentDescription = "Reset to default (${cell.defaultAccessLevel})",
                     tint = Brand.ForegroundMuted,
                     modifier = Modifier.size(16.dp),
                 )
             }
         }
     }
+}
+
+internal fun roleDisplayName(roleCode: String): String = when (roleCode) {
+    "co_owner" -> "Co-owner"
+    "gaming_supervisor" -> "Gaming supervisor"
+    else -> roleCode.replace('_', ' ').replaceFirstChar(Char::uppercase)
 }

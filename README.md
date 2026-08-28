@@ -117,10 +117,11 @@ them as distributable clients.
 - [`download/index.html`](download/index.html) — release-status landing page that
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
-Tagging a release that exactly matches the Android `versionName` (currently
-`git tag v3.0.1 && git push --follow-tags`) triggers
-`.github/workflows/release.yml`. It tests and signs the native Android build,
-then attaches only the verified signed Android artifacts to the GitHub Release.
+Tagging a release that exactly matches the Android `versionName` triggers
+`.github/workflows/release.yml`. The next source candidate is `3.0.5` (`6`), but
+`v3.0.5` must not be tagged until its final gates pass. The workflow tests and
+signs the native Android build, then attaches only verified signed Android
+artifacts to the GitHub Release.
 
 ## License
 

@@ -31,7 +31,10 @@ def regular_branch() -> tuple[FakeSession, Branch]:
         id=uuid4(), name="TestCo", gst_registration_type="regular",
         is_composition=False, gstin="32ABCDE1234F1Z5",
     )
-    branch = Branch(id=uuid4(), company_id=company.id, name="Main", state_code="32")
+    branch = Branch(
+        id=uuid4(), company_id=company.id, name="Main",
+        invoice_series_code="MN", state_code="32",
+    )
     return FakeSession(company, branch), branch
 
 
@@ -41,7 +44,10 @@ def unregistered_branch() -> tuple[FakeSession, Branch]:
         id=uuid4(), name="TestCo", gst_registration_type="unregistered",
         is_composition=False,
     )
-    branch = Branch(id=uuid4(), company_id=company.id, name="Main", state_code="32")
+    branch = Branch(
+        id=uuid4(), company_id=company.id, name="Main",
+        invoice_series_code="MN", state_code="32",
+    )
     return FakeSession(company, branch), branch
 
 
@@ -51,7 +57,10 @@ def composition_branch() -> tuple[FakeSession, Branch]:
         id=uuid4(), name="TestCo", gst_registration_type="composition",
         is_composition=True, gstin="32ABCDE1234F1Z5",
     )
-    branch = Branch(id=uuid4(), company_id=company.id, name="Main", state_code="32")
+    branch = Branch(
+        id=uuid4(), company_id=company.id, name="Main",
+        invoice_series_code="MN", state_code="32",
+    )
     return FakeSession(company, branch), branch
 
 
@@ -164,7 +173,10 @@ class TestPriceTimeBasedLine:
         company = Company(
             id=uuid4(), name="TestCo", gst_registration_type="regular", is_composition=False,
         )
-        branch = Branch(id=uuid4(), company_id=company.id, name="Main", state_code="32")
+        branch = Branch(
+            id=uuid4(), company_id=company.id, name="Main",
+            invoice_series_code="MN", state_code="32",
+        )
         session = FakeSession(company, branch)
         pricing = OrderPricingService(session)
         with pytest.raises(BusinessRuleError, match="GSTIN is missing or invalid"):

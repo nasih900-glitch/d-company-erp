@@ -15,6 +15,10 @@ CO_OWNER_ROLE = "co_owner"
 PUBLIC_OWNER_ROLE = "owner"
 
 FULL_ACCESS_ROLES = {PROTECTED_OWNER_ROLE, CO_OWNER_ROLE}
+# Every role presented to staff as an owner title is security-sensitive even
+# though only the two internal tiers receive an operational bypass.  A manager
+# must never be able to mint, demote, suspend, or delete an owner account.
+OWNER_ROLE_CODES = FULL_ACCESS_ROLES | {PUBLIC_OWNER_ROLE}
 
 
 def has_protected_owner_access(roles: Iterable[str]) -> bool:

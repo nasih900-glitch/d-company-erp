@@ -22,6 +22,7 @@ import cloud.dcompany.erp.core.db.SHIFT_CLOSING_WRITE_GUARD_CALLBACK
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ClientCompatibilityGate
 import cloud.dcompany.erp.core.sync.ConnectivityObserver
+import cloud.dcompany.erp.core.sync.BackgroundSyncScheduler
 import cloud.dcompany.erp.core.sync.RealtimeClient
 import cloud.dcompany.erp.core.sync.RealtimeEvent
 import cloud.dcompany.erp.core.sync.RealtimeRefreshPolicy
@@ -112,7 +113,13 @@ class DCompanyApp : Application() {
 
         outboxSafety = OutboxSafetyGate(db, outboxOwnerStore, tokens)
         cacheIsolation = CacheIsolationCoordinator(this, db)
-        sync = SyncEngine(db, appScope, outboxSafety, cacheIsolation)
+        sync = SyncEngine(
+            db = db,
+            scope = appScope,
+            outboxSafety = outboxSafety,
+            cacheIsolation = cacheIsolation,
+            scheduleDurableSync = { BackgroundSyncScheduler.enqueue(this) },
+        )
         realtime = RealtimeClient(tokens, appScope)
         connectivity = ConnectivityObserver(
             context = this,

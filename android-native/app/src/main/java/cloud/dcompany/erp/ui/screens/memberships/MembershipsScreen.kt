@@ -80,8 +80,9 @@ import cloud.dcompany.erp.ui.theme.Spacing
 
 /**
  * Memberships — greenfield screen. Tier browsing is read-only (create/edit
- * stays on web, per MembershipsApi's class doc). Subscribe/cancel are real
- * offline outbox writes — see MembershipsViewModel's class doc for why.
+ * stays on web, per MembershipsApi's class doc). Zero-value preparation and
+ * cancellation are real offline outbox writes; physical collection remains
+ * server-authorised and online-only — see MembershipsViewModel's class doc.
  */
 @Composable
 fun MembershipsScreen(canManage: Boolean) {
@@ -324,6 +325,7 @@ private fun SelectedCustomerPanel(
     canManage: Boolean,
 ) {
     val membership = state.selectedMembership
+    val activeNow = membership?.subscription?.isActiveAt() == true
     val hasPendingAction = membership?.let {
         it.pendingRefundTaskId != null ||
             it.pendingPaymentTaskId != null ||
@@ -345,12 +347,12 @@ private fun SelectedCustomerPanel(
             OperationalStatusBadge(
                 label = when {
                     hasPendingAction -> "Action pending"
-                    membership?.subscription?.isActive == true -> "Active member"
+                    activeNow -> "Active member"
                     else -> "No active plan"
                 },
                 tone = when {
                     hasPendingAction -> UiTone.Warning
-                    membership?.subscription?.isActive == true -> UiTone.Success
+                    activeNow -> UiTone.Success
                     else -> UiTone.Neutral
                 },
             )
@@ -396,7 +398,7 @@ private fun SelectedCustomerPanel(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            membership?.subscription != null && membership.subscription.isActive -> {
+            membership?.subscription != null && activeNow -> {
                 val sub = membership.subscription
                 val alreadyCancelled = sub.cancelledAt != null
                 Text(
@@ -472,13 +474,34 @@ private fun SelectedCustomerPanel(
                 }
             }
             else -> {
-                Text("No active membership.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+                val ended = membership?.subscription?.takeIf { !activeNow }
+                Text(
+                    ended?.let {
+                        if (it.revokedAt != null) {
+                            "${it.tierName} ended ${it.revokedAt.take(10)}."
+                        } else {
+                            "${it.tierName} expired ${it.expiresAt.take(10)}."
+                        }
+                    }
+                        ?: "No active membership.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (ended != null) {
+                    Text(
+                        "Renewal creates a new paid term. The server rechecks the current plan price before any collection is authorised.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 if (canManage) {
                     Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = { vm.openSubscribeForm(customer) },
                         enabled = state.tiers.isNotEmpty(),
-                    ) { Text("Prepare membership payment") }
+                    ) {
+                        Text(if (ended == null) "Prepare membership payment" else "Renew membership")
+                    }
                 }
             }
         }
@@ -618,9 +641,14 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
     var localError by remember { mutableStateOf<String?>(null) }
 
     val selectedTier = state.tiers.firstOrNull { it.id == tierId }
+    val isRenewal = state.membershipHistory.any { !it.isActiveAt() }
 
     FormDialog(
-        title = "Prepare payment for ${customer.name.orEmpty().ifBlank { customer.phone }}",
+        title = if (isRenewal) {
+            "Renew membership for ${customer.name.orEmpty().ifBlank { customer.phone }}"
+        } else {
+            "Prepare payment for ${customer.name.orEmpty().ifBlank { customer.phone }}"
+        },
         confirmLabel = "Prepare — no money yet",
         busy = state.busy,
         error = localError ?: state.formError,
@@ -655,6 +683,12 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
                 "It does not post a membership or authorise money movement. After preparation, " +
                 "open the task and start its collection step.",
             color = Brand.GoldMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+            "If the tablet is offline, only this zero-value preparation is queued. " +
+                "Reconnect and wait for the server to confirm the live price before collecting anything.",
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
@@ -1391,6 +1425,10 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
                 MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
             )
+            val discardableRejectedPreparation =
+                action.kind == MembershipPaymentActionKind.PREPARE &&
+                    action.state == MembershipMoneyActionState.REJECTED &&
+                    action.serverRequestId == null
             MembershipPendingRow(
                 text = when (action.kind) {
                     MembershipPaymentActionKind.PREPARE -> "Preparing membership payment"
@@ -1410,6 +1448,10 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 error = action.lastError,
                 onRetry = { vm.retryPaymentAction(action.actionId) },
                 retryEnabled = !recovery,
+                secondaryLabel = "Discard draft".takeIf { discardableRejectedPreparation },
+                onSecondary = if (discardableRejectedPreparation) {
+                    { vm.discardRejectedPreparation(action.actionId) }
+                } else null,
                 pendingText = when {
                     recovery -> action.lastError
                         ?: "Owner recovery required. Verify original drawer/provider evidence; never collect again to clear this row."
@@ -1483,6 +1525,8 @@ private fun MembershipPendingRow(
     error: String?,
     onRetry: () -> Unit,
     retryEnabled: Boolean = true,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
     pendingText: String = "Not synced yet",
 ) {
     Column(
@@ -1491,6 +1535,9 @@ private fun MembershipPendingRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (rejected && retryEnabled) TextButton(onClick = onRetry) { Text("Retry") }
+            if (secondaryLabel != null && onSecondary != null) {
+                TextButton(onClick = onSecondary) { Text(secondaryLabel) }
+            }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else pendingText,

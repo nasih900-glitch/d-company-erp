@@ -1014,6 +1014,179 @@ async def test_cash_reservation_retry_and_settlement_post_exactly_once(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_expired_term_remains_in_history_and_can_be_renewed_once(
+    client, session, seed_owner
+) -> None:
+    """Expiry removes benefits without erasing history; renewal mints one new term."""
+    case = await _seed_case(session, seed_owner)
+    now = datetime.now(UTC).replace(microsecond=0)
+    expired = CustomerMembership(
+        id=uuid4(),
+        customer_id=case.customer_id,
+        tier_id=case.tier_id,
+        billing_cycle="monthly",
+        starts_at=now - timedelta(days=60),
+        expires_at=now - timedelta(days=30),
+        auto_renew=False,
+        amount_paid_minor=case.amount_minor,
+        notes="Expired renewal workflow fixture",
+    )
+    session.add(expired)
+    await session.commit()
+    try:
+        current_before = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}",
+            headers=_headers(case, f"membership-expiry-current:{uuid4()}"),
+        )
+        assert current_before.status_code == 200, current_before.text
+        assert current_before.json() is None
+
+        history_before = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}/history",
+            headers=_headers(case, f"membership-expiry-history:{uuid4()}"),
+        )
+        assert history_before.status_code == 200, history_before.text
+        assert [row["id"] for row in history_before.json()] == [str(expired.id)]
+        assert history_before.json()[0]["is_active"] is False
+
+        prepared = await _prepare(
+            client,
+            case,
+            method="upi",
+            key=f"membership-renew-prepare:{uuid4()}",
+        )
+        request_id = prepared["id"]
+        begun = await _begin(
+            client,
+            case,
+            request_id,
+            method="upi",
+            key=f"membership-renew-begin:{uuid4()}",
+        )
+        assert begun["status"] == "provider_action_in_progress"
+        settled = await _settle(
+            client,
+            case,
+            request_id,
+            method="upi",
+            key=f"membership-renew-settle:{uuid4()}",
+            external_reference=f"RENEW-{uuid4().hex}",
+        )
+        assert settled.status_code == 201, settled.text
+        assert settled.json()["status"] == "payment_completed_pending_posting"
+        finalized = await _finalize_payment(
+            client,
+            case,
+            request_id,
+            key=f"membership-renew-finalize:{uuid4()}",
+        )
+        assert finalized.status_code == 201, finalized.text
+        assert finalized.json()["status"] == "settled"
+
+        current_after = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}",
+            headers=_headers(case, f"membership-renew-current:{uuid4()}"),
+        )
+        assert current_after.status_code == 200, current_after.text
+        renewed = current_after.json()
+        assert renewed is not None
+        assert renewed["id"] != str(expired.id)
+        assert renewed["is_active"] is True
+        assert renewed["payment_receipt_no"].startswith("M/")
+
+        history_after = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}/history",
+            headers=_headers(case, f"membership-renew-history:{uuid4()}"),
+        )
+        assert history_after.status_code == 200, history_after.text
+        rows = history_after.json()
+        assert len(rows) == 2
+        assert {row["id"] for row in rows} == {str(expired.id), renewed["id"]}
+        assert sum(bool(row["is_active"]) for row in rows) == 1
+
+        async with AsyncSessionLocal() as verify:
+            assert await verify.scalar(
+                select(func.count())
+                .select_from(CustomerMembership)
+                .where(CustomerMembership.customer_id == case.customer_id)
+            ) == 2
+            assert await verify.scalar(
+                select(func.count())
+                .select_from(MembershipPayment)
+                .where(MembershipPayment.request_id == UUID(request_id))
+            ) == 1
+    finally:
+        await _cleanup(case)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cancel_renewal_replays_and_keeps_paid_term_active_until_expiry(
+    client, session, seed_owner
+) -> None:
+    """Offline/retry cancellation converges without ending prepaid benefits."""
+    case = await _seed_case(session, seed_owner)
+    now = datetime.now(UTC).replace(microsecond=0)
+    membership = CustomerMembership(
+        id=uuid4(),
+        customer_id=case.customer_id,
+        tier_id=case.tier_id,
+        billing_cycle="monthly",
+        starts_at=now - timedelta(days=3),
+        expires_at=now + timedelta(days=27),
+        auto_renew=True,
+        amount_paid_minor=case.amount_minor,
+        notes="Auto-renew cancellation workflow fixture",
+    )
+    session.add(membership)
+    await session.commit()
+    key = f"membership-cancel:{uuid4()}"
+    try:
+        first = await client.post(
+            f"/api/v1/memberships/{membership.id}/cancel",
+            headers=_headers(case, key),
+        )
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["auto_renew"] is False
+        assert body["cancelled_at"] is not None
+        assert body["is_active"] is True
+
+        exact_retry = await client.post(
+            f"/api/v1/memberships/{membership.id}/cancel",
+            headers=_headers(case, key),
+        )
+        assert exact_retry.status_code == 200, exact_retry.text
+        assert exact_retry.json() == body
+
+        # A response-loss recovery generated with a new local cancellation row
+        # still converges to the same desired state and cannot shorten the term.
+        convergent_retry = await client.post(
+            f"/api/v1/memberships/{membership.id}/cancel",
+            headers=_headers(case, f"membership-cancel-recovery:{uuid4()}"),
+        )
+        assert convergent_retry.status_code == 200, convergent_retry.text
+        assert convergent_retry.json()["cancelled_at"] == body["cancelled_at"]
+        assert convergent_retry.json()["expires_at"] == body["expires_at"]
+        assert convergent_retry.json()["is_active"] is True
+
+        async with AsyncSessionLocal() as verify:
+            saved = await verify.get(CustomerMembership, membership.id)
+            assert saved is not None
+            assert saved.auto_renew is False
+            assert saved.cancelled_at is not None
+            assert saved.expires_at == membership.expires_at
+            assert await verify.scalar(
+                select(func.count())
+                .select_from(CustomerMembership)
+                .where(CustomerMembership.customer_id == case.customer_id)
+            ) == 1
+    finally:
+        await _cleanup(case)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ("cash", "upi"))
 async def test_payment_begin_replay_is_same_actor_only(
     client, session, seed_owner, method: str
@@ -1690,7 +1863,12 @@ async def test_legacy_cash_refund_attempt_is_quarantined_then_reconciled_once(
     reconciliation_shift_id = uuid4()
     reconciliation_opening = case.amount_minor + 75_000
     other_company = Company(id=uuid4(), name="Foreign membership tenant")
-    other_branch = Branch(id=uuid4(), company_id=other_company.id, name="Foreign branch")
+    other_branch = Branch(
+        id=uuid4(),
+        company_id=other_company.id,
+        name="Foreign branch",
+        invoice_series_code="MN",
+    )
     other_terminal = Terminal(
         id=uuid4(),
         branch_id=other_branch.id,

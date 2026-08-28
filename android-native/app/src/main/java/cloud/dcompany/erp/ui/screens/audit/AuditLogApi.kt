@@ -18,6 +18,12 @@ data class AuditUnlockResponse(
     @SerialName("expires_in") val expiresIn: Int,
 )
 
+@Serializable
+data class AuditFacets(
+    @SerialName("entity_types") val entityTypes: List<String> = emptyList(),
+    val actions: List<String> = emptyList(),
+)
+
 /** Mirrors backend/app/api/v1/admin/router.py's AuditEntry exactly. */
 @Serializable
 data class AuditEntry(
@@ -54,5 +60,13 @@ interface AuditLogApi {
         @Query("limit") limit: Int,
         @Query("before_id") beforeId: Long? = null,
         @Query("area") area: String? = null,
+        @Query("entity_type") entityType: String? = null,
+        @Query("action") action: String? = null,
+        @Query("q") query: String? = null,
     ): List<AuditEntry>
+
+    @GET("admin/audit/facets")
+    suspend fun facets(
+        @Header("X-Audit-Token") auditToken: String,
+    ): AuditFacets
 }

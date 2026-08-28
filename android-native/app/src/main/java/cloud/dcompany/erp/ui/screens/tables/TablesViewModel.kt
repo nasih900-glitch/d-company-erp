@@ -15,8 +15,12 @@ import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuModifierEntity
+import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.TableOrderState
@@ -24,6 +28,8 @@ import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
 import cloud.dcompany.erp.core.sync.CafeBillProjection
 import cloud.dcompany.erp.core.sync.projectCafeBills
+import cloud.dcompany.erp.ui.screens.CartModifierSelection
+import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,7 +46,22 @@ data class TableCartLine(
     val qty: Int,
     val note: String = "",
     val clientLineId: String = UUID.randomUUID().toString(),
-)
+    val variant: MenuVariantEntity? = null,
+    val modifiers: List<CartModifierSelection> = emptyList(),
+    val unitPriceMinor: Long = configuredUnitPriceMinor(item, variant, modifiers),
+) {
+    val lineTotalMinor: Long get() = unitPriceMinor * qty
+    val optionLabels: List<String>
+        get() = buildList {
+            variant?.name?.trim()?.takeIf(String::isNotEmpty)?.let(::add)
+            modifiers.forEach { selection ->
+                val name = selection.modifier.name.trim()
+                if (name.isNotEmpty()) {
+                    add(if (selection.qty > 1) "${selection.qty}× $name" else name)
+                }
+            }
+        }
+}
 
 data class BlockedCafeAction(
     val actionId: String,
@@ -59,6 +80,9 @@ data class TablesUiState(
     val tables: List<CafeTable> = emptyList(),
     val bills: List<CafeBillProjection> = emptyList(),
     val menu: List<MenuItemEntity> = emptyList(),
+    val variants: List<MenuVariantEntity> = emptyList(),
+    val modifierGroups: List<MenuModifierGroupEntity> = emptyList(),
+    val modifiers: List<MenuModifierEntity> = emptyList(),
     val selectedFloorId: String? = null,
     val selectedTable: CafeTable? = null,
     /** Pre-v24 screen compatibility; removed with the v24 Compose rewrite. */
@@ -78,7 +102,7 @@ data class TablesUiState(
     val visibleTables: List<CafeTable>
         get() = if (selectedFloorId == null) tables else tables.filter { it.floorId == selectedFloorId }
 
-    val estimateMinor: Long get() = cart.sumOf { it.item.basePriceMinor * it.qty }
+    val estimateMinor: Long get() = cart.sumOf(TableCartLine::lineTotalMinor)
 
     val blockingLoadError: String? get() = error ?: refreshError
 }
@@ -88,6 +112,13 @@ private data class TableCacheSnapshot(
     val tables: List<CafeTableEntity>,
     val bills: List<CafeBillProjection>,
     val actions: List<LocalCafeActionEntity>,
+)
+
+private data class TablesMenuSnapshot(
+    val items: List<MenuItemEntity>,
+    val variants: List<MenuVariantEntity>,
+    val modifierGroups: List<MenuModifierGroupEntity>,
+    val modifiers: List<MenuModifierEntity>,
 )
 
 private data class SelectionSnapshot(
@@ -153,9 +184,18 @@ class TablesViewModel : ViewModel() {
         )
     }
 
+    private val menuSnapshot = combine(
+        db.menuDao().observeItems(),
+        db.menuDao().observeVariants(),
+        db.menuDao().observeModifierGroups(),
+        db.menuDao().observeModifiers(),
+    ) { items, variants, groups, modifiers ->
+        TablesMenuSnapshot(items, variants, groups, modifiers)
+    }
+
     val state: StateFlow<TablesUiState> = combine(
         cacheSnapshot,
-        db.menuDao().observeItems(),
+        menuSnapshot,
         combine(selectedFloorId, selectedTableId, draftingRound, cart) {
                 floorId, tableId, drafting, lines ->
             SelectionSnapshot(floorId, tableId, drafting, lines)
@@ -195,7 +235,10 @@ class TablesViewModel : ViewModel() {
             floors = cache.floors.map(FloorEntity::toFloor),
             tables = tableRows,
             bills = cache.bills,
-            menu = menu,
+            menu = menu.items,
+            variants = menu.variants,
+            modifierGroups = menu.modifierGroups,
+            modifiers = menu.modifiers,
             selectedFloorId = selection.floorId,
             selectedTable = selectedTable,
             openTable = selectedTable,
@@ -304,10 +347,48 @@ class TablesViewModel : ViewModel() {
     fun add(item: MenuItemEntity) {
         if (!requireCreate() || busy.value) return
         cart.update { lines ->
-            val index = lines.indexOfFirst { it.item.id == item.id && it.note.isBlank() }
+            val index = lines.indexOfFirst {
+                it.item.id == item.id && it.variant == null &&
+                    it.modifiers.isEmpty() && it.note.isBlank()
+            }
             if (index < 0) lines + TableCartLine(item = item, qty = 1)
             else lines.toMutableList().also { mutable ->
                 mutable[index] = mutable[index].copy(qty = mutable[index].qty + 1)
+            }
+        }
+    }
+
+    fun addConfigured(
+        item: MenuItemEntity,
+        variant: MenuVariantEntity?,
+        modifiers: List<CartModifierSelection>,
+        note: String?,
+    ) {
+        if (!requireCreate() || busy.value) return
+        val cleanNote = note?.trim().orEmpty()
+        val sortedModifiers = modifiers.sortedBy { it.modifier.id }
+        val candidate = TableCartLine(
+            item = item,
+            qty = 1,
+            note = cleanNote,
+            variant = variant,
+            modifiers = sortedModifiers,
+        )
+        cart.update { lines ->
+            val index = lines.indexOfFirst { current ->
+                current.item.id == candidate.item.id &&
+                    current.variant?.id == candidate.variant?.id &&
+                    current.modifiers.map { it.modifier.id to it.qty } ==
+                    candidate.modifiers.map { it.modifier.id to it.qty } &&
+                    current.note == candidate.note &&
+                    current.unitPriceMinor == candidate.unitPriceMinor
+            }
+            if (index < 0) {
+                lines + candidate
+            } else {
+                lines.toMutableList().also { mutable ->
+                    mutable[index] = mutable[index].copy(qty = mutable[index].qty + 1)
+                }
             }
         }
     }
@@ -393,7 +474,19 @@ class TablesViewModel : ViewModel() {
                         name = line.item.name,
                         qty = line.qty,
                         note = line.note.trim().takeIf(String::isNotEmpty),
-                        estimateUnitMinor = line.item.basePriceMinor,
+                        estimateUnitMinor = line.unitPriceMinor,
+                        variantId = line.variant?.id,
+                        variantName = line.variant?.name,
+                        variantPriceDeltaMinor = line.variant?.priceDeltaMinor ?: 0L,
+                        modifiers = line.modifiers.map { selection ->
+                            LocalModifierSelectionSnapshot(
+                                modifierId = selection.modifier.id,
+                                modifierGroupId = selection.modifier.modifierGroupId,
+                                name = selection.modifier.name,
+                                priceDeltaMinor = selection.modifier.priceDeltaMinor,
+                                qty = selection.qty,
+                            )
+                        },
                     )
                 },
             ),

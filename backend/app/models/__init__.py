@@ -4,7 +4,12 @@ from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
-from app.models.customer import Customer, PointsRedemption
+from app.models.customer import (
+    Customer,
+    OrderLoyaltySettlement,
+    PointsRedemption,
+    RefundLoyaltyAdjustment,
+)
 from app.models.events import Event, EventTicket
 from app.models.finance import (
     Account,
@@ -16,6 +21,7 @@ from app.models.finance import (
     JournalLine,
     ManualCollection,
     Partner,
+    SupplierPayment,
     TipPayout,
 )
 from app.models.gaming import (
@@ -160,6 +166,7 @@ __all__ = [
     "OcrVerification",
     "Order",
     "OrderCheckoutClaim",
+    "OrderLoyaltySettlement",
     "OrderLine",
     "Partner",
     "Payment",
@@ -177,6 +184,7 @@ __all__ = [
     "Recipe",
     "RecipeLine",
     "Refund",
+    "RefundLoyaltyAdjustment",
     "Reservation",
     "Role",
     "RolePermissionOverride",
@@ -187,6 +195,7 @@ __all__ = [
     "Station",
     "StockMovement",
     "Supplier",
+    "SupplierPayment",
     "Table",
     "TenantMixin",
     "Terminal",

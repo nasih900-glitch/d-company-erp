@@ -36,9 +36,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +58,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
+import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
@@ -65,22 +68,20 @@ import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import java.text.DateFormat
+import java.util.Date
 import kotlin.math.abs
 
 /**
- * Finance — read-only.
- *
- * Mirrors the web Finance screen's Overview, Expenses and Partners tabs, using
- * its plain-language labels, but deliberately without the write paths. An
- * expense, a capital movement and a void are all immutable ledger entries that
- * need typed evidence (bank UTR, UPI id, voucher no., a written void reason);
- * those belong in the web ERP, not on a counter tablet. What an owner actually
- * wants here is to *look*: what came in, what went out, and how much is
- * genuinely safe to take out.
+ * Finance combines server-authoritative receipt-basis reporting with
+ * permission-gated, idempotent offline entry for expenses, assets and partner
+ * capital movements. Existing evidence is never edited optimistically.
  */
 @Composable
 fun FinanceScreen(access: FinanceAccess = FinanceAccess()) {
@@ -92,17 +93,11 @@ fun FinanceScreen(access: FinanceAccess = FinanceAccess()) {
 
 @Composable
 private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: FinanceAccess) {
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Expenses", "Assets", "Partners")
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
         Header(state, onRefresh = vm::load)
-        if (access.isViewOnly) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                ViewOnlyNotice()
-            }
-        }
-
         when {
             // Nothing to show yet and it failed: this is the whole screen.
             !state.loaded && state.error != null -> ErrorBlock(state.error, vm::load)
@@ -126,9 +121,12 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
                     onSelect = { selected -> tab = selected.toIntOrNull() ?: 0 },
                     modifier = Modifier.padding(horizontal = Spacing.lg),
                 )
+                if (!state.online) {
+                    FinanceOfflineBanner(state.lastUpdatedAtMillis)
+                }
                 // A refresh that failed on top of good data: keep the figures,
                 // but never let the failure pass unmentioned.
-                if (state.error != null) {
+                if (state.error != null && state.online) {
                     ErrorBanner(state.error, vm::load)
                 }
                 if (state.notice != null) {
@@ -179,7 +177,7 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "Review receipt-basis figures or refresh the current books.",
+                        "Review server-backed receipt-basis figures and authorised entries.",
                         color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
@@ -229,12 +227,28 @@ private fun OverviewTab(state: FinanceUiState) {
             color = Brand.ForegroundMuted,
         )
 
+        val coverage = state.verifiedCostingCoverage
+        Panel(border = if (coverage?.isComplete == true) Brand.Good else Brand.Warning) {
+            Text(
+                coverage?.warningTitle ?: "Inventory costing status unavailable",
+                color = if (coverage?.isComplete == true) Brand.Good else Brand.Warning,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                coverage?.warningDetail
+                    ?: "COGS may be understated, so gross profit and operating profit may be overstated " +
+                        "until recipe and ingredient-cost coverage can be verified.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Brand.ForegroundMuted,
+            )
+        }
+
         if (state.periodIdle) {
             Panel(border = Brand.BorderSubtle) {
                 Text("No activity this period yet.", color = Brand.Foreground, fontWeight = FontWeight.Bold)
                 Text(
-                    "Take an order in POS, or record an expense in the web ERP, and real " +
-                        "numbers appear here.",
+                    "Take an order in POS or record an authorised expense. The next successful " +
+                        "sync will update these server-calculated figures.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Brand.ForegroundMuted,
                 )
@@ -244,45 +258,38 @@ private fun OverviewTab(state: FinanceUiState) {
         StatGrid(
             listOfNotNull(
                 StatSpec(
-                    "Net revenue (after GST)",
-                    pl.revenueMinor.asRupees(),
-                    "sales, once any GST collected is taken out",
-                ),
-                StatSpec(
-                    "Cost of goods sold",
-                    pl.cogsMinor.asRupees(),
-                    "what the food/drinks/items you sold actually cost you",
-                ),
-                StatSpec(
-                    "Gross profit",
-                    pl.grossProfitMinor.asRupees(),
-                    "net revenue less cost of goods sold",
-                    if (pl.grossProfitMinor < 0) Tone.Bad else Tone.Default,
-                ),
-                StatSpec("Expenses", pl.expensesMinor.asRupees(), "running costs this period"),
-                StatSpec(
-                    "Operating profit",
+                    "Operating profit · this period",
                     pl.netProfitMinor.asRupees(),
-                    "after equipment depreciation",
-                    if (pl.netProfitMinor < 0) Tone.Bad else Tone.Good,
+                    "net revenue less COGS, expenses and depreciation",
+                    if (pl.netProfitMinor < 0) Tone.Bad else Tone.Default,
                 ),
-                metrics?.let {
+                distributable?.let {
+                    val spendable = it.authoritativeSpendableCashMinor()
                     StatSpec(
-                        "Burn rate",
-                        it.burnRateMinor.asRupees(),
-                        if (it.burnRateMinor > 0) {
-                            "lost money this period, after cost of goods sold and expenses"
+                        "Safe-to-distribute cap",
+                        if (spendable == null) "Unavailable" else it.safeToDistributeMinor.asRupees(),
+                        if (spendable == null) {
+                            CASH_CONTRACT_UNAVAILABLE
                         } else {
-                            "profitable this period"
+                            "lower of profit-based and spendable-cash capacity after reserve"
                         },
-                        if (it.burnRateMinor > 0) Tone.Bad else Tone.Default,
+                        if (spendable == null) Tone.Bad else Tone.Default,
                     )
                 },
                 distributable?.let {
+                    val spendable = it.authoritativeSpendableCashMinor()
                     StatSpec(
-                        "Safe to distribute right now",
-                        it.safeToDistributeMinor.asRupees(),
-                        "after the reserve, capped by cash on hand · detail in Partners",
+                        SPENDABLE_FUNDS_LABEL,
+                        spendable?.asRupees() ?: "Unavailable",
+                        if (spendable == null) CASH_CONTRACT_UNAVAILABLE else SPENDABLE_FUNDS_DETAIL,
+                        if (spendable == null || spendable < 0) Tone.Bad else Tone.Default,
+                    )
+                },
+                metrics?.let {
+                    StatSpec(
+                        "Average order value · this period",
+                        it.aovMinor.asRupees(),
+                        countLabel(it.ordersCount, "paid order"),
                     )
                 },
             ),
@@ -356,16 +363,6 @@ private fun OverviewTab(state: FinanceUiState) {
                                 "${metrics.newCustomersCount} new"
                         },
                     ),
-                    StatSpec(
-                        "Burn rate",
-                        metrics.burnRateMinor.asRupees(),
-                        if (metrics.burnRateMinor > 0) {
-                            "lost money this period, after cost of goods sold and expenses"
-                        } else {
-                            "profitable this period"
-                        },
-                        if (metrics.burnRateMinor > 0) Tone.Bad else Tone.Good,
-                    ),
                 ),
             )
             Note(
@@ -373,11 +370,6 @@ private fun OverviewTab(state: FinanceUiState) {
                     "MRR/ARR stay hidden until recurring billing is operating.",
             )
         }
-
-        Note(
-            "Expenses, assets and partner capital movements can now be recorded right " +
-                "here. For monthly, quarterly and yearly P&L, open Reports in the web ERP.",
-        )
     }
 }
 
@@ -397,8 +389,11 @@ private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             ExpenseActionBar(state, canWrite, vm::openExpenseForm)
             EmptyBlock(
                 title = "No expenses recorded yet",
-                body = "Record one here, or in the web ERP (Finance → Expenses) — either " +
-                    "way it shows up here, newest first.",
+                body = if (canWrite) {
+                    "Use New expense to create the first evidence-backed entry. It is saved on this tablet first and syncs safely."
+                } else {
+                    "No expense entries are available for this account and branch."
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -422,7 +417,7 @@ private fun ExpensesTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             ExpenseRow(expense, state.categoryName(expense.categoryId))
         }
         item {
-            Note("Every expense ever recorded, newest first. Editing or deleting one still needs the web ERP.")
+            Note("Authoritative expense entries, newest first. Corrections require an authorised evidence-preserving workflow.")
         }
     }
 }
@@ -439,7 +434,7 @@ private fun ExpenseActionBar(state: FinanceUiState, canWrite: Boolean, onCreate:
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "Recorded total ${state.expenseTotalMinor.asRupees()}",
+                    "Loaded history total ${state.expenseTotalMinor.asRupees()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -524,9 +519,11 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boo
             AssetActionBar(state, canWrite, vm::openAssetForm)
             EmptyBlock(
                 title = "No assets registered yet",
-                body = "PS5s, TVs, the projector, kitchen equipment — register one here, " +
-                    "or in the web ERP (Finance → Assets). Depreciation is computed " +
-                    "straight-line automatically.",
+                body = if (canWrite) {
+                    "Register PS5s, TVs, projectors, kitchen equipment or other fixed assets. Straight-line depreciation is server-calculated."
+                } else {
+                    "No fixed assets are available for this account and branch."
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -548,7 +545,7 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boo
         }
         items(state.assets, key = { it.id }) { asset -> AssetRow(asset) }
         item {
-            Note("Straight-line depreciation, recomputed as of today on every load. Editing an asset still needs the web ERP.")
+            Note("Straight-line depreciation is recomputed by the server as of each successful load.")
         }
     }
 }
@@ -644,22 +641,37 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (!state.companyWidePartnerDataAvailable) {
+            Panel {
+                Text(
+                    "Company-wide finance access required",
+                    color = Brand.Foreground,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Partner ownership, capital and distribution capacity cannot be split " +
+                        "safely by branch. Sign in with a company-wide owner or partner " +
+                        "assignment to view these figures.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Brand.ForegroundMuted,
+                )
+            }
+            return@Column
+        }
         if (!canWrite) {
             ViewOnlyNotice(
                 "Partner capital is view only — ask a protected owner to record a movement.",
             )
         }
         if (distributable != null) {
-            DistributableCard(distributable)
+            DistributableCard(distributable, state.verifiedCostingCoverage)
         }
 
         if (state.partners.isEmpty()) {
             Panel {
                 Text("No partners yet", color = Brand.Foreground, fontWeight = FontWeight.Bold)
                 Text(
-                    "Add partners and record their capital in the web ERP " +
-                        "(Finance → Partners). Their capital balance and safe-to-take-out " +
-                        "share then appear here.",
+                    "No partner records are available. A protected owner must create the partner before capital movements can be recorded.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Brand.ForegroundMuted,
                 )
@@ -673,12 +685,16 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
             color = Brand.ForegroundMuted,
         )
 
-        val shareByPartnerId = distributable?.partners.orEmpty().associateBy { it.partnerId }
+        val shareByPartnerId = if (distributable?.authoritativeSpendableCashMinor() != null) {
+            distributable.partners.associateBy { it.partnerId }
+        } else {
+            emptyMap()
+        }
         state.partners.forEach { partner ->
             PartnerCard(
                 partner,
                 shareByPartnerId[partner.id],
-                canRecordCapital = canWrite,
+                canRecordCapital = canWrite && state.companyWidePartnerDataAvailable,
                 onRecordCapital = { vm.openCapitalEntryForm(partner) },
             )
         }
@@ -686,36 +702,34 @@ private fun PartnersTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: B
         Note(
             "Investment records money a partner put in; capital repayment records money " +
                 "paid back. Profit share is calculated separately and does not change " +
-                "contributed capital. Voiding a capital entry still needs the web ERP.",
+                "contributed capital. Corrections require an authorised reasoned void.",
         )
     }
 }
 
 @Composable
-private fun DistributableCard(d: DistributableProfit) {
-    Panel(border = Brand.Good) {
+private fun DistributableCard(d: DistributableProfit, costing: CostingCoverage?) {
+    val spendable = d.authoritativeSpendableCashMinor()
+    Panel(border = if (costing?.isComplete == true) Brand.BorderSubtle else Brand.Warning) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
-                    "Safe to distribute right now",
+                    "Safe-to-distribute cap · server calculation",
                     style = MaterialTheme.typography.titleLarge,
                     color = Brand.Foreground,
                 )
                 Text(
-                    "All-time profit, minus everything ever withdrawn, minus a " +
-                        "${d.reserveMonths}-month safety buffer — capped by actual cash on " +
-                        "hand, not just what the books say. Already charges straight-line " +
-                        "depreciation on gaming/kitchen equipment wearing out " +
-                        "(${d.lifetimeDepreciationMinor.asRupees()} to date), so this is the " +
-                        "real number, not an upper bound.",
+                    "The lower of profit-based capacity and spendable-cash capacity after a " +
+                        "${d.reserveMonths}-month operating reserve. Lifetime profit already includes " +
+                        "${d.lifetimeDepreciationMinor.asRupees()} of server-calculated depreciation.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
             }
             Text(
-                d.safeToDistributeMinor.asRupees(),
+                if (spendable == null) "Unavailable" else d.safeToDistributeMinor.asRupees(),
                 style = MaterialTheme.typography.headlineMedium,
-                color = Brand.Foreground,
+                color = if (spendable == null) Brand.Warning else Brand.Foreground,
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -734,18 +748,56 @@ private fun DistributableCard(d: DistributableProfit) {
                     d.reserveMinor.asRupees(),
                     "${d.reserveMonths} months at ${d.avgMonthlyCostMinor.asRupees()}/month",
                 ),
-                StatSpec("Cash on hand", d.liquidCashMinor.asRupees()),
+                StatSpec(
+                    SPENDABLE_FUNDS_LABEL,
+                    spendable?.asRupees() ?: "Unavailable",
+                    if (spendable == null) CASH_CONTRACT_UNAVAILABLE else SPENDABLE_FUNDS_DETAIL,
+                    if (spendable == null || spendable < 0) Tone.Bad else Tone.Default,
+                ),
             ),
             columns = 4,
             surface = Brand.SurfaceRaised,
         )
-        if (d.cashBasedCapacityMinor < d.profitBasedCapacityMinor) {
+        d.cashPosition?.let { position ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Provider settlement receivables: " +
+                    position.settlementReceivablesMinor.asRupees() +
+                    " · UPI/QR ${position.upiQrClearingMinor.asRupees()}" +
+                    " · Card ${position.cardClearingMinor.asRupees()}" +
+                    " · Wallet ${position.walletClearingMinor.asRupees()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.ForegroundMuted,
+            )
+        }
+        if (spendable == null) {
             Spacer(Modifier.height(10.dp))
             Text(
-                "Limited by cash on hand, not by profit — some of what you've earned is " +
-                    "currently tied up in stock or equipment.",
+                CASH_CONTRACT_UNAVAILABLE,
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.Warning,
+            )
+        } else if (d.cashBasedCapacityMinor < d.profitBasedCapacityMinor) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Limited by spendable cash, not by profit — some value may be tied up in " +
+                    "stock, equipment, or provider settlement receivables.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.Warning,
+            )
+        }
+        if (costing?.isComplete != true) {
+            Text(
+                if (costing == null) {
+                    "Costing coverage could not be verified. Do not distribute from this figure until " +
+                        "Finance refreshes and confirms recipe and ingredient costing."
+                } else {
+                    "Costing is incomplete, so profit-based distribution capacity may be overstated. " +
+                        "Do not distribute from this figure until recipe and ingredient costing is reconciled."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.Warning,
+                modifier = Modifier.padding(top = 8.dp),
             )
         }
         Text(
@@ -838,7 +890,7 @@ private fun PartnerCard(
 // ============================================================================
 // SHARED PIECES
 // ============================================================================
-private enum class Tone { Default, Good, Bad }
+private enum class Tone { Default, Bad }
 
 private data class StatSpec(
     val label: String,
@@ -848,7 +900,6 @@ private data class StatSpec(
 )
 
 private fun Tone.color(): Color = when (this) {
-    Tone.Good -> Brand.Good
     Tone.Bad -> Brand.Danger
     Tone.Default -> Brand.Foreground
 }
@@ -991,6 +1042,25 @@ private fun HairLine() {
 @Composable
 private fun Note(text: String) {
     Text(text, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
+}
+
+@Composable
+private fun FinanceOfflineBanner(lastUpdatedAtMillis: Long?) {
+    val lastUpdated = lastUpdatedAtMillis?.let {
+        remember(it) {
+            DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it))
+        }
+    }
+    OperationalBanner(
+        title = "Offline · showing saved financial data",
+        detail = buildString {
+            if (lastUpdated != null) append("Last successful server load: $lastUpdated. ")
+            append("New authorised entries stay on this tablet and sync automatically after reconnection.")
+        },
+        tone = UiTone.Warning,
+        icon = Icons.Default.CloudOff,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+    )
 }
 
 @Composable
@@ -1204,8 +1274,20 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         PickerField(
             "Paid via",
             paidViaLabel(paidVia),
-            listOf("cash" to "Cash", "upi" to "UPI", "card" to "Card", "bank" to "Bank transfer"),
+            listOf(
+                "cash" to "Cash",
+                "upi" to "UPI (from business bank)",
+                "card" to "Business debit card",
+                "bank" to "Bank transfer",
+            ),
         ) { paidVia = it }
+        Text(
+            "UPI and business debit-card expenses reduce the Bank balance. " +
+                "Business credit-card liabilities are not supported yet; do not record " +
+                "a credit-card purchase as Card.",
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
+        )
         OutlinedTextField(
             value = vendorName, onValueChange = { vendorName = it },
             label = { Text("Vendor (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),

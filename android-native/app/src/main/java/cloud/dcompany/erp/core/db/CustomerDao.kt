@@ -27,6 +27,29 @@ interface CustomerDao {
         deleteCacheNotIn(rows.map { it.id }.ifEmpty { listOf("") })
     }
 
+    // ------------------------------------------------------ purchase history
+    @Query(
+        "SELECT * FROM customer_order_history_cache " +
+            "WHERE customerId = :customerId ORDER BY createdAt DESC",
+    )
+    suspend fun history(customerId: String): List<CustomerOrderHistoryEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertHistory(rows: List<CustomerOrderHistoryEntity>)
+
+    @Query(
+        "DELETE FROM customer_order_history_cache " +
+            "WHERE customerId = :customerId AND id NOT IN (:keepIds)",
+    )
+    suspend fun deleteHistoryNotIn(customerId: String, keepIds: List<String>)
+
+    /** Replace only the selected customer's bounded history, never another profile's cache. */
+    @Transaction
+    suspend fun replaceHistory(customerId: String, rows: List<CustomerOrderHistoryEntity>) {
+        upsertHistory(rows)
+        deleteHistoryNotIn(customerId, rows.map { it.id }.ifEmpty { listOf("") })
+    }
+
     // -------------------------------------------------------- local writes
     /** Pending or rejected only — a synced row is deleted, see [deleteSynced]. */
     @Query("SELECT * FROM local_customers WHERE state != 'synced' ORDER BY createdAtMillis DESC")

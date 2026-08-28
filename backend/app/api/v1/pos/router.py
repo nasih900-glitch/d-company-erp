@@ -100,10 +100,12 @@ from app.services.pos.membership_benefits import (
 )
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.points import (
+    apply_refund_loyalty_adjustment,
     consume_points_redemption,
     minor_to_points,
     points_redeemed_for_order,
     rank_up_bonus_points,
+    record_order_loyalty_settlement,
     reserve_catalog_reward_redemption,
     reserve_points_redemption,
 )
@@ -126,6 +128,15 @@ from app.services.pos.shift_validation import (
 log = get_logger(__name__)
 
 router = APIRouter()
+
+PosPaymentMethod = Literal["cash", "card", "upi", "qr", "wallet"]
+_POS_PAYMENT_METHOD_ORDER: tuple[PosPaymentMethod, ...] = (
+    "cash",
+    "card",
+    "upi",
+    "qr",
+    "wallet",
+)
 _KITCHEN_ITEM_TYPES = {"food", "drink", "dessert"}
 _LEGACY_VOID_REASONS = {
     "Legacy cancellation - reason not recorded",
@@ -304,7 +315,7 @@ class CheckoutClaimRead(BaseModel):
 
 
 class PaymentCreate(BaseModel):
-    method: Literal["cash", "card", "upi", "qr", "wallet"]
+    method: PosPaymentMethod
     amount_minor: int = Field(gt=0)
     tendered_minor: int | None = Field(default=None, ge=0)
     ref_external: str | None = Field(default=None, max_length=200)
@@ -342,7 +353,7 @@ class PaymentRead(BaseModel):
     id: UUID
     order_id: UUID
     shift_id: UUID
-    method: Literal["cash", "card", "upi", "qr", "wallet"]
+    method: PosPaymentMethod
     # amount_minor is the total actually collected/banked (bill + tip), which
     # preserves the pre-existing API meaning. bill_amount_minor makes the split
     # explicit so receipt clients never add the tip twice.
@@ -618,6 +629,12 @@ class PosRefundRequestRead(BaseModel):
     refund_id: UUID | None = None
     client_action_id: str
     customer_spend_reconciled: bool | None = None
+    loyalty_reconciliation_state: Literal[
+        "not_applicable",
+        "applied",
+        "legacy_redemption_restored",
+        "legacy_unknown",
+    ] | None = None
     note: str | None = None
 
 
@@ -771,45 +788,60 @@ async def _upsert_and_attach_customer(
     phone: str,
     name: str | None,
     order: Order,
+    at: datetime,
     order_lines: list[OrderLine] | None = None,
 ) -> Customer:
     """Find or create customer by phone, bump visit_count + total_spent,
     award loyalty points (1× food, 2× gaming/hookah/streaming/events, × membership tier).
     """
-    existing = (
-        await session.execute(
-            select(Customer).where(
-                Customer.company_id == company_id,
-                Customer.phone == phone,
-                Customer.deleted_at.is_(None),
-            ).with_for_update()
-        )
-    ).scalar_one_or_none()
-    now = datetime.now(timezone.utc)
-
-    # Resolve membership multiplier if customer already exists and has an active sub
-    multiplier = 1.0
-    if existing:
-        sub = (
+    # Finalization has a pending Order(open->paid) update and Payment insert.
+    # Resolve all customer/menu reads without autoflush, then attach the stable
+    # customer ID before the single source-snapshot flush below. Otherwise a
+    # query here can flush a paid invoice without its customer linkage and a
+    # second UPDATE would correctly be rejected by the paid-source DB guard.
+    with session.no_autoflush:
+        existing = (
             await session.execute(
-                select(CustomerMembership, MembershipTier)
-                .join(MembershipTier, MembershipTier.id == CustomerMembership.tier_id)
-                .where(
-                    CustomerMembership.customer_id == existing.id,
-                    CustomerMembership.starts_at <= now,
-                    CustomerMembership.expires_at > now,
-                    CustomerMembership.revoked_at.is_(None),
-                )
-                .limit(1)
+                select(Customer).where(
+                    Customer.company_id == company_id,
+                    Customer.phone == phone,
+                    Customer.deleted_at.is_(None),
+                ).with_for_update()
             )
-        ).first()
-        if sub:
-            multiplier = float(sub.MembershipTier.point_multiplier or 1)
+        ).scalar_one_or_none()
+        # Use the authoritative checkout timestamp throughout this transaction.
+        # In particular, the immutable loyalty settlement must match the invoice
+        # issue time exactly rather than a second wall-clock sample.
+        now = at
 
-    points_earned = await _compute_points_with_multiplier(
-        session, order=order, order_lines=order_lines or [],
-        membership_multiplier=multiplier,
-    )
+        # Resolve membership multiplier if the customer has an active plan.
+        multiplier = 1.0
+        if existing:
+            sub = (
+                await session.execute(
+                    select(CustomerMembership, MembershipTier)
+                    .join(
+                        MembershipTier,
+                        MembershipTier.id == CustomerMembership.tier_id,
+                    )
+                    .where(
+                        CustomerMembership.customer_id == existing.id,
+                        CustomerMembership.starts_at <= now,
+                        CustomerMembership.expires_at > now,
+                        CustomerMembership.revoked_at.is_(None),
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if sub:
+                multiplier = float(sub.MembershipTier.point_multiplier or 1)
+
+        points_earned = await _compute_points_with_multiplier(
+            session,
+            order=order,
+            order_lines=order_lines or [],
+            membership_multiplier=multiplier,
+        )
 
     if existing:
         old_lifetime = int(existing.lifetime_gaming_points_earned or 0)
@@ -829,6 +861,14 @@ async def _upsert_and_attach_customer(
         if name and not existing.name:
             existing.name = name
         order.customer_id = existing.id
+        await record_order_loyalty_settlement(
+            session,
+            order=order,
+            customer=existing,
+            points_earned=int(points_earned),
+            rank_bonus_points_awarded=bonus,
+            at=now,
+        )
         return existing
     else:
         bonus = rank_up_bonus_points(old_lifetime=0, new_lifetime=int(points_earned))
@@ -846,6 +886,14 @@ async def _upsert_and_attach_customer(
         )
         session.add(customer)
         order.customer_id = customer.id
+        await record_order_loyalty_settlement(
+            session,
+            order=order,
+            customer=customer,
+            points_earned=int(points_earned),
+            rank_bonus_points_awarded=bonus,
+            at=now,
+        )
         return customer
 
 
@@ -1098,8 +1146,8 @@ async def _allocate_pos_refund_receipt(
             "Cannot issue the refund receipt because the branch identity is invalid."
         )
     return await InvoiceNumberService(session).allocate(
+        company_id=company_id,
         branch_id=branch_id,
-        branch_code=branch.code or "RF",
         prefix="R",
         series="pos_refund",
         at=occurred_at,
@@ -1245,6 +1293,9 @@ def _pos_refund_request_read(
         provider_verified_at=withdrawal.verified_at if withdrawal else None,
         customer_spend_reconciled=(
             refund.customer_spend_reconciled if refund else None
+        ),
+        loyalty_reconciliation_state=(
+            refund.loyalty_reconciliation_state if refund else None
         ),
         note=refund_request.note,
     )
@@ -1658,6 +1709,22 @@ async def _materialize_legacy_kitchen_line_state(session, order: Order) -> None:
         return
     for line in existing_lines:
         line.kitchen_status = target_status
+        if target_status == "served":
+            # Migration 0042 materialises every legacy served batch. This is
+            # the fail-safe for an anomalous row created by an older writer
+            # after that migration: preserve the best historical event time
+            # instead of falsely treating a late append as today's service.
+            line.kitchen_served_at = (
+                getattr(line, "kitchen_served_at", None)
+                or getattr(order, "updated_at", None)
+                or getattr(order, "kitchen_ready_at", None)
+                or getattr(line, "updated_at", None)
+                or getattr(line, "kitchen_released_at", None)
+                or getattr(line, "created_at", None)
+                or datetime.now(timezone.utc)
+            )
+        else:
+            line.kitchen_served_at = None
 
 
 async def _reaggregate_active_order_lines(
@@ -1770,7 +1837,7 @@ def _order_line_read(line: OrderLine, item: MenuItem) -> OrderLineRead:
         variant_id=line.variant_id,
         variant_snapshot=getattr(line, "variant_snapshot", None),
         modifiers=line.modifiers,
-        name=item.name,
+        name=line.menu_item_name_snapshot,
         sku=item.sku,
         hsn_or_sac=line.hsn_or_sac or item.hsn_code or "",
         qty=float(line.qty),
@@ -1890,8 +1957,8 @@ async def _finalize_order(
     timezone_name = branch.timezone or await company_timezone(session, company_id)
     if not order.invoice_no:
         order.invoice_no, order.fiscal_year = await InvoiceNumberService(session).allocate(
+            company_id=company_id,
             branch_id=order.branch_id,
-            branch_code=branch.code or "MN",
             at=at,
             timezone_name=timezone_name,
         )
@@ -1965,6 +2032,7 @@ async def _finalize_order(
             name=order.customer_name,
             order=order,
             order_lines=list(order_lines),
+            at=at,
         )
 
 
@@ -2173,6 +2241,8 @@ async def create_order(
             order_id=order.id,
             client_line_id=requested_line.client_line_id,
             menu_item_id=priced_line.menu_item_id,
+            menu_item_name_snapshot=priced_line.name,
+            menu_item_type_snapshot=priced_line.item_type,
             variant_id=(
                 priced_line.variant_snapshot.id
                 if priced_line.variant_snapshot is not None
@@ -2345,6 +2415,8 @@ async def add_order_lines(
             order_id=order.id,
             client_line_id=requested_line.client_line_id,
             menu_item_id=priced_line.menu_item_id,
+            menu_item_name_snapshot=priced_line.name,
+            menu_item_type_snapshot=priced_line.item_type,
             variant_id=(
                 priced_line.variant_snapshot.id
                 if priced_line.variant_snapshot is not None
@@ -3445,6 +3517,11 @@ class OrderListItem(BaseModel):
     paid_minor: int = 0
     refundable_minor: int = 0
     pending_refund_minor: int = 0
+    # Exact distinct rails actually collected for this order. The server still
+    # resolves and validates `mode=original` when accepting a refund; this
+    # summary exists so clients can label that action truthfully and hide it
+    # for mixed-payment history instead of guessing.
+    payment_methods: list[PosPaymentMethod] = Field(default_factory=list)
 
 
 @router.get("/orders", response_model=list[OrderListItem])
@@ -3527,15 +3604,22 @@ async def list_orders(
             )
         ).all()
     )
-    paid_by_order = dict(
-        (
-            await session.execute(
-                select(Payment.order_id, func.coalesce(func.sum(Payment.amount_minor), 0))
-                .where(Payment.order_id.in_(order_ids))
-                .group_by(Payment.order_id)
+    payment_rows = (
+        await session.execute(
+            select(
+                Payment.order_id,
+                Payment.method,
+                func.coalesce(func.sum(Payment.amount_minor), 0),
             )
-        ).all()
-    )
+            .where(Payment.order_id.in_(order_ids))
+            .group_by(Payment.order_id, Payment.method)
+        )
+    ).all()
+    paid_by_order: dict[UUID, int] = {}
+    methods_by_order: dict[UUID, set[str]] = {}
+    for order_id, method, amount in payment_rows:
+        paid_by_order[order_id] = paid_by_order.get(order_id, 0) + int(amount or 0)
+        methods_by_order.setdefault(order_id, set()).add(str(method))
     refunded_by_order = dict(
         (
             await session.execute(
@@ -3592,6 +3676,11 @@ async def list_orders(
             paid_minor=paid,
             refundable_minor=max(0, paid - refunded - reserved),
             pending_refund_minor=reserved,
+            payment_methods=[
+                method
+                for method in _POS_PAYMENT_METHOD_ORDER
+                if method in methods_by_order.get(o.id, set())
+            ],
         ))
     return out
 
@@ -3619,6 +3708,14 @@ class ShiftRead(BaseModel):
     # Accurate name for Payment receipts + membership receipts. Payment rows
     # may include tips and this is before refunds, so this is not net sales.
     gross_collections_minor: int
+    # Gross receipts by payment rail across POS and membership collections.
+    # These remain separate from ``expected_minor``: only cash affects the
+    # physical drawer, while card/UPI/other receipts still belong in the
+    # shift's commercial reconciliation.
+    cash_collections_minor: int
+    card_collections_minor: int
+    upi_collections_minor: int
+    other_collections_minor: int
     settled_pos_refunds_minor: int
     settled_membership_refunds_minor: int
     total_refunds_minor: int
@@ -3659,6 +3756,28 @@ async def list_shifts(
         .correlate(Shift)
         .scalar_subquery()
     )
+
+    def payment_rail_total(method: str):
+        pos_total = (
+            select(func.coalesce(func.sum(Payment.amount_minor), 0))
+            .where(Payment.shift_id == Shift.id, Payment.method == method)
+            .correlate(Shift)
+            .scalar_subquery()
+        )
+        membership_total = (
+            select(func.coalesce(func.sum(MembershipPayment.amount_minor), 0))
+            .where(
+                MembershipPayment.shift_id == Shift.id,
+                MembershipPayment.method == method,
+            )
+            .correlate(Shift)
+            .scalar_subquery()
+        )
+        return pos_total + membership_total
+
+    cash_collections_subq = payment_rail_total("cash")
+    card_collections_subq = payment_rail_total("card")
+    upi_collections_subq = payment_rail_total("upi")
     membership_refunds_subq = (
         select(func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0))
         .where(MembershipRefundSettlement.shift_id == Shift.id)
@@ -3678,6 +3797,9 @@ async def list_shifts(
             User.email,
             sales_subq.label("pos_sales"),
             membership_sales_subq.label("membership_sales"),
+            cash_collections_subq.label("cash_collections"),
+            card_collections_subq.label("card_collections"),
+            upi_collections_subq.label("upi_collections"),
             pos_refunds_subq.label("pos_refunds"),
             membership_refunds_subq.label("membership_refunds"),
         )
@@ -3700,12 +3822,24 @@ async def list_shifts(
         opener_email,
         pos_sales_value,
         membership_sales_value,
+        cash_collections_value,
+        card_collections_value,
+        upi_collections_value,
         pos_refunds_value,
         membership_refunds_value,
     ) in rows:
         pos_sales = int(pos_sales_value or 0)
         membership_sales = int(membership_sales_value or 0)
         gross_collections = pos_sales + membership_sales
+        cash_collections = int(cash_collections_value or 0)
+        card_collections = int(card_collections_value or 0)
+        upi_collections = int(upi_collections_value or 0)
+        other_collections = (
+            gross_collections
+            - cash_collections
+            - card_collections
+            - upi_collections
+        )
         pos_refunds = int(pos_refunds_value or 0)
         membership_refunds = int(membership_refunds_value or 0)
         total_refunds = pos_refunds + membership_refunds
@@ -3720,6 +3854,10 @@ async def list_shifts(
                 pos_sales_minor=pos_sales,
                 membership_sales_minor=membership_sales,
                 gross_collections_minor=gross_collections,
+                cash_collections_minor=cash_collections,
+                card_collections_minor=card_collections,
+                upi_collections_minor=upi_collections,
+                other_collections_minor=other_collections,
                 settled_pos_refunds_minor=pos_refunds,
                 settled_membership_refunds_minor=membership_refunds,
                 total_refunds_minor=total_refunds,
@@ -4134,8 +4272,36 @@ async def _settle_pos_refund(
         branch_id=refund_request.branch_id,
         occurred_at=settled_at,
     )
+    refund_id = uuid4()
+    customer_spend_reconciled = order.customer_id is None
+
+    if refund_request.settlement_method == "cash":
+        shift.expected_minor = int(shift.expected_minor or 0) - amount
+
+    # Once value has physically moved, the immutable settlement must not roll
+    # back because an ancillary LTV record drifted. Forward orders normally
+    # reconcile here; legacy/deleted/inconsistent customers are explicitly
+    # flagged for owner repair while the real refund remains recorded.
+    if order.customer_id is not None:
+        customer = await session.get(Customer, order.customer_id, with_for_update=True)
+        if customer is not None and customer.company_id == refund_request.company_id:
+            current_spend = int(customer.total_spent_minor or 0)
+            if current_spend >= amount:
+                customer.total_spent_minor = current_spend - amount
+                customer_spend_reconciled = True
+            else:
+                # Never hide pre-existing LTV drift by flooring the accumulator
+                # and claiming success. The payout remains immutable and the
+                # owner reconciliation queue derives an authoritative balance
+                # from normalized payment/refund facts.
+                customer_spend_reconciled = False
+
+    # Keep the Refund pending while loyalty derives its state.  The no-autoflush
+    # boundary prevents a placeholder state from becoming immutable.  Once the
+    # final state is assigned we flush this parent explicitly, before the
+    # pending adjustment's FK/DB guard needs to read it.
     refund = Refund(
-        id=uuid4(),
+        id=refund_id,
         request_id=refund_request.id,
         order_id=order.id,
         company_id=refund_request.company_id,
@@ -4159,34 +4325,26 @@ async def _settle_pos_refund(
         receipt_no=receipt_no,
         receipt_fiscal_year=receipt_fiscal_year,
         receipt_issued_at=accounting_finalized_at,
-        customer_spend_reconciled=order.customer_id is None,
+        customer_spend_reconciled=customer_spend_reconciled,
+        loyalty_reconciliation_state="legacy_unknown",
         note=refund_request.note,
     )
     session.add(refund)
-
-    if refund_request.settlement_method == "cash":
-        shift.expected_minor = int(shift.expected_minor or 0) - amount
-
-    # Once value has physically moved, the immutable settlement must not roll
-    # back because an ancillary LTV record drifted. Forward orders normally
-    # reconcile here; legacy/deleted/inconsistent customers are explicitly
-    # flagged for owner repair while the real refund remains recorded.
-    if order.customer_id is not None:
-        customer = await session.get(Customer, order.customer_id, with_for_update=True)
-        if customer is not None and customer.company_id == refund_request.company_id:
-            current_spend = int(customer.total_spent_minor or 0)
-            if current_spend >= amount:
-                customer.total_spent_minor = current_spend - amount
-                refund.customer_spend_reconciled = True
-            else:
-                # Never hide pre-existing LTV drift by flooring the accumulator
-                # and claiming success. The payout remains immutable and the
-                # owner reconciliation queue derives an authoritative balance
-                # from normalized payment/refund facts.
-                refund.customer_spend_reconciled = False
+    with session.no_autoflush:
+        loyalty_reconciliation_state = await apply_refund_loyalty_adjustment(
+            session,
+            refund_id=refund_id,
+            order=order,
+            company_id=refund_request.company_id,
+            paid_total_minor=paid_total,
+            cumulative_refunded_minor=refunded_before + amount,
+            at=accounting_finalized_at,
+        )
+    refund.loyalty_reconciliation_state = loyalty_reconciliation_state
 
     if refunded_before + amount >= paid_total:
         order.status = "refunded"
+    await session.flush([refund])
 
     # A monetary refund is not proof that prepared food or consumed gaming
     # inventory returned to stock. Inventory reversal requires a separate,
@@ -4427,6 +4585,17 @@ async def create_pos_refund_request(
     )
     if order.status not in {"paid", "refunded"}:
         raise BusinessRuleError("Only a paid order can be refunded.")
+    if (
+        order.closed_at is None
+        or order.invoice_issued_at is None
+        or not (order.invoice_no or "").strip()
+        or not (order.fiscal_year or "").strip()
+    ):
+        raise BusinessRuleError(
+            "This paid order is missing immutable invoice evidence. Ask a protected "
+            "owner to reconcile the sale before refunding it. No refund task or cash "
+            "handover was created."
+        )
 
     # The order lock serializes both duplicate client_action_id recovery and
     # different-key partial refunds, preventing over-reservation.

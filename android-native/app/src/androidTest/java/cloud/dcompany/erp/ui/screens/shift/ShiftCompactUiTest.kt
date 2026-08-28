@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -70,6 +72,8 @@ class ShiftCompactUiTest {
             .performClick()
 
         compose.runOnIdle { assertEquals(21_050L, submittedMinor) }
+        compose.onNodeWithContentDescription("Opening float (₹), 210.50")
+            .assertIsNotFocused()
     }
 
     @Test
@@ -114,5 +118,47 @@ class ShiftCompactUiTest {
             .performClick()
 
         compose.onNodeWithText("Close current shift").assertIsDisplayed()
+    }
+
+    @Test
+    fun denominationInputsRemainReachableInsideCompactShiftScroll() {
+        compose.setContent {
+            DCompanyTheme {
+                val counts = remember { mutableStateMapOf<Long, String>() }
+                Box(Modifier.width(872.dp).height(360.dp)) {
+                    CompactShiftPanels(
+                        stateIdentity = "open:shift-1",
+                        currentPanel = {
+                            Column {
+                                Text("Count the drawer")
+                                DenominationCountGrid(
+                                    compactLayout = true,
+                                    counts = counts,
+                                    onCountChange = { note, value -> counts[note] = value },
+                                    enabled = true,
+                                )
+                                Text("Close shift")
+                            }
+                        },
+                        historyPanel = {
+                            Box(Modifier.height(280.dp)) { Text("Past shifts") }
+                        },
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Count of ₹500 notes")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performTextReplacement("1")
+
+        compose.onNodeWithText("₹500.00")
+            .performScrollTo()
+            .assertIsDisplayed()
+        compose.onNodeWithText("Close shift")
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 }

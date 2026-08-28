@@ -34,6 +34,13 @@ data class AuditLogUiState(
     val error: String? = null,
     val entries: List<AuditEntry> = emptyList(),
     val area: String? = null,
+    val queryDraft: String = "",
+    val appliedQuery: String? = null,
+    val entityType: String? = null,
+    val action: String? = null,
+    val facets: AuditFacets = AuditFacets(),
+    val facetsLoading: Boolean = false,
+    val facetsError: String? = null,
     val endReached: Boolean = false,
     val selected: AuditEntry? = null,
 )
@@ -53,6 +60,7 @@ class AuditLogViewModel(
     private var auditToken: String? = null
     private var expiryJob: Job? = null
     private var loadJob: Job? = null
+    private var facetsJob: Job? = null
 
     fun unlock(password: String) {
         if (_state.value.unlocking) return
@@ -74,8 +82,10 @@ class AuditLogViewModel(
                     entries = emptyList(),
                     error = null,
                     endReached = false,
+                    facetsLoading = true,
                 )
                 scheduleExpiry(response.expiresIn)
+                loadFacets(response.auditToken)
                 loadFirstPage(clearEntries = true)
             } catch (e: CancellationException) {
                 throw e
@@ -92,15 +102,73 @@ class AuditLogViewModel(
     fun lock() {
         expiryJob?.cancel()
         loadJob?.cancel()
+        facetsJob?.cancel()
         auditToken = null
         _state.value = AuditLogUiState()
     }
 
-    fun refresh() = loadFirstPage(clearEntries = false)
+    fun refresh() {
+        val token = auditToken ?: return
+        if (_state.value.facetsError != null) {
+            _state.value = _state.value.copy(facetsLoading = true, facetsError = null)
+            loadFacets(token)
+        }
+        loadFirstPage(clearEntries = false)
+    }
 
     fun selectArea(area: String?) {
         if (_state.value.locked || area == _state.value.area) return
         _state.value = _state.value.copy(area = area, entries = emptyList(), endReached = false)
+        loadFirstPage(clearEntries = true)
+    }
+
+    fun queryChanged(value: String) {
+        _state.value = _state.value.copy(queryDraft = value.take(MAX_QUERY_LENGTH))
+    }
+
+    fun applyQuery() {
+        if (_state.value.locked) return
+        val normalized = _state.value.queryDraft.trim().takeIf(String::isNotEmpty)
+        if (normalized == _state.value.appliedQuery) return
+        _state.value = _state.value.copy(
+            appliedQuery = normalized,
+            entries = emptyList(),
+            endReached = false,
+        )
+        loadFirstPage(clearEntries = true)
+    }
+
+    fun selectEntityType(value: String?) = selectFacet(entityType = value, action = _state.value.action)
+
+    fun selectAction(value: String?) = selectFacet(entityType = _state.value.entityType, action = value)
+
+    fun clearDetailedFilters() {
+        if (_state.value.locked) return
+        val current = _state.value
+        if (current.queryDraft.isEmpty() && current.appliedQuery == null &&
+            current.entityType == null && current.action == null
+        ) return
+        _state.value = current.copy(
+            queryDraft = "",
+            appliedQuery = null,
+            entityType = null,
+            action = null,
+            entries = emptyList(),
+            endReached = false,
+        )
+        loadFirstPage(clearEntries = true)
+    }
+
+    private fun selectFacet(entityType: String?, action: String?) {
+        if (_state.value.locked ||
+            (entityType == _state.value.entityType && action == _state.value.action)
+        ) return
+        _state.value = _state.value.copy(
+            entityType = entityType,
+            action = action,
+            entries = emptyList(),
+            endReached = false,
+        )
         loadFirstPage(clearEntries = true)
     }
 
@@ -117,6 +185,9 @@ class AuditLogViewModel(
                     limit = PAGE_SIZE,
                     beforeId = beforeId,
                     area = snapshot.area,
+                    entityType = snapshot.entityType,
+                    action = snapshot.action,
+                    query = snapshot.appliedQuery,
                 )
                 if (token != auditToken) return@launch
                 _state.value = _state.value.copy(
@@ -152,12 +223,18 @@ class AuditLogViewModel(
             endReached = false,
         )
         val area = _state.value.area
+        val entityType = _state.value.entityType
+        val action = _state.value.action
+        val query = _state.value.appliedQuery
         loadJob = viewModelScope.launch {
             try {
                 val rows = api.list(
                     auditToken = token,
                     limit = PAGE_SIZE,
                     area = area,
+                    entityType = entityType,
+                    action = action,
+                    query = query,
                 )
                 if (token != auditToken) return@launch
                 _state.value = _state.value.copy(
@@ -175,8 +252,14 @@ class AuditLogViewModel(
 
     private fun handleLoadFailure(error: Exception, loadingMore: Boolean) {
         val apiError = error as? ApiException
-        if (apiError?.status == 401) {
-            expireAuditAccess("Audit access expired. Re-enter your password to continue.")
+        if (apiError?.status == 401 || apiError?.status == 403) {
+            expireAuditAccess(
+                if (apiError.status == 403) {
+                    "Audit access is no longer permitted for this account."
+                } else {
+                    "Audit access expired. Re-enter your password to continue."
+                },
+            )
             return
         }
         _state.value = _state.value.copy(
@@ -190,6 +273,42 @@ class AuditLogViewModel(
         )
     }
 
+    private fun loadFacets(token: String) {
+        facetsJob?.cancel()
+        facetsJob = viewModelScope.launch {
+            try {
+                val facets = api.facets(token)
+                if (token != auditToken) return@launch
+                _state.value = _state.value.copy(
+                    facets = facets,
+                    facetsLoading = false,
+                    facetsError = null,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val apiError = error as? ApiException
+                if (apiError?.status == 401 || apiError?.status == 403) {
+                    expireAuditAccess(
+                        if (apiError.status == 403) {
+                            "Audit access is no longer permitted for this account."
+                        } else {
+                            "Audit access expired. Re-enter your password to continue."
+                        },
+                    )
+                    return@launch
+                }
+                if (token == auditToken) {
+                    _state.value = _state.value.copy(
+                        facetsLoading = false,
+                        facetsError = apiError?.message
+                            ?: "Advanced filters could not load. Area and search filters still work.",
+                    )
+                }
+            }
+        }
+    }
+
     private fun scheduleExpiry(expiresInSeconds: Int) {
         expiryJob?.cancel()
         expiryJob = viewModelScope.launch {
@@ -201,6 +320,7 @@ class AuditLogViewModel(
     private fun expireAuditAccess(message: String) {
         loadJob?.cancel()
         expiryJob?.cancel()
+        facetsJob?.cancel()
         auditToken = null
         _state.value = AuditLogUiState(unlockError = message)
     }
@@ -212,5 +332,6 @@ class AuditLogViewModel(
 
     private companion object {
         const val PAGE_SIZE = 50
+        const val MAX_QUERY_LENGTH = 200
     }
 }

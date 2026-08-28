@@ -82,8 +82,13 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var beginHandoff by remember { mutableStateOf<RefundTask?>(null) }
     var confirmCash by remember { mutableStateOf<RefundTask?>(null) }
+    var beginProvider by remember { mutableStateOf<RefundTask?>(null) }
+    var confirmProvider by remember { mutableStateOf<RefundTask?>(null) }
     var cancelRequest by remember { mutableStateOf<RefundTask?>(null) }
     var withdrawTask by remember { mutableStateOf<RefundTask?>(null) }
+    var resolveCashTask by remember { mutableStateOf<RefundTask?>(null) }
+    var withdrawProviderTask by remember { mutableStateOf<RefundTask?>(null) }
+    var resolveProviderTask by remember { mutableStateOf<RefundTask?>(null) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
@@ -144,8 +149,8 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
         }
         if (!state.online) {
             OperationalBanner(
-                title = "Offline — no cash payout is authorised",
-                detail = "Requests can be preserved locally, but a cash handover must wait for live server acceptance.",
+                title = "Offline — no new payout is authorised",
+                detail = "Requests can be preserved locally, but cash and provider payout starts require live server acceptance.",
                 tone = UiTone.Warning,
                 icon = Icons.Default.CloudOff,
             )
@@ -210,7 +215,12 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                                 onCancel = { cancelRequest = task },
                                 onBeginHandoff = { beginHandoff = task },
                                 onCashHanded = { confirmCash = task },
-                                onWithdraw = { withdrawTask = task },
+                                onBeginProvider = { beginProvider = task },
+                                onProviderCompleted = { confirmProvider = task },
+                                onWithdrawCash = { withdrawTask = task },
+                                onResolveCash = { resolveCashTask = task },
+                                onWithdrawProvider = { withdrawProviderTask = task },
+                                onResolveProvider = { resolveProviderTask = task },
                             )
                         }
                     }
@@ -281,7 +291,8 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
-                                    "${order.type} · collected ${order.paidMinor.asRupees()}",
+                                    "${order.type} · collected ${order.paidMinor.asRupees()} · " +
+                                        refundRailSummary(order.paymentMethods),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Brand.ForegroundMuted,
                                 )
@@ -294,6 +305,33 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
                             },
                         )
                         if (index != state.visible.lastIndex) PanelDivider()
+                    }
+                }
+
+                if (state.recentTasks.isNotEmpty()) {
+                    item("history-divider") { PanelDivider() }
+                    item("history-heading") {
+                        Column(
+                            Modifier.fillMaxWidth().background(Brand.SurfaceRaised)
+                                .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                "RECENT REFUND HISTORY",
+                                color = Brand.ForegroundFaint,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "Server-backed receipts and the employees recorded at each money stage.",
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    items(state.recentTasks, key = { "refund-history-${it.localId}" }) { task ->
+                        RefundHistoryRow(task)
+                        PanelDivider()
                     }
                 }
             }
@@ -352,13 +390,50 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
         )
     }
 
+    beginProvider?.let { task ->
+        AlertDialog(
+            onDismissRequest = { if (!state.busy) beginProvider = null },
+            title = { Text("Open server-confirmed provider payout?") },
+            text = {
+                Text(
+                    "Verify the customer, ${task.amountMinor.asRupees()}, and original ${task.settlementMethod ?: "non-cash"} rail. " +
+                        "The server must open this exact payout before you use the provider app.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !state.busy && state.online && state.canManageMoney,
+                    onClick = {
+                        beginProvider = null
+                        vm.beginProviderPayout(task.localId)
+                    },
+                ) { Text("Verify with server") }
+            },
+            dismissButton = {
+                TextButton(onClick = { beginProvider = null }, enabled = !state.busy) { Text("Not yet") }
+            },
+        )
+    }
+
+    confirmProvider?.let { task ->
+        ProviderCompletionDialog(
+            task = task,
+            busy = state.busy,
+            onDismiss = { confirmProvider = null },
+            onConfirm = { reference ->
+                confirmProvider = null
+                vm.confirmProviderCompleted(task.localId, reference)
+            },
+        )
+    }
+
     cancelRequest?.let { task ->
         AlertDialog(
             onDismissRequest = { if (!state.busy) cancelRequest = null },
-            title = { Text("Cancel refused cash request?") },
+            title = { Text("Cancel refused request?") },
             text = {
                 Text(
-                    "Use this only because the server refused the request and no cash was authorised or handed over. It does not create or withdraw a server refund.",
+                    "Use this only because the server refused the request and no cash or provider payout occurred. It does not create or withdraw a server refund.",
                 )
             },
             confirmButton = {
@@ -389,6 +464,45 @@ fun RefundsScreen(vm: RefundsViewModel = viewModel()) {
         )
     }
 
+    resolveCashTask?.let { task ->
+        ResolveCashHandoffDialog(
+            task = task,
+            busy = state.busy,
+            online = state.online,
+            onDismiss = { resolveCashTask = null },
+            onConfirm = { reason ->
+                resolveCashTask = null
+                vm.resolveStartedCashHandoff(task.localId, reason)
+            },
+        )
+    }
+
+    withdrawProviderTask?.let { task ->
+        WithdrawProviderDialog(
+            task = task,
+            busy = state.busy,
+            online = state.online,
+            onDismiss = { withdrawProviderTask = null },
+            onConfirm = { reason ->
+                withdrawProviderTask = null
+                vm.withdrawProviderRefund(task.localId, reason)
+            },
+        )
+    }
+
+    resolveProviderTask?.let { task ->
+        ResolveProviderPayoutDialog(
+            task = task,
+            busy = state.busy,
+            online = state.online,
+            onDismiss = { resolveProviderTask = null },
+            onConfirm = { status, reference, reason ->
+                resolveProviderTask = null
+                vm.resolveStartedProviderPayout(task.localId, status, reference, reason)
+            },
+        )
+    }
+
     state.notice?.let { msg ->
         AlertDialog(
             containerColor = Brand.SurfaceOverlay,
@@ -413,18 +527,31 @@ private fun RefundTaskCard(
     onCancel: () -> Unit,
     onBeginHandoff: () -> Unit,
     onCashHanded: () -> Unit,
-    onWithdraw: () -> Unit,
+    onBeginProvider: () -> Unit,
+    onProviderCompleted: () -> Unit,
+    onWithdrawCash: () -> Unit,
+    onResolveCash: () -> Unit,
+    onWithdrawProvider: () -> Unit,
+    onResolveProvider: () -> Unit,
 ) {
     val reason = REFUND_REASONS.firstOrNull { it.first == task.reasonCode }?.second ?: task.reasonCode
     val created = remember(task.createdAtMillis) {
         DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(task.createdAtMillis))
     }
     val (headline, instruction) = refundTaskCopy(task)
-    val urgent = task.state in setOf(
+    val urgent = task.payoutConflict || task.state in setOf(
         RefundState.ACCEPTED_CASH_DUE,
         RefundState.CASH_HANDOFF_IN_PROGRESS,
         RefundState.CASH_SETTLE_PENDING,
         RefundState.CASH_SETTLE_REJECTED,
+        RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING,
+        RefundState.CASH_FINALIZE_REJECTED,
+        RefundState.ACCEPTED_PROVIDER_DUE,
+        RefundState.PROVIDER_PAYOUT_IN_PROGRESS,
+        RefundState.PROVIDER_COMPLETION_PENDING,
+        RefundState.PROVIDER_COMPLETION_REJECTED,
+        RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING,
+        RefundState.PROVIDER_FINALIZE_REJECTED,
         RefundState.LEGACY_RECONCILIATION_REQUIRED,
     )
     val tone = when {
@@ -441,7 +568,7 @@ private fun RefundTaskCard(
             "${task.settlementMethod ?: task.mode ?: "unverified rail"} · $created",
         action = {
             OperationalStatusBadge(
-                label = refundTaskStatusLabel(task.state),
+                label = refundTaskStatusLabel(task),
                 tone = tone,
                 icon = if (tone == UiTone.Danger) Icons.Default.Warning else Icons.Default.Sync,
             )
@@ -450,6 +577,33 @@ private fun RefundTaskCard(
         contentPadding = PaddingValues(Spacing.md),
     ) {
         InfoRow("Reason", reason)
+        task.acceptedByNameOrId()?.let { InfoRow("Accepted by", it) }
+        task.moneyStartedByNameOrId()?.let {
+            InfoRow(if (task.settlementMethod == "cash") "Cash handover started by" else "Provider payout started by", it)
+        }
+        task.moneyCompletedByNameOrId()?.let {
+            InfoRow(if (task.settlementMethod == "cash") "Cash recorded by" else "Provider completion recorded by", it)
+        }
+        if (task.payoutConflict) {
+            task.localPayoutAtMillis?.let { capturedAt ->
+                val captured = remember(capturedAt) {
+                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                        .format(Date(capturedAt))
+                }
+                InfoRow("Local payout captured", captured, valueColor = Brand.Danger)
+            }
+            task.externalReference?.takeIf(String::isNotBlank)?.let {
+                InfoRow("Local provider reference", it, valueColor = Brand.Danger)
+            }
+            task.withdrawnByNameOrId()?.let { InfoRow("Server withdrawal recorded by", it) }
+            task.withdrawalAtMillis?.let { withdrawnAt ->
+                val withdrawn = remember(withdrawnAt) {
+                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                        .format(Date(withdrawnAt))
+                }
+                InfoRow("Server withdrawal recorded", withdrawn)
+            }
+        }
         Text(instruction, color = Brand.Foreground, style = MaterialTheme.typography.bodySmall)
         task.receiptNo?.let {
             InfoRow("Receipt", it, valueColor = Brand.Good)
@@ -463,7 +617,14 @@ private fun RefundTaskCard(
             )
         }
 
-        when (task.state) {
+        if (task.payoutConflict) {
+            OperationalBanner(
+                title = "Protected-owner reconciliation required",
+                detail = "Do not pay again and do not close this shift. Preserve the customer, drawer or provider, timestamp, reference, and audit evidence for owner/support review.",
+                tone = UiTone.Danger,
+                icon = Icons.Default.Warning,
+            )
+        } else when (task.state) {
             RefundState.REQUEST_PENDING -> ErpButton(
                 text = "Check server now",
                 onClick = onCheckNow,
@@ -481,15 +642,13 @@ private fun RefundTaskCard(
                     enabled = !busy,
                     leadingIcon = Icons.Default.Refresh,
                 )
-                if (task.mode == "cash") {
-                    ErpButton(
-                        text = "Cancel refused request",
-                        onClick = onCancel,
-                        modifier = Modifier.weight(1f),
-                        intent = ActionIntent.Destructive,
-                        enabled = !busy,
-                    )
-                }
+                ErpButton(
+                    text = "Cancel refused request",
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    intent = ActionIntent.Destructive,
+                    enabled = !busy,
+                )
             }
             RefundState.ACCEPTED_CASH_DUE -> {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -503,7 +662,7 @@ private fun RefundTaskCard(
                     if (protectedAccess) {
                         ErpButton(
                             text = "Withdraw — no cash given",
-                            onClick = onWithdraw,
+                            onClick = onWithdrawCash,
                             modifier = Modifier.weight(1f),
                             intent = ActionIntent.Secondary,
                             enabled = !busy && canManageMoney,
@@ -522,16 +681,61 @@ private fun RefundTaskCard(
                     )
                     if (protectedAccess) {
                         ErpButton(
-                            text = "Withdraw — no cash was given",
-                            onClick = onWithdraw,
+                            text = if (online) "Resolve — no cash was given" else "Reconnect to resolve handover",
+                            onClick = onResolveCash,
                             modifier = Modifier.weight(1f),
                             intent = ActionIntent.Secondary,
-                            enabled = !busy && canManageMoney,
+                            enabled = !busy && online && canManageMoney,
                         )
                     }
                 }
             }
+            RefundState.ACCEPTED_PROVIDER_DUE -> Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                ErpButton(
+                    text = if (online) "Start provider payout" else "Reconnect to start provider payout",
+                    onClick = onBeginProvider,
+                    modifier = Modifier.weight(1f),
+                    intent = ActionIntent.Warning,
+                    enabled = !busy && online && canManageMoney,
+                )
+                if (protectedAccess) {
+                    ErpButton(
+                        text = "Withdraw — payout not started",
+                        onClick = onWithdrawProvider,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Secondary,
+                        enabled = !busy && online && canManageMoney,
+                    )
+                }
+            }
+            RefundState.PROVIDER_PAYOUT_IN_PROGRESS -> Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                ErpButton(
+                    text = "Record provider payout completed",
+                    onClick = onProviderCompleted,
+                    modifier = Modifier.weight(1f),
+                    intent = ActionIntent.Destructive,
+                    enabled = !busy && canManageMoney,
+                )
+                if (protectedAccess) {
+                    ErpButton(
+                        text = if (online) "Resolve failed payout" else "Reconnect to resolve",
+                        onClick = onResolveProvider,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Secondary,
+                        enabled = !busy && online && canManageMoney,
+                    )
+                }
+            }
             RefundState.CASH_SETTLE_PENDING,
+            RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING,
+            RefundState.PROVIDER_COMPLETION_PENDING,
+            RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING,
             RefundState.WITHDRAWAL_PENDING,
             -> ErpButton(
                 text = "Check server now",
@@ -542,6 +746,9 @@ private fun RefundTaskCard(
                 leadingIcon = Icons.Default.Refresh,
             )
             RefundState.CASH_SETTLE_REJECTED,
+            RefundState.CASH_FINALIZE_REJECTED,
+            RefundState.PROVIDER_COMPLETION_REJECTED,
+            RefundState.PROVIDER_FINALIZE_REJECTED,
             RefundState.WITHDRAWAL_REJECTED,
             -> ErpButton(
                 text = "Retry same resolution",
@@ -560,28 +767,132 @@ private fun RefundTaskCard(
     }
 }
 
-private fun refundTaskStatusLabel(state: String): String = when (state) {
+@Composable
+private fun RefundHistoryRow(task: RefundTask) {
+    val terminalActor = if (task.state == RefundState.WITHDRAWN) {
+        task.withdrawnByNameOrId()
+    } else {
+        task.settledByNameOrId() ?: task.moneyCompletedByNameOrId()
+    }
+    val needsReview = task.error?.isNotBlank() == true ||
+        task.customerSpendReconciled == false ||
+        task.loyaltyReconciliationState == "legacy_unknown" ||
+        task.capturedTimeReconciled == false ||
+        task.providerEvidenceReconciled == false
+    DataListRow(
+        leading = {
+            OperationalStatusBadge(
+                label = refundTaskStatusLabel(task),
+                tone = if (task.state == RefundState.SETTLED) UiTone.Success else UiTone.Neutral,
+                icon = Icons.AutoMirrored.Filled.AssignmentReturn,
+            )
+        },
+        content = {
+            Text(
+                task.invoiceNo ?: "Order ${task.orderId.take(8)}…",
+                color = Brand.Foreground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                buildString {
+                    append(refundPaymentMethodLabel(task.settlementMethod.orEmpty()))
+                    terminalActor?.let { append(" · recorded by $it") }
+                },
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            if (needsReview) {
+                Text(
+                    task.error ?: "Owner reconciliation evidence remains incomplete.",
+                    color = Brand.Warning,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        },
+        trailing = {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(task.amountMinor.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                Text(
+                    task.receiptNo ?: when {
+                        task.payoutConflict -> "Payout conflict"
+                        task.state == RefundState.WITHDRAWN -> "No payout"
+                        else -> "Receipt pending"
+                    },
+                    color = if (needsReview) Brand.Warning else Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        },
+    )
+}
+
+private fun RefundTask.acceptedByNameOrId(): String? = actorNameOrId(acceptedByName, acceptedByUserId)
+
+private fun RefundTask.moneyStartedByNameOrId(): String? =
+    actorNameOrId(moneyStartedByName, moneyStartedByUserId)
+
+private fun RefundTask.moneyCompletedByNameOrId(): String? =
+    actorNameOrId(moneyCompletedByName, moneyCompletedByUserId)
+
+private fun RefundTask.settledByNameOrId(): String? = actorNameOrId(settledByName, settledByUserId)
+
+private fun RefundTask.withdrawnByNameOrId(): String? = actorNameOrId(withdrawnByName, withdrawnByUserId)
+
+private fun actorNameOrId(name: String?, id: String?): String? =
+    name?.trim()?.takeIf(String::isNotEmpty)
+        ?: id?.trim()?.takeIf(String::isNotEmpty)?.let { "Employee ${it.take(8)}…" }
+
+internal fun refundRailSummary(methods: List<String>): String {
+    val policy = refundRailPolicy(methods)
+    return when (policy.kind) {
+        RefundRailKind.UNKNOWN -> "Payment rail unavailable"
+        RefundRailKind.CASH -> "Cash"
+        RefundRailKind.SINGLE_PROVIDER -> refundPaymentMethodLabel(policy.methods.single())
+        RefundRailKind.MIXED -> "Mixed: " + policy.methods.joinToString(" + ") {
+            refundPaymentMethodLabel(it)
+        }
+    }
+}
+
+private fun refundTaskStatusLabel(task: RefundTask): String = if (task.payoutConflict) {
+    "Owner reconciliation"
+} else when (task.state) {
     RefundState.REQUEST_PENDING -> "Awaiting server"
     RefundState.REQUEST_REJECTED -> "Request refused"
     RefundState.ACCEPTED_CASH_DUE -> "Cash due"
+    RefundState.ACCEPTED_PROVIDER_DUE -> "Provider due"
     RefundState.CASH_HANDOFF_IN_PROGRESS -> "Handover active"
     RefundState.CASH_SETTLE_PENDING -> "Settlement pending"
+    RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING -> "Accounting pending"
     RefundState.CASH_SETTLE_REJECTED -> "Recovery required"
+    RefundState.CASH_FINALIZE_REJECTED -> "Accounting recovery"
+    RefundState.PROVIDER_PAYOUT_IN_PROGRESS -> "Provider active"
+    RefundState.PROVIDER_COMPLETION_PENDING -> "Provider evidence pending"
+    RefundState.PROVIDER_COMPLETION_REJECTED -> "Provider recovery"
+    RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING -> "Accounting pending"
+    RefundState.PROVIDER_FINALIZE_REJECTED -> "Accounting recovery"
     RefundState.WITHDRAWAL_PENDING -> "Withdrawal pending"
     RefundState.WITHDRAWAL_REJECTED -> "Withdrawal refused"
     RefundState.LEGACY_RECONCILIATION_REQUIRED -> "Quarantined"
+    RefundState.SETTLED -> "Settled"
+    RefundState.WITHDRAWN -> "Withdrawn"
     else -> "Review"
 }
 
-internal fun refundTaskCopy(task: RefundTask): Pair<String, String> = when (task.state) {
+internal fun refundTaskCopy(task: RefundTask): Pair<String, String> = if (task.payoutConflict) {
+    "Payout evidence conflicts with server withdrawal — do not pay again" to
+        "This tablet recorded that physical cash or provider value moved, while the server records no payout. " +
+        "Do not repeat or reverse value movement. Keep the shift open and ask a protected owner to reconcile " +
+        "the customer, drawer or provider, timestamps, reference, and audit evidence; contact support if needed."
+} else when (task.state) {
     RefundState.REQUEST_PENDING ->
         "Waiting for server — no payout authorised" to
-            "Do not hand over cash or repeat a provider refund while this exact action is being checked."
+            "Do not hand over cash or start a provider payout while this exact request is being checked."
     RefundState.REQUEST_REJECTED ->
         "Server refused this record" to if (task.mode == "cash") {
             "No cash is authorised. Fix the stated issue and retry the same task, or cancel this refused request."
         } else {
-            "Do not repeat the external provider payout. Retry the same task or ask a protected owner to reconcile it."
+            "No provider payout is authorised. Fix the stated issue and retry the same task, or cancel this refused request."
         }
     RefundState.ACCEPTED_CASH_DUE ->
         "Cash refund accepted — drawer untouched" to
@@ -595,6 +906,30 @@ internal fun refundTaskCopy(task: RefundTask): Pair<String, String> = when (task
     RefundState.CASH_SETTLE_REJECTED ->
         "Cash was handed over — server needs recovery" to
             "Do not pay again or withdraw. Fix the stated issue and retry this same settlement identity."
+    RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING ->
+        "Cash payout recorded — accounting waiting" to
+            "Do not pay again. Keep the shift open while the ERP safely materialises the refund receipt and balances."
+    RefundState.CASH_FINALIZE_REJECTED ->
+        "Cash payout recorded — accounting needs recovery" to
+            "Do not pay again. Retry the accounting step; the server already holds the immutable cash handover fact."
+    RefundState.ACCEPTED_PROVIDER_DUE ->
+        "Provider refund accepted — payout not started" to
+            "Verify the original rail and amount, then obtain a live server-confirmed provider start before moving money."
+    RefundState.PROVIDER_PAYOUT_IN_PROGRESS ->
+        "Provider payout in progress — do not start twice" to
+            "Complete this exact payout once. After success, record the provider reference; after restart, verify the provider first."
+    RefundState.PROVIDER_COMPLETION_PENDING ->
+        "Provider completed — evidence waiting" to
+            "Do not run the payout again. Keep the shift open and reconnect until the server records the immutable provider outcome."
+    RefundState.PROVIDER_COMPLETION_REJECTED ->
+        "Provider completed — server needs recovery" to
+            "Do not run the payout again. Fix the stated issue and retry the same provider evidence."
+    RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING ->
+        "Provider payout recorded — accounting waiting" to
+            "Do not run the payout again. Keep the shift open while the ERP creates the receipt and reconciles balances."
+    RefundState.PROVIDER_FINALIZE_REJECTED ->
+        "Provider payout recorded — accounting needs recovery" to
+            "Do not run the payout again. Retry accounting; the server already holds the provider completion fact."
     RefundState.WITHDRAWAL_PENDING ->
         "No cash given — withdrawal waiting" to
             "Do not hand over cash. Keep the shift open until the server confirms the append-only withdrawal."
@@ -604,15 +939,21 @@ internal fun refundTaskCopy(task: RefundTask): Pair<String, String> = when (task
     RefundState.LEGACY_RECONCILIATION_REQUIRED ->
         "Older refund quarantined — do not pay again" to
             "Its exact shift and physical handover cannot be proven from this tablet. Owner reconciliation is required."
+    RefundState.SETTLED ->
+        "Refund settled — receipt recorded" to
+            "Money movement and accounting are complete. Stock and COGS were not changed automatically."
+    RefundState.WITHDRAWN ->
+        "Refund withdrawn — no payout recorded" to
+            "The server recorded that no cash or provider value moved."
     else -> "Refund needs review" to "Ask a protected owner to verify server, customer, and drawer records."
 }
 
 @Composable
 private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: RefundsViewModel) {
+    val railPolicy = remember(order.id, order.paymentMethods) { refundRailPolicy(order.paymentMethods) }
     var amount by remember(order.id) { mutableStateOf(minorToRupeesInput(order.refundableMinor)) }
     var reason by remember(order.id) { mutableStateOf(REFUND_REASONS.first().first) }
-    var mode by remember(order.id) { mutableStateOf("cash") }
-    var externalReference by remember(order.id) { mutableStateOf("") }
+    var mode by remember(order.id, order.paymentMethods) { mutableStateOf(railPolicy.defaultMode) }
     var note by remember(order.id) { mutableStateOf("") }
     var confirming by remember(order.id) { mutableStateOf(false) }
 
@@ -620,9 +961,10 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
     val amountMinor = parsedAmountMinor ?: 0L
     val invalidAmount = parsedAmountMinor == null
     val overRefund = amountMinor > order.refundableMinor
-    val invalidReference = mode == "original" && externalReference.trim().length < 3
-    val valid = !invalidAmount && amountMinor > 0 && !overRefund && !invalidReference
-    val alreadyRefunded = order.paidMinor - order.refundableMinor
+    val valid = !invalidAmount && amountMinor > 0 && !overRefund &&
+        railPolicy.requestReady && railPolicy.allows(mode)
+    val pendingRefund = order.pendingRefundMinor.coerceAtLeast(0).coerceAtMost(order.paidMinor)
+    val alreadyRefunded = (order.paidMinor - order.refundableMinor - pendingRefund).coerceAtLeast(0)
 
     AlertDialog(
         onDismissRequest = { if (!busy) vm.select(null) },
@@ -641,8 +983,14 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 }
                 if (alreadyRefunded > 0) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Settled or reserved refunds", color = Brand.ForegroundMuted)
+                        Text("Already settled refunds", color = Brand.ForegroundMuted)
                         Text(alreadyRefunded.asRupees(), color = Brand.ForegroundMuted)
+                    }
+                }
+                if (pendingRefund > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Reserved in open refund tasks", color = Brand.ForegroundMuted)
+                        Text(pendingRefund.asRupees(), color = Brand.Warning)
                     }
                 }
                 OutlinedTextField(
@@ -660,41 +1008,69 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                     overRefund -> Text("That is above the latest refundable balance.", color = Brand.Danger)
                 }
 
-                Text("Payout rail", color = Brand.ForegroundMuted)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = mode == "cash",
-                        onClick = { mode = "cash" },
-                        label = { Text("Cash") },
-                        modifier = Modifier.weight(1f),
-                        colors = refundChipColors(),
+                Text("Original payment", color = Brand.ForegroundMuted)
+                when (railPolicy.kind) {
+                    RefundRailKind.UNKNOWN -> OperationalBanner(
+                        title = "Payment rail unavailable — refund locked",
+                        detail = "Refresh after the server update. The app will not guess whether this was Cash, Card, UPI, QR or Wallet.",
+                        tone = UiTone.Danger,
+                        icon = Icons.Default.Lock,
                     )
-                    FilterChip(
-                        selected = mode == "original",
-                        onClick = { mode = "original" },
-                        label = { Text("Original non-cash") },
-                        modifier = Modifier.weight(1f),
-                        colors = refundChipColors(),
-                    )
+                    RefundRailKind.CASH -> {
+                        InfoRow("Collected through", "Cash")
+                        Text(
+                            "This refund must use the cash handover workflow.",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    RefundRailKind.MIXED -> {
+                        InfoRow("Collected through", refundRailSummary(railPolicy.methods))
+                        Text(
+                            "Mixed-payment refunds use the explicit cash workflow under the current server contract.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    RefundRailKind.SINGLE_PROVIDER -> {
+                        val originalLabel = refundPaymentMethodLabel(railPolicy.methods.single())
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilterChip(
+                                selected = mode == "original",
+                                onClick = { mode = "original" },
+                                label = { Text("Original $originalLabel") },
+                                modifier = Modifier.weight(1f),
+                                colors = refundChipColors(),
+                            )
+                            FilterChip(
+                                selected = mode == "cash",
+                                onClick = { mode = "cash" },
+                                label = { Text("Cash instead") },
+                                modifier = Modifier.weight(1f),
+                                colors = refundChipColors(),
+                            )
+                        }
+                        Text(
+                            if (mode == "original") {
+                                "The server must open this exact $originalLabel payout before the provider app is used."
+                            } else {
+                                "Cash uses the guarded drawer handover workflow even though the original payment was $originalLabel."
+                            },
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
-                if (mode == "original") {
-                    Text(
-                        "Use only when the receipt has one card/UPI/QR/wallet rail. Complete the provider refund first; ERP records it but does not send funds.",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        value = externalReference,
-                        onValueChange = { externalReference = it.take(200) },
-                        label = { Text("Provider refund reference") },
-                        isError = invalidReference,
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
+
+                OperationalBanner(
+                    title = "Money refund only — stock and COGS stay unchanged",
+                    detail = "There is no item-level refund restock workflow. Sale-time stock is already consumed, so do not deduct prepared food, used ingredients or gaming time again. Only unopened goods physically returned to stock may use a separately authorised inventory adjustment with evidence.",
+                    tone = UiTone.Warning,
+                    icon = Icons.Default.Warning,
+                )
 
                 Text("Reason", color = Brand.ForegroundMuted)
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -732,9 +1108,9 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 Text(
                     when {
                         mode == "original" && online ->
-                            "The provider reference and completion time will be captured with this exact shift. Do not repeat the provider payout."
+                            "Submitting reserves the provider refund only. Do not open the provider app until the accepted task tells you to start."
                         mode == "original" ->
-                            "Offline: provider evidence will be saved. Do not repeat the payout; this shift remains blocked until sync."
+                            "Offline: only the request is saved. No provider payout is authorised until reconnection and server acceptance."
                         online -> "Submitting asks the server to reserve the cash refund. Do not give cash yet."
                         else -> "Offline: the request will be saved. Do not give cash until server acceptance appears."
                     },
@@ -758,13 +1134,13 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text(if (mode == "cash") "Submit cash request?" else "Record provider refund?") },
+            title = { Text(if (mode == "cash") "Submit cash request?" else "Submit provider request?") },
             text = {
                 Text(
                     if (mode == "cash") {
-                        "Request ${amountMinor.asRupees()} against ${order.invoiceNo ?: "this order"}. No cash may leave now. A separate server handover task must appear first."
+                        "Request ${amountMinor.asRupees()} against ${order.invoiceNo ?: "this order"}. No cash may leave now. A separate server handover task must appear first. This money refund does not restock items or reverse COGS; do not deduct consumed stock again."
                     } else {
-                        "Confirm the provider already completed ${amountMinor.asRupees()} and reference ${externalReference.trim()}. Do not run the provider refund again if ERP sync is delayed."
+                        "Request ${amountMinor.asRupees()} against ${order.invoiceNo ?: "this order"}. This does not move provider money. Wait for the separate server-confirmed payout task. It does not restock items or reverse COGS; do not deduct consumed stock again."
                     },
                 )
             },
@@ -772,15 +1148,223 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 Button(
                     onClick = {
                         confirming = false
-                        vm.refund(order, amountMinor, reason, mode, externalReference, note)
+                        vm.refund(order, amountMinor, reason, mode, note)
                     },
                     enabled = !busy,
                     colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-                ) { Text(if (mode == "cash") "Submit request" else "Provider payout completed") }
+                ) { Text("Submit request") }
             },
             dismissButton = { TextButton(onClick = { confirming = false }) { Text("Go back") } },
         )
     }
+}
+
+@Composable
+private fun ProviderCompletionDialog(
+    task: RefundTask,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var externalReference by remember(task.localId) { mutableStateOf("") }
+    val valid = externalReference.trim().isNotEmpty()
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(0.94f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text("Provider payout completed once?") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Confirm only after the original ${task.settlementMethod ?: "non-cash"} provider successfully refunded " +
+                        "${task.amountMinor.asRupees()}. If the app restarted or you are unsure, check the provider first—never run it twice.",
+                )
+                OutlinedTextField(
+                    value = externalReference,
+                    onValueChange = { externalReference = it.take(200) },
+                    label = { Text("Successful provider refund reference") },
+                    singleLine = true,
+                    isError = externalReference.isNotEmpty() && !valid,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "The reference and completion time are saved durably before sync. A connection failure must not cause another payout.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && valid,
+                onClick = { onConfirm(externalReference.trim()) },
+                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+            ) { Text("Provider payout completed") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Stop and verify") }
+        },
+    )
+}
+
+@Composable
+private fun ResolveCashHandoffDialog(
+    task: RefundTask,
+    busy: Boolean,
+    online: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var reason by remember(task.localId) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(0.94f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text("Resolve started cash handover?") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Protected-owner recovery only. Continue only after checking the customer and drawer and confirming none of " +
+                        "${task.amountMinor.asRupees()} left the drawer. If any cash moved, stop and record settlement instead.",
+                )
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it.take(500) },
+                    label = { Text("Why the drawer remained unchanged") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && online && reason.trim().length >= 3,
+                onClick = { onConfirm(reason.trim()) },
+                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+            ) { Text("Confirm no cash moved") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Stop and verify") } },
+    )
+}
+
+@Composable
+private fun WithdrawProviderDialog(
+    task: RefundTask,
+    busy: Boolean,
+    online: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var reason by remember(task.localId) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(0.94f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text("Withdraw provider refund request?") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Protected-owner action only. Use this before the provider payout starts and only when no provider value moved.",
+                )
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it.take(500) },
+                    label = { Text("Why the payout will not be started") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && online && reason.trim().length >= 3,
+                onClick = { onConfirm(reason.trim()) },
+                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+            ) { Text("Withdraw — no payout started") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Keep task") } },
+    )
+}
+
+private val PROVIDER_FAILURE_STATUSES = listOf(
+    "no_matching_transaction" to "No matching transaction",
+    "provider_declined" to "Provider declined",
+    "provider_reversed" to "Provider reversed",
+)
+
+@Composable
+private fun ResolveProviderPayoutDialog(
+    task: RefundTask,
+    busy: Boolean,
+    online: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String) -> Unit,
+) {
+    var providerStatus by remember(task.localId) { mutableStateOf(PROVIDER_FAILURE_STATUSES.first().first) }
+    var verificationReference by remember(task.localId) { mutableStateOf("") }
+    var reason by remember(task.localId) { mutableStateOf("") }
+    val valid = verificationReference.trim().length >= 3 && reason.trim().length >= 3
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.94f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text("Resolve failed provider payout?") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Protected-owner recovery only. Search the provider for this exact ${task.amountMinor.asRupees()} payout first. " +
+                        "If it succeeded, stop and record its successful reference instead.",
+                )
+                Text("Verified provider outcome", color = Brand.ForegroundMuted)
+                PROVIDER_FAILURE_STATUSES.forEach { (code, label) ->
+                    FilterChip(
+                        selected = providerStatus == code,
+                        onClick = { providerStatus = code },
+                        label = { Text(label) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = refundChipColors(),
+                    )
+                }
+                OutlinedTextField(
+                    value = verificationReference,
+                    onValueChange = { verificationReference = it.take(200) },
+                    label = { Text("Provider search / case / reversal reference") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it.take(500) },
+                    label = { Text("Why no payout completed") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && online && valid,
+                onClick = {
+                    onConfirm(providerStatus, verificationReference.trim(), reason.trim())
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
+            ) { Text("Confirm no provider payout") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Stop and verify") } },
+    )
 }
 
 @Composable

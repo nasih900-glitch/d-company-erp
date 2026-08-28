@@ -83,7 +83,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version 5 backend cutover
+## Version 5 compatibility floor and version 6 candidate
 
 Android version code 5 is the first client that sends the conflict snapshots
 required by the current Gaming start and extension write contracts. Version 4
@@ -91,24 +91,34 @@ and older must not be allowed to reach those handlers: they would receive a
 validation error partway through an employee workflow rather than a clear
 update-required response.
 
+The next source candidate is version `3.0.5` with version code 6. It is not yet a
+distributed release: no final signed artifact, emulator/physical-device
+acceptance, Play upload, or production backend deployment is claimed. Version 5
+therefore remains the minimum supported code while version 6 becomes the latest
+only when the coordinated release below is ready.
+
 Treat the app and backend as one coordinated release:
 
-1. Produce, sign, and verify the version-code-5 artifact before changing the
-   server.
+1. Produce, sign, and verify the version-code-6 artifact before changing the
+   server or advertising it to installed clients.
 2. While the old backend is still active, bring every installed older app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Make the version-5 APK/update channel available to staff.
-4. Back up the database, apply migration `0038`, and deploy the backend with
+3. Make the version-6 APK/update channel available to staff.
+4. Back up the database, complete the deployment preflight, and run
+   `alembic upgrade head`; for this candidate, verify the database reaches
+   revision `0050` before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=5`,
-   `ANDROID_LATEST_VERSION_CODE=5`, and
+   `ANDROID_LATEST_VERSION_CODE=6`, and
    `REQUIRE_NATIVE_VERSION_HEADERS=true` in the same maintenance window.
-5. Verify an older declared build receives HTTP 426 before a write handler,
-   then run Gaming start, timer extension, paid package extension, stop, and
-   Send to POS from version 5.
+5. Verify version 4 receives HTTP 426 before a write handler, version 5 remains
+   supported with an update available, and version 6 is current. Then run
+   Gaming start, timer extension, paid package extension, stop, and Send to POS
+   from version 6.
 
 Do not lower the minimum to keep an older APK operating against this backend.
-If version 5 is not ready to distribute, postpone the backend deployment too.
+If version 6 is not ready to distribute, do not advertise it as latest or deploy
+the matching production compatibility configuration.
 
 ## Android artifacts
 

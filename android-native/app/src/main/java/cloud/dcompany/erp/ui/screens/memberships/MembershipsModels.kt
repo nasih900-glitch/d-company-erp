@@ -2,6 +2,7 @@ package cloud.dcompany.erp.ui.screens.memberships
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.time.Instant
 
 /**
  * Field names copied verbatim from backend/app/api/v1/memberships/router.py
@@ -67,6 +68,18 @@ data class Subscription(
     @SerialName("refund_customer_spend_reconciled") val refundCustomerSpendReconciled: Boolean = true,
     @SerialName("is_active") val isActive: Boolean,
 )
+
+/**
+ * The backend flag remains authoritative, but an offline cache must not keep
+ * presenting benefits after its signed term has elapsed. A malformed or
+ * future-dated cached term fails closed until the server can refresh it.
+ */
+internal fun Subscription.isActiveAt(now: Instant = Instant.now()): Boolean {
+    if (!isActive || revokedAt != null) return false
+    val start = runCatching { Instant.parse(startsAt) }.getOrNull() ?: return false
+    val expiry = runCatching { Instant.parse(expiresAt) }.getOrNull() ?: return false
+    return !now.isBefore(start) && now.isBefore(expiry)
+}
 
 @Serializable
 data class MembershipPaymentRequestCreate(

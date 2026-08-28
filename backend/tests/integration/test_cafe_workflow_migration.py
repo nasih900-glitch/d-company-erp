@@ -95,6 +95,7 @@ def _seed_0036_cafe_scope(connection: psycopg.Connection) -> dict[str, object]:
         "order_two": uuid4(),
         "direct_open_order": uuid4(),
         "direct_paid_order": uuid4(),
+        "direct_paid_payment": uuid4(),
         "line": uuid4(),
         "legacy_void_line": uuid4(),
         "missing_actor_void_line": uuid4(),
@@ -185,27 +186,57 @@ def _seed_0036_cafe_scope(connection: psycopg.Connection) -> dict[str, object]:
                 now,
             ),
         )
-    for order_id, order_status in (
-        (ids["direct_open_order"], "open"),
-        (ids["direct_paid_order"], "paid"),
-    ):
-        connection.execute(
-            "INSERT INTO orders "
-            "(id, company_id, branch_id, terminal_id, shift_id, opened_by, "
-            "table_id, type, status, opened_at, kitchen_state) "
-            "VALUES (%s, %s, %s, %s, %s, %s, NULL, 'takeaway', %s, %s, "
-            "'received')",
-            (
-                order_id,
-                ids["company"],
-                ids["branch"],
-                ids["terminal"],
-                ids["shift"],
-                ids["user"],
-                order_status,
-                now,
-            ),
-        )
+    connection.execute(
+        "INSERT INTO orders "
+        "(id, company_id, branch_id, terminal_id, shift_id, opened_by, "
+        "table_id, type, status, opened_at, kitchen_state) "
+        "VALUES (%s, %s, %s, %s, %s, %s, NULL, 'takeaway', 'open', %s, "
+        "'received')",
+        (
+            ids["direct_open_order"],
+            ids["company"],
+            ids["branch"],
+            ids["terminal"],
+            ids["shift"],
+            ids["user"],
+            now,
+        ),
+    )
+    # This legacy paid direct order is used by runtime tests that later upgrade
+    # through 0048. Give it the complete immutable invoice/payment evidence
+    # expected of a real collected sale rather than relying on a pre-0048
+    # status-only fixture.
+    connection.execute(
+        "INSERT INTO orders "
+        "(id, company_id, branch_id, terminal_id, shift_id, opened_by, "
+        "table_id, type, status, subtotal_minor, total_minor, opened_at, "
+        "closed_at, invoice_issued_at, invoice_no, fiscal_year, kitchen_state) "
+        "VALUES (%s, %s, %s, %s, %s, %s, NULL, 'takeaway', 'paid', 10000, "
+        "10000, %s, %s, %s, 'D/M1/26-27/00001', '2026-27', 'received')",
+        (
+            ids["direct_paid_order"],
+            ids["company"],
+            ids["branch"],
+            ids["terminal"],
+            ids["shift"],
+            ids["user"],
+            now,
+            now,
+            now,
+        ),
+    )
+    connection.execute(
+        "INSERT INTO payments "
+        "(id, order_id, shift_id, method, amount_minor, tendered_minor, "
+        "change_minor, paid_at) VALUES (%s, %s, %s, 'cash', 10000, 10000, "
+        "0, %s)",
+        (
+            ids["direct_paid_payment"],
+            ids["direct_paid_order"],
+            ids["shift"],
+            now,
+        ),
+    )
     for line_id, order_id, voided_at, voided_by in (
         (ids["line"], ids["order_one"], None, None),
         (

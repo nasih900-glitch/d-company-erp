@@ -70,10 +70,11 @@ class Settings(BaseSettings):
     # lets operations block a build whose local schema/API contract is no
     # longer safe, without shipping another already-obsolete APK first.
     # v5 is the first build that supplies the conflict-safe Gaming pricing and
-    # timer snapshots required by the current write API. Older native builds
-    # must be stopped by compatibility middleware before they reach handlers.
+    # timer snapshots required by the current write API, so it remains the
+    # minimum. v6 is the next distributed candidate after material app fixes.
+    # Older native builds must be stopped before they reach write handlers.
     android_min_supported_version_code: int = Field(default=5, ge=1)
-    android_latest_version_code: int = Field(default=5, ge=1)
+    android_latest_version_code: int = Field(default=6, ge=1)
     android_update_url: AnyHttpUrl | None = None
     ios_min_supported_version_code: int = Field(default=1, ge=1)
     ios_latest_version_code: int = Field(default=1, ge=1)

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -45,9 +46,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -127,7 +130,7 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
             }
 
             val tiles = listOf(
-                KpiTile("Revenue", dashboard.revenueTotalMinor.asRupees()),
+                KpiTile("Gross revenue", dashboard.revenueTotalMinor.asRupees()),
                 KpiTile("Orders", "${dashboard.ordersCount} (${dashboard.ticketsCount} tickets)"),
                 KpiTile("Average ticket", dashboard.avgTicketMinor.asRupees()),
                 KpiTile(
@@ -146,6 +149,17 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
             }
 
             RightNowCard(dashboard)
+            ProfitBridgeCard(dashboard)
+
+            if (dashboard.unissuedPaidOrdersCount > 0) {
+                OperationalBanner(
+                    title = "Invoice reconciliation required",
+                    detail = "${dashboard.unissuedPaidOrdersCount} settled order(s) are included " +
+                        "using close time because their invoice timestamp is missing.",
+                    tone = UiTone.Warning,
+                    icon = Icons.Filled.WarningAmber,
+                )
+            }
 
             if (dashboard.discountsAndPointsRedeemedMinor > 0) {
                 Text(
@@ -173,7 +187,13 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
 
             if (dashboard.revenueStreams.isNotEmpty()) {
                 SectionCard {
-                    CardTitle("Revenue by stream (today)")
+                    CardTitle("Gross revenue sources (today)")
+                    Text(
+                        "Category values are before refunds and GST. Discounts and loyalty " +
+                            "redemptions are applied in the gross-revenue total above.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Brand.ForegroundMuted,
+                    )
                     val max = dashboard.revenueStreams.maxOf { it.second }
                     dashboard.revenueStreams.forEach { (label, amountMinor) ->
                         RevenueBar(label, amountMinor, max)
@@ -182,6 +202,46 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+}
+
+@Composable
+private fun ProfitBridgeCard(dashboard: DashboardKpis) {
+    SectionCard {
+        CardTitle("Profit bridge")
+        AnalyticsMoneyRow("Gross revenue", dashboard.revenueTotalMinor)
+        if (dashboard.refundsIssuedMinor > 0) {
+            AnalyticsMoneyRow("Less: refunds", -dashboard.refundsIssuedMinor)
+        }
+        AnalyticsMoneyRow("Net revenue after refunds and GST", dashboard.netRevenueMinor)
+        AnalyticsMoneyRow("Less: cost of goods sold", -dashboard.cogsMinor)
+        AnalyticsMoneyRow("Gross profit", dashboard.grossProfitMinor, bold = true)
+        AnalyticsMoneyRow("Less: operating expenses", -dashboard.expenseTotalMinor)
+        if (dashboard.depreciationMinor > 0) {
+            AnalyticsMoneyRow("Less: depreciation", -dashboard.depreciationMinor)
+        }
+        AnalyticsMoneyRow("Net profit", dashboard.netProfitMinor, bold = true)
+    }
+}
+
+@Composable
+private fun AnalyticsMoneyRow(label: String, amountMinor: Long, bold: Boolean = false) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            amountMinor.asRupees(),
+            color = if (amountMinor < 0) Brand.Danger else Brand.Foreground,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
+        )
     }
 }
 
@@ -328,7 +388,7 @@ private fun GrowthBody(
                 ) {
                     ComparisonCard(
                         Modifier.weight(1f),
-                        "Revenue",
+                        "Revenue after refunds",
                         growth.current.revenueMinor.asRupees(),
                         growth.previous.label,
                         growth.previous.revenueMinor.asRupees(),
@@ -347,7 +407,7 @@ private fun GrowthBody(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     ComparisonCard(
                         Modifier.fillMaxWidth(),
-                        "Revenue",
+                        "Revenue after refunds",
                         growth.current.revenueMinor.asRupees(),
                         growth.previous.label,
                         growth.previous.revenueMinor.asRupees(),
@@ -397,12 +457,18 @@ private fun GrowthBody(
 private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
     SectionCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            CardTitle("Top items (this month)")
+            CardTitle("Top items by gross line sales (this month)")
             if (state.topItemsLoading) {
                 Spacer(Modifier.weight(1f))
                 CircularProgressIndicator(Modifier.size(14.dp), color = Brand.Gold, strokeWidth = 2.dp)
             }
         }
+        Text(
+            "Ranked from immutable sold-item names and line totals before order-level " +
+                "discounts, refunds and GST adjustments.",
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
+        )
         when (
             supplementalListPresentation(
                 hasSnapshot = state.topItemsFetchedAtMillis != null,
@@ -512,7 +578,7 @@ private fun ComparisonCard(
     currentValue: String,
     previousLabel: String,
     previousValue: String,
-    deltaPct: Double,
+    deltaPct: Double?,
 ) {
     SectionCard(modifier) {
         Text(metricLabel.uppercase(Locale.ENGLISH), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
@@ -520,12 +586,22 @@ private fun ComparisonCard(
         Text(currentValue, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Brand.Foreground)
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                (if (deltaPct >= 0) "▲ " else "▼ ") + String.format(Locale.ENGLISH, "%.1f%%", kotlin.math.abs(deltaPct)),
-                color = if (deltaPct >= 0) Brand.Good else Brand.Danger,
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            if (deltaPct == null) {
+                Text(
+                    "No prior baseline",
+                    color = Brand.ForegroundMuted,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                Text(
+                    (if (deltaPct >= 0) "▲ " else "▼ ") +
+                        String.format(Locale.ENGLISH, "%.1f%%", kotlin.math.abs(deltaPct)),
+                    color = if (deltaPct >= 0) Brand.Good else Brand.Danger,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
         Text(
             "vs $previousValue $previousLabel",

@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.net.CostingCoverage
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -10,9 +11,8 @@ import retrofit2.http.Query
 
 /**
  * Recording an expense, a partner capital movement, or an asset are all
- * offline-capable, insert-only writes (create-only — edit/delete for
- * expenses, void for capital entries, and any edit at all for assets all
- * stay in the web ERP; see FinanceViewModel's class doc for why). Each carries
+ * offline-capable, insert-only writes. Corrections use separate authorised,
+ * evidence-preserving workflows rather than mutating these captured rows. Each carries
  * an Idempotency-Key: none of the three has a natural key a duplicate retry
  * could collide against server-side, so a receipt sent twice because a
  * tablet lost the reply mid-request would otherwise silently double an
@@ -29,6 +29,9 @@ import retrofit2.http.Query
  * URL already ends in /api/v1/, hence the relative paths.
  */
 interface FinanceApi {
+
+    @GET("insights/inventory/costing-coverage")
+    suspend fun costingCoverage(): CostingCoverage
 
     /**
      * Month-to-date P&L: revenue (after GST), cost of goods sold, gross

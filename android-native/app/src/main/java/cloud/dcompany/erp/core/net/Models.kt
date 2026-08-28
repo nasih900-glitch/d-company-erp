@@ -143,6 +143,13 @@ data class OrderDiscountUpdateRequest(
 )
 
 @Serializable
+data class OrderPointsRedemptionUpdateRequest(
+    /** Absolute spend, never a delta. The backend owns the conversion and balance check. */
+    val points: Int,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
 data class VoidOrderRequest(val reason: String)
 
 @Serializable
@@ -201,6 +208,7 @@ data class Order(
     @SerialName("discount_minor") val discountMinor: Long = 0,
     @SerialName("manual_discount_minor") val manualDiscountMinor: Long = 0,
     @SerialName("points_redeemed_minor") val pointsRedeemedMinor: Long = 0,
+    @SerialName("points_redeemed") val pointsRedeemed: Int = 0,
     @SerialName("tax_minor") val taxMinor: Long = 0,
     @SerialName("round_off_minor") val roundOffMinor: Long = 0,
     @SerialName("tip_minor") val tipMinor: Long = 0,
@@ -213,6 +221,11 @@ data class Order(
     // Defaults to 0 for every other consumer of this shared model, which is
     // the safe failure mode (blocks a refund rather than risking an over-refund).
     @SerialName("refundable_minor") val refundableMinor: Long = 0,
+    // Authoritative server reservation and payment-rail evidence used by the
+    // Refunds screen. An empty paymentMethods list is intentionally treated as
+    // unavailable evidence; the client must not guess an original payout rail.
+    @SerialName("pending_refund_minor") val pendingRefundMinor: Long = 0,
+    @SerialName("payment_methods") val paymentMethods: List<String> = emptyList(),
     val lines: List<OrderLine> = emptyList(),
     @SerialName("checkout_version") val checkoutVersion: Long = 1,
     @SerialName("customer_name") val customerName: String? = null,

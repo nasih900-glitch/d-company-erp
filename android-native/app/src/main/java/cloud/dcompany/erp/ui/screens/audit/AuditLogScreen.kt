@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -22,12 +23,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -185,6 +190,13 @@ fun AuditLogScreen(vm: AuditLogViewModel = viewModel()) {
                 }
             }
             AuditAreaFilters(selected = state.area, onSelect = vm::selectArea)
+            AuditDetailedFilters(state = state, vm = vm)
+            OperationalBanner(
+                title = "Audit export is not available yet",
+                detail = "Filtering and review are live, but neither Android nor the web ERP currently has a complete server-authoritative export endpoint. The app will not create a misleading partial export from only the loaded page.",
+                tone = UiTone.Information,
+                icon = Icons.Default.Security,
+            )
             SectionCard(
                 modifier = Modifier.weight(1f),
                 title = "Activity history",
@@ -206,6 +218,129 @@ fun AuditLogScreen(vm: AuditLogViewModel = viewModel()) {
 
     state.selected?.let { entry ->
         AuditEntryDialog(entry = entry, onDismiss = vm::dismissDetails)
+    }
+}
+
+@Composable
+private fun AuditDetailedFilters(state: AuditLogUiState, vm: AuditLogViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= 720.dp) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AuditSearch(state, vm, Modifier.weight(1f))
+                    AuditFacetMenu(
+                        label = "Entity",
+                        selected = state.entityType,
+                        options = state.facets.entityTypes,
+                        loading = state.facetsLoading,
+                        display = ::auditEntityLabel,
+                        onSelect = vm::selectEntityType,
+                    )
+                    AuditFacetMenu(
+                        label = "Action",
+                        selected = state.action,
+                        options = state.facets.actions,
+                        loading = state.facetsLoading,
+                        display = ::auditActionLabel,
+                        onSelect = vm::selectAction,
+                    )
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    AuditSearch(state, vm, Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        AuditFacetMenu(
+                            label = "Entity",
+                            selected = state.entityType,
+                            options = state.facets.entityTypes,
+                            loading = state.facetsLoading,
+                            display = ::auditEntityLabel,
+                            onSelect = vm::selectEntityType,
+                            modifier = Modifier.weight(1f),
+                        )
+                        AuditFacetMenu(
+                            label = "Action",
+                            selected = state.action,
+                            options = state.facets.actions,
+                            loading = state.facetsLoading,
+                            display = ::auditActionLabel,
+                            onSelect = vm::selectAction,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+        state.facetsError?.let { message ->
+            Text(message, color = Brand.Warning, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun AuditSearch(state: AuditLogUiState, vm: AuditLogViewModel, modifier: Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = state.queryDraft,
+            onValueChange = vm::queryChanged,
+            label = { Text("Search audit details") },
+            supportingText = { Text("Reason, request ID, client action ID, and before/after values") },
+            singleLine = true,
+            enabled = !state.loading && !state.loadingMore,
+            leadingIcon = { androidx.compose.material3.Icon(Icons.Default.Search, contentDescription = null) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { vm.applyQuery() }),
+            modifier = Modifier.weight(1f),
+        )
+        ErpButton(
+            text = "Search",
+            onClick = vm::applyQuery,
+            enabled = !state.loading && !state.loadingMore,
+            intent = ActionIntent.Secondary,
+            leadingIcon = Icons.Default.Search,
+        )
+        if (state.appliedQuery != null || state.entityType != null || state.action != null) {
+            TextButton(onClick = vm::clearDetailedFilters) { Text("Clear") }
+        }
+    }
+}
+
+@Composable
+private fun AuditFacetMenu(
+    label: String,
+    selected: String?,
+    options: List<String>,
+    loading: Boolean,
+    display: (String) -> String,
+    onSelect: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier.widthIn(min = 148.dp, max = 210.dp)) {
+        ErpButton(
+            text = if (loading) "$label…" else "$label: ${selected?.let(display) ?: "All"}",
+            onClick = { expanded = true },
+            enabled = !loading,
+            intent = ActionIntent.Secondary,
+            leadingIcon = Icons.Default.FilterList,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("All $label values") },
+                onClick = { expanded = false; onSelect(null) },
+            )
+            options.forEach { value ->
+                DropdownMenuItem(
+                    text = { Text(display(value)) },
+                    onClick = { expanded = false; onSelect(value) },
+                )
+            }
+        }
     }
 }
 

@@ -1,5 +1,8 @@
 package cloud.dcompany.erp.ui.screens.tables
 
+import cloud.dcompany.erp.core.net.ModifierSelectionRequest
+import cloud.dcompany.erp.core.net.OrderModifierSnapshot
+import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -88,6 +91,8 @@ data class TableOrderLine(
     @SerialName("void_reason") val voidReason: String? = null,
     @SerialName("kitchen_void_acknowledged_at")
     val kitchenVoidAcknowledgedAt: String? = null,
+    @SerialName("variant_snapshot") val variantSnapshot: OrderVariantSnapshot? = null,
+    val modifiers: List<OrderModifierSnapshot> = emptyList(),
 ) {
     /** "2" rather than "2.0"; a half portion still reads as "0.5". */
     val qtyLabel: String
@@ -128,6 +133,8 @@ data class OrderLineBody(
     @SerialName("menu_item_id") val menuItemId: String,
     val qty: Int,
     val note: String? = null,
+    @SerialName("variant_id") val variantId: String? = null,
+    val modifiers: List<ModifierSelectionRequest> = emptyList(),
 )
 
 @Serializable

@@ -59,6 +59,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.TablesAccess
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
 import cloud.dcompany.erp.core.sync.CafeBillProjection
@@ -79,6 +80,9 @@ import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
+import cloud.dcompany.erp.ui.orderOptionLabels
+import cloud.dcompany.erp.ui.screens.CartModifierSelection
+import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -222,6 +226,7 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
                 state = state,
                 canWrite = access.canCreateOrders,
                 onAdd = vm::add,
+                onAddConfigured = vm::addConfigured,
                 onIncrement = vm::increment,
                 onRemove = vm::remove,
                 onNote = vm::updateNote,
@@ -673,6 +678,12 @@ private fun OrderBuilder(
     state: TablesUiState,
     canWrite: Boolean,
     onAdd: (MenuItemEntity) -> Unit,
+    onAddConfigured: (
+        MenuItemEntity,
+        MenuVariantEntity?,
+        List<CartModifierSelection>,
+        String?,
+    ) -> Unit,
     onIncrement: (String) -> Unit,
     onRemove: (String) -> Unit,
     onNote: (String, String) -> Unit,
@@ -680,6 +691,13 @@ private fun OrderBuilder(
     onSaveRound: () -> Unit,
 ) {
     var confirmDiscard by remember(table.id) { mutableStateOf(false) }
+    var configuringItemId by rememberSaveable(table.id) { mutableStateOf<String?>(null) }
+    val configuringItem = state.menu.firstOrNull { it.id == configuringItemId }
+    val addOrConfigure: (MenuItemEntity) -> Unit = { item ->
+        val configurable = state.variants.any { it.menuItemId == item.id && it.isActive } ||
+            state.modifierGroups.any { it.menuItemId == item.id && it.isActive }
+        if (configurable) configuringItemId = item.id else onAdd(item)
+    }
     val requestDismiss = {
         if (state.cart.isEmpty()) onDismiss() else confirmDiscard = true
     }
@@ -705,7 +723,7 @@ private fun OrderBuilder(
                         OrderMenuPanel(
                             state = state,
                             canWrite = canWrite,
-                            onAdd = onAdd,
+                            onAdd = addOrConfigure,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                         OrderCartPanel(
@@ -725,7 +743,7 @@ private fun OrderBuilder(
                         OrderMenuPanel(
                             state = state,
                             canWrite = canWrite,
-                            onAdd = onAdd,
+                            onAdd = addOrConfigure,
                             modifier = Modifier.weight(0.9f).fillMaxWidth(),
                         )
                         HorizontalDivider(color = Brand.BorderSubtle)
@@ -783,6 +801,22 @@ private fun OrderBuilder(
             },
             dismissButton = {
                 TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+            },
+        )
+    }
+
+    configuringItem?.let { item ->
+        ProductConfigurationDialog(
+            item = item,
+            variants = state.variants.filter { it.menuItemId == item.id && it.isActive },
+            modifierGroups = state.modifierGroups.filter {
+                it.menuItemId == item.id && it.isActive
+            },
+            modifiers = state.modifiers.filter { it.menuItemId == item.id && it.isActive },
+            onDismiss = { configuringItemId = null },
+            onAdd = { variant, modifiers, note ->
+                configuringItemId = null
+                onAddConfigured(item, variant, modifiers, note)
             },
         )
     }
@@ -872,10 +906,17 @@ private fun OrderCartPanel(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                (line.item.basePriceMinor * line.qty).asRupees(),
+                                line.lineTotalMinor.asRupees(),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Brand.ForegroundMuted,
                             )
+                            line.optionLabels.takeIf(List<String>::isNotEmpty)?.let { options ->
+                                Text(
+                                    options.joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.Information,
+                                )
+                            }
                         }
                         Qty("−", enabled = canWrite) { onRemove(line.clientLineId) }
                         Text(
@@ -1036,6 +1077,14 @@ private fun BillDialog(
                                             color = Brand.Foreground,
                                             fontWeight = FontWeight.SemiBold,
                                         )
+                                        orderOptionLabels(line.variantSnapshot, line.modifiers)
+                                            .takeIf(List<String>::isNotEmpty)?.let { options ->
+                                                Text(
+                                                    options.joinToString(" · "),
+                                                    color = Brand.Information,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                )
+                                            }
                                         line.note?.takeIf(String::isNotBlank)?.let { note ->
                                             Text("Request: $note", color = Brand.ForegroundMuted)
                                         }

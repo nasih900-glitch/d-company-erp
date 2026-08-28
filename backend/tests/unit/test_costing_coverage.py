@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from app.api.v1.insights.router import _build_costing_coverage, _fifo_costed_pairs
 
+TEST_BRANCH_ID = uuid4()
+
 
 def _item(name: str):
     return SimpleNamespace(id=uuid4(), sku=name.upper(), name=name, type="food")
@@ -41,6 +43,7 @@ def test_costing_coverage_does_not_present_unknown_cost_as_zero() -> None:
         [missing_recipe, empty_recipe, zero_cost, complete],
         [empty, unknown, costed],
         [_line(unknown, free_ingredient), _line(costed, costed_ingredient)],
+        branch_id=TEST_BRANCH_ID,
     )
 
     assert result.inventory_item_count == 4
@@ -70,6 +73,7 @@ def test_costing_coverage_is_complete_only_when_every_item_is_costed() -> None:
         [item],
         [recipe],
         [_line(recipe, ingredient)],
+        branch_id=TEST_BRANCH_ID,
     )
 
     assert result.is_complete is True
@@ -79,7 +83,7 @@ def test_costing_coverage_is_complete_only_when_every_item_is_costed() -> None:
 
 
 def test_empty_catalogue_is_not_reported_as_incomplete() -> None:
-    result = _build_costing_coverage([], [], [])
+    result = _build_costing_coverage([], [], [], branch_id=TEST_BRANCH_ID)
 
     assert result.is_complete is True
     assert result.inventory_item_count == 0
@@ -98,6 +102,7 @@ def test_positive_average_without_a_costed_batch_is_still_unverified() -> None:
         [_line(recipe, ingredient)],
         branches=[branch],
         fifo_costed_pairs=set(),
+        branch_id=branch.id,
     )
 
     assert result.is_complete is False
@@ -119,6 +124,7 @@ def test_costed_batch_in_another_branch_does_not_hide_missing_fifo_cost() -> Non
         [_line(recipe, ingredient)],
         branches=[main, kiosk],
         fifo_costed_pairs={(ingredient.id, main.id)},
+        branch_id=main.id,
     )
 
     assert result.is_complete is False

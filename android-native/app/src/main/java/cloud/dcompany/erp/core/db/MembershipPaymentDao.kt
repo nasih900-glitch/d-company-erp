@@ -122,6 +122,15 @@ interface MembershipPaymentDao {
     )
     suspend fun retryAction(actionId: String): Int
 
+    /** A rejected PREPARE has no server task and never authorised value
+     * movement. It is the only membership-money row staff may safely discard;
+     * ambiguous or later-stage evidence must always be reconciled instead. */
+    @Query(
+        "DELETE FROM local_membership_payment_actions WHERE actionId = :actionId " +
+            "AND kind = 'prepare' AND state = 'rejected' AND serverRequestId IS NULL",
+    )
+    suspend fun discardRejectedPreparation(actionId: String): Int
+
     @Query(
         "SELECT COUNT(*) FROM local_membership_payment_actions " +
             "WHERE state <> 'synced' AND shiftId IS NULL",

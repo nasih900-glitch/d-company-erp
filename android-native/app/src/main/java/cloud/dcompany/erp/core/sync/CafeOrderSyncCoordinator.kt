@@ -10,6 +10,7 @@ import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
+import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.ui.screens.tables.OrderLineBody
 import cloud.dcompany.erp.ui.screens.tables.OrderLinesAppendBody
 import cloud.dcompany.erp.ui.screens.tables.SendToPosBody
@@ -170,6 +171,10 @@ class CafeOrderSyncCoordinator(
                             menuItemId = line.menuItemId,
                             qty = line.qty,
                             note = line.note,
+                            variantId = line.variantId,
+                            modifiers = line.modifiers.map {
+                                ModifierSelectionRequest(it.modifierId, it.qty)
+                            },
                         )
                     },
                 ),
@@ -197,6 +202,10 @@ class CafeOrderSyncCoordinator(
                             menuItemId = line.menuItemId,
                             qty = line.qty,
                             note = line.note,
+                            variantId = line.variantId,
+                            modifiers = line.modifiers.map {
+                                ModifierSelectionRequest(it.modifierId, it.qty)
+                            },
                         )
                     },
                 ),
@@ -408,4 +417,6 @@ private fun TableOrderLine.toCafeLineSnapshot(): CafeBillLineSnapshot = CafeBill
     voidedAt = voidedAt,
     voidReason = voidReason,
     kitchenVoidAcknowledgedAt = kitchenVoidAcknowledgedAt,
+    variantSnapshot = variantSnapshot,
+    modifiers = modifiers,
 )

@@ -1342,6 +1342,59 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * A successful password reset increments the server auth version, so the
+     * current bearer is already revoked. Leave the operational workspace
+     * immediately instead of waiting for a later API call to discover that
+     * fact. Saved outbox ownership is deliberately retained so only this same
+     * employee can sign back in and finish any queued work.
+     */
+    fun expireAfterPasswordChange() {
+        terminalChangeJob?.cancel()
+        terminalChangeGate.finish()
+        _terminalChange.value = TerminalChangeUiState.Idle
+        _state.value = AuthState.SigningOut
+        sync.clearSessionFeedback()
+        deactivateTerminalRuntime()
+        realtime.disconnect()
+        PricingLock.lock()
+        restoreJob?.cancel()
+        pendingTerminalSession = null
+        _accessChangeNotice.value = null
+        cancelOperationalAlarms()
+        (getApplication() as DCompanyApp).notificationRoutes.clearPending()
+        viewModelScope.launch {
+            var cleanupWarning: String? = null
+            try {
+                cacheIsolation.deactivate()
+            } catch (_: Exception) {
+                cleanupWarning =
+                    "The previous workspace could not be fully deactivated; restart the app before another employee signs in."
+            }
+            try {
+                withContext(Dispatchers.IO) { tokens.clear() }
+            } catch (_: Exception) {
+                _state.value = AuthState.SignOutFailed(
+                    "Your password changed, but this tablet could not durably clear the old secure session. " +
+                        "Keep this screen open and restart the app before anyone else uses it.",
+                )
+                return@launch
+            }
+            try {
+                cache.rememberProfile(null)
+            } catch (_: Exception) {
+                cleanupWarning =
+                    "The saved display profile could not be cleared; restart the app before another employee signs in."
+            }
+            _loginError.value = buildString {
+                append("Password updated. Sign in again with the new password to continue.")
+                cleanupWarning?.let { append(" ").append(it) }
+            }
+            _state.value = AuthState.SignedOut
+            refreshSignedOutSafetyNotice()
+        }
+    }
+
     fun dismissAccountSafetyNotice() = outboxSafety.clearNotice()
 
     fun dismissAccessChangeNotice() {

@@ -14,11 +14,11 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from app.core.db import AsyncSessionLocal
+from app.core.timezone import local_today
 from app.models import Company, Role, User, UserRole
 from app.services.alerts import (
     build_expiring_batches_alert,
@@ -39,7 +39,6 @@ PeriodCode = Literal["daily", "weekly", "monthly", "quarterly", "half_yearly", "
 CliPeriod = Literal[PeriodCode, "all_due"]
 
 PUBLIC_URL = os.getenv("PUBLIC_URL", "https://dcompany.duckdns.org")
-BUSINESS_TZ = ZoneInfo(os.getenv("BUSINESS_TIMEZONE", "Asia/Kolkata"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +131,19 @@ def due_periods(today: date) -> list[PeriodCode]:
     return periods
 
 
+def _schedule_for_company(
+    period: CliPeriod,
+    timezone_name: str | None,
+    *,
+    as_of: date | None = None,
+    now: datetime | None = None,
+) -> tuple[date, list[PeriodCode]]:
+    """Resolve report dates in the company's configured business timezone."""
+    today = as_of or local_today(timezone_name, now=now)
+    periods = due_periods(today) if period == "all_due" else [period]
+    return today, periods
+
+
 def _configured_recipients() -> list[str]:
     raw = os.getenv("REPORT_RECIPIENT_EMAILS", "") or os.getenv("ALERT_RECIPIENT_EMAILS", "")
     return [email.strip() for email in raw.split(",") if email.strip()]
@@ -206,8 +218,6 @@ async def send_reports(period: CliPeriod, *, as_of: date | None = None) -> None:
         print("[pnl_alerts] SMTP env vars not configured - skipping email send.")
         return
 
-    today = as_of or datetime.now(BUSINESS_TZ).date()
-    periods = due_periods(today) if period == "all_due" else [period]
     env_recipients = _configured_recipients()
 
     async with AsyncSessionLocal() as session:
@@ -216,6 +226,11 @@ async def send_reports(period: CliPeriod, *, as_of: date | None = None) -> None:
         ).scalars().all()
 
         for company in companies:
+            today, periods = _schedule_for_company(
+                period,
+                company.timezone,
+                as_of=as_of,
+            )
             recipients = env_recipients or await _protected_owner_recipients(session, company.id)
             if not recipients:
                 print(f"[pnl_alerts] {company.name}: no recipients - skipping.")

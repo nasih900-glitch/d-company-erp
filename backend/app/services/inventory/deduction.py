@@ -11,26 +11,29 @@ we deduct what we can and continue — the cashier still gets to charge
 the customer, but Ingredient.current_qty may go briefly negative,
 which surfaces in the low-stock alert.
 
-When an order is refunded, restock_for_refund() reverses this: the actual
-"sale" StockMovement rows recorded for that order are credited back onto
-the same batches (in full for a full refund, proportionally for a partial
-one), with a StockMovement ('refund_restock') written as the audit trail.
-Reversing the historical movements — rather than re-deriving from the
-menu item's current recipe — keeps this correct even if the recipe is
-edited or deactivated between the sale and a later refund.
+Money refunds deliberately do not change physical stock or COGS: prepared
+food, consumed gaming time, and opened ingredients have not returned merely
+because money left the business. ``restock_for_refund`` is retained only as a
+low-level reversal primitive for a future explicit item-disposition workflow.
+It has no production refund-route caller and must not be wired in until that
+workflow records returned quantities, a disposition identifier, authority,
+and idempotency. When such evidence exists, the helper reverses historical
+sale movements rather than guessing from the current recipe.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import BusinessRuleError
 from app.models import (
     Batch,
     Ingredient,
@@ -44,6 +47,19 @@ from app.models import (
 # is non-null and refunds reverse the exact original movement.  This marker
 # distinguishes a zero cost that means "unknown" from a genuine free item.
 UNCOSTED_SHORTAGE_LOT_CODE = "SYSTEM-UNCOSTED-SHORTAGE"
+_QUANTITY_QUANTUM = Decimal("0.0001")
+
+
+def _quantity(value: object) -> Decimal:
+    """Return one database-representable inventory quantity."""
+
+    try:
+        return Decimal(str(value)).quantize(
+            _QUANTITY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise BusinessRuleError("inventory quantity must be a finite number") from exc
 
 
 async def deduct_for_order(
@@ -101,24 +117,42 @@ async def deduct_for_order(
     # deduction per ingredient, acquired in canonical UUID order, also avoids
     # fragmenting the audit trail merely because an ingredient appears in
     # more than one line.
-    required_by_ingredient: dict[UUID, float] = {}
+    required_by_ingredient: dict[UUID, Decimal] = {}
     for order_line in order_lines:
         recipe = recipes_by_item.get(order_line.menu_item_id)
         if not recipe:
             continue
+        # SQLAlchemy column defaults are applied at INSERT/flush time. Unit
+        # construction and legacy rows may therefore expose ``None`` for the
+        # historical default, which means one output unit rather than zero.
+        recipe_yield = Decimal(
+            str(recipe.yield_qty if recipe.yield_qty is not None else 1)
+        )
+        if recipe_yield <= 0:
+            raise BusinessRuleError(
+                f"active recipe {recipe.id} has an invalid yield; correct the recipe before payment"
+            )
         for rl in lines_by_recipe.get(recipe.id, []):
-            qty_needed = (
-                float(rl.qty)
-                * (1 + float(rl.wastage_pct or 0))
-                * float(order_line.qty)
+            raw_qty_needed = (
+                Decimal(str(rl.qty))
+                * (Decimal(1) + Decimal(str(rl.wastage_pct or 0)))
+                * Decimal(str(order_line.qty))
+                / recipe_yield
             )
             required_by_ingredient[rl.ingredient_id] = (
-                required_by_ingredient.get(rl.ingredient_id, 0.0) + qty_needed
+                required_by_ingredient.get(rl.ingredient_id, Decimal(0))
+                + raw_qty_needed
             )
 
-    for ingredient_id, qty_needed in sorted(
+    for ingredient_id, raw_qty_needed in sorted(
         required_by_ingredient.items(), key=lambda item: item[0].int
     ):
+        qty_needed = _quantity(raw_qty_needed)
+        if raw_qty_needed > 0 and qty_needed == 0:
+            raise BusinessRuleError(
+                "recipe consumption is below the inventory precision of 0.0001; "
+                "change the ingredient base unit or recipe quantity"
+            )
         if qty_needed > 0:
             movements_written += await _deduct_ingredient(
                 session,
@@ -137,7 +171,7 @@ async def _deduct_ingredient(
     *,
     ingredient_id: UUID,
     branch_id: UUID,
-    qty_needed: float,
+    qty_needed: Decimal | float,
     order_id: UUID,
     created_by: UUID | None,
 ) -> int:
@@ -147,6 +181,7 @@ async def _deduct_ingredient(
     Also decrements Ingredient.current_qty so the analytics dashboard /
     low-stock alert stays accurate.
     """
+    qty_needed = _quantity(qty_needed)
     remaining = qty_needed
     movements_written = 0
 
@@ -157,13 +192,22 @@ async def _deduct_ingredient(
     # every batch mutation for this ingredient, including the shortage path.
     ing = (
         await session.execute(
-            select(Ingredient).where(Ingredient.id == ingredient_id).with_for_update()
+            select(Ingredient)
+            .where(
+                Ingredient.id == ingredient_id,
+                Ingredient.deleted_at.is_(None),
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if not ing:
         return 0
 
-    # Pull batches in FIFO order (oldest first), only those with stock
+    # Pull batches in FIFO order (oldest first), only those with stock that is
+    # still saleable. At the exact UTC expiry instant the batch is expired, so
+    # the strict ``>`` boundary is intentional. Expired physical stock remains
+    # untouched until an authorised waste/damage movement records its disposal.
+    now = datetime.now(UTC)
     batches = (
         await session.execute(
             select(Batch)
@@ -171,6 +215,7 @@ async def _deduct_ingredient(
                 Batch.ingredient_id == ingredient_id,
                 Batch.branch_id == branch_id,
                 Batch.qty_on_hand > 0,
+                or_(Batch.expires_at.is_(None), Batch.expires_at > now),
             )
             .order_by(Batch.received_at, Batch.id)
             .with_for_update()
@@ -180,8 +225,8 @@ async def _deduct_ingredient(
     for batch in batches:
         if remaining <= 0:
             break
-        take = min(float(batch.qty_on_hand), remaining)
-        batch.qty_on_hand = float(batch.qty_on_hand) - take
+        take = min(_quantity(batch.qty_on_hand), remaining)
+        batch.qty_on_hand = _quantity(batch.qty_on_hand) - take
         session.add(
             StockMovement(
                 id=uuid4(),
@@ -212,6 +257,7 @@ async def _deduct_ingredient(
                 .where(
                     Batch.ingredient_id == ingredient_id,
                     Batch.branch_id == branch_id,
+                    or_(Batch.expires_at.is_(None), Batch.expires_at > now),
                 )
                 .order_by(Batch.received_at.desc(), Batch.id.desc())
                 .limit(1)
@@ -234,7 +280,7 @@ async def _deduct_ingredient(
             )
             session.add(last)
         else:
-            last.qty_on_hand = float(last.qty_on_hand or 0) - remaining
+            last.qty_on_hand = _quantity(last.qty_on_hand or 0) - remaining
 
         cost_per_unit_minor = int(last.cost_per_unit_minor or 0)
         cost_unknown = (
@@ -263,7 +309,7 @@ async def _deduct_ingredient(
         movements_written += 1
 
     # The ingredient row remains locked from before the batch reads above.
-    ing.current_qty = float(ing.current_qty or 0) - qty_needed
+    ing.current_qty = _quantity(ing.current_qty or 0) - qty_needed
     return movements_written
 
 
@@ -275,7 +321,14 @@ async def restock_for_refund(
     created_by: UUID | None,
     fraction: float,
 ) -> int:
-    """Reverse the inventory deductions actually recorded for this order.
+    """Low-level stock reversal for an explicit returned-item disposition.
+
+    This function is intentionally not called by the monetary POS refund
+    workflow. ``order_id`` and a fraction alone are not sufficient evidence
+    that any physical item returned, and this primitive is not independently
+    idempotent. A production caller must first persist and deduplicate an
+    authorised item-level disposition, then invoke this within that same
+    transaction.
 
     Reads back the "sale" StockMovement rows deduct_for_order wrote for this
     exact order (matched via ref_type="order", ref_id=order_id) and credits
@@ -296,8 +349,8 @@ async def restock_for_refund(
     Returns the number of stock movements written.
     """
     movements_written = 0
-    fraction = max(0.0, min(1.0, fraction))
-    if fraction <= 0:
+    fraction_decimal = max(Decimal(0), min(Decimal(1), Decimal(str(fraction))))
+    if fraction_decimal <= 0:
         return 0
 
     sale_movements = (
@@ -319,7 +372,9 @@ async def restock_for_refund(
     ).scalars().all()
 
     for movement in sale_movements:
-        qty_to_restock = abs(float(movement.qty_delta or 0)) * fraction
+        qty_to_restock = _quantity(
+            abs(Decimal(str(movement.qty_delta or 0))) * fraction_decimal
+        )
         if qty_to_restock <= 0:
             continue
         await _restock_ingredient(
@@ -341,7 +396,7 @@ async def _restock_ingredient(
     *,
     batch_id: UUID,
     branch_id: UUID,
-    qty_to_restock: float,
+    qty_to_restock: Decimal | float,
     cost_per_unit_minor: int,
     order_id: UUID,
     created_by: UUID | None,
@@ -391,7 +446,8 @@ async def _restock_ingredient(
     if not batch:
         return
 
-    batch.qty_on_hand = float(batch.qty_on_hand) + qty_to_restock
+    qty_to_restock = _quantity(qty_to_restock)
+    batch.qty_on_hand = _quantity(batch.qty_on_hand) + qty_to_restock
     session.add(
         StockMovement(
             id=uuid4(),
@@ -407,4 +463,4 @@ async def _restock_ingredient(
         )
     )
 
-    ing.current_qty = float(ing.current_qty or 0) + qty_to_restock
+    ing.current_qty = _quantity(ing.current_qty or 0) + qty_to_restock
