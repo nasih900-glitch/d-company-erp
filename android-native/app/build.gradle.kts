@@ -52,8 +52,11 @@ android {
         applicationId = "cloud.dcompany.erp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "3.0.7"
+        // Every Room schema change must ship under a strictly newer Android
+        // version code so an installed tablet upgrades in place instead of
+        // requiring an uninstall that would destroy its offline outbox.
+        versionCode = 10
+        versionName = "3.0.9"
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.

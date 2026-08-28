@@ -24,9 +24,12 @@ of sync with what a plain GET would return.
 from __future__ import annotations
 
 from collections import defaultdict
-from uuid import UUID
+from typing import TYPE_CHECKING
 
-from fastapi import WebSocket
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from fastapi import WebSocket
 
 from app.core.logging import get_logger
 
@@ -35,7 +38,7 @@ log = get_logger(__name__)
 RESOURCES = frozenset({
     "shifts", "tables", "orders", "gaming", "kitchen", "attendance",
     "menu", "customers", "inventory", "finance", "staff", "events",
-    "memberships", "access_control", "ocr", "settings",
+    "memberships", "access_control", "ocr", "settings", "bug_reports",
 })
 
 
@@ -101,6 +104,7 @@ _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/events", "events"),
     ("/memberships", "memberships"),
     ("/settings", "settings"),
+    ("/bug-reports", "bug_reports"),
     # Narrow on purpose — NOT a bare "/admin" row, which would also swallow
     # /admin/pricing/unlock and /admin/audit/*, neither of which is a
     # resource anything should be pull-refreshing on.

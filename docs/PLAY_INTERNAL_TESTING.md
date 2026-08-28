@@ -11,15 +11,18 @@ Current Android identity:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.0.7` |
-| Version code | `8` |
+| Version name | `3.0.9` |
+| Version code | `10` |
+| Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-This is the identity reserved for the next candidate. No final `3.0.7` APK/AAB
-has been built, uploaded, or installed. Treat any locally signed output as a
-candidate only until every gate below passes. There is currently no emulator or
-physical-device acceptance proof for `3.0.7`, and this preparation has not
-deployed the production backend or web ERP.
+This is the identity reserved for the next unreleased candidate. A locally
+signed `3.0.9` APK exists, but its complete release gates and signed in-place
+upgrades from `3.0.7` (`8`) and the earlier schema-37 code-`9` candidate must be
+rerun for code `10`. No Play AAB has been uploaded, no production rollout has
+occurred, and physical Redmi Pad 2 acceptance remains unverified. The candidate
+includes the automatic one-shop workspace UI and contextual Support reporting.
+Its coordinated backend deployment must reach Alembic revision `0054`.
 
 Google's current internal-testing instructions are at
 [Play Console Help](https://support.google.com/googleplay/android-developer/answer/9845334).
@@ -32,8 +35,8 @@ repository release workflow and verify all of the following:
 - backend tests and migrations pass;
 - Android JVM tests, compilation, lint, assembly, and emulator instrumentation
   pass;
-- the release manifest says package `cloud.dcompany.erp`, version `3.0.7`, code
-  `8`, and the production HTTPS API above;
+- the release manifest says package `cloud.dcompany.erp`, version `3.0.9`, code
+  `10`, and the production HTTPS API above;
 - APK/AAB signatures and the published SHA-256 checksums verify;
 - no test active session, unpaid held order, pending cancellation, or open test
   shift remains in the acceptance environment;
@@ -43,10 +46,12 @@ repository release workflow and verify all of the following:
   [`ANDROID_STAFF_GUIDE.md`](ANDROID_STAFF_GUIDE.md) passes on that physical
   tablet.
 
-An Android 15 emulator run would be useful evidence, but it would not be
-physical Redmi Pad proof. No such run has yet been completed for `3.0.7`.
+API-35 emulator installation and code-8-to-code-10 plus schema-37-code-9-to-code-10
+upgrade evidence are required, but they are not physical Redmi Pad proof.
 Uploading to an internal track also does not deploy the backend or web ERP to
-production. GST validation is outside the current Android acceptance scope.
+production. Keep client code `8` as the compatibility floor and advertise code
+`10` only after its signed artifact is actually available at the configured
+HTTPS update URL. GST validation is outside the current Android acceptance scope.
 
 ## 1. Create or use the correct developer account
 
@@ -129,20 +134,22 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload version 3.0.7 (8)
+## 5. Upload version 3.0.9 (10)
 
 1. Open **Test and release → Testing → Internal testing**.
 2. Choose **Create new release**.
 3. Upload the signed AAB from the green repository release, normally named
-   `d-company-erp-v3.0.7.aab`. Do not upload `app-debug.apk`.
-4. Confirm Play reads package `cloud.dcompany.erp`, version `3.0.7`, and version
-   code `8` from the bundle.
-5. Use release name `3.0.7 (8)`.
-6. Add concise notes such as: `Native Android staff workflow: shifts, POS,
-   Tables/KDS, gaming hand-off, alarms, and offline recovery.`
+   `d-company-erp-v3.0.9.aab`. Do not upload `app-debug.apk` or substitute the
+   locally signed APK for Play's required bundle.
+4. Confirm Play reads package `cloud.dcompany.erp`, version `3.0.9`, and version
+   code `10` from the bundle.
+5. Use release name `3.0.9 (10)`.
+6. Add concise notes such as: `Native Android staff workflow: one-shop
+   workspace, shifts, POS, Tables/KDS, gaming hand-off, contextual Support,
+   alarms, and offline recovery.`
 7. Review all warnings, then start the rollout to **Internal testing only**.
 
-If Play reports that version code `8` was already used, increment `versionCode`
+If Play reports that version code `10` was already used, increment `versionCode`
 and rebuild through the release workflow. Never alter or rename an existing
 bundle to work around a version error.
 
@@ -169,7 +176,7 @@ On the tablet:
 1. Sign in to Google Play with the authorised tester account.
 2. Open the opt-in link and accept the invitation.
 3. Install or update **D Company** from Google Play.
-4. Confirm Android reports version `3.0.7`.
+4. Confirm Android reports version `3.0.9` (code `10`).
 5. Grant notification permission and, when prompted, allow the exact-alarm
    access needed for operational session/held-order reminders.
 6. Run the complete start-to-close workflow in

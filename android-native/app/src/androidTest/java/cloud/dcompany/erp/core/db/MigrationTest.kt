@@ -2106,4 +2106,119 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate36To37_addsOwnerScopedDurableSupportReportAndAttachmentOutbox() {
+        helper.createDatabase(dbName, 36).close()
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 37, true, MIGRATION_36_37)
+        migrated.execSQL(
+            "INSERT INTO local_bug_reports " +
+                "(localId, ownerCompanyId, ownerUserId, requestJson, title, screen, " +
+                "createdAtMillis, state, attemptCount) VALUES " +
+                "('report-local', 'company-1', 'user-1', '{}', 'Staff needs help', " +
+                "'Gaming', 1000, 'pending', 0)",
+        )
+        migrated.execSQL(
+            "INSERT INTO local_bug_report_attachments " +
+                "(localId, reportLocalId, ownerCompanyId, ownerUserId, filename, contentType, " +
+                "content, byteSize, createdAtMillis, state, attemptCount) VALUES " +
+                "('image-local', 'report-local', 'company-1', 'user-1', 'support-image.jpg', " +
+                "'image/jpeg', X'010203', 3, 1000, 'pending', 0)",
+        )
+        migrated.query(
+            "SELECT ownerCompanyId, ownerUserId, state FROM local_bug_reports WHERE localId = 'report-local'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("company-1", cursor.getString(0))
+            assertEquals("user-1", cursor.getString(1))
+            assertEquals("pending", cursor.getString(2))
+        }
+        migrated.query(
+            "SELECT reportLocalId, contentType, byteSize FROM local_bug_report_attachments " +
+                "WHERE localId = 'image-local'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("report-local", cursor.getString(0))
+            assertEquals("image/jpeg", cursor.getString(1))
+            assertEquals(3, cursor.getInt(2))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate37To38BindsAttachmentOwnerToParentAndQuarantinesLegacyMismatch() {
+        helper.createDatabase(dbName, 37).apply {
+            execSQL(
+                "INSERT INTO local_bug_reports " +
+                    "(localId, ownerCompanyId, ownerUserId, requestJson, title, screen, " +
+                    "createdAtMillis, state, attemptCount) VALUES " +
+                    "('report-local', 'company-1', 'user-1', '{}', 'Staff needs help', " +
+                    "'Gaming', 1000, 'sent', 1)",
+            )
+            execSQL(
+                "INSERT INTO local_bug_report_attachments " +
+                    "(localId, reportLocalId, ownerCompanyId, ownerUserId, filename, contentType, " +
+                    "content, byteSize, createdAtMillis, state, attemptCount) VALUES " +
+                    "('image-local', 'report-local', 'company-1', 'user-2', 'support-image.jpg', " +
+                    "'image/jpeg', X'010203', 3, 1000, 'pending', 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 38, true, MIGRATION_37_38)
+        migrated.query(
+            "SELECT ownerCompanyId, ownerUserId, state, lastError, length(content) " +
+                "FROM local_bug_report_attachments WHERE localId = 'image-local'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("company-1", cursor.getString(0))
+            assertEquals("user-1", cursor.getString(1))
+            assertEquals(BugReportOutboxState.DISCARDED, cursor.getString(2))
+            assertTrue(cursor.getString(3).contains("privacy", ignoreCase = true))
+            assertEquals(0, cursor.getInt(4))
+        }
+        migrated.query(
+            "SELECT COUNT(*) FROM local_bug_report_attachments " +
+                "WHERE localId = 'image-local' AND state = 'pending'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate36To38CreatesOwnerBoundSupportOutboxInOneReleaseUpgrade() {
+        helper.createDatabase(dbName, 36).close()
+
+        val migrated = helper.runMigrationsAndValidate(
+            dbName,
+            38,
+            true,
+            MIGRATION_36_37,
+            MIGRATION_37_38,
+        )
+        migrated.execSQL(
+            "INSERT INTO local_bug_reports " +
+                "(localId, ownerCompanyId, ownerUserId, requestJson, title, screen, " +
+                "createdAtMillis, state, attemptCount) VALUES " +
+                "('report-local', 'company-1', 'user-1', '{}', 'Staff needs help', " +
+                "'Gaming', 1000, 'pending', 0)",
+        )
+        migrated.execSQL(
+            "INSERT INTO local_bug_report_attachments " +
+                "(localId, reportLocalId, ownerCompanyId, ownerUserId, filename, contentType, " +
+                "content, byteSize, createdAtMillis, state, attemptCount) VALUES " +
+                "('image-local', 'report-local', 'company-1', 'user-1', 'support-image.jpg', " +
+                "'image/jpeg', X'010203', 3, 1000, 'pending', 0)",
+        )
+        migrated.query(
+            "SELECT COUNT(*) FROM local_bug_report_attachments WHERE reportLocalId = 'report-local'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+        migrated.close()
+    }
 }

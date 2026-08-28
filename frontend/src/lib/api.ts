@@ -1,5 +1,6 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import { readStoredTerminalId } from './operational-context';
+import { recordFailedSupportAction } from './support-context';
 
 /**
  * Base URL resolution order (most specific wins):
@@ -181,16 +182,28 @@ export const api = axios.create({
 
 export { BASE_URL };
 
+export function isBugReportApiRequest(url: string): boolean {
+  const path = url.split(/[?#]/, 1)[0] ?? '';
+  return /(?:^|\/)bug-reports(?:\/|$)/.test(path);
+}
+
 // ---------------------------------------------------------------- request side
 // Inject access token + tenant headers.
 api.interceptors.request.use((config) => {
   const token = readAccessToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   const url = String(config.url || '');
+  const supportRequest = isBugReportApiRequest(url);
   // These two routes validate identity/terminal state. Sending an unvalidated
   // cached terminal here would prevent the app from repairing stale storage.
-  const validatesContext = url.includes('/auth/') || url.includes('/settings/terminals');
-  const terminalId = validatesContext ? null : readStoredTerminalId();
+  // Support requests carry captured branch/terminal evidence in their body.
+  // Binding them to the device's current terminal would make a legitimate
+  // retry change meaning after terminal selection changes.
+  const validatesContext = url.includes('/auth/')
+    || url.includes('/settings/terminals');
+  const omitsTerminalContext = validatesContext || supportRequest;
+  if (supportRequest) config.headers.delete('X-Terminal-Id');
+  const terminalId = omitsTerminalContext ? null : readStoredTerminalId();
   if (terminalId) config.headers['X-Terminal-Id'] = terminalId;
   const pricingToken = readPricingToken();
   if (pricingToken) config.headers['X-Pricing-Token'] = pricingToken;
@@ -352,6 +365,11 @@ api.interceptors.response.use(
             'Could not reach the server to renew this session. Check the connection and try again.',
           );
           retryable.code = 'network_error';
+          recordFailedSupportAction({
+            method: cfg.method,
+            url,
+            errorCode: retryable.code,
+          });
           return Promise.reject(retryable);
         }
       }
@@ -383,6 +401,12 @@ api.interceptors.response.use(
     // from "we never got an answer" (timeout/offline, no status at all) — only
     // the former may destroy a stored session.
     enriched.status = err.response?.status;
+    recordFailedSupportAction({
+      method: cfg?.method,
+      url,
+      errorCode: enriched.code,
+      status: enriched.status,
+    });
     return Promise.reject(enriched);
   },
 );

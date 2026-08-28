@@ -45,6 +45,14 @@ import kotlinx.serialization.json.Json
 
 sealed interface AuthState {
     data object Loading : AuthState
+    /**
+     * A cached identity is available for display, but it is deliberately not
+     * writable until the bounded live authority check either succeeds or
+     * proves that the server cannot be reached. This closes the cold-start
+     * window where revoked permissions or an archived till could otherwise
+     * enqueue work before `/me` and the terminal list returned.
+     */
+    data class VerifyingCached(val me: MeResponse) : AuthState
     data object SigningOut : AuthState
     data class SignOutFailed(val message: String) : AuthState
     data object SignedOut : AuthState
@@ -111,11 +119,16 @@ internal enum class RestoreFailureAction {
 
 /** Only a definitive authentication decision may discard a restored session. */
 internal fun restoreFailureAction(
-    cachedSessionActive: Boolean,
+    cachedIdentityAvailable: Boolean,
+    liveProfileVerified: Boolean = false,
     error: ApiException,
 ): RestoreFailureAction = when {
     error.status == 401 || error.status == 403 -> RestoreFailureAction.SIGN_OUT
-    cachedSessionActive -> RestoreFailureAction.KEEP_CACHED_SESSION
+    // Offline operation is allowed only when the server did not answer. An
+    // authoritative HTTP response (including 5xx/426) keeps the cache locked:
+    // it is not evidence that the last-known permissions or till remain valid.
+    cachedIdentityAvailable && !liveProfileVerified && error.status == null ->
+        RestoreFailureAction.KEEP_CACHED_SESSION
     else -> RestoreFailureAction.SHOW_UNREACHABLE
 }
 
@@ -137,23 +150,22 @@ private data class PendingTerminalSession(
 }
 
 /**
- * The ordering contract behind offline cold start: publish a locally verified
- * employee before beginning any potentially slow server refresh. Keeping this
- * tiny coordinator pure makes the no-network ordering deterministic in tests.
+ * The ordering contract behind cold start: cached identity may make the wait
+ * understandable, but cached write authority is not activated here. The
+ * remote verifier owns the later decision to activate a live or offline
+ * scope. Keeping this tiny coordinator pure makes the no-write verification
+ * window deterministic in tests.
  */
-internal suspend fun <T : Any> restoreCachedBeforeRemote(
+internal suspend fun <T : Any> verifyRemoteBeforeCachedActivation(
     cached: T?,
-    activateCached: suspend (T) -> Boolean,
-    publishCached: (T) -> Unit,
-    refreshRemote: suspend (cachedSessionActive: Boolean) -> Unit,
+    validateCachedIdentity: suspend (T) -> Boolean,
+    publishVerifying: (T) -> Unit,
+    refreshRemote: suspend (cachedIdentity: T?) -> Unit,
 ) {
-    var cachedSessionActive = false
-    if (cached != null) {
-        if (!activateCached(cached)) return
-        publishCached(cached)
-        cachedSessionActive = true
-    }
-    refreshRemote(cachedSessionActive)
+    val cachedIdentity = cached?.takeIf { validateCachedIdentity(it) }
+    if (cached != null && cachedIdentity == null) return
+    if (cachedIdentity != null) publishVerifying(cachedIdentity)
+    refreshRemote(cachedIdentity)
 }
 
 /**
@@ -343,15 +355,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val cached = cache.cachedProfile()?.let {
                     runCatching { json.decodeFromString(MeResponse.serializer(), it) }.getOrNull()
                 }
-                val cachedActive = cached != null && activateCachedSession(restoreLease, cached)
-                if (cachedActive) {
-                    _state.value = AuthState.SignedIn(cached!!)
-                    sync.requestSync()
-                    realtime.connect()
-                }
-                if (tokens.currentAccessFor(restoreLease) != null) {
-                    refreshRestoredSession(restoreLease, cached?.takeIf { cachedActive })
-                }
+                verifyRemoteBeforeCachedActivation(
+                    cached = cached,
+                    validateCachedIdentity = { validateCachedIdentity(restoreLease, it) },
+                    publishVerifying = { _state.value = AuthState.VerifyingCached(it) },
+                    refreshRemote = { cachedIdentity ->
+                        if (tokens.currentAccessFor(restoreLease) != null) {
+                            refreshRestoredSession(restoreLease, cachedIdentity)
+                        }
+                    },
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -366,7 +379,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun activateCachedSession(
+    /** Validate display identity only; this must not grant a Room write lease. */
+    private suspend fun validateCachedIdentity(
         restoreLease: SessionRefreshLease,
         profile: MeResponse,
     ): Boolean {
@@ -378,6 +392,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             )
             return false
         }
+        return tokens.currentAccessFor(restoreLease) != null
+    }
+
+    private suspend fun activateCachedSession(
+        restoreLease: SessionRefreshLease,
+        profile: MeResponse,
+    ): Boolean {
+        if (!validateCachedIdentity(restoreLease, profile)) return false
         if (tokens.currentAccessFor(restoreLease) == null) return false
         val scope = runCatching { cachedScope(profile) }.getOrNull() ?: return false
         try {
@@ -387,7 +409,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             return false
         }
         ApiClient.activateTerminalScope(scope.terminalId)
-        terminals.activateCachedValidated(scope.terminalId, scope.branchId)
+        val cachedTerminalValid = scope.terminalId == null ||
+            terminals.activateCachedValidated(scope.terminalId, scope.branchId)
+        if (!cachedTerminalValid) {
+            deactivateTerminalRuntime()
+            cacheIsolation.deactivate()
+            return false
+        }
+        if (scope.terminalId == null) terminals.deactivateValidatedDisplay()
         // Do not bind or attribute even a legacy local outbox until the
         // persisted user/company/branch/terminal cache scope is exact.
         if (!acceptAuthenticated(profile, restoredSession = restoreLease)) return false
@@ -404,6 +433,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         restoreLease: SessionRefreshLease,
         cachedProfile: MeResponse?,
     ) {
+        var liveProfileVerified = false
         try {
             val me = withTimeoutOrNull(RESTORE_SERVER_TIMEOUT_MILLIS) {
                 ApiClient.api.me()
@@ -420,7 +450,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 return
             }
-            if (cachedProfile != null) _state.value = AuthState.Loading
+            // From this point onward the server has authoritatively answered
+            // `/me`. If the later terminal/shift check loses connectivity, we
+            // must not fall back to the older cached permissions: the fresh
+            // profile may already have revoked a module or changed authority.
+            liveProfileVerified = true
+            // The cached profile is display-only while this check runs. No
+            // feature ViewModel or Room write lease exists until the live
+            // account and till below have been verified.
             if (!activateResolvedTerminalOrRequestSelection(
                     me = me,
                     restoredSession = restoreLease,
@@ -444,35 +481,62 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val message = e.message ?: "This tablet's terminal could not be verified."
             blockWorkspace(message)
         } catch (e: ApiException) {
-            when (restoreFailureAction(cachedProfile != null, e)) {
+            when (
+                restoreFailureAction(
+                    cachedIdentityAvailable = cachedProfile != null,
+                    liveProfileVerified = liveProfileVerified,
+                    error = e,
+                )
+            ) {
                 RestoreFailureAction.KEEP_CACHED_SESSION -> {
-                    if (cachedProfile != null && cacheIsolation.isReady()) {
+                    if (
+                        cachedProfile != null &&
+                        activateCachedSession(restoreLease, cachedProfile)
+                    ) {
                         _state.value = AuthState.SignedIn(cachedProfile)
+                        sync.requestSync()
+                        realtime.connect()
                     } else {
-                        _state.value = AuthState.Unreachable(e.message ?: "Could not reach the server.")
-                    }
-                }
-                RestoreFailureAction.SHOW_UNREACHABLE -> {
-                    if (tokens.currentAccessFor(restoreLease) != null) {
-                        _state.value = AuthState.Unreachable(
+                        lockRestoredWorkspaceAsUnreachable(
+                            restoreLease,
                             e.message ?: "Could not reach the server.",
                         )
                     }
+                }
+                RestoreFailureAction.SHOW_UNREACHABLE -> {
+                    lockRestoredWorkspaceAsUnreachable(
+                        restoreLease,
+                        e.message ?: "Could not reach the server.",
+                    )
                 }
                 RestoreFailureAction.SIGN_OUT -> {
                     rejectRestoredSession(restoreLease, message = null)
                 }
             }
         } catch (_: Exception) {
-            // A malformed/failed remote response is not proof that the cached
-            // employee or their pending Room work should be destroyed.
-            if (cachedProfile != null && cacheIsolation.isReady()) {
-                _state.value = AuthState.SignedIn(cachedProfile)
-            } else if (tokens.currentAccessFor(restoreLease) != null) {
-                _state.value = AuthState.Unreachable(
-                    "Could not verify the server session. Check the connection and try again.",
-                )
-            }
+            // A malformed response is not the same as being offline. Keep the
+            // cached write lease locked and give the employee a clear retry
+            // path instead of accepting possibly revoked authority.
+            lockRestoredWorkspaceAsUnreachable(
+                restoreLease,
+                "Could not verify the server session. Check the connection and try again.",
+            )
+        }
+    }
+
+    /** Revoke any partially activated live scope before exposing a retry UI. */
+    private suspend fun lockRestoredWorkspaceAsUnreachable(
+        restoreLease: SessionRefreshLease,
+        message: String,
+    ) {
+        if (tokens.currentAccessFor(restoreLease) == null) return
+        deactivateTerminalRuntime()
+        cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
+        cancelOperationalAlarms()
+        realtime.disconnect()
+        if (tokens.currentAccessFor(restoreLease) != null) {
+            _state.value = AuthState.Unreachable(message)
         }
     }
 

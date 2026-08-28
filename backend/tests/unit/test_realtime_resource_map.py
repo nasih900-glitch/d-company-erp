@@ -24,6 +24,13 @@ def test_access_control_is_narrow_and_does_not_swallow_other_admin_routes() -> N
     assert resource_for_path("/api/v1/admin/audit") is None
 
 
+def test_bug_report_writes_notify_support_and_reporter_views() -> None:
+    assert resource_for_path("/api/v1/bug-reports") == "bug_reports"
+    assert resource_for_path(
+        "/api/v1/bug-reports/9c846314-7df0-4bf5-a310-712f56db697f/public-replies"
+    ) == "bug_reports"
+
+
 def test_new_phase_2_resources_all_resolve() -> None:
     cases = {
         "/api/v1/menu/items": "menu",

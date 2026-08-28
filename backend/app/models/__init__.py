@@ -4,7 +4,12 @@ from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
-from app.models.bug_report import BugReport
+from app.models.bug_report import (
+    BugReport,
+    BugReportAttachment,
+    BugReportInboxRead,
+    BugReportPublicReply,
+)
 from app.models.customer import (
     Customer,
     OrderLoyaltySettlement,
@@ -114,6 +119,9 @@ __all__ = [
     "Batch",
     "Branch",
     "BugReport",
+    "BugReportAttachment",
+    "BugReportInboxRead",
+    "BugReportPublicReply",
     "CapitalEntry",
     "Company",
     "Customer",

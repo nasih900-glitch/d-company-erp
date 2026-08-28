@@ -143,6 +143,30 @@ interface OutboxSafetyDao {
             UNION ALL
             SELECT 'held_order_payments', syncState
               FROM local_held_order_payments WHERE syncState != 'synced'
+            UNION ALL
+            -- One logical help request is one blocker even when both its
+            -- report and screenshot are waiting. This keeps sign-out copy
+            -- truthful while still covering an attachment whose report has
+            -- already reached the server.
+            SELECT 'support_requests',
+                   CASE
+                     WHEN report.state = 'action_required' OR EXISTS (
+                         SELECT 1 FROM local_bug_report_attachments attachment
+                          WHERE attachment.reportLocalId = report.localId
+                            AND attachment.ownerCompanyId = report.ownerCompanyId
+                            AND attachment.ownerUserId = report.ownerUserId
+                            AND attachment.state = 'action_required'
+                     ) THEN 'action_required'
+                     ELSE 'pending'
+                   END
+              FROM local_bug_reports report
+             WHERE report.state IN ('pending', 'action_required') OR EXISTS (
+                 SELECT 1 FROM local_bug_report_attachments attachment
+                  WHERE attachment.reportLocalId = report.localId
+                    AND attachment.ownerCompanyId = report.ownerCompanyId
+                    AND attachment.ownerUserId = report.ownerUserId
+                    AND attachment.state IN ('pending', 'action_required')
+             )
         ) unresolved
         GROUP BY resource, state
         ORDER BY resource, state

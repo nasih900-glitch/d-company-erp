@@ -9,8 +9,9 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.0.7` |
-| Version code | `8` |
+| Version name | `3.0.9` |
+| Version code | `10` |
+| Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
@@ -22,13 +23,19 @@ build.
 
 ## Release status
 
-Version `3.0.7` (`8`) is a source release candidate, not a declared production
-rollout. No final `3.0.7` APK/AAB has been built for distribution yet. Any
-locally signed output remains a candidate until the repository release gates
-pass. Earlier emulator evidence does not transfer to this new build: `3.0.7`
-currently has no emulator or physical-device acceptance proof. Nothing from
-this Android release preparation has deployed the backend or web ERP to
-production.
+Version `3.0.9` (`10`) is an unreleased candidate, not a declared production
+rollout. The current source advances Room from 36 through 38 to protect the
+employee-owned Support outbox. The focused 36-to-38 migration tests pass on an
+API-35 emulator, but the signed APK and in-place release upgrade must be rebuilt
+and reverified after this schema change before handoff. That evidence does not
+replace the full authenticated staff workflow or physical Redmi Pad 2
+acceptance, and no Play AAB has been uploaded. Nothing from this Android release
+preparation has deployed the backend or web ERP to production. A coordinated
+deployment must migrate the server database through Alembic revision `0054`.
+
+Android client code `8` remains the minimum-compatible floor while code `10` is
+offered as the optional latest update. Do not raise the minimum to `10` until
+every active tablet has installed and accepted this candidate.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
@@ -44,7 +51,9 @@ release check must not be described as GST or tax-compliance certification.
 The native app now supports the operational day rather than POS browsing only:
 
 - authenticated login, token refresh, password recovery, role-based navigation,
-  protected-owner step-up, and verified branch/terminal selection;
+  protected-owner step-up, and automatic one-shop workspace selection (the
+  backend still enforces its branch/terminal scope without exposing unnecessary
+  terminal controls when only one workspace is active);
 - shift open and close, opening float, staff opener identity, cash-denomination
   counting, collection/refund breakdown, variance, and shift history;
 - direct POS sales, quantities, authoritative checkout totals, cash/UPI/card,
@@ -60,7 +69,10 @@ The native app now supports the operational day rather than POS browsing only:
   reconciliation, and duplicate-payment guards;
 - inventory, menu/pricing, customers, memberships, events, refunds, finance,
   reports, analytics, staff, settings, access control, and protected audit-log
-  screens, subject to the signed-in role's permissions.
+  screens, subject to the signed-in role's permissions; and
+- contextual **Help** from authenticated screens, with user-entered issue
+  details, allowlisted screen/action/error context, an explicitly selected and
+  privacy-reviewed screenshot, durable offline retry, and visible owner replies.
 
 Roles intentionally do not all receive the same navigation. A missing screen can
 be correct least-privilege behaviour; do not broaden a role merely to make its
@@ -68,8 +80,9 @@ menu resemble an owner's menu.
 
 ## Operational flow
 
-1. Sign in, confirm the branch and terminal/till, then open a shift with the
-   physical opening float.
+1. Sign in, confirm the single shop workspace, then open a shift with the
+   physical opening float. Internal branch/terminal ownership remains automatic
+   and is shown only when an operator needs to resolve a configuration problem.
 2. For seated service, take and customise rounds in **Tables**, send each round
    to **Kitchen**, progress it in **KDS**, then use **Send to POS** when the bill
    is ready.
@@ -93,7 +106,8 @@ The full staff procedure and recovery rules are in
   routine network failure.
 - Order and payment retries use stable identities and idempotency protection.
   A pending or ambiguous payment must be reconciled, not recreated.
-- Branch, terminal, user and company form the local cache scope. Terminal
+- Branch, terminal, user and company still form the internal local-cache scope,
+  even when the one-workspace UI hides redundant terminal controls. Workspace
   reassignment and sign-out are guarded when unresolved work could be stranded.
 - Shift resolution is terminal-specific. POS and gaming must not reuse an open
   shift from another branch or till.

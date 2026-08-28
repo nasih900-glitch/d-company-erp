@@ -1,174 +1,296 @@
 package cloud.dcompany.erp.ui.screens.settings
 
-import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.db.BugReportOutboxState
+import cloud.dcompany.erp.core.db.LocalBugReportAttachmentEntity
+import cloud.dcompany.erp.core.db.LocalBugReportEntity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import okhttp3.MultipartBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BugReportViewModelTest {
-
+    private val owner = BugReportOwnerScope("company-1", "user-1")
     private val validContext = BugReportClientContext(
         platform = "android",
-        appVersion = "3.0.5",
-        versionCode = 6,
-        connectivity = "online",
+        currentScreen = "Gaming",
+        connectivity = "offline",
         occurredAt = "2026-08-28T10:00:00Z",
     )
 
     @Test
-    fun `ambiguous retry retains draft exact request and idempotency key`() {
-        val api = RecordingBugReportApi(
-            outcomes = ArrayDeque(
-                listOf(
-                    Result.failure(ApiException("timeout")),
-                    Result.success(success()),
+    fun `offline send is durably captured and scheduled instead of rejected`() {
+        val outbox = FakeOutbox()
+        val vm = viewModel(outbox)
+        vm.open(BugReportLaunchContext("Gaming"))
+        vm.descriptionChanged("Send to POS did not complete for this session.")
+
+        vm.submit(validContext)
+
+        assertEquals(1, outbox.captures.size)
+        assertEquals("offline", outbox.captures.single().request.clientContext.connectivity)
+        assertEquals("test-key", vm.state.value.submittedLocalId)
+        assertEquals(BugReportOutboxState.PENDING, vm.state.value.submittedState)
+        assertFalse(vm.state.value.saving)
+        assertTrue(outbox.scheduleCount >= 2) // login recovery plus post-capture hand-off
+    }
+
+    @Test
+    fun `rapid double tap captures one logical request`() {
+        val gate = CompletableDeferred<Unit>()
+        val outbox = FakeOutbox(captureGate = gate)
+        val vm = viewModel(outbox)
+        vm.open(BugReportLaunchContext("POS"))
+        vm.descriptionChanged("Cash payment button stayed on the same screen.")
+
+        vm.submit(validContext.copy(currentScreen = "POS"))
+        vm.submit(validContext.copy(currentScreen = "POS"))
+
+        assertTrue(vm.state.value.saving)
+        assertEquals(1, outbox.captureCalls)
+        gate.complete(Unit)
+        assertFalse(vm.state.value.saving)
+        assertEquals(1, outbox.captures.size)
+    }
+
+    @Test
+    fun `selected image requires explicit privacy confirmation`() {
+        val outbox = FakeOutbox()
+        val vm = viewModel(outbox)
+        vm.open(BugReportLaunchContext("Tables"))
+        vm.descriptionChanged("The table action failed after I tapped send.")
+        vm.attachmentChanged(
+            BugReportAttachmentDraft("support-image.jpg", "image/jpeg", byteArrayOf(1, 2, 3)),
+        )
+
+        vm.submit(validContext.copy(currentScreen = "Tables"))
+
+        assertTrue(vm.state.value.attachmentError.orEmpty().contains("confirm", ignoreCase = true))
+        assertTrue(outbox.captures.isEmpty())
+
+        vm.attachmentConsentChanged(true)
+        vm.submit(validContext.copy(currentScreen = "Tables"))
+        assertEquals(3, outbox.captures.single().attachment?.byteSize)
+    }
+
+    @Test
+    fun `mine endpoint supplies reporter visible status and latest owner reply`() {
+        val api = FakeApi(
+            page = BugReportMinePage(
+                items = listOf(
+                    BugReportMineItem(
+                        id = "server-report",
+                        title = "Action failed · Gaming",
+                        status = "in_progress",
+                        publicReplies = listOf(
+                            BugReportPublicReply(
+                                id = "reply-1",
+                                authorName = "Nasih",
+                                message = "I am checking this now.",
+                                createdAt = "2026-08-28T10:10:00Z",
+                            ),
+                        ),
+                        createdAt = "2026-08-28T10:00:00Z",
+                        updatedAt = "2026-08-28T10:10:00Z",
+                    ),
                 ),
             ),
         )
-        val vm = viewModel(api)
-        enterValidDraft(vm)
+        val vm = viewModel(FakeOutbox(), api)
 
-        vm.submit(validContext)
+        vm.open(BugReportLaunchContext("Gaming"))
+        vm.showHistory()
 
-        assertFalse(vm.state.value.submitting)
-        assertNull(vm.state.value.success)
-        assertEquals("Payment failed at till", vm.state.value.draft.title)
-        assertTrue(vm.state.value.error.orEmpty().contains("not be created twice"))
-
-        // A newly captured context would normally change occurred_at. The
-        // retry must still replay the original body and key byte-for-byte.
-        vm.submit(validContext.copy(occurredAt = "2026-08-28T10:01:00Z"))
-
-        assertNotNull(vm.state.value.success)
-        assertEquals(2, api.requests.size)
-        assertEquals(api.requests[0], api.requests[1])
-        assertEquals(listOf("test-key", "test-key"), api.keys)
+        val item = vm.state.value.recentRequests.single()
+        assertEquals("in_progress", item.status)
+        assertEquals("Nasih", item.latestReplyAuthor)
+        assertEquals("I am checking this now.", item.latestReply)
+        assertNull(vm.state.value.historyError)
     }
 
     @Test
-    fun `double tap while request is in flight sends only once`() {
-        val gate = CompletableDeferred<BugReportCreateResponse>()
-        val api = BlockingBugReportApi(gate)
-        val vm = viewModel(api)
-        enterValidDraft(vm)
+    fun `one report with a pending image counts as one waiting help request`() {
+        val outbox = FakeOutbox()
+        val vm = viewModel(outbox)
+        outbox.snapshots.value = BugReportOutboxSnapshot(
+            reports = listOf(localReport(state = BugReportOutboxState.PENDING)),
+            attachments = listOf(localAttachment(state = BugReportOutboxState.PENDING)),
+        )
 
-        vm.submit(validContext)
-        vm.submit(validContext)
-
-        assertTrue(vm.state.value.submitting)
-        assertEquals(1, api.calls)
-
-        gate.complete(success())
-
-        assertFalse(vm.state.value.submitting)
-        assertEquals(1, api.calls)
-        assertEquals("open", vm.state.value.success?.status)
+        assertEquals(1, vm.state.value.pendingCount)
     }
 
     @Test
-    fun `offline send keeps the entire draft and never calls the API`() {
-        val api = RecordingBugReportApi()
-        val vm = viewModel(api)
-        enterValidDraft(vm)
-        val before = vm.state.value.draft
-
-        vm.submit(validContext.copy(connectivity = "offline"))
-
-        assertEquals(before, vm.state.value.draft)
-        assertTrue(vm.state.value.error.orEmpty().contains("offline", ignoreCase = true))
-        assertTrue(api.requests.isEmpty())
-    }
-
-    @Test
-    fun `failed draft survives closing and reopening but success resets it`() {
-        val api = RecordingBugReportApi(
-            outcomes = ArrayDeque(
-                listOf(
-                    Result.failure(ApiException("server", status = 500)),
-                    Result.success(success()),
+    fun `receipt retries a refused image after the report itself was delivered`() {
+        val outbox = FakeOutbox()
+        val vm = viewModel(outbox)
+        vm.open(BugReportLaunchContext("Gaming"))
+        vm.descriptionChanged("The selected station did not respond to the action.")
+        vm.submit(validContext)
+        outbox.snapshots.value = BugReportOutboxSnapshot(
+            reports = listOf(
+                localReport(
+                    state = BugReportOutboxState.SENT,
+                    serverId = "server-report",
+                ),
+            ),
+            attachments = listOf(
+                localAttachment(
+                    state = BugReportOutboxState.ACTION_REQUIRED,
+                    lastError = "The image could not be accepted.",
                 ),
             ),
         )
-        val vm = viewModel(api)
-        vm.open()
-        enterValidDraft(vm)
 
-        vm.submit(validContext)
-        vm.dismiss()
-        assertFalse(vm.state.value.isOpen)
-        assertEquals("Payment failed at till", vm.state.value.draft.title)
+        vm.retrySubmitted()
 
-        vm.open()
-        vm.submit(validContext)
-        vm.dismiss()
-
-        assertFalse(vm.state.value.isOpen)
-        assertEquals(BugReportDraft(), vm.state.value.draft)
-        assertNull(vm.state.value.success)
-        assertNull(vm.state.value.error)
+        assertEquals(0, outbox.retryCalls)
+        assertEquals(1, outbox.retryAttachmentCalls)
+        assertEquals(BugReportOutboxState.PENDING, vm.state.value.submittedAttachmentState)
+        assertNull(vm.state.value.submittedAttachmentError)
     }
 
-    private fun viewModel(api: BugReportApi) = BugReportViewModel(
+    @Test
+    fun `reviewed action required item can remove only its owned saved copy`() {
+        val outbox = FakeOutbox()
+        val vm = viewModel(outbox)
+        outbox.snapshots.value = BugReportOutboxSnapshot(
+            reports = listOf(localReport(state = BugReportOutboxState.ACTION_REQUIRED)),
+            attachments = listOf(localAttachment(state = BugReportOutboxState.ACTION_REQUIRED)),
+        )
+
+        vm.discardHistoryItem("test-key")
+
+        assertEquals(1, outbox.discardCalls)
+        assertNull(vm.state.value.historyError)
+    }
+
+    private fun localReport(
+        state: String,
+        serverId: String? = null,
+    ) = LocalBugReportEntity(
+        localId = "test-key",
+        ownerCompanyId = owner.companyId,
+        ownerUserId = owner.userId,
+        requestJson = "{}",
+        title = "Action failed · Gaming",
+        screen = "Gaming",
+        createdAtMillis = 1L,
+        state = state,
+        serverId = serverId,
+    )
+
+    private fun localAttachment(
+        state: String,
+        lastError: String? = null,
+    ) = LocalBugReportAttachmentEntity(
+        localId = "attachment-key",
+        reportLocalId = "test-key",
+        ownerCompanyId = owner.companyId,
+        ownerUserId = owner.userId,
+        filename = "support-image.jpg",
+        contentType = "image/jpeg",
+        content = byteArrayOf(1, 2, 3),
+        byteSize = 3,
+        createdAtMillis = 1L,
+        state = state,
+        lastError = lastError,
+    )
+
+    private fun viewModel(
+        outbox: FakeOutbox,
+        api: BugReportApi = FakeApi(),
+    ) = BugReportViewModel(
+        owner = owner,
+        outbox = outbox,
         api = api,
         keyFactory = { "test-key" },
         requestScope = CoroutineScope(Dispatchers.Unconfined),
     )
 
-    private fun enterValidDraft(vm: BugReportViewModel) {
-        vm.categoryChanged(BugReportCategory.Payment)
-        vm.severityChanged(BugReportSeverity.High)
-        vm.titleChanged("Payment failed at till")
-        vm.descriptionChanged("Cash payment was rejected without an explanation.")
-        vm.reproductionStepsChanged("Open POS, select cash, then tap Pay")
-        vm.expectedBehaviorChanged("Payment completes or explains what to do")
-        vm.actualBehaviorChanged("The dialog stayed open with no useful message")
-    }
-
-    private fun success() = BugReportCreateResponse(
-        id = "33333333-3333-4333-8333-333333333333",
-        status = "open",
-        createdAt = "2026-08-28T10:00:01Z",
+    private data class Capture(
+        val request: BugReportCreateRequest,
+        val attachment: BugReportAttachmentDraft?,
     )
 
-    private class RecordingBugReportApi(
-        private val outcomes: ArrayDeque<Result<BugReportCreateResponse>> = ArrayDeque(),
-    ) : BugReportApi {
-        val requests = mutableListOf<BugReportCreateRequest>()
-        val keys = mutableListOf<String>()
+    private class FakeOutbox(
+        private val captureGate: CompletableDeferred<Unit>? = null,
+    ) : BugReportOutboxGateway {
+        val snapshots = MutableStateFlow(BugReportOutboxSnapshot(emptyList(), emptyList()))
+        val captures = mutableListOf<Capture>()
+        var captureCalls = 0
+        var scheduleCount = 0
+        var retryCalls = 0
+        var retryAttachmentCalls = 0
+        var discardCalls = 0
 
-        override suspend fun create(
-            body: BugReportCreateRequest,
-            idempotencyKey: String,
-        ): BugReportCreateResponse {
-            requests += body
-            keys += idempotencyKey
-            return outcomes.removeFirstOrNull()?.getOrThrow() ?: success()
+        override fun observe(owner: BugReportOwnerScope): Flow<BugReportOutboxSnapshot> = snapshots
+
+        override suspend fun capture(
+            owner: BugReportOwnerScope,
+            localId: String,
+            request: BugReportCreateRequest,
+            attachment: BugReportAttachmentDraft?,
+        ) {
+            captureCalls += 1
+            captureGate?.await()
+            captures += Capture(request, attachment)
+            snapshots.value = BugReportOutboxSnapshot(
+                reports = listOf(
+                    LocalBugReportEntity(
+                        localId = localId,
+                        ownerCompanyId = owner.companyId,
+                        ownerUserId = owner.userId,
+                        requestJson = "{}",
+                        title = request.title,
+                        screen = request.clientContext.currentScreen.orEmpty(),
+                        createdAtMillis = 1L,
+                    ),
+                ),
+                attachments = emptyList(),
+            )
+            scheduleCount += 1
         }
 
-        private fun success() = BugReportCreateResponse(
-            id = "33333333-3333-4333-8333-333333333333",
-            status = "open",
-            createdAt = "2026-08-28T10:00:01Z",
-        )
+        override suspend fun retry(owner: BugReportOwnerScope, localId: String): Boolean {
+            retryCalls += 1
+            return true
+        }
+
+        override suspend fun retryAttachment(owner: BugReportOwnerScope, localId: String): Boolean {
+            retryAttachmentCalls += 1
+            return true
+        }
+        override suspend fun discardAfterReview(
+            owner: BugReportOwnerScope,
+            localId: String,
+        ): Boolean {
+            discardCalls += 1
+            return true
+        }
+        override fun ensureDeliveryScheduled() { scheduleCount += 1 }
     }
 
-    private class BlockingBugReportApi(
-        private val gate: CompletableDeferred<BugReportCreateResponse>,
+    private class FakeApi(
+        private val page: BugReportMinePage = BugReportMinePage(),
     ) : BugReportApi {
-        var calls = 0
-
         override suspend fun create(
             body: BugReportCreateRequest,
             idempotencyKey: String,
-        ): BugReportCreateResponse {
-            calls += 1
-            return gate.await()
-        }
+        ) = BugReportCreateResponse("report", "open", "2026-08-28T10:00:00Z")
+
+        override suspend fun mine(limit: Int, offset: Int): BugReportMinePage = page
+
+        override suspend fun uploadAttachment(
+            reportId: String,
+            file: MultipartBody.Part,
+            idempotencyKey: String,
+        ): BugReportAttachment = error("not used")
     }
 }

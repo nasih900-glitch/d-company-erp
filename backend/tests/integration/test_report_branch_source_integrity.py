@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -97,8 +98,14 @@ async def test_authenticated_reports_align_order_stock_and_gaming_to_token_branc
         "X-Terminal-Id": str(seed_owner["terminal"].id),
     }
 
+    # Derive the requested day in the company's timezone. Using the UTC date
+    # becomes flaky after 18:30 UTC because D Company's Asia/Kolkata business
+    # date has already advanced, correctly placing a late-UTC payment outside
+    # the requested local report day. Keep event timestamps near real ``now``
+    # because payment integrity also rejects future-dated settlements.
+    local_zone = ZoneInfo("Asia/Kolkata")
     now = datetime.now(UTC).replace(microsecond=0)
-    today = now.date()
+    today = now.astimezone(local_zone).date()
     branch_a = seed_owner["branch"]
     terminal_a = seed_owner["terminal"]
     branch_b = Branch(

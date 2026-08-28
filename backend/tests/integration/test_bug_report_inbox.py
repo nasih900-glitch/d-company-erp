@@ -1,17 +1,31 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import hashlib
+from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from PIL import Image
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.security import hash_password, issue_access_token
-from app.models import AuditLog, Branch, BugReport, Company, Role, Terminal, User, UserRole
+from app.models import (
+    AuditLog,
+    Branch,
+    BugReport,
+    BugReportAttachment,
+    Company,
+    Role,
+    Terminal,
+    User,
+    UserRole,
+)
+from app.services.bug_reports.attachments import purge_expired_bug_report_attachments
 
 if TYPE_CHECKING:
     from httpx import Response
@@ -128,6 +142,21 @@ def _report_payload(seed_owner, **overrides) -> dict:
     return payload
 
 
+def _image_bytes(
+    image_format: str,
+    *,
+    color: tuple[int, int, int, int] = (25, 75, 125, 180),
+) -> bytes:
+    mode = "RGBA" if image_format in {"PNG", "WEBP"} else "RGB"
+    image = Image.new(mode, (8, 6), color if mode == "RGBA" else color[:3])
+    exif = Image.Exif()
+    exif[0x010E] = "private integration-test metadata"
+    output = BytesIO()
+    image.save(output, format=image_format, exif=exif)
+    image.close()
+    return output.getvalue()
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_staff_can_submit_idempotently_but_cannot_open_admin_inbox(
@@ -151,11 +180,11 @@ async def test_staff_can_submit_idempotently_but_cannot_open_admin_inbox(
     assert create.status_code == 201, create.text
     body = create.json()
     assert body["status"] == "open"
-    assert body["reporter"] == {
-        "user_id": str(staff.id),
-        "name": staff.name,
-        "email": staff.email,
-    }
+    # Submission returns the same least-privilege shape used by My requests.
+    # Private triage notes and reporter-email snapshots are admin-inbox data.
+    assert "reporter" not in body
+    assert "internal_resolution_note" not in body
+    assert body["public_replies"] == []
     assert body["client_context"]["branch_name"] == seed_owner["branch"].name
     assert body["client_context"]["terminal_name"] == seed_owner["terminal"].name
     assert "not-safe" not in body["description"]
@@ -621,3 +650,301 @@ async def test_database_guard_blocks_native_submission_rewrites_and_false_proven
     with pytest.raises(DBAPIError, match="reporter snapshots must match"):
         await session.commit()
     await session.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reporter_can_follow_public_replies_without_private_inbox_data(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    staff, staff_headers = await _staff_headers(session, seed_owner)
+    _, other_staff_headers = await _staff_headers(session, seed_owner)
+    admin_headers = _admin_headers(seed_owner)
+    created = await client.post(
+        "/api/v1/bug-reports",
+        headers={**staff_headers, "Idempotency-Key": f"conversation-{uuid4()}"},
+        json=_report_payload(
+            seed_owner,
+            client_context={
+                **_report_payload(seed_owner)["client_context"],
+                "last_action": "POST /api/v1/pos/orders/:id/payments",
+                "error_code": "payment_unavailable",
+            },
+        ),
+    )
+    assert created.status_code == 201, created.text
+    report_id = created.json()["id"]
+
+    initial_summary = await client.get("/api/v1/bug-reports/inbox-summary", headers=admin_headers)
+    assert initial_summary.status_code == 200, initial_summary.text
+    assert initial_summary.json() == {
+        "active": 1,
+        "unread": 1,
+        "urgent_unread": 1,
+        "critical_active": 0,
+        "last_activity_at": initial_summary.json()["last_activity_at"],
+    }
+    denied_summary = await client.get(
+        "/api/v1/bug-reports/inbox-summary",
+        headers=_co_owner_headers(seed_owner),
+    )
+    assert denied_summary.status_code == 403
+
+    marked = await client.post(f"/api/v1/bug-reports/{report_id}/read", headers=admin_headers)
+    assert marked.status_code == 204, marked.text
+    after_read = await client.get("/api/v1/bug-reports/inbox-summary", headers=admin_headers)
+    assert after_read.json()["unread"] == 0
+
+    reply_key = f"support-reply-{uuid4()}"
+    reply = await client.post(
+        f"/api/v1/bug-reports/{report_id}/public-replies",
+        headers={**admin_headers, "Idempotency-Key": reply_key},
+        json={"message": "Restart the payment screen. Your order is still safely held."},
+    )
+    assert reply.status_code == 201, reply.text
+    replay = await client.post(
+        f"/api/v1/bug-reports/{report_id}/public-replies",
+        headers={**admin_headers, "Idempotency-Key": reply_key},
+        json={"message": "Restart the payment screen. Your order is still safely held."},
+    )
+    assert replay.status_code == 201
+    assert replay.json() == reply.json()
+    conflict = await client.post(
+        f"/api/v1/bug-reports/{report_id}/public-replies",
+        headers={**admin_headers, "Idempotency-Key": reply_key},
+        json={"message": "A different response under the same operation key."},
+    )
+    assert conflict.status_code == 409
+
+    private_note = await client.patch(
+        f"/api/v1/bug-reports/{report_id}",
+        headers=admin_headers,
+        json={"internal_resolution_note": "Private diagnosis: cash state reducer race."},
+    )
+    assert private_note.status_code == 200, private_note.text
+    assert private_note.json()["internal_resolution_note"].startswith("Private diagnosis")
+
+    mine = await client.get("/api/v1/bug-reports/mine", headers=staff_headers)
+    assert mine.status_code == 200, mine.text
+    reporter_view = next(item for item in mine.json()["items"] if item["id"] == report_id)
+    assert reporter_view["client_context"]["last_action"].endswith("/payments")
+    assert reporter_view["client_context"]["error_code"] == "payment_unavailable"
+    assert reporter_view["public_replies"] == [reply.json()]
+    assert "internal_resolution_note" not in reporter_view
+    assert "reporter" not in reporter_view
+    assert "status_changed_by" not in reporter_view
+    assert "resolved_by" not in reporter_view
+
+    hidden_from_other_staff = await client.get(
+        f"/api/v1/bug-reports/mine/{report_id}",
+        headers=other_staff_headers,
+    )
+    assert hidden_from_other_staff.status_code == 404
+    denied_reply = await client.post(
+        f"/api/v1/bug-reports/{report_id}/public-replies",
+        headers={**staff_headers, "Idempotency-Key": f"denied-{uuid4()}"},
+        json={"message": "A reporter cannot impersonate an owner response."},
+    )
+    assert denied_reply.status_code == 403
+
+    # Reply insertion and private-note update are separately auditable, without
+    # copying either message body into the audit JSON.
+    audit_rows = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.company_id == seed_owner["company"].id,
+                    AuditLog.entity_id == report_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reply_audit = next(row for row in audit_rows if row.action == "bug_report_public_reply_add")
+    assert "Restart" not in str(reply_audit.after)
+    assert staff.email not in str(reporter_view)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_private_screenshot_is_bounded_idempotent_tenant_scoped_and_purgeable(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    staff, staff_headers = await _staff_headers(session, seed_owner)
+    _, other_staff_headers = await _staff_headers(session, seed_owner)
+    admin_headers = _admin_headers(seed_owner)
+    created = await client.post(
+        "/api/v1/bug-reports",
+        headers={**staff_headers, "Idempotency-Key": f"attachment-report-{uuid4()}"},
+        json=_report_payload(seed_owner),
+    )
+    assert created.status_code == 201, created.text
+    report_id = created.json()["id"]
+    png = _image_bytes("PNG")
+    key = f"attachment-{uuid4()}"
+    uploaded = await client.post(
+        f"/api/v1/bug-reports/mine/{report_id}/attachments",
+        headers={**staff_headers, "Idempotency-Key": key},
+        files={"file": ("payment-screen.png", png, "image/png")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    attachment = uploaded.json()
+    assert attachment["available"] is True
+    assert 0 < attachment["byte_size"] <= 2 * 1024 * 1024
+    assert len(attachment["sha256"]) == 64
+
+    # Multipart boundaries differ on every request; canonical file hashing
+    # still makes a genuine network retry return exactly the first result.
+    replay = await client.post(
+        f"/api/v1/bug-reports/mine/{report_id}/attachments",
+        headers={**staff_headers, "Idempotency-Key": key},
+        files={"file": ("payment-screen.png", png, "image/png")},
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == attachment
+    conflict = await client.post(
+        f"/api/v1/bug-reports/mine/{report_id}/attachments",
+        headers={**staff_headers, "Idempotency-Key": key},
+        files={"file": ("different.jpg", _image_bytes("JPEG"), "image/jpeg")},
+    )
+    assert conflict.status_code == 409
+    malformed_images = (
+        ("not-a-jpeg.jpg", b"\xff\xd8\xffnot-a-jpeg", "image/jpeg"),
+        ("not-a-png.png", b"\x89PNG\r\n\x1a\nnot-a-png", "image/png"),
+        ("not-a-webp.webp", b"RIFFxxxxWEBPnot-a-webp", "image/webp"),
+    )
+    for filename, malformed, content_type in malformed_images:
+        rejected = await client.post(
+            f"/api/v1/bug-reports/mine/{report_id}/attachments",
+            headers={**staff_headers, "Idempotency-Key": f"malformed-{uuid4()}"},
+            files={"file": (filename, malformed, content_type)},
+        )
+        assert rejected.status_code == 422, rejected.text
+
+    downloaded = await client.get(
+        f"/api/v1/bug-reports/{report_id}/attachments/{attachment['id']}",
+        headers=admin_headers,
+    )
+    assert downloaded.status_code == 200
+    assert len(downloaded.content) == attachment["byte_size"]
+    assert hashlib.sha256(downloaded.content).hexdigest() == attachment["sha256"]
+    with Image.open(BytesIO(downloaded.content)) as canonical:
+        canonical.load()
+        assert canonical.format == "PNG"
+        assert canonical.size == (8, 6)
+        assert not canonical.getexif()
+        assert "exif" not in canonical.info
+    assert downloaded.headers["cache-control"] == "private, no-store"
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
+    denied_other_reporter = await client.get(
+        f"/api/v1/bug-reports/mine/{report_id}/attachments/{attachment['id']}",
+        headers=other_staff_headers,
+    )
+    assert denied_other_reporter.status_code == 404
+    denied_unprotected_owner = await client.get(
+        f"/api/v1/bug-reports/{report_id}/attachments/{attachment['id']}",
+        headers=_co_owner_headers(seed_owner),
+    )
+    assert denied_unprotected_owner.status_code == 403
+
+    report = await session.get(BugReport, UUID(report_id))
+    assert report is not None
+    oversized = b"x" * (2 * 1024 * 1024 + 1)
+    invalid_rows = (
+        ("oversized.png", 1, hashlib.sha256(oversized).hexdigest(), oversized),
+        ("wrong-size.png", len(png) + 1, hashlib.sha256(png).hexdigest(), png),
+        ("wrong-digest.png", len(png), "0" * 64, png),
+        ("uppercase-digest.png", len(png), hashlib.sha256(png).hexdigest().upper(), png),
+    )
+    insert_attachment = text(
+        """
+        INSERT INTO bug_report_attachments (
+            id, company_id, bug_report_id, uploader_user_id, original_filename,
+            content_type, byte_size, sha256, payload, created_at, expires_at, purged_at
+        ) VALUES (
+            :id, :company_id, :report_id, :uploader_user_id, :filename,
+            'image/png', :byte_size, :sha256, :payload, now(),
+            now() + interval '90 days', NULL
+        )
+        """
+    )
+    for filename, declared_size, digest, payload in invalid_rows:
+        with pytest.raises(DBAPIError, match="ck_bug_report_attachments"):
+            async with session.begin_nested():
+                await session.execute(
+                    insert_attachment,
+                    {
+                        "id": uuid4(),
+                        "company_id": seed_owner["company"].id,
+                        "report_id": report.id,
+                        "uploader_user_id": staff.id,
+                        "filename": filename,
+                        "byte_size": declared_size,
+                        "sha256": digest,
+                        "payload": payload,
+                    },
+                )
+
+    expired_payload = _image_bytes("PNG", color=(120, 30, 60, 255))
+    expired_older_payload = _image_bytes("PNG", color=(20, 140, 80, 255))
+    expired_sha256 = hashlib.sha256(expired_payload).hexdigest()
+    expired_older_sha256 = hashlib.sha256(expired_older_payload).hexdigest()
+    expired = BugReportAttachment(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        bug_report_id=report.id,
+        uploader_user_id=staff.id,
+        original_filename="expired.png",
+        content_type="image/png",
+        byte_size=len(expired_payload),
+        sha256=expired_sha256,
+        payload=expired_payload,
+        created_at=datetime.now(UTC) - timedelta(days=91),
+        expires_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    expired_older = BugReportAttachment(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        bug_report_id=report.id,
+        uploader_user_id=staff.id,
+        original_filename="expired-older.png",
+        content_type="image/png",
+        byte_size=len(expired_older_payload),
+        sha256=expired_older_sha256,
+        payload=expired_older_payload,
+        created_at=datetime.now(UTC) - timedelta(days=92),
+        expires_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    session.add_all([expired, expired_older])
+    await session.flush()
+    first_batch = await purge_expired_bug_report_attachments(
+        session,
+        now=datetime.now(UTC),
+        batch_size=1,
+        company_id=seed_owner["company"].id,
+    )
+    assert first_batch.rows == 1
+    assert first_batch.bytes_released == len(expired_older_payload)
+    assert expired_older.payload is None
+    assert expired_older.purged_at is not None
+    assert expired_older.byte_size == len(expired_older_payload)
+    assert expired_older.sha256 == expired_older_sha256
+    assert expired.payload == expired_payload
+
+    second_batch = await purge_expired_bug_report_attachments(
+        session,
+        now=datetime.now(UTC),
+        batch_size=1,
+        company_id=seed_owner["company"].id,
+    )
+    assert second_batch.rows == 1
+    assert second_batch.bytes_released == len(expired_payload)
+    assert expired.payload is None
+    assert expired.purged_at is not None
+    assert expired.byte_size == len(expired_payload)
+    assert expired.sha256 == expired_sha256

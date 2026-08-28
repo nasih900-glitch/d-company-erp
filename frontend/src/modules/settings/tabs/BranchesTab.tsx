@@ -11,7 +11,7 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 const TERMINAL_PURPOSE_LABELS: Record<TerminalDTO['purpose'], string> = {
   cafe_pos: 'Cafe POS',
   gaming: 'Gaming Area',
-  hybrid: 'General / combined',
+  hybrid: 'Combined workspace',
 };
 
 export default function BranchesTab() {
@@ -48,10 +48,10 @@ export default function BranchesTab() {
     <div className="space-y-3">
       <div className="card flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="font-semibold">One shop, separate working terminals</p>
+          <p className="font-semibold">One shop, one simple workspace</p>
           <p className="mt-1 text-sm text-fg-muted">
-            The shop is selected automatically. Cafe POS and Gaming Area keep their shifts
-            accountable while operating under the same business location.
+            The app selects the active workspace automatically. Its internal identity keeps
+            shifts and receipts accountable without adding a step for staff.
           </p>
         </div>
         {rows.length === 0 && (
@@ -90,17 +90,19 @@ export default function BranchesTab() {
             <div className="mt-4 border-t border-bg-border pt-4">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold">Terminals</p>
+                  <p className="text-sm font-semibold">Workspace</p>
                   <p className="text-xs text-fg-muted">
-                    Each physical service area uses its own shift and terminal identity.
+                    Gaming, POS and shift operation use this workspace together.
                   </p>
                 </div>
-                <button
-                  className="btn btn-secondary !min-h-[36px] !px-3 !py-1.5 text-xs"
-                  onClick={() => setTerminalForm({ branch: b })}
-                >
-                  <Plus size={13}/> Add terminal
-                </button>
+                {terminals.filter((terminal) => terminal.branch_id === b.id).length !== 1 && (
+                  <button
+                    className="btn btn-secondary !min-h-[36px] !px-3 !py-1.5 text-xs"
+                    onClick={() => setTerminalForm({ branch: b })}
+                  >
+                    <Plus size={13}/> Add workspace
+                  </button>
+                )}
               </div>
 
               <div className="grid gap-2 md:grid-cols-2">
@@ -117,7 +119,9 @@ export default function BranchesTab() {
                           {TERMINAL_PURPOSE_LABELS[terminal.purpose]}
                         </p>
                         <p className="truncate text-xs text-fg-muted">
-                          {terminal.device_id || 'Device selected inside the app'}
+                          {terminals.filter((item) => item.branch_id === b.id).length === 1
+                            ? 'Selected automatically on staff devices'
+                            : terminal.device_id || 'Device selected inside the app'}
                         </p>
                       </div>
                     </div>
@@ -125,14 +129,14 @@ export default function BranchesTab() {
                       className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs"
                       onClick={() => setTerminalForm({ branch: b, terminal })}
                     >
-                      <Edit2 size={11}/> Edit
+                      <Edit2 size={11}/> Advanced
                     </button>
                   </div>
                 ))}
               </div>
               {terminals.every((terminal) => terminal.branch_id !== b.id) && (
                 <div className="mt-2 rounded-lg border border-dashed border-bg-border p-4 text-sm text-fg-muted">
-                  No terminal is configured yet. Add Cafe POS first.
+                  No workspace is configured yet. Add one combined workspace to begin.
                 </div>
               )}
             </div>
@@ -273,7 +277,7 @@ function TerminalForm({
   const isEdit = Boolean(terminal);
   const [name, setName] = useState(terminal?.name ?? '');
   const [deviceId, setDeviceId] = useState(terminal?.device_id ?? '');
-  const [purpose, setPurpose] = useState<TerminalDTO['purpose']>(terminal?.purpose ?? 'cafe_pos');
+  const [purpose, setPurpose] = useState<TerminalDTO['purpose']>(terminal?.purpose ?? 'hybrid');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [idempotencyKey] = useState(() => `terminal-create:${crypto.randomUUID()}`);
@@ -282,7 +286,7 @@ function TerminalForm({
     e.preventDefault();
     const normalizedName = name.trim();
     if (!normalizedName) {
-      setErr('Enter a terminal name, such as Cafe POS or Gaming Area.');
+      setErr('Enter a workspace name, such as Main Workspace.');
       return;
     }
 
@@ -316,20 +320,20 @@ function TerminalForm({
     <Modal
       open
       onClose={onClose}
-      title={isEdit ? `Edit ${terminal!.name}` : `Add terminal to ${branch.name}`}
+      title={isEdit ? `Advanced workspace settings` : `Add workspace to ${branch.name}`}
       size="sm"
     >
       <form onSubmit={submit} className="space-y-3">
         <p className="text-sm text-fg-muted">
-          A terminal is a physical work area, not another shop. Use Cafe POS and Gaming Area
-          so each shift and handoff is clearly attributable.
+          D Company currently uses one combined workspace for Gaming, POS and shifts. Only
+          create separate workspaces later if there are genuinely separate counters.
         </p>
-        <Field label="Terminal name">
+        <Field label="Workspace name">
           <input
             className="input"
             required
             autoFocus
-            placeholder="Cafe POS"
+            placeholder="Main Workspace"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -342,13 +346,13 @@ function TerminalForm({
           >
             <option value="cafe_pos">Cafe POS — takes orders and collects payments</option>
             <option value="gaming">Gaming Area — starts sessions and sends bills to Cafe POS</option>
-            <option value="hybrid">General / combined — both workflows on one terminal</option>
+            <option value="hybrid">Combined — Gaming, POS and shifts together</option>
           </select>
         </Field>
         {isEdit && purpose !== terminal!.purpose && (
           <p className="text-xs text-accent-warning">
-            Close this terminal&apos;s current shift before changing its work area. Renaming
-            the terminal does not require closing the shift.
+            Close this workspace&apos;s current shift before changing its purpose. Renaming
+            the workspace does not require closing the shift.
           </p>
         )}
         <Field label="Device ID (optional)">
@@ -369,7 +373,7 @@ function TerminalForm({
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>}
-            {isEdit ? 'Save terminal' : 'Add terminal'}
+            {isEdit ? 'Save workspace' : 'Add workspace'}
           </button>
         </div>
       </form>

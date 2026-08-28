@@ -118,10 +118,16 @@ them as distributable clients.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The next source candidate is `3.0.7` (`8`), but
-`v3.0.7` must not be tagged until its final gates pass. The workflow tests and
-signs the native Android build, then attaches only verified signed Android
-artifacts to the GitHub Release.
+`.github/workflows/release.yml`. The current unreleased candidate is `3.0.9`
+(`10`); Android code `8` remains the minimum-compatible floor. The candidate
+includes contextual Support reporting and the simplified one-shop workspace UI.
+A locally signed APK exists, but the release gates and API-35 in-place upgrades
+from both `3.0.7` (`8`) and the earlier schema-37 code-`9` candidate must be
+rerun for code `10`. This is not physical Redmi Pad 2 proof, a Play upload, or a
+production rollout. The coordinated backend deployment must reach Alembic
+revision `0054`. Do not tag `v3.0.9` until the remaining release gates pass. The
+workflow tests and signs the native Android build, then attaches only verified
+signed Android artifacts to the GitHub Release.
 
 ## License
 

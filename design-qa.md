@@ -1,11 +1,11 @@
 # D Company ERP Android design QA
 
 > Evidence boundary: this document records the earlier `3.0.4` (`5`) Android
-> snapshot. Material fixes were made before the source identity moved to
-> `3.0.7` (`8`), so none of the emulator, instrumentation, signed-build, or
-> performance results below count as `3.0.7` acceptance evidence. The new
-> candidate still requires its own automated, emulator, and physical-device
-> gates and has not been deployed to production.
+> snapshot. Material fixes were made before the source identity moved through
+> the earlier schema-37 `3.0.8` (`9`) candidate to `3.0.9` (`10`), so none of
+> the older results below count as current-candidate acceptance evidence. The
+> code-`10` release gates and signed upgrades must be rerun. It still has no
+> physical Redmi Pad 2 acceptance proof and has not been deployed to production.
 
 ## Visual target and test environment
 

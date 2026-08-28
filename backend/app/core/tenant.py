@@ -116,6 +116,7 @@ async def get_tenant_context(
                 .join(Branch, Branch.id == Terminal.branch_id)
                 .where(
                     Terminal.id == terminal_id,
+                    Terminal.is_active.is_(True),
                     Branch.company_id == company_id,
                     Branch.deleted_at.is_(None),
                 )

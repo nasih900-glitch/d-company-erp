@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -134,7 +135,14 @@ fun MetricCard(
             )
             Text(
                 detail,
-                color = colors.foreground,
+                // Reserve semantic colour for the icon and genuinely urgent
+                // values. Neutral detail text keeps a five-card tablet row
+                // calm instead of turning every summary into a status alert.
+                color = if (tone == UiTone.Warning || tone == UiTone.Danger) {
+                    colors.foreground
+                } else {
+                    Brand.ForegroundFaint
+                },
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -157,14 +165,20 @@ fun OperationalBanner(
         modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
             .border(1.dp, colors.border, Radius.shapeMd)
             .semantics { liveRegion = LiveRegionMode.Polite }
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Icon(icon, contentDescription = null, tint = colors.foreground, modifier = Modifier.size(22.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
-            Text(detail, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text(
+                detail,
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         action?.invoke(this)
     }
@@ -189,6 +203,10 @@ fun ErpButton(
         ActionIntent.Destructive -> Brand.Danger to Brand.Background
         ActionIntent.Quiet -> Color.Transparent to Brand.ForegroundMuted
     }
+    val border = when (intent) {
+        ActionIntent.Secondary -> BorderStroke(1.dp, Brand.Border)
+        else -> null
+    }
     Button(
         onClick = onClick,
         enabled = enabled && !busy,
@@ -196,9 +214,10 @@ fun ErpButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = container,
             contentColor = content,
-            disabledContainerColor = Brand.SurfaceRaised,
-            disabledContentColor = Brand.Disabled,
+            disabledContainerColor = if (busy) container else Brand.SurfaceRaised,
+            disabledContentColor = if (busy) content else Brand.Disabled,
         ),
+        border = border,
         contentPadding = contentPadding,
         modifier = modifier
             .heightIn(min = 48.dp)
@@ -210,7 +229,7 @@ fun ErpButton(
             CircularProgressIndicator(
                 Modifier.size(18.dp),
                 strokeWidth = 2.dp,
-                color = Brand.ForegroundMuted,
+                color = content,
             )
             Spacer(Modifier.width(Spacing.sm))
         } else {

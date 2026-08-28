@@ -1,4 +1,4 @@
-"""Seed script — creates a default company, shop, two terminals, owner user,
+"""Seed script — creates a default company, shop, one workspace, owner user,
 roles, chart of accounts, and a minimal menu so the system is ready
 to take its first order.
 
@@ -59,9 +59,9 @@ DEFAULT_ROLES: list[tuple[str, str]] = [
 
 BOOTSTRAP_OWNER_ROLE = "super_owner"
 DEFAULT_SHOP_NAME = "Main Shop"
+DEFAULT_GST_REGISTRATION_TYPE = "unregistered"
 DEFAULT_TERMINALS: tuple[tuple[str, str, str | None], ...] = (
-    ("Cafe POS", "cafe_pos", "seed-terminal-1"),
-    ("Gaming Area", "gaming", None),
+    ("Main Workspace", "hybrid", "seed-terminal-1"),
 )
 
 
@@ -92,6 +92,9 @@ async def seed() -> None:
             currency="INR",
             timezone="Asia/Kolkata",
             country="IN",
+            gst_registration_type=DEFAULT_GST_REGISTRATION_TYPE,
+            is_composition=False,
+            e_invoicing_enabled=False,
         )
         s.add(company)
         # Flush so the company row is INSERTed in the DB before any rows

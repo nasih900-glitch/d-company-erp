@@ -222,11 +222,20 @@ fun SectionCard(
     Column(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
             .background(if (elevated) Brand.SurfaceRaised else Brand.Surface)
-            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg),
+            .border(
+                1.dp,
+                if (elevated) Brand.Border else Brand.BorderSubtle,
+                Radius.shapeLg,
+            ),
     ) {
         if (title != null || subtitle != null || icon != null || action != null) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                Modifier.fillMaxWidth()
+                    .background(
+                        if (elevated) Brand.SurfaceOverlay.copy(alpha = 0.56f)
+                        else Brand.SurfaceRaised.copy(alpha = 0.48f),
+                    )
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -418,7 +427,7 @@ fun DesignedEmptyState(
     secondaryLabel: String? = null,
     onSecondary: (() -> Unit)? = null,
 ) {
-    BoxWithConstraints(modifier.fillMaxWidth().heightIn(min = 240.dp)) {
+    BoxWithConstraints(modifier.fillMaxWidth().heightIn(min = 216.dp)) {
         val availableWidth = maxWidth
         val accent = when (tone) {
             UiTone.Brand -> Brand.Gold
@@ -429,10 +438,10 @@ fun DesignedEmptyState(
             UiTone.Neutral -> Brand.ForegroundMuted
         }
         // Some dense dashboard cards intentionally give the shared empty state
-        // less than its preferred 240dp height. Compact the internal rhythm in
+        // less than its preferred 216dp height. Compact the internal rhythm in
         // that case instead of letting the fixed icon/padding push copy outside
         // the card's bounds.
-        val compact = maxHeight < 240.dp
+        val compact = maxHeight < 216.dp
         val outerPadding = if (compact) Spacing.md else Spacing.xl
         val iconBoxSize = if (compact) 48.dp else 64.dp
         val iconSize = if (compact) 24.dp else 30.dp

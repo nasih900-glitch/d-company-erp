@@ -907,6 +907,7 @@ export interface TerminalDTO {
   branch_id: string;
   name: string;
   purpose: 'cafe_pos' | 'gaming' | 'hybrid';
+  is_active: boolean;
   device_id: string | null;
   last_seen_at: string | null;
 }
@@ -953,12 +954,32 @@ export interface BugReportClientContextDTO {
   device_model: string | null;
   os_version: string | null;
   current_screen: string | null;
+  last_action: string | null;
+  error_code: string | null;
   branch_id: string | null;
   branch_name: string | null;
   terminal_id: string | null;
   terminal_name: string | null;
   connectivity: BugReportConnectivity;
   occurred_at: string | null;
+}
+
+export interface BugReportPublicReplyDTO {
+  id: string;
+  author_name: string;
+  message: string;
+  created_at: string;
+}
+
+export interface BugReportAttachmentDTO {
+  id: string;
+  filename: string;
+  content_type: 'image/png' | 'image/jpeg' | 'image/webp';
+  byte_size: number;
+  sha256: string;
+  created_at: string;
+  expires_at: string;
+  available: boolean;
 }
 
 export interface BugReportDTO {
@@ -973,6 +994,8 @@ export interface BugReportDTO {
   client_context: BugReportClientContextDTO;
   status: BugReportStatus;
   internal_resolution_note: string | null;
+  public_replies: BugReportPublicReplyDTO[];
+  attachments: BugReportAttachmentDTO[];
   reporter: {
     user_id: string;
     name: string;
@@ -986,6 +1009,25 @@ export interface BugReportDTO {
   resolved_by: string | null;
 }
 
+export interface BugReportMineDTO {
+  id: string;
+  category: BugReportCategory;
+  severity: BugReportSeverity;
+  title: string;
+  description: string;
+  reproduction_steps: string | null;
+  expected_behavior: string | null;
+  actual_behavior: string | null;
+  client_context: BugReportClientContextDTO;
+  status: BugReportStatus;
+  public_replies: BugReportPublicReplyDTO[];
+  attachments: BugReportAttachmentDTO[];
+  status_changed_at: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface BugReportSummaryDTO {
   counts_by_status: Record<BugReportStatus, number>;
   counts_by_severity: Record<BugReportSeverity, number>;
@@ -997,6 +1039,21 @@ export interface BugReportListResponseDTO {
   limit: number;
   offset: number;
   summary: BugReportSummaryDTO;
+}
+
+export interface BugReportMineListResponseDTO {
+  items: BugReportMineDTO[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BugReportInboxSummaryDTO {
+  active: number;
+  unread: number;
+  urgent_unread: number;
+  critical_active: number;
+  last_activity_at: string | null;
 }
 
 export interface BugReportListParams {
@@ -1029,6 +1086,8 @@ export interface BugReportCreateDTO {
     device_model?: string | null;
     os_version?: string | null;
     current_screen?: string | null;
+    last_action?: string | null;
+    error_code?: string | null;
     branch_id?: string | null;
     branch_name?: string | null;
     terminal_id?: string | null;
@@ -1045,15 +1104,45 @@ export interface BugReportUpdateDTO {
 
 export const bugReports = {
   submit: (body: BugReportCreateDTO, idempotencyKey: string) =>
-    api.post<BugReportDTO>('/bug-reports', body, {
+    api.post<BugReportMineDTO>('/bug-reports', body, {
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => r.data),
+  mine: (params?: { limit?: number; offset?: number }, signal?: AbortSignal) =>
+    api.get<BugReportMineListResponseDTO>('/bug-reports/mine', { params, signal })
+      .then((r) => r.data),
+  getMine: (id: string, signal?: AbortSignal) =>
+    api.get<BugReportMineDTO>(`/bug-reports/mine/${id}`, { signal }).then((r) => r.data),
   list: (params?: BugReportListParams, signal?: AbortSignal) =>
     api.get<BugReportListResponseDTO>('/bug-reports', { params, signal }).then((r) => r.data),
   get: (id: string, signal?: AbortSignal) =>
     api.get<BugReportDTO>(`/bug-reports/${id}`, { signal }).then((r) => r.data),
   update: (id: string, body: BugReportUpdateDTO) =>
     api.patch<BugReportDTO>(`/bug-reports/${id}`, body).then((r) => r.data),
+  inboxSummary: (signal?: AbortSignal) =>
+    api.get<BugReportInboxSummaryDTO>('/bug-reports/inbox-summary', { signal })
+      .then((r) => r.data),
+  markRead: (id: string) => api.post<void>(`/bug-reports/${id}/read`).then(() => undefined),
+  reply: (id: string, message: string, idempotencyKey: string) =>
+    api.post<BugReportPublicReplyDTO>(
+      `/bug-reports/${id}/public-replies`,
+      { message },
+      { headers: { 'Idempotency-Key': idempotencyKey } },
+    ).then((r) => r.data),
+  attachMine: (id: string, file: File, idempotencyKey: string) => {
+    const body = new FormData();
+    body.append('file', file);
+    return api.post<BugReportAttachmentDTO>(`/bug-reports/mine/${id}/attachments`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }).then((r) => r.data);
+  },
+  mineAttachment: (reportId: string, attachmentId: string) =>
+    api.get<Blob>(`/bug-reports/mine/${reportId}/attachments/${attachmentId}`, {
+      responseType: 'blob',
+    }).then((r) => r.data),
+  inboxAttachment: (reportId: string, attachmentId: string) =>
+    api.get<Blob>(`/bug-reports/${reportId}/attachments/${attachmentId}`, {
+      responseType: 'blob',
+    }).then((r) => r.data),
 };
 
 // =============================================================================
@@ -2633,6 +2722,7 @@ export const settings = {
   updateTerminal: (id: string, body: {
     name?: string;
     purpose?: TerminalDTO['purpose'];
+    is_active?: boolean;
     device_id?: string | null;
   }) =>
     api.patch<TerminalDTO>(`/settings/terminals/${id}`, body).then((r) => r.data),

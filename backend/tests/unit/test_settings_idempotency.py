@@ -468,6 +468,70 @@ async def test_update_terminal_blocks_purpose_change_during_an_open_shift() -> N
 
 
 @pytest.mark.asyncio
+async def test_update_terminal_archives_history_in_place_when_another_workspace_remains() -> None:
+    terminal_id = uuid4()
+    terminal = Terminal(
+        id=terminal_id,
+        branch_id=BRANCH_ID,
+        name="Old Cafe POS",
+        purpose="cafe_pos",
+        is_active=True,
+        device_id=None,
+    )
+    session = _QueuedSession([
+        _Result(scalar=BRANCH_ID),
+        _Result(scalar=_branch()),
+        _Result(scalar=terminal),
+        _Result(scalar=None),  # no unsettled shift blocks configuration change
+        _Result(scalar=2),  # another active workspace remains
+        _Result(scalar=None),  # no unsettled shift blocks archival
+        _Result(scalar=None),  # no name conflict
+    ])
+
+    result = await update_terminal(
+        terminal_id,
+        TerminalUpdate(is_active=False),
+        session,
+        _tenant(),
+    )
+
+    assert result.is_active is False
+    assert terminal.is_active is False
+    assert session.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_refuses_to_archive_the_only_active_workspace() -> None:
+    terminal_id = uuid4()
+    terminal = Terminal(
+        id=terminal_id,
+        branch_id=BRANCH_ID,
+        name="Main Workspace",
+        purpose="hybrid",
+        is_active=True,
+        device_id=None,
+    )
+    session = _QueuedSession([
+        _Result(scalar=BRANCH_ID),
+        _Result(scalar=_branch()),
+        _Result(scalar=terminal),
+        _Result(scalar=None),
+        _Result(scalar=1),
+    ])
+
+    with pytest.raises(BusinessRuleError, match="only active workspace"):
+        await update_terminal(
+            terminal_id,
+            TerminalUpdate(is_active=False),
+            session,
+            _tenant(),
+        )
+
+    assert terminal.is_active is True
+    assert session.flushes == 0
+
+
+@pytest.mark.asyncio
 async def test_update_terminal_explicit_null_clears_device_binding() -> None:
     terminal_id = uuid4()
     terminal = Terminal(
@@ -552,6 +616,7 @@ async def test_list_terminals_is_scoped_to_active_tenant_branch() -> None:
     assert COMPANY_ID in compiled.params.values()
     assert BRANCH_ID in compiled.params.values()
     assert "deleted_at IS NULL" in str(session.statement)
+    assert "terminals.is_active IS true" in str(session.statement)
 
 
 @pytest.mark.asyncio

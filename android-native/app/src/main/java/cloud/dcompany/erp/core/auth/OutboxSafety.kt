@@ -112,6 +112,8 @@ internal data class SignOutBlockers(
     val activeRefundCount: Int,
     val kitchenPendingCount: Int,
     val kitchenRejectedCount: Int,
+    val supportPendingCount: Int,
+    val supportReviewCount: Int,
     val pendingWriteCount: Int,
     val rejectedWriteCount: Int,
 )
@@ -147,8 +149,15 @@ internal fun OutboxSnapshot.signOutBlockers(): SignOutBlockers {
         it.resource in setOf("kitchen_advances", "kitchen_cancellation_acks") &&
             it.state == "rejected"
     }
+    val supportPending = countWhere {
+        it.resource == "support_requests" && it.state == "pending"
+    }
+    val supportReview = countWhere {
+        it.resource == "support_requests" && it.state == "action_required"
+    }
     val workflowActionCount =
-        gamingAwaitingPos + activeRefunds + kitchenPending + kitchenRejected
+        gamingAwaitingPos + activeRefunds + kitchenPending + kitchenRejected +
+            supportPending + supportReview
     val rejectedWrites = countWhere { group ->
         group.state.contains("rejected") &&
             group.resource !in setOf("kitchen_advances", "kitchen_cancellation_acks") &&
@@ -166,6 +175,8 @@ internal fun OutboxSnapshot.signOutBlockers(): SignOutBlockers {
         activeRefundCount = activeRefunds,
         kitchenPendingCount = kitchenPending,
         kitchenRejectedCount = kitchenRejected,
+        supportPendingCount = supportPending,
+        supportReviewCount = supportReview,
         pendingWriteCount = (count - workflowActionCount - rejectedWrites).coerceAtLeast(0),
         rejectedWriteCount = rejectedWrites,
     )
@@ -211,6 +222,24 @@ internal fun signOutBlockedMessage(snapshot: OutboxSnapshot): String {
                 },
             )
         }
+        if (blockers.supportPendingCount > 0) {
+            add(
+                if (blockers.supportPendingCount == 1) {
+                    "1 help request is waiting for server confirmation"
+                } else {
+                    "${blockers.supportPendingCount} help requests are waiting for server confirmation"
+                },
+            )
+        }
+        if (blockers.supportReviewCount > 0) {
+            add(
+                if (blockers.supportReviewCount == 1) {
+                    "1 help request needs review"
+                } else {
+                    "${blockers.supportReviewCount} help requests need review"
+                },
+            )
+        }
         if (blockers.pendingWriteCount > 0) {
             add(
                 if (blockers.pendingWriteCount == 1) {
@@ -250,6 +279,13 @@ internal fun signOutBlockedMessage(snapshot: OutboxSnapshot): String {
                 "Open Kitchen. Use Sync now for waiting updates. For an update that needs review, " +
                     "choose Check again; remove the saved update only after verifying the live " +
                     "server ticket is already correct.",
+            )
+        }
+        if (blockers.supportPendingCount > 0 || blockers.supportReviewCount > 0) {
+            add(
+                "Open Help, then My help requests. Reconnect and retry anything waiting. " +
+                    "If a saved request still needs review, first check the owner's web inbox; " +
+                    "then retry it or remove only the saved tablet copy.",
             )
         }
         if (blockers.pendingWriteCount > 0 || blockers.rejectedWriteCount > 0) {

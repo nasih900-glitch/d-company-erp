@@ -4,7 +4,7 @@
  * Tabs:
  *   - Account     change your own password
  *   - Company     name, GSTIN, PAN, timezone
- *   - Shop        one operational location plus its terminals
+ *   - Shop        one operational location and its internal workspace
  *   - Pricing     menu, gaming, events, memberships
  *   - Sheets      (existing Google Sheets integration wizard)
  */
@@ -55,7 +55,7 @@ export default function SettingsScreen() {
       <header className="mb-6">
         <h2 className="text-2xl font-bold">Settings</h2>
         <p className="text-fg-muted text-sm">
-          Your account and, when authorised, shop, terminals, pricing, and integrations.
+          Your account and, when authorised, shop, pricing, and integrations.
         </p>
       </header>
 
@@ -69,7 +69,7 @@ export default function SettingsScreen() {
               <Building2 size={14}/> Company
             </TabBtn>
             <TabBtn active={tab === 'branches'} onClick={() => setTab('branches')}>
-              <Store size={14}/> Shop &amp; terminals
+              <Store size={14}/> Shop
             </TabBtn>
             <TabBtn active={tab === 'pricing'} onClick={() => setTab('pricing')}>
               <IndianRupee size={14}/> Pricing

@@ -1066,9 +1066,10 @@ class GamingDialogUiTest {
         compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
             .bringIntoViewIfNeeded()
             .performClick()
-        compose.onAllNodesWithContentDescription("Cancellation reason: Guest changed mind")
-            .assertCountEquals(0)
-        compose.onNodeWithText("Presets").assertIsDisplayed()
+        // Tall tablets retain the preset choices beside the custom editor;
+        // compact windows replace them to keep the IME and footer reachable.
+        // The workflow contract is that the custom field becomes reachable in
+        // either layout, not that every display must use the compact variant.
         compose.onNodeWithContentDescription("Show keyboard for custom cancellation reason")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()

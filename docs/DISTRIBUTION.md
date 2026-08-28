@@ -83,37 +83,47 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version 8 compatibility floor and candidate
+## Version-code-8 floor and the 3.0.9 candidate
 
-Version `3.0.7` with version code 8 introduces authoritative terminal purposes
-(`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming Area to Cafe POS
+Version `3.0.7` with version code `8` introduced authoritative terminal
+purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
 handoff. Older Android clients do not understand that contract and can select
-the wrong local shift or attempt an invalid local handoff. They must therefore
-receive a clear update-required response before an operational write reaches a
-handler; version code 8 is both the minimum supported and latest code for this
-coordinated release.
+the wrong local shift or attempt an invalid local handoff, so code `8` remains
+the minimum-supported compatibility floor.
+
+The current unreleased candidate is `3.0.9` with version code `10`. It retains
+the internal tenant/branch/terminal safety model while presenting the current
+one-shop installation as one automatic workspace, and it adds contextual
+Support reporting with optional privacy-reviewed screenshots, durable retry,
+and owner replies. A locally signed APK exists, but the complete release gates
+and signed upgrades from code `8` and the earlier schema-37 code-`9` candidate
+must be rerun for code `10`. It has not passed physical Redmi Pad 2 acceptance,
+been uploaded to Play, or been rolled out to production.
 
 Treat the app and backend as one coordinated release:
 
-1. Produce, sign, and verify the version-code-8 artifact before changing the
+1. Produce, sign, and verify the version-code-10 artifact before changing the
    server or advertising it to installed clients.
 2. While the old backend is still active, bring every installed older app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Make the version-8 APK/update channel available to staff.
+3. Make the version-10 APK/update channel available to staff.
 4. Back up the database, complete the deployment preflight, and run
    `alembic upgrade head`; for this candidate, verify the database reaches
-   revision `0052` before starting the backend. Deploy with
+   revision `0054` before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
-   `ANDROID_LATEST_VERSION_CODE=8`, and
+   `ANDROID_LATEST_VERSION_CODE=10`, a verified HTTPS update URL, and
    `REQUIRE_NATIVE_VERSION_HEADERS=true` in the same maintenance window.
 5. Verify version 7 and older receive HTTP 426 before a write handler and
-   version 8 is current. Then run Gaming start, timer extension, paid package
-   extension, stop, and the explicit Cafe POS handoff from version 8.
+   version 8 remains operational with an optional update while version 10 is
+   current. Then run shift open/close, POS payment, Tables/KDS handoff, Gaming
+   start/stop/Send-to-POS, offline retry, and Support-report submission from
+   version 10.
 
 Do not lower the minimum to keep an older APK operating against this backend.
-If version 8 is not ready to distribute, do not advertise it as latest or deploy
-the matching production compatibility configuration.
+If version 10 is not ready to distribute, do not advertise it as latest or
+deploy the matching production compatibility configuration. Do not raise the
+minimum to `10` until every active tablet is upgraded and accepted.
 
 ## Android artifacts
 
@@ -126,8 +136,10 @@ and signature verification. It emits:
 - `release-manifest.json` with source revision, version, API base URL, and
   signing-certificate fingerprint.
 
-Do not distribute an artifact until the release workflow is green and the
-device acceptance checklist has passed on the target café tablet.
+Do not distribute an artifact for live café operation until the release
+workflow is green and the device acceptance checklist has passed on the target
+café tablet. Emulator proof supports candidate review but is not physical-device
+acceptance.
 
 ## Download page
 

@@ -15,6 +15,9 @@ import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
 import InstallButton from './InstallButton';
 import ConnectivityBanner from './ConnectivityBanner';
+import SupportLauncher from '@/components/support/SupportLauncher';
+import { bugReports } from '@/lib/erp-api';
+import { subscribeRealtime } from '@/lib/realtime';
 
 // `module` matches a key in the backend's MODULE_PERMISSIONS — used to hide
 // a tab when the caller's role/company access-control override says no.
@@ -87,6 +90,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const hasSystemAccess = hasAdminSystemAccess(me);
   const hasRefundAccess = Boolean(demo || canAccessRefunds(me));
   const hasMembershipAccess = Boolean(demo || canViewMemberships(me));
+  const [supportUnread, setSupportUnread] = useState(0);
   const accessibleModules = me?.accessible_modules;
   const isVisible = useCallback(
     (item: (typeof NAV)[number]) => {
@@ -132,6 +136,27 @@ export default function AppShell({ children }: { children?: ReactNode }) {
     () => terminalOptions.find((terminal) => terminal.id === terminalId) ?? null,
     [terminalId, terminalOptions],
   );
+
+  const refreshSupportSummary = useCallback(() => {
+    if (!hasSystemAccess || demo) {
+      setSupportUnread(0);
+      return;
+    }
+    const controller = new AbortController();
+    void bugReports.inboxSummary(controller.signal)
+      .then((summary) => setSupportUnread(summary.unread))
+      .catch(() => { /* the protected inbox itself shows actionable load errors */ });
+    return () => controller.abort();
+  }, [demo, hasSystemAccess]);
+
+  useEffect(() => {
+    const abort = refreshSupportSummary();
+    const unsubscribe = subscribeRealtime('bug_reports', refreshSupportSummary);
+    return () => {
+      abort?.();
+      unsubscribe();
+    };
+  }, [refreshSupportSummary]);
 
   // Close the drawer whenever the route changes.
   const onNavigate = () => setDrawerOpen(false);
@@ -248,6 +273,11 @@ export default function AppShell({ children }: { children?: ReactNode }) {
                 >
                   <Icon size={18} />
                   {label}
+                  {to === '/bug-reports' && supportUnread > 0 && (
+                    <span className="ml-auto grid min-w-5 place-items-center rounded-full bg-accent-bad px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      {Math.min(supportUnread, 99)}
+                    </span>
+                  )}
                 </NavLink>
               ))}
             </div>
@@ -264,7 +294,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           <div className="px-2 py-3">
             <p className="text-sm font-medium">{me?.name}</p>
             <p className="text-xs text-fg-muted">{rolesLabel(me?.roles)}</p>
-            {selectedTerminal && (
+            {selectedTerminal && terminalOptions.length > 1 && (
               <p className="mt-1 text-xs text-fg-muted">Terminal · {selectedTerminal.name}</p>
             )}
             {terminalOptions.length > 1 && (
@@ -336,6 +366,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         )}
         {children ?? <Outlet />}
       </main>
+      <SupportLauncher inboxUnread={hasSystemAccess ? supportUnread : 0} />
     </div>
   );
 }

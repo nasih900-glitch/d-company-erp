@@ -429,8 +429,10 @@ interface SyncMetaDao {
         LocalCafeActionEntity::class,
         LocalKitchenCancellationAckEntity::class,
         PosReceiptEntity::class,
+        LocalBugReportEntity::class,
+        LocalBugReportAttachmentEntity::class,
     ],
-    version = 36,
+    version = 38,
     exportSchema = true,
 )
 @TypeConverters(
@@ -466,4 +468,5 @@ abstract class ErpDatabase : RoomDatabase() {
     abstract fun outboxSafetyDao(): OutboxSafetyDao
     abstract fun shiftCloseSafetyDao(): ShiftCloseSafetyDao
     abstract fun cacheIsolationDao(): CacheIsolationDao
+    abstract fun bugReportDao(): BugReportDao
 }

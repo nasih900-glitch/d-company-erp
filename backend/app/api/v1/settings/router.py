@@ -218,6 +218,7 @@ class TerminalRead(BaseModel):
     # Default keeps historical idempotency-response replays readable after
     # the purpose contract is deployed.
     purpose: TerminalPurpose = "hybrid"
+    is_active: bool = True
     device_id: str | None
     last_seen_at: datetime | None
 
@@ -247,6 +248,7 @@ class TerminalCreate(BaseModel):
 class TerminalUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     purpose: TerminalPurpose | None = None
+    is_active: bool | None = None
     # Explicit null or a blank string clears a no-longer-used device binding.
     device_id: str | None = Field(default=None, max_length=100)
 
@@ -303,6 +305,7 @@ def _terminal_read(terminal: Terminal) -> TerminalRead:
         branch_id=terminal.branch_id,
         name=terminal.name,
         purpose=getattr(terminal, "purpose", None) or "hybrid",
+        is_active=getattr(terminal, "is_active", None) is not False,
         device_id=terminal.device_id,
         last_seen_at=terminal.last_seen_at,
     )
@@ -338,6 +341,49 @@ async def _ensure_terminal_identity_available(
         device_stmt = device_stmt.where(Terminal.id != exclude_terminal_id)
     if (await session.execute(device_stmt.limit(1))).scalar_one_or_none() is not None:
         raise ConflictError("this device ID is already assigned to another terminal")
+
+
+async def _ensure_terminal_can_be_archived(
+    session,
+    *,
+    company_id: UUID,
+    terminal: Terminal,
+) -> None:
+    """Protect the last workspace and any unsettled shift before archival."""
+    active_count = int(
+        (
+            await session.execute(
+                select(func.count(Terminal.id))
+                .join(Branch, Branch.id == Terminal.branch_id)
+                .where(
+                    Terminal.branch_id == terminal.branch_id,
+                    Terminal.is_active.is_(True),
+                    Branch.company_id == company_id,
+                    Branch.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if active_count <= 1:
+        raise BusinessRuleError(
+            "The only active workspace cannot be archived. Keep one workspace available."
+        )
+    blocking_shift_id = (
+        await session.execute(
+            select(Shift.id)
+            .where(
+                Shift.company_id == company_id,
+                Shift.terminal_id == terminal.id,
+                Shift.status.not_in(("closed", "reconciled")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if blocking_shift_id is not None:
+        raise BusinessRuleError(
+            "Close or reconcile this workspace's current shift before archiving it."
+        )
 
 # ============================================================================
 # COMPANY
@@ -665,6 +711,7 @@ async def list_terminals(
     session: SessionDep,
     tenant: TenantContext = Depends(requires_any("pos.read", "settings.manage")),
     branch_id: UUID | None = None,
+    include_inactive: bool = False,
 ) -> list[TerminalRead]:
     # Ordinary POS users may discover tills only in their authenticated
     # branch. An owner with settings.manage may inspect the company's other
@@ -675,6 +722,7 @@ async def list_terminals(
             # Do not reveal whether another branch or terminal exists.
             raise NotFoundError("branch not found")
         branch_id = tenant.branch_id
+        include_inactive = False
     stmt = (
         select(Terminal)
         .join(Branch, Branch.id == Terminal.branch_id)
@@ -685,11 +733,14 @@ async def list_terminals(
     )
     if branch_id:
         stmt = stmt.where(Terminal.branch_id == branch_id)
+    if not include_inactive:
+        stmt = stmt.where(Terminal.is_active.is_(True))
+    stmt = stmt.order_by(Terminal.is_active.desc(), func.lower(Terminal.name), Terminal.id)
     rows = (await session.execute(stmt)).scalars().all()
     return [
         TerminalRead(
             id=r.id, branch_id=r.branch_id, name=r.name,
-            purpose=r.purpose,
+            purpose=r.purpose, is_active=r.is_active,
             device_id=r.device_id, last_seen_at=r.last_seen_at,
         )
         for r in rows
@@ -810,7 +861,9 @@ async def update_terminal(
         else terminal.device_id
     )
     purpose = payload.purpose if payload.purpose is not None else terminal.purpose
-    if purpose != terminal.purpose:
+    terminal_is_active = getattr(terminal, "is_active", None) is not False
+    is_active = payload.is_active if payload.is_active is not None else terminal_is_active
+    if purpose != terminal.purpose or is_active != terminal_is_active:
         blocking_shift_id = (
             await session.execute(
                 select(Shift.id)
@@ -825,8 +878,14 @@ async def update_terminal(
         if blocking_shift_id is not None:
             raise BusinessRuleError(
                 "Close or reconcile this terminal's current shift before changing "
-                "whether it is used for Cafe POS or Gaming."
+                "its operational configuration."
             )
+    if terminal_is_active and not is_active:
+        await _ensure_terminal_can_be_archived(
+            session,
+            company_id=tenant.company_id,
+            terminal=terminal,
+        )
     await _ensure_terminal_identity_available(
         session,
         branch_id=branch_id,
@@ -837,6 +896,7 @@ async def update_terminal(
     terminal.name = name
     terminal.device_id = device_id
     terminal.purpose = purpose
+    terminal.is_active = is_active
     try:
         await session.flush()
     except IntegrityError as exc:
@@ -852,20 +912,50 @@ async def delete_terminal(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("settings.manage")),
 ):
-    t = await session.get(Terminal, terminal_id)
-    if not t:
+    branch_id = (
+        await session.execute(
+            select(Terminal.branch_id)
+            .join(Branch, Branch.id == Terminal.branch_id)
+            .where(
+                Terminal.id == terminal_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if branch_id is None:
         raise NotFoundError("terminal not found")
-    b = await session.get(Branch, t.branch_id)
-    if not b or b.company_id != tenant.company_id:
+    branch = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if branch is None:
         raise NotFoundError("terminal not found")
-    try:
-        await session.delete(t)
-        await session.flush()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise ConflictError(
-            "cannot delete terminal because it has operational, audit, or support history"
-        ) from exc
+    terminal = (
+        await session.execute(
+            select(Terminal)
+            .where(Terminal.id == terminal_id, Terminal.branch_id == branch_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if terminal is None:
+        raise NotFoundError("terminal not found")
+    if not terminal.is_active:
+        return
+    await _ensure_terminal_can_be_archived(
+        session,
+        company_id=tenant.company_id,
+        terminal=terminal,
+    )
+    terminal.is_active = False
+    await session.flush()
 
 
 # ============================================================================

@@ -1064,6 +1064,15 @@ internal fun GamingStationCard(
     val nowMillis = if (shouldTick) wallClock.value else frozenMillis
 
     val presentation = stationPresentation(station, session, nowMillis)
+    // Available cards contain one short action and should not consume the same
+    // height as active/payment cards with timers, billing and recovery copy.
+    // Keep the operational states roomy while fitting more ready stations on
+    // an 11-inch 16:10 tablet without shrinking touch targets.
+    val minimumCardHeight = if (presentation.state == StationVisualState.Available) {
+        224.dp
+    } else {
+        260.dp
+    }
     val stationIcon = stationTypeIcon(station.type)
     val actionsEnabled = canWrite && !actionInProgress
     val authority = session?.authority(activeShiftId)
@@ -1087,7 +1096,7 @@ internal fun GamingStationCard(
     }
 
     Column(
-        Modifier.fillMaxWidth().heightIn(min = 260.dp)
+        Modifier.fillMaxWidth().heightIn(min = minimumCardHeight)
             // Operational state belongs in the badge, icon and copy. Keeping
             // the complete card neutral prevents payment/warning states from
             // turning the board into a field of competing colour blocks.
@@ -1470,7 +1479,11 @@ private fun StationBody(
     when (presentation.state) {
         StationVisualState.Available -> {
             Text("Ready for a new session", color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)
-            Text("Start time is saved at the tap and synced safely.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Choose the customer and duration when you start.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
         StationVisualState.Disabled -> {
             Text("Station disabled", color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium)

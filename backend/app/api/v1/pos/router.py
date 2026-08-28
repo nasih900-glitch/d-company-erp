@@ -6941,11 +6941,47 @@ async def open_shift(
         raise BusinessRuleError("X-Terminal-Id header required to open a shift")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
-    # Serialize shift opening per terminal so two simultaneous clients cannot
+    # Terminal management locks branch -> terminal. Use the same order here so
+    # an archive/configuration change cannot pass its no-open-shift check while
+    # this request is creating a shift on the same workspace.
+    branch = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == tenant.branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if branch is None:
+        raise BusinessRuleError(
+            "This shop is no longer available. Reload the app before opening a shift."
+        )
+    terminal = (
+        await session.execute(
+            select(Terminal)
+            .where(
+                Terminal.id == tenant.terminal_id,
+                Terminal.branch_id == tenant.branch_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if terminal is None:
+        raise BusinessRuleError(
+            "The selected workspace does not belong to this shop. Reload the app "
+            "and use its active workspace before opening a shift."
+        )
+    if not terminal.is_active:
+        raise BusinessRuleError(
+            "This workspace has been archived and cannot open a shift. Reload the "
+            "app and use the active workspace."
+        )
+
+    # The locked active terminal serializes simultaneous clients so they cannot
     # create two live shifts for the same drawer.
-    await session.execute(
-        select(Terminal).where(Terminal.id == tenant.terminal_id).with_for_update()
-    )
     existing = (
         await session.execute(
             select(Shift).where(

@@ -89,11 +89,11 @@ class TerminalReassignmentPolicyTest {
     }
 
     @Test
-    fun `workspace label uses verified branch name and exact terminal`() {
+    fun `hybrid workspace hides the internal terminal from staff`() {
         val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
-            "Main Cafe · Till Front",
+            "Main Cafe",
             workspaceLocationLabel(
                 branchId = "branch-a",
                 branchName = " Main Cafe ",
@@ -104,16 +104,37 @@ class TerminalReassignmentPolicyTest {
     }
 
     @Test
-    fun `legacy profile hides internal branch id but keeps exact terminal`() {
+    fun `hybrid legacy profile hides internal branch and terminal ids`() {
         val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
-            "Assigned branch · Till Front",
+            "Assigned branch",
             workspaceLocationLabel(
                 branchId = "branch-a",
                 branchName = null,
                 requiresTill = true,
                 activeTerminal = display,
+            ),
+        )
+    }
+
+    @Test
+    fun `explicit multi-terminal workspace keeps exact terminal visible`() {
+        val display = ValidatedTerminalDisplay("till-1", "Gaming Area", "branch-a", TerminalPurpose.GAMING)
+
+        assertEquals(
+            "Main Cafe · Till Gaming Area",
+            workspaceLocationLabel(
+                branchId = "branch-a",
+                branchName = "Main Cafe",
+                requiresTill = true,
+                activeTerminal = display,
+            ),
+        )
+        assertTrue(usesAdvancedTerminalWorkflow(display))
+        assertFalse(
+            usesAdvancedTerminalWorkflow(
+                display.copy(purpose = TerminalPurpose.HYBRID),
             ),
         )
     }

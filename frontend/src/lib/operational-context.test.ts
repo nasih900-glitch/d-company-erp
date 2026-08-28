@@ -9,7 +9,15 @@ const terminalA = 'terminal-a';
 const terminalB = 'terminal-b';
 
 function terminal(id: string, branch_id: string): TerminalDTO {
-  return { id, branch_id, name: id, purpose: 'hybrid', device_id: null, last_seen_at: null };
+  return {
+    id,
+    branch_id,
+    name: id,
+    purpose: 'hybrid',
+    is_active: true,
+    device_id: null,
+    last_seen_at: null,
+  };
 }
 
 function shift(overrides: Partial<ShiftDTO> = {}): ShiftDTO {

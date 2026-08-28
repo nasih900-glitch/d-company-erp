@@ -2358,6 +2358,190 @@ val MIGRATION_35_36 = object : Migration(35, 36) {
     }
 }
 
+/**
+ * Durable, employee-owned support outbox. Unlike the older shared outboxes,
+ * every row carries its creator's tenant identity so a shared tablet cannot
+ * replay a report as the next person who signs in.
+ */
+val MIGRATION_36_37 = object : Migration(36, 37) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_bug_reports` (
+                `localId` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `requestJson` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `screen` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `serverId` TEXT,
+                `serverStatus` TEXT,
+                `serverCreatedAt` TEXT,
+                `attemptCount` INTEGER NOT NULL,
+                `lastAttemptAtMillis` INTEGER,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_reports_ownerCompanyId_ownerUserId_state` " +
+                "ON `local_bug_reports` (`ownerCompanyId`, `ownerUserId`, `state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_reports_createdAtMillis` " +
+                "ON `local_bug_reports` (`createdAtMillis`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_bug_report_attachments` (
+                `localId` TEXT NOT NULL,
+                `reportLocalId` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `filename` TEXT NOT NULL,
+                `contentType` TEXT NOT NULL,
+                `content` BLOB NOT NULL,
+                `byteSize` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `serverAttachmentId` TEXT,
+                `attemptCount` INTEGER NOT NULL,
+                `lastAttemptAtMillis` INTEGER,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_report_attachments_reportLocalId` " +
+                "ON `local_bug_report_attachments` (`reportLocalId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_report_attachments_ownerCompanyId_ownerUserId_state` " +
+                "ON `local_bug_report_attachments` (`ownerCompanyId`, `ownerUserId`, `state`)",
+        )
+    }
+}
+
+/**
+ * Bind every support screenshot to the same company and employee as its
+ * parent report. A corrupt orphan aborts the migration transaction rather
+ * than silently deleting private evidence. Cross-owner screenshot bytes can
+ * never be safely shown or retried by the parent owner, so a legacy mismatch
+ * is rebound only to satisfy the FK and its private bytes are discarded.
+ */
+val MIGRATION_37_38 = object : Migration(37, 38) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val orphanCount = db.query(
+            """
+            SELECT COUNT(*)
+              FROM local_bug_report_attachments attachment
+              LEFT JOIN local_bug_reports report ON report.localId = attachment.reportLocalId
+             WHERE report.localId IS NULL
+            """.trimIndent(),
+        ).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+        check(orphanCount == 0) {
+            "Support attachment migration found $orphanCount orphan row(s); recovery is required"
+        }
+
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                "`index_local_bug_reports_localId_ownerCompanyId_ownerUserId` " +
+                "ON `local_bug_reports` (`localId`, `ownerCompanyId`, `ownerUserId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_bug_report_attachments_new` (
+                `localId` TEXT NOT NULL,
+                `reportLocalId` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `filename` TEXT NOT NULL,
+                `contentType` TEXT NOT NULL,
+                `content` BLOB NOT NULL,
+                `byteSize` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `serverAttachmentId` TEXT,
+                `attemptCount` INTEGER NOT NULL,
+                `lastAttemptAtMillis` INTEGER,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`),
+                FOREIGN KEY(`reportLocalId`, `ownerCompanyId`, `ownerUserId`)
+                    REFERENCES `local_bug_reports`(`localId`, `ownerCompanyId`, `ownerUserId`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `local_bug_report_attachments_new` (
+                localId, reportLocalId, ownerCompanyId, ownerUserId, filename, contentType,
+                content, byteSize, createdAtMillis, state, serverAttachmentId, attemptCount,
+                lastAttemptAtMillis, lastError
+            )
+            SELECT attachment.localId,
+                   attachment.reportLocalId,
+                   report.ownerCompanyId,
+                   report.ownerUserId,
+                   attachment.filename,
+                   attachment.contentType,
+                   CASE
+                     WHEN attachment.ownerCompanyId != report.ownerCompanyId OR
+                          attachment.ownerUserId != report.ownerUserId
+                       THEN X''
+                     ELSE attachment.content
+                   END,
+                   attachment.byteSize,
+                   attachment.createdAtMillis,
+                   CASE
+                     WHEN attachment.ownerCompanyId != report.ownerCompanyId OR
+                          attachment.ownerUserId != report.ownerUserId
+                       THEN 'discarded'
+                     ELSE attachment.state
+                   END,
+                   attachment.serverAttachmentId,
+                   attachment.attemptCount,
+                   attachment.lastAttemptAtMillis,
+                   CASE
+                     WHEN attachment.ownerCompanyId != report.ownerCompanyId OR
+                          attachment.ownerUserId != report.ownerUserId
+                       THEN 'Image removed during a privacy-safe ownership repair; it cannot be retried.'
+                     ELSE attachment.lastError
+                   END
+              FROM local_bug_report_attachments attachment
+              JOIN local_bug_reports report ON report.localId = attachment.reportLocalId
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `local_bug_report_attachments`")
+        db.execSQL(
+            "ALTER TABLE `local_bug_report_attachments_new` " +
+                "RENAME TO `local_bug_report_attachments`",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_report_attachments_reportLocalId` " +
+                "ON `local_bug_report_attachments` (`reportLocalId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_local_bug_report_attachments_ownerCompanyId_ownerUserId_state` " +
+                "ON `local_bug_report_attachments` (`ownerCompanyId`, `ownerUserId`, `state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_local_bug_report_attachments_reportLocalId_ownerCompanyId_ownerUserId` " +
+                "ON `local_bug_report_attachments` " +
+                "(`reportLocalId`, `ownerCompanyId`, `ownerUserId`)",
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2365,5 +2549,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
     MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
     MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
-    MIGRATION_34_35, MIGRATION_35_36,
+    MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38,
 )

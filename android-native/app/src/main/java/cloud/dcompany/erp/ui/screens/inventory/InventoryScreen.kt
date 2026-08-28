@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -473,46 +474,83 @@ private fun SupplierCountMetric(state: InventoryUiState, modifier: Modifier) = C
 @Composable
 private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
     SectionCard(
-        title = "Restock priority",
-        subtitle = "Lowest stock relative to each ingredient's reorder level",
-        icon = Icons.Default.WarningAmber,
-        contentPadding = PaddingValues(12.dp),
+        contentPadding = PaddingValues(10.dp),
     ) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.restockPriority, key = { it.localWriteId ?: it.id }) { ingredient ->
-                Column(
-                    Modifier.width(210.dp).clip(Radius.shapeSm)
-                        .background(Brand.SurfaceRaised)
-                        .clickable { vm.select(ingredient) }
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                Modifier.width(190.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    Icons.Default.WarningAmber,
+                    contentDescription = null,
+                    tint = Brand.Danger,
+                    modifier = Modifier.size(24.dp),
+                )
+                Column {
                     Text(
-                        ingredient.name,
+                        "Restock priority",
                         color = Brand.Foreground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "${ingredient.currentQty.asQty()} / " +
-                            "${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
-                        color = Brand.Danger,
+                        "Lowest stock first",
+                        color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
-                    if (ingredient.reorderQty > 0) {
-                        Text(
-                            "Order ${ingredient.reorderQty.asQty()} ${ingredient.baseUnit}",
-                            color = Brand.ForegroundMuted,
-                            style = MaterialTheme.typography.labelSmall,
+                }
+            }
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(state.restockPriority, key = { it.localWriteId ?: it.id }) { ingredient ->
+                    Row(
+                        Modifier.width(205.dp).heightIn(min = 64.dp)
+                            .clip(Radius.shapeSm)
+                            .background(Brand.SurfaceRaised)
+                            .clickable { vm.select(ingredient) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = Brand.Danger,
+                            modifier = Modifier.size(18.dp),
                         )
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                ingredient.name,
+                                color = Brand.Foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                "${ingredient.currentQty.asQty()} / " +
+                                    "${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
+                                color = Brand.Danger,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            if (ingredient.reorderQty > 0) {
+                                Text(
+                                    "Order ${ingredient.reorderQty.asQty()} ${ingredient.baseUnit}",
+                                    color = Brand.ForegroundMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
                     }
-                    Spacer(Modifier.height(4.dp))
-                    OperationalStatusBadge(
-                        label = "Low stock",
-                        tone = UiTone.Danger,
-                        icon = Icons.Default.WarningAmber,
-                    )
                 }
             }
         }

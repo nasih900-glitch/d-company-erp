@@ -99,6 +99,9 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_branches",
     "local_terminals",
     "local_held_order_payments",
+    // Support images precede their parent rows for FK-safe scope purging.
+    "local_bug_report_attachments",
+    "local_bug_reports",
     "pos_receipts",
 )
 

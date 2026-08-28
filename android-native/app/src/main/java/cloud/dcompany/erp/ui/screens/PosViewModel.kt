@@ -42,12 +42,15 @@ import cloud.dcompany.erp.core.net.asRupees
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -70,6 +73,20 @@ data class PreparedHeldCheckout(
     val claimExpiresAtMillis: Long,
     val claimOrderVersion: Long,
 )
+
+internal fun subscriptionClock(
+    periodMillis: Long,
+    nowMillis: () -> Long = System::currentTimeMillis,
+): Flow<Long> {
+    require(periodMillis > 0L) { "Clock period must be positive" }
+    return flow {
+        emit(nowMillis())
+        while (currentCoroutineContext().isActive) {
+            delay(periodMillis)
+            emit(nowMillis())
+        }
+    }
+}
 
 data class PreparedDirectCheckout(
     val localId: String,
@@ -260,7 +277,13 @@ class PosViewModel : ViewModel() {
     private val confirmingHeldOrderId = MutableStateFlow<String?>(null)
     private val retryingRejectedSaleIds = MutableStateFlow<Set<String>>(emptySet())
     private val retryingHeldPaymentIds = MutableStateFlow<Set<String>>(emptySet())
-    private val heldAlarmClock = MutableStateFlow(System.currentTimeMillis())
+    /**
+     * The overdue clock only exists while POS state has a UI subscriber. The
+     * session ViewModelStore deliberately survives route changes, so an init
+     * loop here otherwise woke every 30 seconds for the rest of the login even
+     * after the cashier left POS.
+     */
+    private val heldAlarmClock = subscriptionClock(periodMillis = 30_000L)
     private val focusedHeldOrderId = MutableStateFlow<String?>(null)
     private val heldBannerMute = MutableStateFlow(HeldBannerMute())
     private var capturedSaleOutcomeJob: Job? = null
@@ -498,12 +521,6 @@ class PosViewModel : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PosUiState())
 
     init {
-        viewModelScope.launch {
-            while (isActive) {
-                delay(30_000L)
-                heldAlarmClock.value = System.currentTimeMillis()
-            }
-        }
         // Keep the dialog bound to one immutable order id. A cache reorder is
         // harmless; removal closes that exact dialog. If settlement is already
         // in flight, closure must not release its claim underneath the request

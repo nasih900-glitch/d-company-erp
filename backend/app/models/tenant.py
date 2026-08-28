@@ -7,9 +7,11 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     UniqueConstraint,
 )
@@ -136,6 +138,12 @@ class Terminal(Base, TimestampMixin):
     purpose: Mapped[str] = mapped_column(
         String(20), nullable=False, default="hybrid", server_default="hybrid"
     )
+    # Historical till identities are accounting/audit evidence and must not be
+    # hard-deleted.  Inactive terminals remain referenceable by old shifts and
+    # orders but are excluded from new device assignment and operational writes.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     device_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     offline_seq_high_water: Mapped[int] = mapped_column(BigInteger, default=0)
@@ -143,6 +151,7 @@ class Terminal(Base, TimestampMixin):
     branch: Mapped[Branch] = relationship(back_populates="terminals")
 
     __table_args__ = (
+        Index("ix_terminals_branch_active", "branch_id", "is_active"),
         CheckConstraint(
             "purpose IN ('hybrid', 'cafe_pos', 'gaming')",
             name="ck_terminals_purpose",

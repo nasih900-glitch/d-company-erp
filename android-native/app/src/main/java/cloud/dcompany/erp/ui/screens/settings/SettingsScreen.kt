@@ -37,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +48,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
-import cloud.dcompany.erp.DCompanyApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.DataListRow
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
@@ -71,20 +70,29 @@ import cloud.dcompany.erp.ui.theme.Spacing
 fun SettingsScreen(
     canManageSystem: Boolean,
     onPasswordChanged: () -> Unit = {},
+    onReportProblem: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
-    bugReportVm: BugReportViewModel = viewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
-    val app = DCompanyApp.instance
-    val terminal by app.terminalStore.activeValidatedTerminal.collectAsStateWithLifecycle()
-    val effectiveOnline by app.connectivity.online.collectAsStateWithLifecycle()
-    val networkValidated by app.connectivity.networkValidated.collectAsStateWithLifecycle()
-    val reportConnectivity = bugReportConnectivity(effectiveOnline, networkValidated)
     LaunchedEffect(state.passwordChanged) {
         if (state.passwordChanged) onPasswordChanged()
     }
-    val visibleTabs = if (canManageSystem) SettingsTab.entries else listOf(SettingsTab.Account)
+    LaunchedEffect(canManageSystem) {
+        // Owners only need terminal controls when the shop genuinely has more
+        // than one work terminal. Refresh once so a stale cache cannot expose
+        // or hide the advanced control indefinitely.
+        if (canManageSystem) vm.loadTerminalsCache()
+    }
+    val showTerminalSettings = showAdvancedTerminalSettings(
+        canManageSystem = canManageSystem,
+        activeTerminalCount = state.allTerminals.size,
+        pendingTerminalCount = state.pendingTerminals.size,
+    )
+    val visibleTabs = if (canManageSystem) {
+        SettingsTab.entries.filter { it != SettingsTab.Terminals || showTerminalSettings }
+    } else {
+        listOf(SettingsTab.Account)
+    }
     val activeTab = state.tab.takeIf { it in visibleTabs } ?: SettingsTab.Account
     LaunchedEffect(activeTab) {
         if (state.tab != activeTab) vm.selectTab(activeTab)
@@ -106,7 +114,7 @@ fun SettingsScreen(
             contentAlignment = Alignment.TopCenter,
         ) {
             when (activeTab) {
-                SettingsTab.Account -> AccountTab(state, vm, bugReportVm::open)
+                SettingsTab.Account -> AccountTab(state, vm, onReportProblem)
                 SettingsTab.Company -> CompanyTab(state, vm)
                 SettingsTab.Branches -> BranchesTab(state, vm)
                 SettingsTab.Terminals -> TerminalsTab(state, vm)
@@ -114,31 +122,13 @@ fun SettingsScreen(
         }
     }
 
-    BugReportDialog(
-        state = bugReportState,
-        connectivity = reportConnectivity,
-        onCategoryChange = bugReportVm::categoryChanged,
-        onSeverityChange = bugReportVm::severityChanged,
-        onTitleChange = bugReportVm::titleChanged,
-        onDescriptionChange = bugReportVm::descriptionChanged,
-        onReproductionStepsChange = bugReportVm::reproductionStepsChanged,
-        onExpectedBehaviorChange = bugReportVm::expectedBehaviorChanged,
-        onActualBehaviorChange = bugReportVm::actualBehaviorChanged,
-        onSubmit = {
-            bugReportVm.submit(
-                currentAndroidBugReportContext(
-                    currentScreen = "Settings",
-                    branchId = state.me?.branchId,
-                    branchName = state.me?.branchName,
-                    terminalId = terminal?.terminalId,
-                    terminalName = terminal?.terminalName,
-                    connectivity = reportConnectivity,
-                ),
-            )
-        },
-        onDismiss = bugReportVm::dismiss,
-    )
 }
+
+internal fun showAdvancedTerminalSettings(
+    canManageSystem: Boolean,
+    activeTerminalCount: Int,
+    pendingTerminalCount: Int,
+): Boolean = canManageSystem && (activeTerminalCount > 1 || pendingTerminalCount > 0)
 
 @Composable
 private fun Field(
@@ -290,7 +280,7 @@ private fun AccountTab(
             tone = UiTone.Information,
         ) {
             Text(
-                "Describe what went wrong and the app will include only safe device, version, shop, till, screen, and connectivity details.",
+                "Describe what went wrong and the app will include only safe device, version, shop, workspace, screen, and connectivity details.",
                 color = Brand.ForegroundMuted,
             )
             ErpButton(

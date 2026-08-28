@@ -80,7 +80,7 @@ services:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-dev}
+        APP_VERSION: ${APP_VERSION:-3.0.9}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -100,7 +100,7 @@ services:
       # v8 is the first build that understands terminal purposes and the
       # explicit Gaming Area -> Cafe POS handoff, so older clients are blocked.
       ANDROID_MIN_SUPPORTED_VERSION_CODE: ${ANDROID_MIN_SUPPORTED_VERSION_CODE:-8}
-      ANDROID_LATEST_VERSION_CODE: ${ANDROID_LATEST_VERSION_CODE:-8}
+      ANDROID_LATEST_VERSION_CODE: ${ANDROID_LATEST_VERSION_CODE:-10}
       ANDROID_UPDATE_URL: ${ANDROID_UPDATE_URL:-}
       IOS_MIN_SUPPORTED_VERSION_CODE: ${IOS_MIN_SUPPORTED_VERSION_CODE:-1}
       IOS_LATEST_VERSION_CODE: ${IOS_LATEST_VERSION_CODE:-1}
@@ -145,8 +145,8 @@ services:
       dockerfile: infra/docker/frontend.Dockerfile
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-1.0.0}
-        APP_VERSION: ${APP_VERSION:-dev}
+        VITE_APP_VERSION: ${APP_VERSION:-3.0.9}
+        APP_VERSION: ${APP_VERSION:-3.0.9}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

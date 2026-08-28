@@ -36,6 +36,8 @@ const report: BugReportDTO = {
     device_model: 'API 35 tablet',
     os_version: 'Android 15',
     current_screen: 'POS / void dialog',
+    last_action: 'Tapped Void item',
+    error_code: 'VOID_REASON_INPUT_BLOCKED',
     branch_id: '59511f4f-3a07-40b6-9f9b-90aa78df15ea',
     branch_name: 'Main branch',
     terminal_id: '787833ae-d942-48b8-81eb-b14b8d77c19f',
@@ -45,6 +47,13 @@ const report: BugReportDTO = {
   },
   status: 'open',
   internal_resolution_note: null,
+  public_replies: [{
+    id: '5fb4c21b-aea0-42bc-8c80-ad7e76f24f24',
+    author_name: 'Nasih',
+    message: 'The input fix is ready. Restart the app and try again.',
+    created_at: '2026-08-28T12:40:00Z',
+  }],
+  attachments: [],
   reporter: {
     user_id: '1703098e-9f86-47dc-a668-0655e89cff96',
     name: '<img src=x onerror=alert(1)>',
@@ -179,6 +188,11 @@ describe('bug report detail rendering', () => {
         onStatusChange={() => undefined}
         onNoteChange={() => undefined}
         onSave={() => undefined}
+        replyDraft=""
+        replying={false}
+        onReplyChange={() => undefined}
+        onReply={() => undefined}
+        onOpenAttachment={() => undefined}
       />,
     );
 
@@ -188,6 +202,8 @@ describe('bug report detail rendering', () => {
     expect(markup).not.toContain('<img src=x');
     expect(markup).toContain('Main branch');
     expect(markup).toContain('Main POS');
+    expect(markup).toContain('VOID_REASON_INPUT_BLOCKED');
+    expect(markup).toContain('The input fix is ready');
     expect(markup).toContain('Do not paste passwords, tokens, payment credentials');
   });
 
@@ -207,6 +223,11 @@ describe('bug report detail rendering', () => {
         onStatusChange={() => undefined}
         onNoteChange={() => undefined}
         onSave={() => undefined}
+        replyDraft=""
+        replying={false}
+        onReplyChange={() => undefined}
+        onReply={() => undefined}
+        onOpenAttachment={() => undefined}
       />,
     );
 

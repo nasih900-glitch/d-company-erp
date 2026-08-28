@@ -77,29 +77,35 @@ class SessionLoginErrorTest {
     }
 
     @Test
-    fun `cached authenticated employee is published before server refresh can finish`() = runBlocking {
-        val published = CompletableDeferred<Unit>()
+    fun `cached identity is display only until server refresh decides write authority`() = runBlocking {
+        val verifyingPublished = CompletableDeferred<Unit>()
         val remoteStarted = CompletableDeferred<Unit>()
         val releaseRemote = CompletableDeferred<Unit>()
+        var cachedWriteAuthorityActivated = false
 
         val restore = launch(Dispatchers.Default) {
-            restoreCachedBeforeRemote(
+            verifyRemoteBeforeCachedActivation(
                 cached = "cached-employee",
-                activateCached = { true },
-                publishCached = { published.complete(Unit) },
-                refreshRemote = { cachedSessionActive ->
-                    if (cachedSessionActive) remoteStarted.complete(Unit)
+                validateCachedIdentity = { true },
+                publishVerifying = { verifyingPublished.complete(Unit) },
+                refreshRemote = { cachedIdentity ->
+                    if (cachedIdentity != null) remoteStarted.complete(Unit)
                     releaseRemote.await()
+                    cachedWriteAuthorityActivated = true
                 },
             )
         }
 
         try {
             withTimeout(1_000) {
-                published.await()
+                verifyingPublished.await()
                 remoteStarted.await()
             }
             assertFalse("remote validation must still be blocked", restore.isCompleted)
+            assertFalse(
+                "cached write authority must remain inactive during live verification",
+                cachedWriteAuthorityActivated,
+            )
         } finally {
             releaseRemote.complete(Unit)
             restore.join()
@@ -150,7 +156,7 @@ class SessionLoginErrorTest {
     @Test
     fun `offline restore keeps cached identity and does not request sign out`() {
         val action = restoreFailureAction(
-            cachedSessionActive = true,
+            cachedIdentityAvailable = true,
             error = ApiException("server unreachable", status = null, code = "network_error"),
         )
 
@@ -163,7 +169,7 @@ class SessionLoginErrorTest {
         assertEquals(
             RestoreFailureAction.SHOW_UNREACHABLE,
             restoreFailureAction(
-                cachedSessionActive = false,
+                cachedIdentityAvailable = false,
                 error = ApiException("server unreachable", status = null, code = "network_error"),
             ),
         )
@@ -174,15 +180,45 @@ class SessionLoginErrorTest {
         assertEquals(
             RestoreFailureAction.SIGN_OUT,
             restoreFailureAction(
-                cachedSessionActive = true,
+                cachedIdentityAvailable = true,
                 error = ApiException("expired", status = 401, code = "auth_error"),
             ),
         )
         assertEquals(
             RestoreFailureAction.SIGN_OUT,
             restoreFailureAction(
-                cachedSessionActive = true,
+                cachedIdentityAvailable = true,
                 error = ApiException("forbidden", status = 403, code = "auth_error"),
+            ),
+        )
+    }
+
+    @Test
+    fun `server errors never unlock cached write authority`() {
+        assertEquals(
+            RestoreFailureAction.SHOW_UNREACHABLE,
+            restoreFailureAction(
+                cachedIdentityAvailable = true,
+                error = ApiException("temporary server failure", status = 503),
+            ),
+        )
+        assertEquals(
+            RestoreFailureAction.SHOW_UNREACHABLE,
+            restoreFailureAction(
+                cachedIdentityAvailable = true,
+                error = ApiException("update required", status = 426),
+            ),
+        )
+    }
+
+    @Test
+    fun `fresh server profile prevents stale cached fallback when terminal verification loses network`() {
+        assertEquals(
+            RestoreFailureAction.SHOW_UNREACHABLE,
+            restoreFailureAction(
+                cachedIdentityAvailable = true,
+                liveProfileVerified = true,
+                error = ApiException("terminal list unavailable", status = null, code = "network_error"),
             ),
         )
     }

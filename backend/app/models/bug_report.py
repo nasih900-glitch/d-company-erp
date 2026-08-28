@@ -12,8 +12,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
+    UniqueConstraint,
     event,
+    func,
     inspect,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -131,6 +134,8 @@ class BugReport(Base, TimestampMixin, TenantMixin):
     device_model: Mapped[str | None] = mapped_column(String(160))
     os_version: Mapped[str | None] = mapped_column(String(100))
     current_screen: Mapped[str | None] = mapped_column(String(100))
+    last_action: Mapped[str | None] = mapped_column(String(120))
+    error_code: Mapped[str | None] = mapped_column(String(100))
     branch_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("branches.id", ondelete="RESTRICT"),
@@ -165,6 +170,147 @@ class BugReport(Base, TimestampMixin, TenantMixin):
     )
 
 
+class BugReportPublicReply(Base, TenantMixin):
+    """An immutable support reply that is safe for the reporter to read."""
+
+    __tablename__ = "bug_report_public_replies"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(message)) >= 2",
+            name="ck_bug_report_public_replies_message_present",
+        ),
+        Index(
+            "ix_bug_report_public_replies_company_report_created",
+            "company_id",
+            "bug_report_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    bug_report_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bug_reports.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    author_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    author_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    message: Mapped[str] = mapped_column(String(4000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class BugReportAttachment(Base, TenantMixin):
+    """A private, authenticated screenshot attachment with bounded storage."""
+
+    __tablename__ = "bug_report_attachments"
+    __table_args__ = (
+        CheckConstraint(
+            "content_type IN ('image/png', 'image/jpeg', 'image/webp')",
+            name="ck_bug_report_attachments_content_type",
+        ),
+        CheckConstraint(
+            "byte_size BETWEEN 1 AND 2097152",
+            name="ck_bug_report_attachments_byte_size",
+        ),
+        CheckConstraint(
+            "sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_bug_report_attachments_sha256",
+        ),
+        CheckConstraint(
+            "(payload IS NULL AND purged_at IS NOT NULL) OR ("
+            "payload IS NOT NULL AND purged_at IS NULL "
+            "AND octet_length(payload) = byte_size "
+            "AND octet_length(payload) <= 2097152 "
+            "AND sha256 = encode(digest(payload, 'sha256'), 'hex'))",
+            name="ck_bug_report_attachments_payload_integrity",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "bug_report_id",
+            "sha256",
+            name="uq_bug_report_attachments_report_sha256",
+        ),
+        Index(
+            "ix_bug_report_attachments_company_report_created",
+            "company_id",
+            "bug_report_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    bug_report_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bug_reports.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    uploader_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    original_filename: Mapped[str] = mapped_column(String(160), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The support workflow deliberately avoids public object URLs. Two MiB is
+    # small enough to keep the initial private implementation transactional in
+    # PostgreSQL; the column is deferred so ordinary inbox queries never load
+    # screenshot bytes.
+    payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BugReportInboxRead(Base, TenantMixin):
+    """Per-owner read cursor used for accurate unread Support counts."""
+
+    __tablename__ = "bug_report_inbox_reads"
+    __table_args__ = (
+        UniqueConstraint(
+            "bug_report_id",
+            "user_id",
+            name="uq_bug_report_inbox_reads_report_user",
+        ),
+        Index(
+            "ix_bug_report_inbox_reads_company_user",
+            "company_id",
+            "user_id",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    bug_report_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bug_reports.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 _IMMUTABLE_REPORT_FIELDS = {
     "id",
     "company_id",
@@ -184,6 +330,8 @@ _IMMUTABLE_REPORT_FIELDS = {
     "device_model",
     "os_version",
     "current_screen",
+    "last_action",
+    "error_code",
     "branch_id",
     "branch_name",
     "terminal_id",
@@ -228,6 +376,43 @@ def _guard_bug_report_delete(
     raise ValueError("bug reports are durable support evidence and cannot be deleted")
 
 
+@event.listens_for(BugReportPublicReply, "before_update")
+@event.listens_for(BugReportPublicReply, "before_delete")
+def _guard_public_reply_mutation(
+    _mapper: Any,
+    _connection: Any,
+    _reply: BugReportPublicReply,
+) -> None:
+    raise ValueError("public support replies are durable and cannot be changed or deleted")
+
+
+@event.listens_for(BugReportAttachment, "before_update")
+def _guard_attachment_update(
+    _mapper: Any,
+    _connection: Any,
+    attachment: BugReportAttachment,
+) -> None:
+    """Only expiry cleanup may erase bytes; metadata remains durable."""
+    state = inspect(attachment)
+    changed = {attr.key for attr in state.attrs if attr.history.has_changes()}
+    if changed - {"payload", "purged_at"}:
+        raise ValueError("bug report attachment metadata is immutable")
+    payload_history = state.attrs.payload.history
+    if payload_history.has_changes() and attachment.payload is not None:
+        raise ValueError("purged attachment bytes cannot be restored or replaced")
+    if attachment.payload is None and attachment.purged_at is None:
+        raise ValueError("attachment purge requires purged_at")
+
+
+@event.listens_for(BugReportAttachment, "before_delete")
+def _guard_attachment_delete(
+    _mapper: Any,
+    _connection: Any,
+    _attachment: BugReportAttachment,
+) -> None:
+    raise ValueError("bug report attachment metadata is durable and cannot be deleted")
+
+
 __all__ = [
     "BUG_REPORT_CATEGORIES",
     "BUG_REPORT_CONNECTIVITY_STATES",
@@ -235,4 +420,7 @@ __all__ = [
     "BUG_REPORT_STATUSES",
     "BUG_REPORT_STATUS_TRANSITIONS",
     "BugReport",
+    "BugReportAttachment",
+    "BugReportInboxRead",
+    "BugReportPublicReply",
 ]

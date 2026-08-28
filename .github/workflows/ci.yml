@@ -35,8 +35,8 @@ jobs:
         with: { python-version: '3.11', cache: 'pip' }
       - run: pip install -r backend/requirements.txt
       - run: pip install ruff mypy pytest pytest-asyncio pytest-cov pip-audit
-      # Blocking: pip-audit -r backend/requirements.lock passes clean (0 known vulns) as of 2026-07-21.
-      # requirements.lock is the fully pinned 55-package closure that infra/docker/backend.Dockerfile
+      # Blocking: audit the exact dependency set installed into the production image.
+      # requirements.lock is the fully pinned closure that infra/docker/backend.Dockerfile
       # actually installs into the production image — it's what's deployed, so it's the gate.
       # No severity flag exists for pip-audit (unlike npm's --audit-level); it fails on any known vuln.
       - name: Dependency vulnerability scan (pip-audit, locked/deployed set)

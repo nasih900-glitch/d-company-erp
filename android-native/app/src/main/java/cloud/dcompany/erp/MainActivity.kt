@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,7 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
@@ -48,6 +48,7 @@ import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.allowedDestinations
 import cloud.dcompany.erp.ui.canManageSystemSettings
 import cloud.dcompany.erp.ui.workspaceLocationLabel
+import cloud.dcompany.erp.ui.usesAdvancedTerminalWorkflow
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
@@ -63,6 +64,12 @@ import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
 import cloud.dcompany.erp.ui.screens.reservations.ReservationsScreen
 import cloud.dcompany.erp.ui.screens.tables.TablesScreen
 import cloud.dcompany.erp.ui.screens.settings.SettingsScreen
+import cloud.dcompany.erp.ui.screens.settings.BugReportDialog
+import cloud.dcompany.erp.ui.screens.settings.BugReportLaunchContext
+import cloud.dcompany.erp.ui.screens.settings.BugReportOwnerScope
+import cloud.dcompany.erp.ui.screens.settings.BugReportViewModel
+import cloud.dcompany.erp.ui.screens.settings.bugReportConnectivity
+import cloud.dcompany.erp.ui.screens.settings.currentAndroidBugReportContext
 import cloud.dcompany.erp.ui.screens.staff.StaffScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
@@ -130,6 +137,7 @@ private fun AppRoot(
     val compatibility = DCompanyApp.instance.clientCompatibility
     val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
     val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsStateWithLifecycle()
+    val effectiveOnline by DCompanyApp.instance.connectivity.online.collectAsStateWithLifecycle()
     val backendReachability by ApiClient.backendReachability.state.collectAsStateWithLifecycle()
     val syncAvailability = syncAvailabilityProblem(networkValidated, backendReachability)
     val unresolvedOutboxGroups by DCompanyApp.instance.db.outboxSafetyDao()
@@ -157,10 +165,9 @@ private fun AppRoot(
             return
         }
 
-        // Render the cached workspace beneath a non-dismissible safety gate.
-        // This avoids a blank-looking launch while preserving the preflight:
-        // no offline write can be captured until the server either supports
-        // this build or the bounded compatibility check fails open.
+        // Keep the cached workspace usable while the bounded compatibility
+        // preflight runs. An authoritative HTTP 426/UpdateRequired result is
+        // still handled above as the only blocking update state.
         ClientCompatibilityState.Checking,
         is ClientCompatibilityState.UpdateAvailable,
         ClientCompatibilityState.Supported -> Unit
@@ -169,6 +176,25 @@ private fun AppRoot(
     when (val s = state) {
         is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             CircularProgressIndicator(color = Brand.Gold)
+        }
+
+        is AuthState.VerifyingCached -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(24.dp),
+            ) {
+                CircularProgressIndicator(color = Brand.Gold)
+                Text("Checking access", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Restoring ${s.me.name}'s workspace safely…",
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "If the server is unavailable, the last verified offline workspace will open automatically.",
+                    color = Brand.ForegroundMuted,
+                )
+            }
         }
 
         is AuthState.SigningOut -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -210,17 +236,76 @@ private fun AppRoot(
             }
         }
 
-        is AuthState.SelectTerminal -> TerminalSelectionScreen(
-            employeeName = s.me.name,
-            terminals = s.terminals,
-            choosing = s.choosing,
-            error = s.error,
-            isReassignment = s.reassigning,
-            previousTerminalName = s.previousTerminalName,
-            onConfirm = session::selectTerminal,
-            onRefresh = session::refreshTerminalChoices,
-            onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
-        )
+        is AuthState.SelectTerminal -> SessionViewModelScope(s.me) {
+            val reportConnectivity = bugReportConnectivity(effectiveOnline, networkValidated)
+            val bugReportVm: BugReportViewModel = viewModel(
+                factory = BugReportViewModel.factory(
+                    app = DCompanyApp.instance,
+                    owner = BugReportOwnerScope(
+                        companyId = s.me.companyId,
+                        userId = s.me.userId,
+                    ),
+                ),
+            )
+            val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
+            fun openSetupSupport() {
+                bugReportVm.open(
+                    BugReportLaunchContext(
+                        currentScreen = "Workspace setup",
+                        lastAction = "Choosing a workspace",
+                        errorCode = s.error?.let { "workspace_selection_error" },
+                    ),
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                TerminalSelectionScreen(
+                    employeeName = s.me.name,
+                    terminals = s.terminals,
+                    choosing = s.choosing,
+                    error = s.error,
+                    isReassignment = s.reassigning,
+                    previousTerminalName = s.previousTerminalName,
+                    onConfirm = session::selectTerminal,
+                    onRefresh = session::refreshTerminalChoices,
+                    onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
+                )
+                TextButton(
+                    onClick = ::openSetupSupport,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                ) {
+                    Text("Help")
+                }
+            }
+            BugReportDialog(
+                state = bugReportState,
+                connectivity = reportConnectivity,
+                onReasonChange = bugReportVm::reasonChanged,
+                onContinuationChange = bugReportVm::continuationChanged,
+                onDescriptionChange = bugReportVm::descriptionChanged,
+                onAttachmentChange = bugReportVm::attachmentChanged,
+                onAttachmentRejected = bugReportVm::attachmentRejected,
+                onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                onSubmit = {
+                    bugReportVm.submit(
+                        currentAndroidBugReportContext(
+                            launchContext = bugReportState.launchContext,
+                            branchId = s.me.branchId,
+                            branchName = s.me.branchName,
+                            terminalId = null,
+                            terminalName = null,
+                            connectivity = reportConnectivity,
+                        ),
+                    )
+                },
+                onRetry = bugReportVm::retrySubmitted,
+                onOpenHistory = bugReportVm::showHistory,
+                onCloseHistory = bugReportVm::closeHistory,
+                onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                onDismiss = bugReportVm::dismiss,
+            )
+        }
 
         // Credentials are intact — this is a connectivity problem, so the fix
         // is a retry, never a login screen that makes staff re-enter a
@@ -258,6 +343,16 @@ private fun AppRoot(
             SessionViewModelScope(s.me) {
                 val permissions = remember(s.me) { EffectivePermissions.from(s.me) }
                 val destinations = remember(s.me) { allowedDestinations(s.me) }
+                val bugReportVm: BugReportViewModel = viewModel(
+                    factory = BugReportViewModel.factory(
+                        app = DCompanyApp.instance,
+                        owner = BugReportOwnerScope(
+                            companyId = s.me.companyId,
+                            userId = s.me.userId,
+                        ),
+                    ),
+                )
+                val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
                 var confirmSignOut by remember(s.me.userId) { mutableStateOf(false) }
                 var currentDestination by rememberSaveable(s.me.userId) {
                     mutableStateOf(destinations.firstOrNull() ?: Destination.Settings)
@@ -322,6 +417,23 @@ private fun AppRoot(
                     requiresTill = requiresTill,
                     activeTerminal = activeTerminal,
                 )
+                val advancedTerminalWorkflow = usesAdvancedTerminalWorkflow(activeTerminal)
+                val reportConnectivity = bugReportConnectivity(effectiveOnline, networkValidated)
+                fun openSupport() {
+                    bugReportVm.open(
+                        BugReportLaunchContext(
+                            currentScreen = visibleDestination.label,
+                            lastAction = "Opened Help from ${visibleDestination.label}",
+                            errorCode = when (syncAvailability) {
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.NO_NETWORK ->
+                                    "network_offline"
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.SERVER_UNREACHABLE ->
+                                    "server_unreachable"
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.NONE -> null
+                            },
+                        ),
+                    )
+                }
                 WorkspaceScaffold(
                     destinations = destinations,
                     currentDestination = visibleDestination,
@@ -330,7 +442,9 @@ private fun AppRoot(
                     connectivityProblem = syncAvailability,
                     outboxWorkStatus = outboxWorkStatus,
                     syncing = syncing,
-                    canChangeTill = s.me.protectedAccess && requiresTill,
+                    pendingSupportCount = bugReportState.pendingCount,
+                    canChangeTill = s.me.protectedAccess && requiresTill && advancedTerminalWorkflow,
+                    onOpenSupport = ::openSupport,
                     onChangeTill = session::requestTerminalReassignment,
                     onSignOut = { confirmSignOut = true },
                     onDestinationChanged = {
@@ -455,9 +569,40 @@ private fun AppRoot(
                             Destination.Settings -> SettingsScreen(
                                 canManageSystem = canManageSystemSettings(s.me),
                                 onPasswordChanged = session::expireAfterPasswordChange,
+                                onReportProblem = ::openSupport,
                             )
                     }
                 }
+
+                BugReportDialog(
+                    state = bugReportState,
+                    connectivity = reportConnectivity,
+                    onReasonChange = bugReportVm::reasonChanged,
+                    onContinuationChange = bugReportVm::continuationChanged,
+                    onDescriptionChange = bugReportVm::descriptionChanged,
+                    onAttachmentChange = bugReportVm::attachmentChanged,
+                    onAttachmentRejected = bugReportVm::attachmentRejected,
+                    onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                    onSubmit = {
+                        bugReportVm.submit(
+                            currentAndroidBugReportContext(
+                                launchContext = bugReportState.launchContext,
+                                branchId = s.me.branchId,
+                                branchName = s.me.branchName,
+                                terminalId = activeTerminal?.terminalId,
+                                terminalName = activeTerminal?.terminalName,
+                                connectivity = reportConnectivity,
+                            ),
+                        )
+                    },
+                    onRetry = bugReportVm::retrySubmitted,
+                    onOpenHistory = bugReportVm::showHistory,
+                    onCloseHistory = bugReportVm::closeHistory,
+                    onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                    onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                    onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                    onDismiss = bugReportVm::dismiss,
+                )
 
                 if (confirmSignOut) {
                     AlertDialog(
@@ -534,8 +679,9 @@ private fun AppRoot(
     }
 
     if (compatibilityState is ClientCompatibilityState.Checking) {
-        CompatibilityCheckDialog()
-    } else if (accountSafetyNotice != null) {
+        CompatibilityCheckOverlay()
+    }
+    if (accountSafetyNotice != null) {
         AlertDialog(
             onDismissRequest = session::dismissAccountSafetyNotice,
             title = { Text("Account safety lock") },
@@ -584,28 +730,34 @@ private fun AppRoot(
 }
 
 @Composable
-private fun CompatibilityCheckDialog() {
-    AlertDialog(
-        onDismissRequest = {},
-        properties = DialogProperties(
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false,
-        ),
-        title = { Text("Getting this tablet ready") },
-        text = {
+private fun CompatibilityCheckOverlay() {
+    Box(
+        Modifier.fillMaxWidth().padding(16.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Surface(
+            color = Brand.SurfaceRaised,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapePill,
+            shadowElevation = 4.dp,
+        ) {
             Row(
+                Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CircularProgressIndicator(color = Brand.Gold)
+                CircularProgressIndicator(
+                    color = Brand.Gold,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp),
+                )
                 Text(
-                    "Verifying this app version before orders can be changed. " +
-                        "Saved work is safe; this usually takes a moment.",
+                    "Checking for app updates · cached work remains available",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
-        },
-        confirmButton = {},
-    )
+        }
+    }
 }
 
 @Composable

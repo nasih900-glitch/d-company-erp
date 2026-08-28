@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AdminPanelSettings
@@ -57,6 +58,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -107,7 +109,7 @@ enum class Destination(
     Tables("Tables", "Open and manage table orders", Icons.Filled.TableRestaurant),
     Reservations("Reservations", "Manage table and gaming bookings", Icons.Filled.CalendarMonth),
     Kitchen("Kitchen", "Prepare and complete kitchen tickets", Icons.Filled.Restaurant),
-    Shift("Shift", "Open, review and close this till", Icons.Filled.Schedule),
+    Shift("Shift", "Open, review and close today's shift", Icons.Filled.Schedule),
     Customers("Customers", "Find customers and loyalty history", Icons.Filled.People),
     Menu("Menu", "Manage categories, items and pricing", Icons.Filled.Keyboard),
     Staff("Staff", "Manage employees and attendance", Icons.Filled.Groups),
@@ -137,7 +139,9 @@ fun WorkspaceScaffold(
     connectivityProblem: SyncAvailabilityProblem,
     outboxWorkStatus: OutboxWorkStatus,
     syncing: Boolean,
+    pendingSupportCount: Int = 0,
     canChangeTill: Boolean,
+    onOpenSupport: () -> Unit,
     onChangeTill: () -> Unit,
     onSignOut: () -> Unit,
     onDestinationChanged: (Destination) -> Unit = {},
@@ -182,9 +186,11 @@ fun WorkspaceScaffold(
                     connectivityProblem = connectivityProblem,
                     outboxWorkStatus = outboxWorkStatus,
                     syncing = syncing,
+                    pendingSupportCount = pendingSupportCount,
                     compact = compact,
                     canChangeTill = canChangeTill,
                     onOpenCommand = { commandOpen = true },
+                    onOpenSupport = onOpenSupport,
                     onChangeTill = onChangeTill,
                     onSignOut = onSignOut,
                 )
@@ -449,9 +455,11 @@ private fun WorkspaceHeader(
     connectivityProblem: SyncAvailabilityProblem,
     outboxWorkStatus: OutboxWorkStatus,
     syncing: Boolean,
+    pendingSupportCount: Int,
     compact: Boolean,
     canChangeTill: Boolean,
     onOpenCommand: () -> Unit,
+    onOpenSupport: () -> Unit,
     onChangeTill: () -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -512,6 +520,50 @@ private fun WorkspaceHeader(
             syncing = syncing,
             showDetail = !compact,
         )
+
+        Surface(
+            color = Brand.Surface,
+            shape = Radius.shapePill,
+            border = androidx.compose.foundation.BorderStroke(1.dp, Brand.BorderSubtle),
+            modifier = Modifier.heightIn(min = 48.dp)
+                .clickable(onClick = onOpenSupport)
+                .semantics {
+                    role = Role.Button
+                    contentDescription = if (pendingSupportCount > 0) {
+                        "Help and support. $pendingSupportCount saved request${if (pendingSupportCount == 1) "" else "s"} waiting"
+                    } else {
+                        "Help and support"
+                    }
+                },
+        ) {
+            Row(
+                Modifier.padding(horizontal = Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.HelpOutline,
+                    contentDescription = null,
+                    tint = Brand.ForegroundMuted,
+                    modifier = Modifier.size(21.dp),
+                )
+                if (!compact) {
+                    Text(
+                        "Help",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+                if (pendingSupportCount > 0) {
+                    Text(
+                        pendingSupportCount.coerceAtMost(99).toString(),
+                        color = Brand.Gold,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
 
         Box {
             Row(

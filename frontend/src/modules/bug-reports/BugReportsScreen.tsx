@@ -14,9 +14,12 @@ import {
   MapPin,
   MessageSquareWarning,
   MonitorSmartphone,
+  Paperclip,
   RefreshCw,
   Search,
+  Send,
   ShieldCheck,
+  MessageSquareText,
   UserRound,
   Wifi,
   WifiOff,
@@ -32,7 +35,10 @@ import {
   type BugReportSeverity,
   type BugReportStatus,
   type BugReportUpdateDTO,
+  type BugReportAttachmentDTO,
 } from '@/lib/erp-api';
+import { subscribeRealtime } from '@/lib/realtime';
+import { StableMutationIntent } from '@/lib/stable-mutation-intent';
 import {
   BUG_REPORT_CATEGORY_OPTIONS,
   BUG_REPORT_SEVERITY_OPTIONS,
@@ -86,9 +92,23 @@ export default function BugReportsScreen() {
   const [statusDraft, setStatusDraft] = useState<BugReportStatus>('open');
   const [noteDraft, setNoteDraft] = useState('');
   const [saving, setSaving] = useState(false);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [replying, setReplying] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState<{
+    url: string;
+    name: string;
+  } | null>(null);
   const detailRequestId = useRef<string | null>(null);
   const detailRequestController = useRef<AbortController | null>(null);
   const detailSession = useRef<number | null>(null);
+  const replyRequestGeneration = useRef(0);
+  const replyLockRef = useRef(false);
+  const replyIntentRef = useRef<StableMutationIntent<{ reportId: string; message: string }> | null>(null);
+  if (replyIntentRef.current === null) {
+    replyIntentRef.current = new StableMutationIntent({
+      prefix: 'bug-report-reply:web',
+    });
+  }
   const detailRequestGate = useRef<BugReportDetailRequestGate | null>(null);
   if (detailRequestGate.current === null) {
     detailRequestGate.current = new BugReportDetailRequestGate();
@@ -115,6 +135,14 @@ export default function BugReportsScreen() {
       detailRequestController.current?.abort();
     };
   }, []);
+
+  useEffect(() => subscribeRealtime('bug_reports', () => {
+    setRefreshVersion((version) => version + 1);
+  }), []);
+
+  useEffect(() => () => {
+    if (attachmentPreview) URL.revokeObjectURL(attachmentPreview.url);
+  }, [attachmentPreview]);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +188,9 @@ export default function BugReportsScreen() {
   }, []);
 
   const openDetail = useCallback(async (report: BugReportDTO) => {
+    replyRequestGeneration.current += 1;
+    replyLockRef.current = false;
+    replyIntentRef.current!.invalidate();
     const session = detailRequestGate.current!.openSession();
     detailSession.current = session;
     detailRequestController.current?.abort();
@@ -173,6 +204,8 @@ export default function BugReportsScreen() {
     setDetailLoading(true);
     setDetailReady(false);
     setSaving(false);
+    setReplyDraft('');
+    setReplying(false);
 
     try {
       const latest = await bugReports.get(report.id, controller.signal);
@@ -186,6 +219,10 @@ export default function BugReportsScreen() {
       setStatusDraft(latest.status);
       setNoteDraft(latest.internal_resolution_note ?? '');
       setDetailReady(true);
+      void bugReports.markRead(report.id).catch(() => {
+        // The detail remains usable; a failed cursor write simply keeps the
+        // unread badge present so the owner can retry by reopening it.
+      });
     } catch (error) {
       if (
         !detailRequestGate.current!.isCurrentSession(session)
@@ -211,6 +248,9 @@ export default function BugReportsScreen() {
   }, []);
 
   const closeDetail = useCallback(() => {
+    replyRequestGeneration.current += 1;
+    replyLockRef.current = false;
+    replyIntentRef.current!.invalidate();
     detailRequestGate.current!.closeSession();
     detailSession.current = null;
     detailRequestController.current?.abort();
@@ -221,7 +261,88 @@ export default function BugReportsScreen() {
     setDetailLoading(false);
     setDetailReady(false);
     setSaving(false);
+    setReplyDraft('');
+    setReplying(false);
   }, []);
+
+  const changeReplyDraft = useCallback((value: string) => {
+    if (replyDraft !== value) replyIntentRef.current!.invalidate();
+    setReplyDraft(value);
+  }, [replyDraft]);
+
+  const sendPublicReply = useCallback(async (event: React.FormEvent) => {
+    event.preventDefault();
+    const message = replyDraft.trim();
+    if (
+      !detail
+      || !detailReady
+      || replying
+      || replyLockRef.current
+      || message.length < 2
+    ) return;
+    const reportId = detail.id;
+    const requestGeneration = replyRequestGeneration.current + 1;
+    replyRequestGeneration.current = requestGeneration;
+    replyLockRef.current = true;
+    const intent = replyIntentRef.current!.resolve(
+      `${reportId}\u0000${message}`,
+      () => ({ reportId, message }),
+    );
+    setReplying(true);
+    setDetailError(null);
+    try {
+      const reply = await bugReports.reply(
+        intent.payload.reportId,
+        intent.payload.message,
+        intent.idempotencyKey,
+      );
+      replyIntentRef.current!.confirmSuccess(intent);
+      if (
+        replyRequestGeneration.current !== requestGeneration
+        || detailRequestId.current !== reportId
+      ) return;
+      setDetail((current) => {
+        if (!current || current.id !== reportId) return current;
+        if (current.public_replies.some((existing) => existing.id === reply.id)) return current;
+        return { ...current, public_replies: [...current.public_replies, reply] };
+      });
+      setReplyDraft('');
+      notifications.success('The staff member can now see this response in My requests.', {
+        title: 'Reply sent',
+      });
+      setRefreshVersion((version) => version + 1);
+    } catch (error) {
+      if (
+        replyRequestGeneration.current !== requestGeneration
+        || detailRequestId.current !== reportId
+      ) return;
+      const message = `The reply was not sent. ${errorMessage(error)}`;
+      setDetailError(message);
+      notifications.error(message, { title: 'Could not send reply' });
+    } finally {
+      if (replyRequestGeneration.current === requestGeneration) {
+        replyLockRef.current = false;
+        setReplying(false);
+      }
+    }
+  }, [detail, detailReady, notifications, replying, replyDraft]);
+
+  const openAttachment = useCallback(async (
+    reportId: string,
+    attachment: BugReportAttachmentDTO,
+  ) => {
+    if (!attachment.available) return;
+    try {
+      const blob = await bugReports.inboxAttachment(reportId, attachment.id);
+      const url = URL.createObjectURL(blob);
+      setAttachmentPreview((current) => {
+        if (current) URL.revokeObjectURL(current.url);
+        return { url, name: attachment.filename };
+      });
+    } catch (error) {
+      notifications.error(errorMessage(error), { title: 'Could not open screenshot' });
+    }
+  }, [notifications]);
 
   const noteValue = noteDraft.trim() || null;
   const detailNoteValue = detail?.internal_resolution_note?.trim() || null;
@@ -572,6 +693,28 @@ export default function BugReportsScreen() {
             onStatusChange={setStatusDraft}
             onNoteChange={setNoteDraft}
             onSave={saveResolution}
+            replyDraft={replyDraft}
+            replying={replying}
+            onReplyChange={changeReplyDraft}
+            onReply={sendPublicReply}
+            onOpenAttachment={openAttachment}
+          />
+        )}
+      </Modal>
+      <Modal
+        open={Boolean(attachmentPreview)}
+        onClose={() => setAttachmentPreview((current) => {
+          if (current) URL.revokeObjectURL(current.url);
+          return null;
+        })}
+        title={attachmentPreview?.name ?? 'Support screenshot'}
+        size="lg"
+      >
+        {attachmentPreview && (
+          <img
+            src={attachmentPreview.url}
+            alt="Screenshot attached to this support request"
+            className="max-h-[70dvh] w-full rounded-xl bg-bg-raised object-contain"
           />
         )}
       </Modal>
@@ -760,6 +903,11 @@ export function ReportDetail({
   onStatusChange,
   onNoteChange,
   onSave,
+  replyDraft,
+  replying,
+  onReplyChange,
+  onReply,
+  onOpenAttachment,
 }: {
   report: BugReportDTO;
   detailLoading: boolean;
@@ -774,6 +922,11 @@ export function ReportDetail({
   onStatusChange: (status: BugReportStatus) => void;
   onNoteChange: (note: string) => void;
   onSave: (event: React.FormEvent) => void;
+  replyDraft: string;
+  replying: boolean;
+  onReplyChange: (reply: string) => void;
+  onReply: (event: React.FormEvent) => void;
+  onOpenAttachment: (reportId: string, attachment: BugReportAttachmentDTO) => void;
 }) {
   const context = report.client_context;
   return (
@@ -835,6 +988,8 @@ export function ReportDetail({
               value={[context.device_model, context.os_version].filter(Boolean).join(' · ') || 'Not provided'}
             />
             <InfoRow label="Screen" value={context.current_screen || 'Not provided'} />
+            <InfoRow label="Last action" value={context.last_action || 'Not provided'} />
+            <InfoRow label="Error code" value={context.error_code || 'Not provided'} />
           </div>
         </section>
       </div>
@@ -857,6 +1012,72 @@ export function ReportDetail({
             Icon={Clock3}
           />
         </div>
+      </section>
+
+      {report.attachments.length > 0 && (
+        <section className="rounded-2xl border border-bg-border bg-bg-raised/35 p-4">
+          <h4 className="flex items-center gap-2 text-sm font-semibold">
+            <Paperclip size={16} className="text-accent" aria-hidden="true" /> Screenshots
+          </h4>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {report.attachments.map((attachment) => (
+              <button
+                key={attachment.id}
+                type="button"
+                className="btn btn-ghost"
+                disabled={!attachment.available}
+                onClick={() => onOpenAttachment(report.id, attachment)}
+              >
+                {attachment.available ? `View ${attachment.filename}` : `${attachment.filename} expired`}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-2xl border border-bg-border bg-bg-raised/35 p-4">
+        <h4 className="flex items-center gap-2 text-sm font-semibold">
+          <MessageSquareText size={16} className="text-accent" aria-hidden="true" /> Replies visible to staff
+        </h4>
+        <p className="mt-1 text-xs text-fg-muted">
+          These messages appear in the reporter’s My requests view. Internal notes below remain private.
+        </p>
+        {report.public_replies.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {report.public_replies.map((reply) => (
+              <div key={reply.id} className="rounded-xl border border-bg-border bg-bg-surface p-3 text-sm">
+                <p className="whitespace-pre-wrap break-words">{reply.message}</p>
+                <p className="mt-1 text-[11px] text-fg-muted">
+                  {reply.author_name} · {formatDateTime(reply.created_at)}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+        <form onSubmit={onReply} className="mt-3">
+          <label htmlFor="bug-report-public-reply" className="text-xs font-medium text-fg-muted">
+            Reply to staff member
+          </label>
+          <textarea
+            id="bug-report-public-reply"
+            className="input mt-1 min-h-[88px] resize-y"
+            value={replyDraft}
+            onChange={(event) => onReplyChange(event.target.value)}
+            maxLength={4000}
+            placeholder="Explain what was checked, what they should do next, or that the issue is fixed."
+            disabled={replying || !detailReady}
+          />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <p className="text-xs text-fg-muted">Do not include passwords, tokens or private management notes.</p>
+            <button
+              type="submit"
+              className="btn btn-ghost"
+              disabled={replying || !detailReady || replyDraft.trim().length < 2}
+            >
+              {replying ? <><Loader2 size={15} className="animate-spin" /> Sending…</> : <><Send size={15} /> Send reply</>}
+            </button>
+          </div>
+        </form>
       </section>
 
       {(report.resolved_at || report.resolved_by) && (

@@ -13,7 +13,9 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -167,68 +169,73 @@ private val DCompanyShapes = Shapes(
     extraLarge = Radius.shapeXl,
 )
 
+private val PreciseTextStyle = TextStyle(
+    fontFamily = FontFamily.SansSerif,
+    platformStyle = PlatformTextStyle(includeFontPadding = false),
+)
+
 private val DCompanyTypography = Typography(
-    displayLarge = TextStyle(
+    displayLarge = PreciseTextStyle.copy(
         fontSize = 40.sp,
         lineHeight = 46.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = (-0.5).sp,
         fontFeatureSettings = "tnum",
     ),
-    headlineLarge = TextStyle(
+    headlineLarge = PreciseTextStyle.copy(
         fontSize = 30.sp,
         lineHeight = 36.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = (-0.35).sp,
         fontFeatureSettings = "tnum",
     ),
-    headlineMedium = TextStyle(
+    headlineMedium = PreciseTextStyle.copy(
         fontSize = 26.sp,
         lineHeight = 32.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = (-0.25).sp,
         fontFeatureSettings = "tnum",
     ),
-    headlineSmall = TextStyle(
+    headlineSmall = PreciseTextStyle.copy(
         fontSize = 22.sp,
         lineHeight = 28.sp,
         fontWeight = FontWeight.SemiBold,
         fontFeatureSettings = "tnum",
     ),
-    titleLarge = TextStyle(
+    titleLarge = PreciseTextStyle.copy(
         fontSize = 20.sp,
         lineHeight = 26.sp,
         fontWeight = FontWeight.SemiBold,
         fontFeatureSettings = "tnum",
     ),
-    titleMedium = TextStyle(
+    titleMedium = PreciseTextStyle.copy(
         fontSize = 17.sp,
         lineHeight = 23.sp,
         fontWeight = FontWeight.SemiBold,
         fontFeatureSettings = "tnum",
     ),
-    titleSmall = TextStyle(
+    titleSmall = PreciseTextStyle.copy(
         fontSize = 15.sp,
         lineHeight = 21.sp,
         fontWeight = FontWeight.SemiBold,
         fontFeatureSettings = "tnum",
     ),
-    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 23.sp, fontFeatureSettings = "tnum"),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontFeatureSettings = "tnum"),
-    bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 17.sp, fontFeatureSettings = "tnum"),
-    labelLarge = TextStyle(
+    bodyLarge = PreciseTextStyle.copy(fontSize = 16.sp, lineHeight = 23.sp, fontFeatureSettings = "tnum"),
+    bodyMedium = PreciseTextStyle.copy(fontSize = 14.sp, lineHeight = 20.sp, fontFeatureSettings = "tnum"),
+    bodySmall = PreciseTextStyle.copy(fontSize = 12.sp, lineHeight = 17.sp, fontFeatureSettings = "tnum"),
+    labelLarge = PreciseTextStyle.copy(
         fontSize = 14.sp,
         lineHeight = 19.sp,
         fontWeight = FontWeight.SemiBold,
         fontFeatureSettings = "tnum",
     ),
-    labelMedium = TextStyle(
+    labelMedium = PreciseTextStyle.copy(
         fontSize = 12.sp,
         lineHeight = 17.sp,
         fontWeight = FontWeight.Medium,
         fontFeatureSettings = "tnum",
     ),
-    labelSmall = TextStyle(
+    labelSmall = PreciseTextStyle.copy(
         fontSize = 11.sp,
         lineHeight = 15.sp,
         fontWeight = FontWeight.Medium,

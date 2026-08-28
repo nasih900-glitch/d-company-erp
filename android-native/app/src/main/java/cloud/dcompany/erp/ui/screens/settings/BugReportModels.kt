@@ -7,113 +7,108 @@ import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.util.UUID
 
-internal const val BUG_REPORT_TITLE_MIN_LENGTH = 5
-internal const val BUG_REPORT_TITLE_MAX_LENGTH = 160
 internal const val BUG_REPORT_DESCRIPTION_MIN_LENGTH = 10
 internal const val BUG_REPORT_DETAIL_MAX_LENGTH = 4_000
 
 @Serializable
-enum class BugReportCategory(val wireValue: String, val label: String) {
-    @SerialName("crash")
-    Crash("crash", "Crash or freeze"),
-
-    @SerialName("incorrect_data")
-    IncorrectData("incorrect_data", "Incorrect data or totals"),
-
-    @SerialName("payment")
-    Payment("payment", "Payment or receipt"),
-
-    @SerialName("sync")
-    Sync("sync", "Sync or offline issue"),
-
-    @SerialName("permission")
-    Permission("permission", "Access or permission"),
-
-    @SerialName("performance")
-    Performance("performance", "Slow or unresponsive"),
-
-    @SerialName("usability")
-    Usability("usability", "Confusing or difficult to use"),
-
-    @SerialName("other")
-    Other("other", "Other"),
+enum class BugReportCategory(val wireValue: String) {
+    @SerialName("crash") Crash("crash"),
+    @SerialName("incorrect_data") IncorrectData("incorrect_data"),
+    @SerialName("payment") Payment("payment"),
+    @SerialName("sync") Sync("sync"),
+    @SerialName("permission") Permission("permission"),
+    @SerialName("performance") Performance("performance"),
+    @SerialName("usability") Usability("usability"),
+    @SerialName("other") Other("other"),
 }
 
 @Serializable
-enum class BugReportSeverity(val wireValue: String, val label: String, val guidance: String) {
-    @SerialName("low")
-    Low("low", "Low", "Minor inconvenience; work can continue"),
-
-    @SerialName("medium")
-    Medium("medium", "Medium", "Work is harder, but there is a workaround"),
-
-    @SerialName("high")
-    High("high", "High", "A key task is blocked for one or more staff"),
-
-    @SerialName("critical")
-    Critical("critical", "Critical", "Payments, data, or the whole operation may be at risk"),
+enum class BugReportSeverity(val wireValue: String) {
+    @SerialName("low") Low("low"),
+    @SerialName("medium") Medium("medium"),
+    @SerialName("high") High("high"),
+    @SerialName("critical") Critical("critical"),
 }
 
+/** Three staff-facing choices are faster and less technical than a category taxonomy. */
+enum class SupportRequestReason(
+    val label: String,
+    val detail: String,
+    val category: BugReportCategory,
+    val titlePrefix: String,
+) {
+    SomethingFailed(
+        label = "Something failed",
+        detail = "A button, payment or task did not complete",
+        category = BugReportCategory.Other,
+        titlePrefix = "Action failed",
+    ),
+    NeedGuidance(
+        label = "I'm stuck",
+        detail = "I am not sure what to do next",
+        category = BugReportCategory.Usability,
+        titlePrefix = "Staff needs help",
+    ),
+    IncorrectInformation(
+        label = "A total looks wrong",
+        detail = "Money, quantity or status appears incorrect",
+        category = BugReportCategory.IncorrectData,
+        titlePrefix = "Incorrect information",
+    ),
+}
+
+enum class WorkContinuation(
+    val label: String,
+    val severity: BugReportSeverity,
+) {
+    Yes("Yes", BugReportSeverity.Low),
+    Difficult("With difficulty", BugReportSeverity.Medium),
+    Blocked("No", BugReportSeverity.High),
+}
+
+data class BugReportLaunchContext(
+    val currentScreen: String,
+    /** Allowlisted action name only; never include order/customer/payment content. */
+    val lastAction: String? = null,
+    /** Stable code only; never include an exception message or stack trace. */
+    val errorCode: String? = null,
+)
+
+data class BugReportOwnerScope(
+    val companyId: String,
+    val userId: String,
+)
+
 data class BugReportDraft(
-    val category: BugReportCategory = BugReportCategory.Usability,
-    val severity: BugReportSeverity = BugReportSeverity.Medium,
-    val title: String = "",
+    val reason: SupportRequestReason = SupportRequestReason.NeedGuidance,
+    val canContinue: WorkContinuation = WorkContinuation.Difficult,
     val description: String = "",
-    val reproductionSteps: String = "",
-    val expectedBehavior: String = "",
-    val actualBehavior: String = "",
 ) {
     fun validate(): BugReportValidation = BugReportValidation(
-        title = when {
-            title.trim().length < BUG_REPORT_TITLE_MIN_LENGTH ->
-                "Enter a short title of at least $BUG_REPORT_TITLE_MIN_LENGTH characters."
-            title.trim().length > BUG_REPORT_TITLE_MAX_LENGTH ->
-                "Title must be $BUG_REPORT_TITLE_MAX_LENGTH characters or fewer."
-            else -> null
-        },
         description = when {
             description.trim().length < BUG_REPORT_DESCRIPTION_MIN_LENGTH ->
-                "Describe the problem in at least $BUG_REPORT_DESCRIPTION_MIN_LENGTH characters."
+                "Tell us what happened in at least $BUG_REPORT_DESCRIPTION_MIN_LENGTH characters."
             description.trim().length > BUG_REPORT_DETAIL_MAX_LENGTH ->
                 "Description must be $BUG_REPORT_DETAIL_MAX_LENGTH characters or fewer."
             else -> null
         },
-        reproductionSteps = optionalLengthError("Steps to reproduce", reproductionSteps),
-        expectedBehavior = optionalLengthError("Expected behaviour", expectedBehavior),
-        actualBehavior = optionalLengthError("What actually happened", actualBehavior),
     )
 
-    fun toRequest(clientContext: BugReportClientContext): BugReportCreateRequest =
-        BugReportCreateRequest(
-            category = category,
-            severity = severity,
-            title = title.trim(),
+    fun toRequest(clientContext: BugReportClientContext): BugReportCreateRequest {
+        val screen = clientContext.currentScreen?.takeIf(String::isNotBlank) ?: "ERP"
+        return BugReportCreateRequest(
+            category = reason.category,
+            severity = canContinue.severity,
+            title = "${reason.titlePrefix} · $screen".take(160),
             description = description.trim(),
-            reproductionSteps = reproductionSteps.trim().ifBlank { null },
-            expectedBehavior = expectedBehavior.trim().ifBlank { null },
-            actualBehavior = actualBehavior.trim().ifBlank { null },
             clientContext = clientContext,
         )
-}
-
-data class BugReportValidation(
-    val title: String? = null,
-    val description: String? = null,
-    val reproductionSteps: String? = null,
-    val expectedBehavior: String? = null,
-    val actualBehavior: String? = null,
-) {
-    val isValid: Boolean
-        get() = title == null && description == null && reproductionSteps == null &&
-            expectedBehavior == null && actualBehavior == null
-}
-
-private fun optionalLengthError(label: String, value: String): String? =
-    if (value.trim().length > BUG_REPORT_DETAIL_MAX_LENGTH) {
-        "$label must be $BUG_REPORT_DETAIL_MAX_LENGTH characters or fewer."
-    } else {
-        null
     }
+}
+
+data class BugReportValidation(val description: String? = null) {
+    val isValid: Boolean get() = description == null
+}
 
 @Serializable
 data class BugReportCreateRequest(
@@ -135,6 +130,8 @@ data class BugReportClientContext(
     @SerialName("device_model") val deviceModel: String? = null,
     @SerialName("os_version") val osVersion: String? = null,
     @SerialName("current_screen") val currentScreen: String? = null,
+    @SerialName("last_action") val lastAction: String? = null,
+    @SerialName("error_code") val errorCode: String? = null,
     @SerialName("branch_id") val branchId: String? = null,
     @SerialName("branch_name") val branchName: String? = null,
     @SerialName("terminal_id") val terminalId: String? = null,
@@ -148,6 +145,42 @@ data class BugReportCreateResponse(
     val id: String,
     val status: String,
     @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class BugReportMinePage(
+    val items: List<BugReportMineItem> = emptyList(),
+    val total: Int = 0,
+    val limit: Int = 20,
+    val offset: Int = 0,
+)
+
+@Serializable
+data class BugReportMineItem(
+    val id: String,
+    val title: String,
+    val status: String,
+    @SerialName("public_replies") val publicReplies: List<BugReportPublicReply> = emptyList(),
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class BugReportPublicReply(
+    val id: String,
+    @SerialName("author_name") val authorName: String,
+    val message: String,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class BugReportAttachment(
+    val id: String,
+    val filename: String,
+    @SerialName("content_type") val contentType: String,
+    @SerialName("byte_size") val byteSize: Int,
+    @SerialName("created_at") val createdAt: String,
+    val available: Boolean = true,
 )
 
 enum class BugReportConnectivity(val wireValue: String) {
@@ -167,11 +200,11 @@ internal fun bugReportConnectivity(
 
 /**
  * Only deliberately selected, non-secret operational metadata is attached.
- * This function has no access to auth tokens, log buffers, orders, customers,
- * payments, or free-form application state.
+ * This function has no access to auth tokens, logs, orders, customers,
+ * payments, screenshots, or arbitrary application state.
  */
 internal fun currentAndroidBugReportContext(
-    currentScreen: String,
+    launchContext: BugReportLaunchContext,
     branchId: String?,
     branchName: String?,
     terminalId: String?,
@@ -184,7 +217,9 @@ internal fun currentAndroidBugReportContext(
     model = Build.MODEL,
     osRelease = Build.VERSION.RELEASE,
     apiLevel = Build.VERSION.SDK_INT,
-    currentScreen = currentScreen,
+    currentScreen = launchContext.currentScreen,
+    lastAction = launchContext.lastAction,
+    errorCode = launchContext.errorCode,
     branchId = branchId,
     branchName = branchName,
     terminalId = terminalId,
@@ -201,6 +236,8 @@ internal fun buildBugReportClientContext(
     osRelease: String,
     apiLevel: Int,
     currentScreen: String,
+    lastAction: String? = null,
+    errorCode: String? = null,
     branchId: String?,
     branchName: String?,
     terminalId: String?,
@@ -220,7 +257,9 @@ internal fun buildBugReportClientContext(
         versionCode = versionCode.takeIf { it >= 1 },
         deviceModel = device.take(160),
         osVersion = "Android $release (API $apiLevel)".take(100),
-        currentScreen = currentScreen.trim().take(100).ifBlank { null },
+        currentScreen = safeContextValue(currentScreen, 100),
+        lastAction = safeContextValue(lastAction, 120),
+        errorCode = safeErrorCode(errorCode),
         branchId = strictUuidOrNull(branchId),
         branchName = branchName?.trim()?.take(200)?.ifBlank { null },
         terminalId = strictUuidOrNull(terminalId),
@@ -228,6 +267,18 @@ internal fun buildBugReportClientContext(
         connectivity = connectivity.wireValue,
         occurredAt = occurredAt,
     )
+}
+
+private fun safeContextValue(value: String?, maximum: Int): String? {
+    val cleaned = value?.trim()?.take(maximum)?.ifBlank { null } ?: return null
+    // Context values are supplied by app-owned enums, not free-form user data.
+    // Reject line breaks/control characters if a future call site gets this wrong.
+    return cleaned.takeIf { candidate -> candidate.all { it >= ' ' && it != '\u007f' } }
+}
+
+private fun safeErrorCode(value: String?): String? {
+    val cleaned = value?.trim()?.take(100)?.ifBlank { null } ?: return null
+    return cleaned.takeIf { it.matches(Regex("[A-Za-z0-9_.:-]+")) }
 }
 
 private fun strictUuidOrNull(value: String?): String? {

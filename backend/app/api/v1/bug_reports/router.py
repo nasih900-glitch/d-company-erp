@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from anyio import CapacityLimiter, to_thread
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import undefer
 
 from app.core.db import SessionDep  # noqa: TC001 - FastAPI resolves dependency aliases
 from app.core.errors import BusinessRuleError, NotFoundError, RateLimitError
@@ -18,8 +24,24 @@ from app.core.tenant import (  # noqa: TC001 - FastAPI resolves dependency alias
     TenantContext,
     TenantDep,
 )
-from app.models import AuditLog, Branch, BugReport, Terminal, User
+from app.models import (
+    AuditLog,
+    Branch,
+    BugReport,
+    BugReportAttachment,
+    BugReportInboxRead,
+    BugReportPublicReply,
+    Company,
+    Terminal,
+    User,
+)
 from app.models.bug_report import BUG_REPORT_STATUS_TRANSITIONS
+from app.services.bug_reports.attachments import purge_expired_bug_report_attachments
+from app.services.bug_reports.images import (
+    MAX_BUG_REPORT_IMAGE_BYTES,
+    BugReportImageError,
+    sanitize_bug_report_image,
+)
 from app.services.bug_reports.sanitization import sanitize_bug_report_text
 
 if TYPE_CHECKING:
@@ -54,6 +76,12 @@ ReportStatusFilter = Annotated[BugStatus | None, Query(alias="status")]
 _STATUS_VALUES = ("open", "acknowledged", "in_progress", "resolved", "closed", "rejected")
 _SEVERITY_VALUES = ("low", "medium", "high", "critical")
 _MAX_REPORTS_PER_HOUR = 10
+_MAX_ATTACHMENTS_PER_REPORT = 3
+_MAX_ATTACHMENT_BYTES = MAX_BUG_REPORT_IMAGE_BYTES
+_MAX_COMPANY_ATTACHMENT_BYTES = 100 * 1024 * 1024
+_ATTACHMENT_RETENTION_DAYS = 90
+_ACTIVE_STATUSES = ("open", "acknowledged", "in_progress")
+_IMAGE_DECODER_LIMITER = CapacityLimiter(2)
 
 
 def _clean_required(value: object) -> object:
@@ -78,6 +106,8 @@ class BugReportClientContextCreate(BaseModel):
     device_model: str | None = Field(default=None, max_length=160)
     os_version: str | None = Field(default=None, max_length=100)
     current_screen: str | None = Field(default=None, max_length=100)
+    last_action: str | None = Field(default=None, max_length=120)
+    error_code: str | None = Field(default=None, max_length=100)
     branch_id: UUID | None = None
     branch_name: str | None = Field(default=None, max_length=200)
     terminal_id: UUID | None = None
@@ -90,6 +120,8 @@ class BugReportClientContextCreate(BaseModel):
         "device_model",
         "os_version",
         "current_screen",
+        "last_action",
+        "error_code",
         "branch_name",
         "terminal_name",
         mode="before",
@@ -166,12 +198,43 @@ class BugReportClientContextRead(BaseModel):
     device_model: str | None
     os_version: str | None
     current_screen: str | None
+    last_action: str | None
+    error_code: str | None
     branch_id: UUID | None
     branch_name: str | None
     terminal_id: UUID | None
     terminal_name: str | None
     connectivity: BugConnectivity
     occurred_at: datetime | None
+
+
+class BugReportPublicReplyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=4000)
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def sanitize_message(cls, value: object) -> object:
+        return _clean_required(value)
+
+
+class BugReportPublicReplyRead(BaseModel):
+    id: UUID
+    author_name: str
+    message: str
+    created_at: datetime
+
+
+class BugReportAttachmentRead(BaseModel):
+    id: UUID
+    filename: str
+    content_type: str
+    byte_size: int
+    sha256: str
+    created_at: datetime
+    expires_at: datetime
+    available: bool
 
 
 class BugReportRead(BaseModel):
@@ -186,11 +249,34 @@ class BugReportRead(BaseModel):
     client_context: BugReportClientContextRead
     status: BugStatus
     internal_resolution_note: str | None
+    public_replies: list[BugReportPublicReplyRead] = Field(default_factory=list)
+    attachments: list[BugReportAttachmentRead] = Field(default_factory=list)
     reporter: BugReportReporterRead
     status_changed_at: datetime | None
     status_changed_by: UUID | None
     resolved_at: datetime | None
     resolved_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BugReportMineRead(BaseModel):
+    """Reporter-safe view: no private notes, staff email, or owner-only metadata."""
+
+    id: UUID
+    category: BugCategory
+    severity: BugSeverity
+    title: str
+    description: str
+    reproduction_steps: str | None
+    expected_behavior: str | None
+    actual_behavior: str | None
+    client_context: BugReportClientContextRead
+    status: BugStatus
+    public_replies: list[BugReportPublicReplyRead] = Field(default_factory=list)
+    attachments: list[BugReportAttachmentRead] = Field(default_factory=list)
+    status_changed_at: datetime | None
+    resolved_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -208,7 +294,73 @@ class BugReportPage(BaseModel):
     summary: BugReportSummary
 
 
-def _to_read(report: BugReport) -> BugReportRead:
+class BugReportMinePage(BaseModel):
+    items: list[BugReportMineRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class BugReportInboxSummary(BaseModel):
+    active: int
+    unread: int
+    urgent_unread: int
+    critical_active: int
+    last_activity_at: datetime | None
+
+
+def _reply_to_read(reply: BugReportPublicReply) -> BugReportPublicReplyRead:
+    return BugReportPublicReplyRead(
+        id=reply.id,
+        author_name=reply.author_name,
+        message=reply.message,
+        created_at=reply.created_at,
+    )
+
+
+def _attachment_to_read(
+    attachment: BugReportAttachment,
+    *,
+    now: datetime | None = None,
+) -> BugReportAttachmentRead:
+    effective_now = now or datetime.now(UTC)
+    return BugReportAttachmentRead(
+        id=attachment.id,
+        filename=attachment.original_filename,
+        content_type=attachment.content_type,
+        byte_size=attachment.byte_size,
+        sha256=attachment.sha256,
+        created_at=attachment.created_at,
+        expires_at=attachment.expires_at,
+        available=attachment.purged_at is None and attachment.expires_at > effective_now,
+    )
+
+
+def _client_context_to_read(report: BugReport) -> BugReportClientContextRead:
+    return BugReportClientContextRead(
+        platform=report.client_platform,
+        app_version=report.app_version,
+        version_code=report.version_code,
+        device_model=report.device_model,
+        os_version=report.os_version,
+        current_screen=report.current_screen,
+        last_action=report.last_action,
+        error_code=report.error_code,
+        branch_id=report.branch_id,
+        branch_name=report.branch_name,
+        terminal_id=report.terminal_id,
+        terminal_name=report.terminal_name,
+        connectivity=cast("BugConnectivity", report.connectivity),
+        occurred_at=report.occurred_at,
+    )
+
+
+def _to_read(
+    report: BugReport,
+    *,
+    replies: list[BugReportPublicReplyRead] | None = None,
+    attachments: list[BugReportAttachmentRead] | None = None,
+) -> BugReportRead:
     return BugReportRead(
         id=report.id,
         category=cast("BugCategory", report.category),
@@ -218,22 +370,11 @@ def _to_read(report: BugReport) -> BugReportRead:
         reproduction_steps=report.reproduction_steps,
         expected_behavior=report.expected_behavior,
         actual_behavior=report.actual_behavior,
-        client_context=BugReportClientContextRead(
-            platform=report.client_platform,
-            app_version=report.app_version,
-            version_code=report.version_code,
-            device_model=report.device_model,
-            os_version=report.os_version,
-            current_screen=report.current_screen,
-            branch_id=report.branch_id,
-            branch_name=report.branch_name,
-            terminal_id=report.terminal_id,
-            terminal_name=report.terminal_name,
-            connectivity=cast("BugConnectivity", report.connectivity),
-            occurred_at=report.occurred_at,
-        ),
+        client_context=_client_context_to_read(report),
         status=cast("BugStatus", report.status),
         internal_resolution_note=report.internal_resolution_note,
+        public_replies=replies or [],
+        attachments=attachments or [],
         reporter=BugReportReporterRead(
             user_id=report.reporter_user_id,
             name=report.reporter_name,
@@ -246,6 +387,84 @@ def _to_read(report: BugReport) -> BugReportRead:
         created_at=report.created_at,
         updated_at=report.updated_at,
     )
+
+
+def _to_mine_read(
+    report: BugReport,
+    *,
+    replies: list[BugReportPublicReplyRead] | None = None,
+    attachments: list[BugReportAttachmentRead] | None = None,
+) -> BugReportMineRead:
+    return BugReportMineRead(
+        id=report.id,
+        category=cast("BugCategory", report.category),
+        severity=cast("BugSeverity", report.severity),
+        title=report.title,
+        description=report.description,
+        reproduction_steps=report.reproduction_steps,
+        expected_behavior=report.expected_behavior,
+        actual_behavior=report.actual_behavior,
+        client_context=_client_context_to_read(report),
+        status=cast("BugStatus", report.status),
+        public_replies=replies or [],
+        attachments=attachments or [],
+        status_changed_at=report.status_changed_at,
+        resolved_at=report.resolved_at,
+        created_at=report.created_at,
+        updated_at=report.updated_at,
+    )
+
+
+async def _support_children(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    report_ids: list[UUID],
+) -> tuple[
+    dict[UUID, list[BugReportPublicReplyRead]],
+    dict[UUID, list[BugReportAttachmentRead]],
+]:
+    replies_by_report: dict[UUID, list[BugReportPublicReplyRead]] = {}
+    attachments_by_report: dict[UUID, list[BugReportAttachmentRead]] = {}
+    if not report_ids:
+        return replies_by_report, attachments_by_report
+    reply_rows = (
+        (
+            await session.execute(
+                select(BugReportPublicReply)
+                .where(
+                    BugReportPublicReply.company_id == company_id,
+                    BugReportPublicReply.bug_report_id.in_(report_ids),
+                )
+                .order_by(BugReportPublicReply.created_at, BugReportPublicReply.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for reply in reply_rows:
+        replies_by_report.setdefault(reply.bug_report_id, []).append(_reply_to_read(reply))
+
+    attachment_rows = (
+        (
+            await session.execute(
+                select(BugReportAttachment)
+                .where(
+                    BugReportAttachment.company_id == company_id,
+                    BugReportAttachment.bug_report_id.in_(report_ids),
+                )
+                .order_by(BugReportAttachment.created_at, BugReportAttachment.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(UTC)
+    for attachment in attachment_rows:
+        attachments_by_report.setdefault(attachment.bug_report_id, []).append(
+            _attachment_to_read(attachment, now=now)
+        )
+    return replies_by_report, attachments_by_report
 
 
 def _require_idempotency(request: Request) -> tuple[str, str]:
@@ -375,13 +594,13 @@ def _list_conditions(
     return conditions
 
 
-@router.post("", response_model=BugReportRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BugReportMineRead, status_code=status.HTTP_201_CREATED)
 async def create_bug_report(
     payload: BugReportCreate,
     request: Request,
     session: SessionDep,
     tenant: TenantDep,
-) -> BugReportRead:
+) -> BugReportMineRead:
     """Accept a report from any authenticated active staff account."""
     idempotency_key, request_hash = _require_idempotency(request)
     # Lock the reporter before reserving the idempotency key. The key row has a
@@ -412,7 +631,7 @@ async def create_bug_report(
         terminal_id=tenant.terminal_id,
     )
     if replay:
-        return BugReportRead.model_validate(replay["body"])
+        return BugReportMineRead.model_validate(replay["body"])
 
     cutoff = datetime.now(UTC) - timedelta(hours=1)
     recent_count = int(
@@ -458,6 +677,8 @@ async def create_bug_report(
         device_model=payload.client_context.device_model,
         os_version=payload.client_context.os_version,
         current_screen=payload.client_context.current_screen,
+        last_action=payload.client_context.last_action,
+        error_code=payload.client_context.error_code,
         branch_id=branch_id,
         branch_name=branch_name,
         terminal_id=terminal_id,
@@ -486,7 +707,7 @@ async def create_bug_report(
         )
     )
     await session.flush()
-    response = _to_read(report)
+    response = _to_mine_read(report)
     await store_response(
         session,
         key=idempotency_key,
@@ -580,8 +801,20 @@ async def list_bug_reports(
     counts_by_status.update({str(value): int(count) for value, count in status_rows})
     counts_by_severity = dict.fromkeys(_SEVERITY_VALUES, 0)
     counts_by_severity.update({str(value): int(count) for value, count in severity_rows})
+    replies_by_report, attachments_by_report = await _support_children(
+        session,
+        company_id=tenant.company_id,
+        report_ids=[report.id for report in reports],
+    )
     return BugReportPage(
-        items=[_to_read(report) for report in reports],
+        items=[
+            _to_read(
+                report,
+                replies=replies_by_report.get(report.id),
+                attachments=attachments_by_report.get(report.id),
+            )
+            for report in reports
+        ],
         total=total,
         limit=limit,
         offset=offset,
@@ -590,6 +823,565 @@ async def list_bug_reports(
             counts_by_severity=counts_by_severity,
         ),
     )
+
+
+@router.get("/mine", response_model=BugReportMinePage)
+async def list_my_bug_reports(
+    session: SessionDep,
+    tenant: TenantDep,
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
+) -> BugReportMinePage:
+    """Return only reports authored by the authenticated staff account."""
+    conditions = (
+        BugReport.company_id == tenant.company_id,
+        BugReport.reporter_user_id == tenant.user_id,
+    )
+    total = int(
+        (await session.execute(select(func.count(BugReport.id)).where(*conditions))).scalar_one()
+        or 0
+    )
+    reports = (
+        (
+            await session.execute(
+                select(BugReport)
+                .where(*conditions)
+                .order_by(BugReport.updated_at.desc(), BugReport.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    replies_by_report, attachments_by_report = await _support_children(
+        session,
+        company_id=tenant.company_id,
+        report_ids=[report.id for report in reports],
+    )
+    return BugReportMinePage(
+        items=[
+            _to_mine_read(
+                report,
+                replies=replies_by_report.get(report.id),
+                attachments=attachments_by_report.get(report.id),
+            )
+            for report in reports
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/inbox-summary", response_model=BugReportInboxSummary)
+async def bug_report_inbox_summary(
+    session: SessionDep,
+    tenant: AdminTenantDep,
+) -> BugReportInboxSummary:
+    """Fast per-owner badge counts without loading the private inbox."""
+    read_join = (
+        BugReportInboxRead.bug_report_id == BugReport.id,
+        BugReportInboxRead.user_id == tenant.user_id,
+        BugReportInboxRead.company_id == tenant.company_id,
+    )
+    base = BugReport.company_id == tenant.company_id
+    unread = or_(
+        BugReportInboxRead.id.is_(None),
+        BugReportInboxRead.last_read_at < BugReport.updated_at,
+    )
+    row = (
+        await session.execute(
+            select(
+                func.count(BugReport.id).filter(BugReport.status.in_(_ACTIVE_STATUSES)),
+                func.count(BugReport.id).filter(unread),
+                func.count(BugReport.id).filter(
+                    unread,
+                    BugReport.status.in_(_ACTIVE_STATUSES),
+                    BugReport.severity.in_(("high", "critical")),
+                ),
+                func.count(BugReport.id).filter(
+                    BugReport.status.in_(_ACTIVE_STATUSES),
+                    BugReport.severity == "critical",
+                ),
+                func.max(BugReport.updated_at),
+            )
+            .select_from(BugReport)
+            .outerjoin(BugReportInboxRead, and_(*read_join))
+            .where(base)
+        )
+    ).one()
+    return BugReportInboxSummary(
+        active=int(row[0] or 0),
+        unread=int(row[1] or 0),
+        urgent_unread=int(row[2] or 0),
+        critical_active=int(row[3] or 0),
+        last_activity_at=row[4],
+    )
+
+
+async def _mark_inbox_read(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    report_id: UUID,
+    user_id: UUID,
+    read_at: datetime,
+) -> None:
+    statement = pg_insert(BugReportInboxRead).values(
+        id=uuid4(),
+        company_id=company_id,
+        bug_report_id=report_id,
+        user_id=user_id,
+        last_read_at=read_at,
+        created_at=read_at,
+        updated_at=read_at,
+    )
+    statement = statement.on_conflict_do_update(
+        constraint="uq_bug_report_inbox_reads_report_user",
+        set_={"last_read_at": read_at, "updated_at": read_at},
+    )
+    await session.execute(statement)
+
+
+async def _owned_report_or_404(
+    session: AsyncSession,
+    *,
+    tenant: TenantContext,
+    report_id: UUID,
+    lock: bool,
+) -> BugReport:
+    stmt = select(BugReport).where(
+        BugReport.id == report_id,
+        BugReport.company_id == tenant.company_id,
+        BugReport.reporter_user_id == tenant.user_id,
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    report = (await session.execute(stmt)).scalar_one_or_none()
+    if report is None:
+        raise NotFoundError("bug report not found")
+    return report
+
+
+@router.get("/mine/{report_id}", response_model=BugReportMineRead)
+async def get_my_bug_report(
+    report_id: UUID,
+    session: SessionDep,
+    tenant: TenantDep,
+) -> BugReportMineRead:
+    report = await _owned_report_or_404(
+        session,
+        tenant=tenant,
+        report_id=report_id,
+        lock=False,
+    )
+    replies_by_report, attachments_by_report = await _support_children(
+        session,
+        company_id=tenant.company_id,
+        report_ids=[report.id],
+    )
+    return _to_mine_read(
+        report,
+        replies=replies_by_report.get(report.id),
+        attachments=attachments_by_report.get(report.id),
+    )
+
+
+def _safe_attachment_filename(filename: str | None, content_type: str) -> str:
+    extension = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[
+        content_type
+    ]
+    cleaned = sanitize_bug_report_text(Path(filename or f"screenshot{extension}").name)
+    if not cleaned:
+        return f"screenshot{extension}"
+    return cleaned[:160]
+
+
+@router.post(
+    "/mine/{report_id}/attachments",
+    response_model=BugReportAttachmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_my_bug_report_attachment(
+    report_id: UUID,
+    request: Request,
+    session: SessionDep,
+    tenant: TenantDep,
+    file: Annotated[UploadFile, File()],
+) -> BugReportAttachmentRead:
+    """Store one explicitly selected screenshot; never capture a screen implicitly."""
+    idempotency_key, _raw_request_hash = _require_idempotency(request)
+    body = await file.read(_MAX_ATTACHMENT_BYTES + 1)
+    try:
+        sanitized = await to_thread.run_sync(
+            sanitize_bug_report_image,
+            body,
+            file.content_type,
+            limiter=_IMAGE_DECODER_LIMITER,
+        )
+    except BugReportImageError as exc:
+        raise BusinessRuleError(str(exc)) from exc
+
+    # Keep replay identity stable across Pillow upgrades while storing only the
+    # canonical, metadata-free bytes and their digest.
+    source_sha256 = hashlib.sha256(body).hexdigest()
+    content_type = sanitized.content_type
+    payload = sanitized.payload
+    sha256 = sanitized.sha256
+    safe_filename = _safe_attachment_filename(file.filename, content_type)
+    # Multipart boundaries vary across retries, so the middleware's raw-body
+    # hash is not stable. Canonicalize the actual operation identity instead:
+    # same report + validated bytes + safe filename replays; anything else
+    # conflicts under the same Idempotency-Key.
+    request_hash = hashlib.sha256(
+        f"{report_id}\0{content_type}\0{source_sha256}\0{safe_filename}".encode()
+    ).hexdigest()
+
+    # Authorise before reserving the key. Reserve before taking the company and
+    # report locks so retries cannot hold those shared quota locks while they
+    # wait for an in-flight request with the same key. The idempotency row's
+    # user foreign key also orders its KEY SHARE lock before the later locks.
+    await _owned_report_or_404(
+        session,
+        tenant=tenant,
+        report_id=report_id,
+        lock=False,
+    )
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if replay:
+        return BugReportAttachmentRead.model_validate(replay["body"])
+
+    company = (
+        await session.execute(
+            select(Company)
+            .where(Company.id == tenant.company_id, Company.deleted_at.is_(None))
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if company is None:
+        raise NotFoundError("company not found")
+    report = await _owned_report_or_404(
+        session,
+        tenant=tenant,
+        report_id=report_id,
+        lock=True,
+    )
+    duplicate = (
+        await session.execute(
+            select(BugReportAttachment).where(
+                BugReportAttachment.company_id == tenant.company_id,
+                BugReportAttachment.bug_report_id == report.id,
+                BugReportAttachment.sha256 == sha256,
+            )
+        )
+    ).scalar_one_or_none()
+    if duplicate is not None:
+        response = _attachment_to_read(duplicate)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+        return response
+
+    attachment_count = int(
+        (
+            await session.execute(
+                select(func.count(BugReportAttachment.id)).where(
+                    BugReportAttachment.company_id == tenant.company_id,
+                    BugReportAttachment.bug_report_id == report.id,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if attachment_count >= _MAX_ATTACHMENTS_PER_REPORT:
+        raise BusinessRuleError("A report can contain up to three screenshots.")
+
+    # Reclaim this tenant's expired bytes before enforcing the low-volume
+    # database-backed storage budget. The Company row lock serializes uploads
+    # across different reports so concurrent requests cannot overrun the cap.
+    await purge_expired_bug_report_attachments(
+        session,
+        now=datetime.now(UTC),
+        batch_size=1_000,
+        company_id=tenant.company_id,
+    )
+    company_bytes = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(BugReportAttachment.byte_size), 0)).where(
+                    BugReportAttachment.company_id == tenant.company_id,
+                    BugReportAttachment.payload.is_not(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if company_bytes + len(payload) > _MAX_COMPANY_ATTACHMENT_BYTES:
+        raise BusinessRuleError(
+            "The company Support screenshot allowance is full. Wait for retention cleanup "
+            "or ask the system owner to archive older evidence."
+        )
+
+    now = datetime.now(UTC)
+    attachment = BugReportAttachment(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        bug_report_id=report.id,
+        uploader_user_id=tenant.user_id,
+        original_filename=safe_filename,
+        content_type=content_type,
+        byte_size=len(payload),
+        sha256=sha256,
+        payload=payload,
+        created_at=now,
+        expires_at=now + timedelta(days=_ATTACHMENT_RETENTION_DAYS),
+    )
+    session.add(attachment)
+    report.updated_at = now
+    await session.flush()
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="bug_report_attachment_add",
+            entity_type="BugReport",
+            entity_id=str(report.id),
+            before=None,
+            after={
+                "attachment_id": str(attachment.id),
+                "content_type": attachment.content_type,
+                "byte_size": attachment.byte_size,
+            },
+        )
+    )
+    response = _attachment_to_read(attachment, now=now)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+async def _attachment_or_404(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    report_id: UUID,
+    attachment_id: UUID,
+) -> BugReportAttachment:
+    attachment = (
+        await session.execute(
+            select(BugReportAttachment)
+            .options(undefer(BugReportAttachment.payload))
+            .where(
+                BugReportAttachment.id == attachment_id,
+                BugReportAttachment.company_id == company_id,
+                BugReportAttachment.bug_report_id == report_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if attachment is None:
+        raise NotFoundError("bug report attachment not found")
+    return attachment
+
+
+async def _private_attachment_response(
+    session: AsyncSession,
+    attachment: BugReportAttachment,
+) -> Response:
+    now = datetime.now(UTC)
+    if attachment.purged_at is not None or attachment.expires_at <= now:
+        if attachment.payload is not None:
+            attachment.payload = None
+            attachment.purged_at = now
+            await session.flush()
+        return Response(
+            status_code=status.HTTP_410_GONE,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    payload = attachment.payload
+    if payload is None:
+        return Response(
+            status_code=status.HTTP_410_GONE,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    safe_name = attachment.original_filename.replace('"', "").replace("\r", "").replace(
+        "\n", ""
+    )
+    return Response(
+        content=payload,
+        media_type=attachment.content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+            "Content-Security-Policy": "sandbox",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/mine/{report_id}/attachments/{attachment_id}", response_class=Response)
+async def download_my_bug_report_attachment(
+    report_id: UUID,
+    attachment_id: UUID,
+    session: SessionDep,
+    tenant: TenantDep,
+) -> Response:
+    await _owned_report_or_404(
+        session,
+        tenant=tenant,
+        report_id=report_id,
+        lock=False,
+    )
+    attachment = await _attachment_or_404(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        attachment_id=attachment_id,
+    )
+    return await _private_attachment_response(session, attachment)
+
+
+@router.get("/{report_id}/attachments/{attachment_id}", response_class=Response)
+async def download_bug_report_attachment(
+    report_id: UUID,
+    attachment_id: UUID,
+    session: SessionDep,
+    tenant: AdminTenantDep,
+) -> Response:
+    await _report_or_404(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        lock=False,
+    )
+    attachment = await _attachment_or_404(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        attachment_id=attachment_id,
+    )
+    return await _private_attachment_response(session, attachment)
+
+
+@router.post("/{report_id}/read", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_bug_report_read(
+    report_id: UUID,
+    session: SessionDep,
+    tenant: AdminTenantDep,
+) -> Response:
+    await _report_or_404(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        lock=False,
+    )
+    await _mark_inbox_read(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        user_id=tenant.user_id,
+        read_at=datetime.now(UTC),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{report_id}/public-replies",
+    response_model=BugReportPublicReplyRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_bug_report_public_reply(
+    report_id: UUID,
+    payload: BugReportPublicReplyCreate,
+    request: Request,
+    session: SessionDep,
+    tenant: AdminTenantDep,
+) -> BugReportPublicReplyRead:
+    idempotency_key, request_hash = _require_idempotency(request)
+    author = (
+        await session.execute(
+            select(User)
+            .where(
+                User.id == tenant.user_id,
+                User.company_id == tenant.company_id,
+                User.status == "active",
+                User.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if author is None:
+        raise NotFoundError("support author not found")
+    replay = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if replay:
+        return BugReportPublicReplyRead.model_validate(replay["body"])
+    report = await _report_or_404(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        lock=True,
+    )
+    now = datetime.now(UTC)
+    reply = BugReportPublicReply(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        bug_report_id=report.id,
+        author_user_id=tenant.user_id,
+        author_name=author.name,
+        message=payload.message,
+        created_at=now,
+    )
+    session.add(reply)
+    # Public replies are relevant activity for both the reporter and every
+    # other protected owner. The replying owner's own cursor is advanced below.
+    report.updated_at = now
+    await session.flush()
+    await _mark_inbox_read(
+        session,
+        company_id=tenant.company_id,
+        report_id=report.id,
+        user_id=tenant.user_id,
+        read_at=now,
+    )
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="bug_report_public_reply_add",
+            entity_type="BugReport",
+            entity_id=str(report.id),
+            before=None,
+            after={"reply_id": str(reply.id)},
+        )
+    )
+    response = _reply_to_read(reply)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
 
 
 async def _report_or_404(
@@ -617,13 +1409,21 @@ async def get_bug_report(
     session: SessionDep,
     tenant: AdminTenantDep,
 ) -> BugReportRead:
+    report = await _report_or_404(
+        session,
+        company_id=tenant.company_id,
+        report_id=report_id,
+        lock=False,
+    )
+    replies_by_report, attachments_by_report = await _support_children(
+        session,
+        company_id=tenant.company_id,
+        report_ids=[report.id],
+    )
     return _to_read(
-        await _report_or_404(
-            session,
-            company_id=tenant.company_id,
-            report_id=report_id,
-            lock=False,
-        )
+        report,
+        replies=replies_by_report.get(report.id),
+        attachments=attachments_by_report.get(report.id),
     )
 
 
@@ -666,7 +1466,23 @@ async def update_bug_report(
         # PATCH is idempotent for an exact retry. This matters when the first
         # response is lost after commit: the operator should see the current
         # successful state, not an error suggesting that their update failed.
-        return _to_read(report)
+        await _mark_inbox_read(
+            session,
+            company_id=tenant.company_id,
+            report_id=report.id,
+            user_id=tenant.user_id,
+            read_at=datetime.now(UTC),
+        )
+        replies_by_report, attachments_by_report = await _support_children(
+            session,
+            company_id=tenant.company_id,
+            report_ids=[report.id],
+        )
+        return _to_read(
+            report,
+            replies=replies_by_report.get(report.id),
+            attachments=attachments_by_report.get(report.id),
+        )
 
     now = datetime.now(UTC)
     if note_changed:
@@ -713,7 +1529,23 @@ async def update_bug_report(
     # server-mutated value explicitly instead of allowing a lazy async load
     # during response serialization.
     await session.refresh(report)
-    return _to_read(report)
+    await _mark_inbox_read(
+        session,
+        company_id=tenant.company_id,
+        report_id=report.id,
+        user_id=tenant.user_id,
+        read_at=datetime.now(UTC),
+    )
+    replies_by_report, attachments_by_report = await _support_children(
+        session,
+        company_id=tenant.company_id,
+        report_ids=[report.id],
+    )
+    return _to_read(
+        report,
+        replies=replies_by_report.get(report.id),
+        attachments=attachments_by_report.get(report.id),
+    )
 
 
 __all__ = ["router"]
