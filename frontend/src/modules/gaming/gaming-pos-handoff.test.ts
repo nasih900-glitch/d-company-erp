@@ -11,6 +11,7 @@ describe('Gaming to POS terminal selection', () => {
       currentTerminalId: gaming.id,
       stationBranchId: 'main-shop',
       terminals: [cafe, gaming],
+      allowCrossTerminalHandoff: true,
     })).toBe('handoff');
   });
 
@@ -19,6 +20,7 @@ describe('Gaming to POS terminal selection', () => {
       currentTerminalId: cafe.id,
       stationBranchId: 'main-shop',
       terminals: [cafe, gaming],
+      allowCrossTerminalHandoff: true,
     })).toBe('local');
   });
 
@@ -27,7 +29,23 @@ describe('Gaming to POS terminal selection', () => {
       currentTerminalId: 'general',
       stationBranchId: 'main-shop',
       terminals: [{ id: 'general', branch_id: 'main-shop', purpose: 'hybrid' }],
+      allowCrossTerminalHandoff: false,
     })).toBe('local');
+  });
+
+  it('blocks split-purpose terminals in the single-Hybrid profile', () => {
+    expect(resolveGamingPosRoute({
+      currentTerminalId: gaming.id,
+      stationBranchId: 'main-shop',
+      terminals: [gaming],
+      allowCrossTerminalHandoff: false,
+    })).toBe('profile_conflict');
+    expect(resolveGamingPosRoute({
+      currentTerminalId: cafe.id,
+      stationBranchId: 'main-shop',
+      terminals: [cafe],
+      allowCrossTerminalHandoff: false,
+    })).toBe('profile_conflict');
   });
 
   it('blocks local fallback when the selected terminal is not verified', () => {
@@ -35,6 +53,7 @@ describe('Gaming to POS terminal selection', () => {
       currentTerminalId: gaming.id,
       stationBranchId: 'main-shop',
       terminals: [{ id: 'other', branch_id: 'other-shop', purpose: 'cafe_pos' }],
+      allowCrossTerminalHandoff: false,
     })).toBe('terminal_unverified');
   });
 });

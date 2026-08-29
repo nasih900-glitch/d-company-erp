@@ -56,11 +56,12 @@ def _branch():
     return SimpleNamespace(id=BRANCH_ID, company_id=COMPANY_ID, deleted_at=None)
 
 
-def _terminal(*, active: bool = True):
+def _terminal(*, active: bool = True, purpose: str = "hybrid"):
     return SimpleNamespace(
         id=TERMINAL_ID,
         branch_id=BRANCH_ID,
         is_active=active,
+        purpose=purpose,
     )
 
 
@@ -107,6 +108,19 @@ async def test_shift_open_refuses_terminal_outside_authenticated_branch() -> Non
     session = _QueuedSession([_Result(_branch()), _Result(None)])
 
     with pytest.raises(BusinessRuleError, match="does not belong to this shop"):
+        await open_shift(ShiftOpenRequest(), session, _tenant())
+
+    assert len(session.statements) == 2
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_shift_open_refuses_legacy_split_purpose_with_clear_recovery() -> None:
+    session = _QueuedSession(
+        [_Result(_branch()), _Result(_terminal(purpose="gaming"))]
+    )
+
+    with pytest.raises(BusinessRuleError, match="one Hybrid workspace"):
         await open_shift(ShiftOpenRequest(), session, _tenant())
 
     assert len(session.statements) == 2

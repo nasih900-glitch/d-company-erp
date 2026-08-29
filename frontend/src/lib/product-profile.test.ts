@@ -4,6 +4,7 @@ import {
   canManageGamingCentreProducts,
   featureForProfileRoute,
   GAMING_CENTRE_FEATURES,
+  GAMING_CENTRE_TERMINAL_POLICY,
   isProfileRouteEnabled,
   profileDeferredMoneyLabel,
   profileMembershipMoneyLabel,
@@ -30,6 +31,15 @@ function labels(access: ProfileAccessContext): string[] {
 }
 
 describe('Gaming Centre web product profile', () => {
+  it('uses one automatic Hybrid workspace with no cross-terminal handoff', () => {
+    expect(GAMING_CENTRE_TERMINAL_POLICY).toEqual({
+      mode: 'single_hybrid',
+      showRoutineSelector: false,
+      allowCrossTerminalPosHandoff: false,
+    });
+    expect(WEB_PRODUCT_PROFILE.terminalPolicy).toBe(GAMING_CENTRE_TERMINAL_POLICY);
+  });
+
   it('keeps the normal staff workspace focused on the daily gaming flow', () => {
     expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Stock', 'Help']);
   });

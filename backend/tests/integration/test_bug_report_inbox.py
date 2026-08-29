@@ -455,6 +455,7 @@ async def test_cross_company_context_and_records_are_not_disclosed(
         id=uuid4(),
         branch_id=seed_owner["branch"].id,
         name="Another terminal in the bound branch",
+        is_active=False,
         device_id=f"same-branch-{uuid4()}",
     )
     session.add_all([same_company_branch, same_company_terminal, same_branch_terminal])

@@ -10,16 +10,19 @@ VPS/Docker Compose procedure in `docs/DEPLOY_LIVE.md`. An Android GitHub Release
 does not deploy the web application.
 
 ```
-git tag v3.1.0
+git tag v3.1.1
         │
         ▼
-GitHub Actions (release.yml)
+GitHub Actions: backend + web + Android gates
         │
         ▼
 native Android .apk + .aab (tested and signed)
         │
         ▼
-GitHub Release attaches the signed Android binaries
+draft GitHub Release (private and unadvertised)
+        │
+        ▼ after migration 0056 + production smoke
+operator publishes the verified draft
         │
         ▼
 download/index.html checks the official latest GitHub Release
@@ -81,21 +84,28 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently:
 
 ```bash
-NEW_VERSION=3.1.0
+NEW_VERSION=3.1.1
 
-# Update web/backend versions where applicable.
-sed -i '' "s/\"version\": \".*\"/\"version\": \"$NEW_VERSION\"/" frontend/package.json
-sed -i '' "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" backend/app/__init__.py
+# Update the coordinated product version in:
+# - android-native/app/build.gradle.kts (versionName and a new versionCode)
+# - backend/pyproject.toml
+# - backend/app/__init__.py
+# - frontend/package.json and frontend/package-lock.json
+# - frontend/.env.example
+# - .env.production.example (APP_VERSION only)
+# - docker-compose.prod.yml (APP_VERSION fallbacks only)
 
-# In android-native/app/build.gradle.kts:
-# - set versionName to $NEW_VERSION
-# - increment versionCode to an integer greater than the last published build
+# Keep the Android update-channel values separate. Do not raise
+# ANDROID_LATEST_VERSION_CODE until the signed artifact is privately staged and
+# its in-place upgrade has passed; do not raise the minimum merely for release.
 
-git add -A
-git commit -m "chore: release v$NEW_VERSION"
-git tag "v$NEW_VERSION"
-git push --follow-tags
+python3 scripts/verify_android_release_version.py --tag "v$NEW_VERSION"
 ```
+
+Commit and tag only after the full coordinated release gates and signed
+same-channel upgrade test pass. Never use a blanket version replacement: many
+dependency versions and the Android rollout policy intentionally differ from
+the product version.
 
 The workflow rejects a release unless all of these are true:
 
@@ -109,7 +119,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor and the 3.1.0 candidate
+## Version-code-8 floor and the 3.1.1 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -117,49 +127,253 @@ handoff. Older Android clients do not understand that contract and can select
 the wrong local shift or attempt an invalid local handoff, so code `8` remains
 the minimum-supported compatibility floor.
 
-The current unreleased candidate is `3.1.0` with version code `11`. It retains
+The current unreleased candidate is `3.1.1` with version code `12`. It retains
 the internal tenant/branch/terminal safety model while presenting the current
-one-shop installation as one automatic workspace, and it adds the Gaming Centre
-profile, durable offline session add-ons, combined POS billing, contextual
-Support, and verified direct updates. The complete release gates and signed
-upgrades from code `8` and the earlier schema-37 code-`9` candidate must pass
-for code `11`. It has not passed physical Redmi Pad 2 acceptance,
+one-shop installation as exactly one server-confirmed Hybrid workspace. Gaming,
+POS, payments and Shift use that same internal identity without exposing
+routine terminal selection. It retains the Gaming Centre profile, durable
+offline session add-ons, combined POS billing, contextual Support, and verified
+direct updates. The complete release gates and signed upgrade from the signed
+`3.1.0` code-`11` bootstrap must pass for code `12`. It has not passed physical Redmi Pad 2 acceptance,
 been uploaded to Play, or been rolled out to production.
 
 Code `11` is also the first build with the verified in-app direct updater.
 Install it once through Android's normal installer; only later builds can use
-that new in-app path. The production template intentionally continues to
-advertise code `8` until the code-`11` APK and all manifest fields are published.
+that new in-app path. Version `3.1.1` is the first follow-up candidate intended
+to exercise that path. The production template must continue advertising the
+last actually published build until the code-`12` APK and all manifest fields
+are published.
 
 Treat the app and backend as one coordinated release:
 
-1. Produce, sign, and verify the version-code-11 artifact before changing the
+1. Produce, sign, and verify the version-code-12 artifact before changing the
    server or advertising it to installed clients.
 2. While the old backend is still active, bring every installed older app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Make the version-11 APK/update channel available to staff.
-4. Back up the database, complete the deployment preflight, and run
-   `alembic upgrade head`; for this candidate, verify the database reaches
-   revision `0055` before starting the backend. Deploy with
+3. Stage the version-12 APK privately without advertising or installing it;
+   staff must remain on the compatible existing client until migration `0056`
+   and the one-Hybrid production smoke test pass.
+4. Back up the database and follow the `0056` maintenance sequence below:
+   stop writers, upgrade only through `0055`, review and apply the explicit
+   terminal consolidation, and only then upgrade to `0056`/head. Verify the
+   database reaches revision `0056` before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
-   `ANDROID_LATEST_VERSION_CODE=11`, a verified HTTPS update URL, and
-   `REQUIRE_NATIVE_VERSION_HEADERS=true` in the same maintenance window.
-5. Verify version 7 and older receive HTTP 426 before a write handler and
-   version 8 remains operational with an optional update while version 11 is
-   current. Then run shift open/close, Gaming start/add item/stop/Send-to-POS,
+   `REQUIRE_NATIVE_VERSION_HEADERS=true`, and the last already-published
+   Android version/update metadata. Do not advertise code `12` yet.
+5. Install the privately staged version `12` package on the controlled test
+   device and run shift open/close, Gaming start/add item/stop/Send-to-POS,
    cash and UPI settlement, offline retry, finance reconciliation, and Support
-   submission from version 11.
+   submission. Verify version `7` and older receive HTTP 426 before a write
+   handler and version `8` remains compatible. Only after those checks pass,
+   publish the draft release and update the server's latest-version metadata to
+   code `12` with the verified public HTTPS URL, checksum, size, and signer.
+
+### Required production order for migration 0056
+
+Migration `0056` intentionally refuses legacy split-terminal data; it never
+chooses a keeper or rewrites production history. Do not run the generic
+`alembic upgrade head` sequence against split data. Use this maintenance-window
+order instead:
+
+> **Do not use `docker compose -f docker-compose.prod.yml up -d --build` as
+> the first release command.** The backend image's normal entrypoint
+> automatically runs `alembic upgrade head`, so it would reach `0056` before
+> the reviewed terminal consolidation. The maintenance commands below override
+> that entrypoint deliberately.
+
+1. Confirm the running database is already at revision `0055` by querying its
+   revision table directly. If it is older, stop this release and complete the
+   earlier release's supported migration to `0055` first; do not mix that work
+   into the one-Hybrid conversion.
+
+   ```bash
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     psql -U erp -d erp -Atc "SELECT version_num FROM alembic_version"
+   ```
+
+2. While the current API remains available, build the new backend image
+   without starting it. Inspect the company, branch, terminal, and operator
+   user IDs and select the existing terminal whose identity will be retained:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml build backend
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     psql -U erp -d erp -c \
+     "SELECT c.id AS company_id, c.deleted_at AS company_deleted_at,
+             b.id AS branch_id, b.deleted_at AS branch_deleted_at,
+             t.id AS terminal_id, t.name, t.purpose, t.is_active
+        FROM companies c
+        JOIN branches b ON b.company_id = c.id
+        LEFT JOIN terminals t ON t.branch_id = b.id
+       ORDER BY c.id, b.id, t.is_active DESC, t.id"
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     psql -U erp -d erp -c \
+     "SELECT id AS actor_user_id, name, email, status
+        FROM users
+       WHERE company_id = '<company-uuid>'
+       ORDER BY name, id"
+   ```
+
+   Review active and archived branches. Revision `0056` requires exactly one
+   active Hybrid terminal for each active branch, permits zero or one for an
+   archived branch, and rejects every active non-Hybrid terminal.
+3. Run the new image's consolidation command without `--apply` while the old
+   app/API still serves staff. Save and inspect its JSON manifest:
+
+   ```bash
+   set -euo pipefail
+   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+   mkdir -p /root/backups
+   COMPANY_ID=<company-uuid>
+   BRANCH_ID=<branch-uuid>
+   KEEPER_TERMINAL_ID=<keeper-terminal-uuid>
+   ACTOR_USER_ID=<protected-owner-user-uuid>
+   PREFLIGHT="/root/backups/hybrid-preflight-${STAMP}.json"
+   set +e
+   docker compose -f docker-compose.prod.yml run --rm --no-deps \
+     --entrypoint python backend -m scripts.merge_terminals_to_one \
+     --company-id "$COMPANY_ID" \
+     --branch-id "$BRANCH_ID" \
+     --keep-terminal-id "$KEEPER_TERMINAL_ID" \
+     --keep-name "Main Workspace" > "$PREFLIGHT"
+   PREFLIGHT_STATUS=$?
+   set -e
+   if [ "$PREFLIGHT_STATUS" -ne 0 ] && [ "$PREFLIGHT_STATUS" -ne 2 ]; then
+     exit "$PREFLIGHT_STATUS"
+   fi
+   python3 -m json.tool "$PREFLIGHT"
+   ```
+
+   A refused dry run intentionally exits with status `2`. Resolve every
+   reported open shift, unfinished order, running/unbilled Gaming session,
+   refund, kitchen cancellation, or membership blocker through the normal
+   audited app/API workflow, then repeat the dry run. Do this for every branch
+   reported by the preflight, including archived branches retained for
+   history. Never clear blockers with direct SQL.
+4. Only after every preflight is clean, bring every installed app online and
+   wait for every offline/sync queue to reach zero. Record that evidence, close
+   the apps, and stop every public writer. The already-running database, Redis,
+   and object store remain available to the one-shot maintenance containers:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml stop caddy frontend backend
+   ```
+
+5. Rerun the dry run after writers are stopped and save a new final manifest.
+   It must exit zero with no errors or blockers. If it refuses, make no changes:
+   restart the stopped old containers with `docker compose ... start backend
+   frontend caddy`, resolve the blocker normally, and repeat from step 3.
+
+   ```bash
+   FINAL_DRY_RUN="/root/backups/hybrid-final-${STAMP}.json"
+   docker compose -f docker-compose.prod.yml run --rm --no-deps \
+     --entrypoint python backend -m scripts.merge_terminals_to_one \
+     --company-id "$COMPANY_ID" \
+     --branch-id "$BRANCH_ID" \
+     --keep-terminal-id "$KEEPER_TERMINAL_ID" \
+     --keep-name "Main Workspace" > "$FINAL_DRY_RUN"
+   python3 -m json.tool "$FINAL_DRY_RUN"
+   python3 - "$FINAL_DRY_RUN" <<'PY'
+   import json
+   import sys
+
+   manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+   if manifest["errors"] or manifest["result"] not in {"planned", "no_change"}:
+       raise SystemExit("final consolidation manifest is not clean")
+   PY
+   ```
+
+6. Take a custom-format database backup and prove it restores into an isolated
+   database. Preserve the backup file and use its exact path as the audit
+   reference during apply:
+
+   ```bash
+   set -euo pipefail
+   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+   BACKUP="/root/backups/pre-0056-${STAMP}.dump"
+   VERIFY_DB="erp_restore_verify_${STAMP//[^0-9]/}"
+   mkdir -p /root/backups
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     pg_dump -U erp -d erp -Fc > "$BACKUP"
+   test -s "$BACKUP"
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     createdb -U erp "$VERIFY_DB"
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     pg_restore -U erp -d "$VERIFY_DB" --exit-on-error < "$BACKUP"
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     dropdb -U erp "$VERIFY_DB"
+   ```
+
+7. Extract the fingerprint from the final clean manifest. Apply only that exact
+   reviewed state, with the operator UUID, reason, and verified backup path.
+   The script writes this evidence transactionally into Audit Log:
+
+   ```bash
+   FINGERPRINT=$(python3 -c \
+     'import json,sys; print(json.load(open(sys.argv[1]))["state_fingerprint"])' \
+     "$FINAL_DRY_RUN")
+   docker compose -f docker-compose.prod.yml run --rm --no-deps \
+     --entrypoint python backend -m scripts.merge_terminals_to_one \
+     --company-id "$COMPANY_ID" \
+     --branch-id "$BRANCH_ID" \
+     --keep-terminal-id "$KEEPER_TERMINAL_ID" \
+     --keep-name "Main Workspace" \
+     --apply \
+     --actor-user-id "$ACTOR_USER_ID" \
+     --reason "Approved one-Hybrid-workspace rollout" \
+     --backup-reference "$BACKUP" \
+     --expected-state-fingerprint "$FINGERPRINT"
+   ```
+
+8. Cross `0056` only through the overridden Alembic entrypoint, then verify the
+   revision. Confirm every active branch has exactly one active terminal, every
+   active terminal has purpose `hybrid`, the consolidation Audit Log row exists,
+   and all retired terminal rows and historical shift/order/audit references
+   remain present:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml run --rm --no-deps \
+     --entrypoint alembic backend upgrade head
+   docker compose -f docker-compose.prod.yml run --rm --no-deps \
+     --entrypoint alembic backend current
+   ```
+
+9. Only now may the normal auto-migrating startup run:
+
+    ```bash
+    docker compose -f docker-compose.prod.yml up -d --build
+    ```
+
+    Verify health, then smoke-test login, shift open, Gaming
+    start/stop, add-on, Send to POS, cash and UPI settlement, receipt, Finance,
+    sync recovery, and shift close on the retained Hybrid workspace using the
+    privately staged code-`12` APK. Only after that succeeds, publish the draft
+    GitHub Release, set the code-`12` update manifest values in production, and
+    recreate the backend:
+
+    ```bash
+    gh release edit v3.1.1 --repo <owner>/<repository> --draft=false
+    # Set ANDROID_LATEST_VERSION_CODE=12 plus the verified public URL,
+    # SHA-256, byte size, signer SHA-256, version name and release notes in .env.
+    docker compose -f docker-compose.prod.yml up -d --force-recreate backend
+    ```
+
+    Verify `/api/v1/app/android/update` from an older supported build before
+    telling staff to update. If the production smoke fails, leave the release
+    as a draft and keep the previously published update metadata.
 
 Do not lower the minimum to keep an older APK operating against this backend.
-If version 11 is not ready to distribute, do not advertise it as latest or
+If version 12 is not ready to distribute, do not advertise it as latest or
 deploy the matching production compatibility configuration. Do not raise the
-minimum to `11` until every active tablet is upgraded and accepted.
+minimum to `12` until every active tablet is upgraded and accepted.
 
 ## Android artifacts
 
-The Android job runs release lint, JVM tests, emulator instrumentation tests,
-and signature verification. It emits:
+The Android job first reruns the complete backend migration/test and web
+lint/typecheck/test/build gates. It then runs Android release lint, JVM tests,
+emulator instrumentation, and signature verification. It stages a draft
+release containing:
 
 - a signed `.apk` for controlled direct installation;
 - a signed `.aab` for Play Console;

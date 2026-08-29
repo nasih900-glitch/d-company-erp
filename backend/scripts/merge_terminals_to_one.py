@@ -3,7 +3,8 @@
 This is an explicit, branch-scoped maintenance command. It never deletes a
 terminal and never rewrites terminal foreign keys on historical records. The
 default mode is a locked dry run; mutation requires ``--apply`` plus both an
-operator reason and a database-backup reference.
+operator identity, reason, database-backup reference, and the exact state
+fingerprint printed by the reviewed dry run.
 
 Example dry run::
 
@@ -20,8 +21,10 @@ Apply only after reviewing and saving the dry-run JSON manifest::
       --keep-terminal-id 33333333-3333-3333-3333-333333333333 \
       --keep-name "Main Workspace" \
       --apply \
+      --actor-user-id 44444444-4444-4444-4444-444444444444 \
       --reason "Approved one-workspace rollout" \
-      --backup-reference "s3://erp-backups/pre-workspace-merge-2026-08-28.dump"
+      --backup-reference "s3://erp-backups/pre-workspace-merge-2026-08-28.dump" \
+      --expected-state-fingerprint <sha256-from-dry-run>
 
 The single-line JSON output is deterministic for the same arguments and
 database state, making it suitable for release evidence and diff review.
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -39,6 +43,7 @@ from sqlalchemy import func, select
 
 from app.core.db import AsyncSessionLocal
 from app.models import (
+    AuditLog,
     Branch,
     Company,
     GamingSession,
@@ -57,6 +62,7 @@ from app.models import (
     Refund,
     Shift,
     Terminal,
+    User,
 )
 
 if TYPE_CHECKING:
@@ -248,8 +254,33 @@ def _base_manifest(
         "preserves_historical_references": True,
         "reason": reason,
         "result": "refused",
-        "schema_version": 1,
+        "schema_version": 2,
+        "state_fingerprint": None,
+        "terminal_state_before": [],
     }
+
+
+def _state_fingerprint(manifest: dict[str, Any]) -> str:
+    """Hash only reviewed database state and intended terminal outcome."""
+
+    payload = {
+        key: manifest[key]
+        for key in (
+            "active_terminal_ids_after",
+            "active_terminal_ids_before",
+            "archive_terminals",
+            "blockers",
+            "branch_id",
+            "company_id",
+            "keep_name_after",
+            "keep_name_before",
+            "keep_terminal_id",
+            "operation",
+            "terminal_state_before",
+        )
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 async def consolidate(
@@ -260,13 +291,20 @@ async def consolidate(
     keep_terminal_id: UUID,
     keep_name: str | None = None,
     apply: bool = False,
+    actor_user_id: UUID | None = None,
     reason: str | None = None,
     backup_reference: str | None = None,
+    expected_state_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Plan or atomically apply one branch's terminal consolidation."""
 
     clean_reason = reason.strip() if reason else None
     clean_backup_reference = backup_reference.strip() if backup_reference else None
+    clean_expected_fingerprint = (
+        expected_state_fingerprint.strip().lower()
+        if expected_state_fingerprint
+        else None
+    )
     manifest = _base_manifest(
         company_id=company_id,
         branch_id=branch_id,
@@ -277,22 +315,50 @@ async def consolidate(
     )
     if apply and not clean_reason:
         manifest["errors"].append("--reason is required with --apply")
+    elif clean_reason and len(clean_reason) > 500:
+        manifest["errors"].append("--reason cannot exceed 500 characters")
     if apply and not clean_backup_reference:
         manifest["errors"].append("--backup-reference is required with --apply")
+    if apply and actor_user_id is None:
+        manifest["errors"].append("--actor-user-id is required with --apply")
+    if apply and (
+        clean_expected_fingerprint is None
+        or len(clean_expected_fingerprint) != 64
+        or any(character not in "0123456789abcdef" for character in clean_expected_fingerprint)
+    ):
+        manifest["errors"].append(
+            "--expected-state-fingerprint must be a 64-character SHA-256 with --apply"
+        )
     if manifest["errors"]:
         return manifest
 
+    # Migration 0056's terminal constraints also cover soft-deleted companies.
+    # Keep this explicit, backup-gated repair path available for their retained
+    # historical rows instead of leaving an otherwise unfixable preflight.
     company_exists = (
         await session.execute(
             select(Company.id).where(
                 Company.id == company_id,
-                Company.deleted_at.is_(None),
             )
         )
     ).scalar_one_or_none()
     if company_exists is None:
-        manifest["errors"].append("company not found or archived")
+        manifest["errors"].append("company not found")
         return manifest
+    if apply:
+        actor_exists = (
+            await session.execute(
+                select(User.id).where(
+                    User.id == actor_user_id,
+                    User.company_id == company_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if actor_exists is None:
+            manifest["errors"].append(
+                "actor user not found in the selected company"
+            )
+            return manifest
 
     # Match settings and shift-open lock order: branch first, then every
     # terminal row in deterministic UUID order. This gives blocker inspection
@@ -303,13 +369,12 @@ async def consolidate(
             .where(
                 Branch.id == branch_id,
                 Branch.company_id == company_id,
-                Branch.deleted_at.is_(None),
             )
             .with_for_update()
         )
     ).scalar_one_or_none()
     if branch is None:
-        manifest["errors"].append("branch not found, archived, or outside company")
+        manifest["errors"].append("branch not found or outside company")
         return manifest
 
     terminals = (
@@ -350,6 +415,15 @@ async def consolidate(
     ]
     manifest["keep_name_before"] = keeper.name
     manifest["keep_name_after"] = target_name
+    manifest["terminal_state_before"] = [
+        {
+            "id": str(terminal.id),
+            "is_active": bool(terminal.is_active),
+            "name": terminal.name,
+            "purpose": terminal.purpose,
+        }
+        for terminal in terminals
+    ]
 
     if not target_name:
         manifest["errors"].append("keeper name cannot be blank")
@@ -379,6 +453,11 @@ async def consolidate(
         terminal_ids=terminal_ids,
     )
     manifest["blockers"] = blockers
+    manifest["state_fingerprint"] = _state_fingerprint(manifest)
+    if apply and clean_expected_fingerprint != manifest["state_fingerprint"]:
+        manifest["errors"].append(
+            "state fingerprint mismatch; run a new dry run and review it before applying"
+        )
     blocking_total = sum(blockers.values())
     if blocking_total:
         manifest["errors"].append(
@@ -397,12 +476,40 @@ async def consolidate(
         manifest["result"] = "planned" if changes_required else "no_change"
         return manifest
 
-    for terminal in to_archive:
-        terminal.is_active = False
-    keeper.is_active = True
-    keeper.purpose = "hybrid"
-    keeper.name = target_name
-    await session.flush()
+    if changes_required:
+        for terminal in to_archive:
+            terminal.is_active = False
+        keeper.is_active = True
+        keeper.purpose = "hybrid"
+        keeper.name = target_name
+        session.add(
+            AuditLog(
+                actor_user_id=actor_user_id,
+                company_id=company_id,
+                action="terminal_workspace_consolidation",
+                entity_type="Branch",
+                entity_id=str(branch_id),
+                before={
+                    "active_terminal_ids": manifest["active_terminal_ids_before"],
+                    "state_fingerprint": manifest["state_fingerprint"],
+                    "terminal_state": manifest["terminal_state_before"],
+                },
+                after={
+                    "active_terminal_ids": manifest["active_terminal_ids_after"],
+                    "archived_terminal_ids": [
+                        terminal["id"] for terminal in manifest["archive_terminals"]
+                    ],
+                    "backup_reference": clean_backup_reference,
+                    "keeper_name": target_name,
+                    "keeper_purpose": "hybrid",
+                    "preserved_historical_references": True,
+                },
+                terminal_id=keeper.id,
+                reason=clean_reason,
+                user_agent="script/merge_terminals_to_one:v2",
+            )
+        )
+        await session.flush()
     manifest["result"] = "applied" if changes_required else "no_change"
     return manifest
 
@@ -414,8 +521,10 @@ async def run(
     keep_terminal_id: UUID,
     keep_name: str | None = None,
     apply: bool = False,
+    actor_user_id: UUID | None = None,
     reason: str | None = None,
     backup_reference: str | None = None,
+    expected_state_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     async with AsyncSessionLocal() as session, session.begin():
         return await consolidate(
@@ -425,8 +534,10 @@ async def run(
             keep_terminal_id=keep_terminal_id,
             keep_name=keep_name,
             apply=apply,
+            actor_user_id=actor_user_id,
             reason=reason,
             backup_reference=backup_reference,
+            expected_state_fingerprint=expected_state_fingerprint,
         )
 
 
@@ -460,6 +571,17 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Required with --apply: identifier or URI of the verified pre-change backup",
     )
+    parser.add_argument(
+        "--actor-user-id",
+        default=None,
+        type=UUID,
+        help="Required with --apply: owner/operator user UUID persisted in Audit Log",
+    )
+    parser.add_argument(
+        "--expected-state-fingerprint",
+        default=None,
+        help="Required with --apply: exact SHA-256 printed by the reviewed dry run",
+    )
     return parser.parse_args(argv)
 
 
@@ -476,8 +598,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             keep_terminal_id=args.keep_terminal_id,
             keep_name=args.keep_name,
             apply=args.apply,
+            actor_user_id=args.actor_user_id,
             reason=args.reason,
             backup_reference=args.backup_reference,
+            expected_state_fingerprint=args.expected_state_fingerprint,
         )
     )
     print(_manifest_json(manifest))

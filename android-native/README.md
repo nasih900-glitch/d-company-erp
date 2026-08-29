@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.0` |
-| Version code | `11` |
+| Version name | `3.1.1` |
+| Version code | `12` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,19 +23,23 @@ build.
 
 ## Release status
 
-Version `3.1.0` (`11`) is an unreleased Gaming Centre candidate, not a declared
-production rollout. The current source advances Room from 36 through 39 to
+Version `3.1.1` (`12`) is an unreleased Gaming Centre candidate, not a declared
+production rollout. It follows the separately signed `3.1.0` (`11`) updater
+bootstrap and must keep that signing lineage. The current source advances Room from 36 through 39 to
 protect both the employee-owned Support outbox and immutable offline Gaming
-item actions. The focused migration tests must pass on an API-35 emulator and
+item actions, and requires exactly one server-confirmed Hybrid Gaming + POS
+workspace for the active shop. The focused migration tests must pass on an API-35 emulator and
 the signed in-place release upgrade must be reverified before handoff. That evidence does not
 replace the full authenticated staff workflow or physical Redmi Pad 2
 acceptance, and no Play AAB has been uploaded. Nothing from this Android release
 preparation has deployed the backend or web ERP to production. A coordinated
-deployment must migrate the server database through Alembic revision `0055`.
+deployment must migrate the server database through Alembic revision `0056`.
 
-Android client code `8` remains the minimum-compatible floor while code `11` is
+Android client code `8` remains the minimum-compatible floor while code `12` is
 offered as the optional latest update. Do not raise the minimum to `11` until
-every active tablet has installed and accepted this candidate.
+every active tablet has installed and accepted the `3.1.0` updater bootstrap;
+do not raise it to `12` until every active tablet has installed and accepted
+this candidate.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
@@ -152,15 +156,17 @@ debug API override as evidence that the production endpoint works.
 
 Android accepts an update only when its application ID and signing lineage
 match the installed app. This module deliberately retains
-`cloud.dcompany.erp`; any existing Capacitor/native installation signed with the
-D Company key must be updated with that same signing lineage.
+`cloud.dcompany.erp`; a previously installed supported native build must be
+updated with that same signing lineage. The archived Capacitor wrapper uses a
+different application ID and is not an upgrade source or release target.
 
 `keystore.properties` and the keystore are gitignored. Keep them outside source
 control and back them up securely. A local `assembleRelease` without the
 properties can produce an unsigned artifact; it is not distributable. The
 repository release workflow is the supported path because it runs release
 tests, lint, emulator instrumentation and signature verification before
-publishing the APK/AAB, checksums, and release manifest.
+staging the APK/AAB, checksums, and release manifest in a draft. Publication is
+a separate post-migration approval step.
 
 See [`docs/DISTRIBUTION.md`](../docs/DISTRIBUTION.md) for the signed GitHub
 release process and [`docs/PLAY_INTERNAL_TESTING.md`](../docs/PLAY_INTERNAL_TESTING.md)

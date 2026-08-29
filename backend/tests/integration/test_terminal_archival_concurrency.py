@@ -1,21 +1,16 @@
-"""PostgreSQL proof that shift opening and terminal archival serialize safely."""
+"""PostgreSQL proof for the one-active-Hybrid-workspace constraints."""
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import suppress
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, inspect, text
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
-from app.api.v1.pos.router import ShiftOpenRequest, open_shift
-from app.api.v1.settings.router import TerminalUpdate, update_terminal
-from app.core.db import AsyncSessionLocal
-from app.core.errors import BusinessRuleError
-from app.core.tenant import TenantContext
-from app.models import Shift, Terminal
+from app.models import Branch, Terminal
+from scripts.merge_terminals_to_one import consolidate
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -57,81 +52,126 @@ async def test_terminal_active_index_exists_in_deployed_schema(session) -> None:
     assert active_index["column_names"] == ["branch_id", "is_active"]
     assert active_index["unique"] is False
 
+    one_active = next(
+        index
+        for index in indexes
+        if index["name"] == "uq_terminals_one_active_per_branch"
+    )
+    assert one_active["column_names"] == ["branch_id"]
+    assert one_active["unique"] is True
+    assert "is_active IS TRUE" in str(one_active["dialect_options"])
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_concurrent_archive_waits_then_refuses_newly_opened_shift(
+async def test_database_refuses_a_second_active_workspace_without_touching_keeper(
     session,
     seed_owner,
 ) -> None:
-    company = seed_owner["company"]
     branch = seed_owner["branch"]
-    owner = seed_owner["owner"]
+    keeper = seed_owner["terminal"]
+    keeper_id = keeper.id
+    second_id = uuid4()
     terminal = Terminal(
-        id=uuid4(),
+        id=second_id,
         branch_id=branch.id,
-        name=f"Archive race {uuid4().hex[:8]}",
-        purpose="gaming",
+        name=f"Second workspace {uuid4().hex[:8]}",
+        purpose="hybrid",
         is_active=True,
-        device_id=f"archive-race-{uuid4()}",
+        device_id=f"second-workspace-{uuid4()}",
     )
     session.add(terminal)
+    with pytest.raises(IntegrityError):
+        await session.flush()
+    await session.rollback()
+
+    persisted_keeper = await session.get(Terminal, keeper_id)
+    persisted_second = await session.get(Terminal, second_id)
+    assert persisted_keeper is not None
+    assert persisted_keeper.is_active is True
+    assert persisted_keeper.purpose == "hybrid"
+    assert persisted_second is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reviewed_consolidation_persists_audit_evidence_atomically(
+    session,
+    seed_owner,
+) -> None:
+    branch = Branch(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        name=f"Historical branch {uuid4().hex[:8]}",
+        invoice_series_code=f"{uuid4().hex[:2]}".upper(),
+    )
+    keeper = Terminal(
+        id=uuid4(),
+        branch_id=branch.id,
+        name="Historical Gaming",
+        purpose="gaming",
+        is_active=False,
+        device_id=f"historical-gaming-{uuid4()}",
+    )
+    retired = Terminal(
+        id=uuid4(),
+        branch_id=branch.id,
+        name="Historical POS",
+        purpose="cafe_pos",
+        is_active=False,
+        device_id=f"historical-pos-{uuid4()}",
+    )
+    session.add(branch)
+    await session.flush()
+    session.add_all([keeper, retired])
     await session.commit()
 
-    tenant = TenantContext(
-        user_id=owner.id,
-        company_id=company.id,
+    dry_run = await consolidate(
+        session,
+        company_id=seed_owner["company"].id,
         branch_id=branch.id,
-        terminal_id=terminal.id,
-        roles=("owner",),
-        protected_access=True,
+        keep_terminal_id=keeper.id,
+        keep_name="Historical Workspace",
     )
-    archive_task: asyncio.Task | None = None
-    opened_shift_id = None
-    try:
-        async with AsyncSessionLocal() as shift_session, AsyncSessionLocal() as settings_session:
-            opened = await open_shift(
-                ShiftOpenRequest(opening_float_minor=0),
-                shift_session,
-                tenant,
-            )
-            opened_shift_id = UUID(opened["id"])
-            await shift_session.flush()
+    assert dry_run["result"] == "planned"
 
-            archive_task = asyncio.create_task(
-                update_terminal(
-                    terminal.id,
-                    TerminalUpdate(is_active=False),
-                    settings_session,
-                    tenant,
-                )
-            )
-            await asyncio.sleep(0.05)
-            assert not archive_task.done(), (
-                "terminal archival must wait for shift-open's branch transaction"
-            )
+    applied = await consolidate(
+        session,
+        company_id=seed_owner["company"].id,
+        branch_id=branch.id,
+        keep_terminal_id=keeper.id,
+        keep_name="Historical Workspace",
+        apply=True,
+        actor_user_id=seed_owner["owner"].id,
+        reason="Reviewed migration integration proof",
+        backup_reference="verified-backup:test-only",
+        expected_state_fingerprint=dry_run["state_fingerprint"],
+    )
+    await session.commit()
 
-            await shift_session.commit()
-            with pytest.raises(BusinessRuleError, match="Close or reconcile"):
-                await asyncio.wait_for(archive_task, timeout=2)
-            await settings_session.rollback()
-
-        async with AsyncSessionLocal() as verify:
-            persisted_terminal = await verify.get(Terminal, terminal.id)
-            persisted_shift = await verify.get(Shift, opened_shift_id)
-            assert persisted_terminal is not None
-            assert persisted_terminal.is_active is True
-            assert persisted_shift is not None
-            assert persisted_shift.status == "open"
-    finally:
-        if archive_task is not None and not archive_task.done():
-            archive_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await archive_task
-        async with AsyncSessionLocal() as cleanup:
-            if opened_shift_id is not None:
-                await cleanup.execute(
-                    delete(Shift).where(Shift.id == opened_shift_id)
-                )
-            await cleanup.execute(delete(Terminal).where(Terminal.id == terminal.id))
-            await cleanup.commit()
+    assert applied["result"] == "applied"
+    await session.refresh(keeper)
+    await session.refresh(retired)
+    assert keeper.is_active is True
+    assert keeper.purpose == "hybrid"
+    assert keeper.name == "Historical Workspace"
+    assert retired.is_active is False
+    audit = (
+        await session.execute(
+            text(
+                "SELECT actor_user_id, reason, before, after "
+                "FROM audit_log "
+                "WHERE company_id = :company_id "
+                "AND action = 'terminal_workspace_consolidation' "
+                "AND entity_id = :branch_id"
+            ),
+            {
+                "company_id": seed_owner["company"].id,
+                "branch_id": str(branch.id),
+            },
+        )
+    ).mappings().one()
+    assert audit["actor_user_id"] == seed_owner["owner"].id
+    assert audit["reason"] == "Reviewed migration integration proof"
+    assert audit["before"]["state_fingerprint"] == dry_run["state_fingerprint"]
+    assert audit["after"]["backup_reference"] == "verified-backup:test-only"

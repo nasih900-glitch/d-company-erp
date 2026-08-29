@@ -119,6 +119,19 @@ class TerminalReassignmentPolicyTest {
     }
 
     @Test
+    fun `non operational role shows branch without implying a till is required`() {
+        assertEquals(
+            "Main Cafe",
+            workspaceLocationLabel(
+                branchId = "branch-a",
+                branchName = "Main Cafe",
+                requiresTill = false,
+                activeTerminal = null,
+            ),
+        )
+    }
+
+    @Test
     fun `explicit multi-terminal workspace keeps exact terminal visible`() {
         val display = ValidatedTerminalDisplay("till-1", "Gaming Area", "branch-a", TerminalPurpose.GAMING)
 

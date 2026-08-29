@@ -18,17 +18,28 @@ class SettingsPresentationPolicyTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
-    fun `gaming centre terminal choices use neutral one-shop language`() {
+    fun `gaming centre exposes only the combined workspace purpose`() {
         val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
         val options = terminalPurposeOptions(presentation)
         val copy = options.joinToString(" ") { "${it.label} ${it.description}" }
 
-        assertEquals(
-            listOf("POS only (legacy)", "Gaming", "Gaming + POS"),
-            options.map { it.label },
-        )
+        assertEquals(listOf(TerminalPurpose.HYBRID), options.map { it.id })
+        assertEquals(listOf("Gaming + POS"), options.map { it.label })
         assertFalse(copy.contains("Cafe", ignoreCase = true))
+        assertFalse(copy.contains("Gaming Area", ignoreCase = true))
         assertEquals("Gaming + POS", terminalPurposeLabel(TerminalPurpose.HYBRID, presentation))
+    }
+
+    @Test
+    fun `dormant hospitality profile retains advanced terminal purposes`() {
+        val options = terminalPurposeOptions(
+            WorkspaceFeatureProfiles.FullHospitality.presentationPolicy(),
+        )
+
+        assertEquals(
+            listOf(TerminalPurpose.CAFE_POS, TerminalPurpose.GAMING, TerminalPurpose.HYBRID),
+            options.map { it.id },
+        )
     }
 
     @Test

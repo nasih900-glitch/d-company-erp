@@ -53,6 +53,8 @@ data class GamingAccess(
     val canManageSessions: Boolean = false,
     /** UI hint only; the backend also requires protected/audit identity. */
     val canReconcileLegacySessions: Boolean = false,
+    /** Gaming writes need the POS shift read contract even when POS is hidden. */
+    val writeBlockedByMissingShiftRead: Boolean = false,
 )
 data class KitchenAccess(val canAdvanceTickets: Boolean = false)
 data class TablesAccess(
@@ -114,6 +116,9 @@ data class MembershipAccess(
 )
 
 const val VIEW_ONLY_MESSAGE = "View only — ask a manager if this action is required."
+const val GAMING_SHIFT_ACCESS_REQUIRED_MESSAGE =
+    "Gaming controls are view only because this account cannot verify the open shift. " +
+        "Ask an owner to enable POS access for this role."
 
 /** ViewModels repeat the UI check before any API call or outbox mutation. */
 internal inline fun authorizeAction(allowed: Boolean, onDenied: () -> Unit): Boolean {
@@ -148,10 +153,36 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
 
     fun hasAny(vararg permissions: String): Boolean = permissions.any(::has)
 
+    private fun canDiscoverOperationalWorkspace(): Boolean = hasAny(
+        ErpPermission.PosRead,
+        ErpPermission.GamingRead,
+        ErpPermission.SettingsManage,
+    )
+
+    private fun hasTerminalScopedWrite(): Boolean = hasAny(
+        ErpPermission.PosWrite,
+        ErpPermission.PosVoid,
+        ErpPermission.PosDiscountLarge,
+        ErpPermission.PosShiftOpen,
+        ErpPermission.PosShiftClose,
+        ErpPermission.PosRefund,
+        ErpPermission.GamingWrite,
+    )
+
+    /**
+     * `/settings/terminals` permits `pos.read`, `gaming.read`, or
+     * `settings.manage`. POS and Gaming readers resolve the shared workspace
+     * because their operational state is terminal scoped. Write-only stale or
+     * misconfigured profiles fail closed rather than trusting a cached ID.
+     */
+    fun requiresOperationalWorkspace(): Boolean =
+        hasAny(ErpPermission.PosRead, ErpPermission.GamingRead) ||
+            (canDiscoverOperationalWorkspace() && hasTerminalScopedWrite())
+
     fun posAccess() = PosAccess(
-        canCreateAndCollect = has(ErpPermission.PosWrite),
-        canVoid = has(ErpPermission.PosVoid),
-        canApplyDiscount = has(ErpPermission.PosDiscountLarge),
+        canCreateAndCollect = requiresOperationalWorkspace() && has(ErpPermission.PosWrite),
+        canVoid = requiresOperationalWorkspace() && has(ErpPermission.PosVoid),
+        canApplyDiscount = requiresOperationalWorkspace() && has(ErpPermission.PosDiscountLarge),
     )
 
     fun staffAccess(): StaffAccess = StaffAccess(
@@ -161,8 +192,12 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
     )
 
     fun gamingAccess() = GamingAccess(
-        canManageSessions = has(ErpPermission.GamingWrite),
-        canReconcileLegacySessions = has(ErpPermission.AdminAuditRead),
+        canManageSessions = requiresOperationalWorkspace() &&
+            has(ErpPermission.GamingWrite) && has(ErpPermission.PosRead),
+        canReconcileLegacySessions = requiresOperationalWorkspace() &&
+            has(ErpPermission.AdminAuditRead),
+        writeBlockedByMissingShiftRead =
+            has(ErpPermission.GamingWrite) && !has(ErpPermission.PosRead),
     )
 
     fun kitchenAccess() = KitchenAccess(has(ErpPermission.KitchenWrite))
@@ -202,8 +237,8 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
     )
 
     fun shiftAccess() = ShiftAccess(
-        canOpen = has(ErpPermission.PosShiftOpen),
-        canClose = has(ErpPermission.PosShiftClose),
+        canOpen = requiresOperationalWorkspace() && has(ErpPermission.PosShiftOpen),
+        canClose = requiresOperationalWorkspace() && has(ErpPermission.PosShiftClose),
     )
 
     fun membershipAccess(profile: MeResponse) = MembershipAccess(

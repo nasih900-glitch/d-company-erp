@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -131,10 +132,10 @@ class Terminal(Base, TimestampMixin):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    # Explicit operational capability. Existing installations migrate to
-    # ``hybrid`` so their current local Gaming/POS workflow remains valid;
-    # newly configured two-terminal shops can route gaming bills only to a
-    # terminal that is actually allowed to act as a POS destination.
+    # Explicit operational capability. The active one-shop workspace is
+    # always ``hybrid`` so Gaming, POS, and Shift share one authoritative
+    # identity. Legacy split-purpose rows remain valid only while inactive so
+    # their historical shifts, orders, and audit references stay intact.
     purpose: Mapped[str] = mapped_column(
         String(20), nullable=False, default="hybrid", server_default="hybrid"
     )
@@ -152,8 +153,19 @@ class Terminal(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_terminals_branch_active", "branch_id", "is_active"),
+        Index(
+            "uq_terminals_one_active_per_branch",
+            "branch_id",
+            unique=True,
+            postgresql_where=text("is_active IS TRUE"),
+            sqlite_where=text("is_active = 1"),
+        ),
         CheckConstraint(
             "purpose IN ('hybrid', 'cafe_pos', 'gaming')",
             name="ck_terminals_purpose",
+        ),
+        CheckConstraint(
+            "is_active IS FALSE OR purpose = 'hybrid'",
+            name="ck_terminals_active_requires_hybrid",
         ),
     )

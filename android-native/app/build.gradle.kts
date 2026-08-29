@@ -55,8 +55,8 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        versionCode = 11
-        versionName = "3.1.0"
+        versionCode = 12
+        versionName = "3.1.1"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
 
         // Single source of truth for the API base, mirroring how the

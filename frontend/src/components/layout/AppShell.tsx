@@ -16,6 +16,7 @@ import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
 import {
   canManageGamingCentreProducts,
+  GAMING_CENTRE_TERMINAL_POLICY,
   visibleProfileNavigationGroups,
   type ProfileNavIcon,
 } from '@/lib/product-profile';
@@ -289,10 +290,12 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           <div className="px-2 py-3">
             <p className="text-sm font-medium">{me?.name}</p>
             <p className="text-xs text-fg-muted">{rolesLabel(me?.roles)}</p>
-            {selectedTerminal && terminalOptions.length > 1 && (
+            {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
+              && selectedTerminal && terminalOptions.length > 1 && (
               <p className="mt-1 text-xs text-fg-muted">Terminal · {selectedTerminal.name}</p>
             )}
-            {terminalOptions.length > 1 && (
+            {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
+              && terminalOptions.length > 1 && (
               <label className="mt-3 block">
                 <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
                   Work terminal
@@ -342,9 +345,10 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         <ConnectivityBanner />
         {!terminalReady && terminalIssue && (
           <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
-            <div className="font-semibold text-accent-gold">Terminal setup required</div>
+            <div className="font-semibold text-accent-gold">Shared register setup needs attention</div>
             <p className="mt-1 text-fg-muted">{terminalIssue}</p>
-            {terminalOptions.length > 1 && (
+            {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
+              && terminalOptions.length > 1 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {terminalOptions.map((terminal) => (
                   <button

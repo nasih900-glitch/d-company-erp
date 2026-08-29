@@ -10,6 +10,7 @@ from scripts.verify_android_release_version import (
     ReleaseVersionError,
     read_gradle_version,
     validate_built_metadata,
+    validate_product_version_coherence,
     validate_production_defaults,
     validate_tag,
 )
@@ -76,9 +77,10 @@ class AndroidReleaseVersionTest(unittest.TestCase):
 
     def test_version_code_must_be_direct_positive_integer(self) -> None:
         for invalid in ("0", "-1", '"7"', "releaseVersionCode"):
-            with self.subTest(invalid=invalid):
-                with self.assertRaisesRegex(ReleaseVersionError, "positive integer"):
-                    read_gradle_version(self.write_build_file(version_code=invalid))
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ReleaseVersionError, "positive integer"
+            ):
+                read_gradle_version(self.write_build_file(version_code=invalid))
 
     def test_ambiguous_version_assignment_fails_closed(self) -> None:
         build_file = self.write_build_file()
@@ -216,6 +218,71 @@ class AndroidReleaseVersionTest(unittest.TestCase):
                 env_file,
                 compose_file,
                 AndroidVersion(code=7, name="3.1.0"),
+            )
+
+    def write_product_versions(
+        self,
+        *,
+        version: str = "3.1.0",
+        backend_runtime_version: str | None = None,
+    ) -> dict[str, Path]:
+        files = {
+            "backend_project_file": self.root / "backend-pyproject.toml",
+            "backend_version_file": self.root / "backend-version.py",
+            "frontend_package_file": self.root / "package.json",
+            "frontend_lock_file": self.root / "package-lock.json",
+            "frontend_env_file": self.root / "frontend.env",
+            "production_env_file": self.root / "production.env",
+            "compose_file": self.root / "compose.yml",
+        }
+        files["backend_project_file"].write_text(
+            f'[project]\nname = "erp"\nversion = "{version}"\n',
+            encoding="utf-8",
+        )
+        files["backend_version_file"].write_text(
+            f'__version__ = "{backend_runtime_version or version}"\n',
+            encoding="utf-8",
+        )
+        files["frontend_package_file"].write_text(
+            json.dumps({"version": version}),
+            encoding="utf-8",
+        )
+        files["frontend_lock_file"].write_text(
+            json.dumps({"version": version, "packages": {"": {"version": version}}}),
+            encoding="utf-8",
+        )
+        files["frontend_env_file"].write_text(
+            f"VITE_APP_VERSION={version}\n",
+            encoding="utf-8",
+        )
+        files["production_env_file"].write_text(
+            f"APP_VERSION={version}\n",
+            encoding="utf-8",
+        )
+        files["compose_file"].write_text(
+            "services:\n"
+            "  backend:\n"
+            f"    image: ${{APP_VERSION:-{version}}}\n"
+            "  frontend:\n"
+            f"    environment: ${{APP_VERSION:-{version}}}\n",
+            encoding="utf-8",
+        )
+        return files
+
+    def test_coordinated_product_versions_match_android(self) -> None:
+        validate_product_version_coherence(
+            AndroidVersion(code=7, name="3.1.0"),
+            **self.write_product_versions(),
+        )
+
+    def test_coordinated_product_version_drift_fails_closed(self) -> None:
+        with self.assertRaisesRegex(
+            ReleaseVersionError,
+            "backend runtime='3.1.1'",
+        ):
+            validate_product_version_coherence(
+                AndroidVersion(code=7, name="3.1.0"),
+                **self.write_product_versions(backend_runtime_version="3.1.1"),
             )
 
 

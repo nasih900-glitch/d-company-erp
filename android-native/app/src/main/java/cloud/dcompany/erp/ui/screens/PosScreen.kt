@@ -1699,7 +1699,7 @@ private fun EmptyMenuPanel(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Menu catalogue", color = Brand.Foreground, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Products available to this till",
+                    "Products available in this shop",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -1715,7 +1715,7 @@ private fun EmptyMenuPanel(
             body = if (everSynced) {
                 "This tablet is up to date, but no products are configured. Add items on the Menu screen, then check again."
             } else {
-                "Connect once to download the menu. After that, the till can keep browsing products offline."
+                "Connect once to download the menu. After that, this tablet can keep browsing products offline."
             },
             icon = Icons.Filled.RestaurantMenu,
             primaryLabel = if (everSynced) "Check again" else "Download menu",
@@ -2630,7 +2630,7 @@ private fun PayDialog(
             ) {
                 if (verifiedSharedOrder) {
                     Text(
-                        "Live total verified and reserved for this till. Confirm only after " +
+                        "Live total verified and reserved for this checkout. Confirm only after " +
                             "receiving this exact amount.",
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.Good,
@@ -3035,7 +3035,7 @@ private fun ZeroTotalCompletionDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    "Live member-benefit total verified and reserved for this till.",
+                    "Live member-benefit total verified and reserved for this checkout.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.Good,
                 )

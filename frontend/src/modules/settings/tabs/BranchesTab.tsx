@@ -9,8 +9,8 @@ import Modal from '@/components/ui/Modal';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const TERMINAL_PURPOSE_LABELS: Record<TerminalDTO['purpose'], string> = {
-  cafe_pos: 'POS',
-  gaming: 'Gaming Area',
+  cafe_pos: 'Legacy POS-only setup',
+  gaming: 'Legacy Gaming-only setup',
   hybrid: 'Combined workspace',
 };
 
@@ -64,8 +64,13 @@ export default function BranchesTab() {
       {err && <ErrorRow text={err}/>}
 
       <div className="space-y-3">
-        {rows.map((b) => (
-          <div key={b.id} className="card">
+        {rows.map((b) => {
+          // The operational endpoint intentionally returns active workspaces
+          // only. Archived terminal identities remain server-side for audit
+          // and accounting references, not as routine owner choices.
+          const branchTerminals = terminals.filter((terminal) => terminal.branch_id === b.id);
+          return (
+            <div key={b.id} className="card">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3 min-w-0">
                 <div className="p-2 bg-bg-raised rounded-lg text-fg-muted">
@@ -95,18 +100,29 @@ export default function BranchesTab() {
                     Gaming, POS and shift operation use this workspace together.
                   </p>
                 </div>
-                {terminals.filter((terminal) => terminal.branch_id === b.id).length !== 1 && (
+                {branchTerminals.length === 0 && (
                   <button
                     className="btn btn-secondary !min-h-[36px] !px-3 !py-1.5 text-xs"
                     onClick={() => setTerminalForm({ branch: b })}
                   >
-                    <Plus size={13}/> Add workspace
+                    <Plus size={13}/> Create shared workspace
                   </button>
                 )}
               </div>
 
+              {branchTerminals.length > 1 && (
+                <div className="mb-3 rounded-lg border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
+                  <p className="font-semibold text-accent-bad">Shared workspace conflict</p>
+                  <p className="mt-1 text-fg-muted">
+                    {branchTerminals.length} active workspaces are configured. Staff operations stay
+                    blocked. Ask support to run the protected consolidation after every open shift,
+                    pending bill and saved device change has been reconciled.
+                  </p>
+                </div>
+              )}
+
               <div className="grid gap-2 md:grid-cols-2">
-                {terminals.filter((terminal) => terminal.branch_id === b.id).map((terminal) => (
+                {branchTerminals.map((terminal) => (
                   <div
                     key={terminal.id}
                     className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-bg-border bg-bg-raised p-3"
@@ -119,9 +135,7 @@ export default function BranchesTab() {
                           {TERMINAL_PURPOSE_LABELS[terminal.purpose]}
                         </p>
                         <p className="truncate text-xs text-fg-muted">
-                          {terminals.filter((item) => item.branch_id === b.id).length === 1
-                            ? 'Selected automatically on staff devices'
-                            : terminal.device_id || 'Device selected inside the app'}
+                          {terminal.device_id || 'Selected automatically for staff'}
                         </p>
                       </div>
                     </div>
@@ -129,19 +143,20 @@ export default function BranchesTab() {
                       className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs"
                       onClick={() => setTerminalForm({ branch: b, terminal })}
                     >
-                      <Edit2 size={11}/> Advanced
+                      <Edit2 size={11}/> Settings
                     </button>
                   </div>
                 ))}
               </div>
-              {terminals.every((terminal) => terminal.branch_id !== b.id) && (
+              {branchTerminals.length === 0 && (
                 <div className="mt-2 rounded-lg border border-dashed border-bg-border p-4 text-sm text-fg-muted">
                   No workspace is configured yet. Add one combined workspace to begin.
                 </div>
               )}
             </div>
-          </div>
-        ))}
+            </div>
+          );
+        })}
         {!rows.length && (
           <div className="card text-fg-muted text-sm">No shop location exists yet.</div>
         )}
@@ -277,7 +292,6 @@ function TerminalForm({
   const isEdit = Boolean(terminal);
   const [name, setName] = useState(terminal?.name ?? '');
   const [deviceId, setDeviceId] = useState(terminal?.device_id ?? '');
-  const [purpose, setPurpose] = useState<TerminalDTO['purpose']>(terminal?.purpose ?? 'hybrid');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [idempotencyKey] = useState(() => `terminal-create:${crypto.randomUUID()}`);
@@ -298,13 +312,13 @@ function TerminalForm({
         await settings.updateTerminal(terminal.id, {
           name: normalizedName,
           device_id: normalizedDeviceId || null,
-          purpose,
+          purpose: 'hybrid',
         });
       } else {
         await settings.createTerminal({
           branch_id: branch.id,
           name: normalizedName,
-          purpose,
+          purpose: 'hybrid',
           ...(normalizedDeviceId ? { device_id: normalizedDeviceId } : {}),
         }, idempotencyKey);
       }
@@ -320,13 +334,13 @@ function TerminalForm({
     <Modal
       open
       onClose={onClose}
-      title={isEdit ? `Advanced workspace settings` : `Add workspace to ${branch.name}`}
+      title={isEdit ? 'Shared workspace settings' : `Create workspace for ${branch.name}`}
       size="sm"
     >
       <form onSubmit={submit} className="space-y-3">
         <p className="text-sm text-fg-muted">
-          D Company currently uses one combined workspace for Gaming, POS and shifts. Only
-          create separate workspaces later if there are genuinely separate counters.
+          D Company uses one shared Combined workspace for Gaming, POS and shifts. Staff do
+          not choose a work area when they sign in.
         </p>
         <Field label="Workspace name">
           <input
@@ -338,21 +352,14 @@ function TerminalForm({
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
-        <Field label="Work area">
-          <select
-            className="input"
-            value={purpose}
-            onChange={(event) => setPurpose(event.target.value as TerminalDTO['purpose'])}
-          >
-            <option value="cafe_pos">POS — handles counter sales and collects payments</option>
-            <option value="gaming">Gaming Area — starts sessions and sends bills to POS</option>
-            <option value="hybrid">Combined — Gaming, POS and shifts together</option>
-          </select>
-        </Field>
-        {isEdit && purpose !== terminal!.purpose && (
+        <div className="rounded-lg border border-bg-border bg-bg-raised p-3">
+          <p className="text-xs text-fg-muted">Mode</p>
+          <p className="mt-1 text-sm font-semibold">Combined — Gaming, POS and Shift</p>
+        </div>
+        {isEdit && terminal!.purpose !== 'hybrid' && (
           <p className="text-xs text-accent-warning">
-            Close this workspace&apos;s current shift before changing its purpose. Renaming
-            the workspace does not require closing the shift.
+            This is a legacy split workspace. Saving converts it to the shared Combined mode.
+            Close any open shift attached to it before saving.
           </p>
         )}
         <Field label="Device ID (optional)">
@@ -373,7 +380,7 @@ function TerminalForm({
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>}
-            {isEdit ? 'Save workspace' : 'Add workspace'}
+            {isEdit ? 'Save workspace' : 'Create workspace'}
           </button>
         </div>
       </form>

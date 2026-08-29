@@ -24,8 +24,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -135,8 +137,11 @@ class ShiftViewModel : ViewModel() {
     private val app = DCompanyApp.instance
     private val db = app.db
     @Volatile private var access = ShiftAccess()
+    private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
+        .map { it?.terminalId }
+        .distinctUntilChanged()
     private val resolvedShift = db.shiftDao().observeShiftForManagement(
-        app.terminalStore.terminalIdFlow,
+        confirmedTerminalId,
     )
     private data class HistoryState(
         val rows: List<ShiftHistoryRow>,
@@ -158,7 +163,7 @@ class ShiftViewModel : ViewModel() {
         val dismissedClosedId: String?,
     )
 
-    private val terminalHistory = app.terminalStore.terminalIdFlow
+    private val terminalHistory = confirmedTerminalId
         .flatMapLatest { terminalId ->
             if (terminalId == null) {
                 flowOf(HistoryState(emptyList(), null, null))
@@ -181,7 +186,7 @@ class ShiftViewModel : ViewModel() {
             }
         }
 
-    private val latestRejected = app.terminalStore.terminalIdFlow
+    private val latestRejected = confirmedTerminalId
         .flatMapLatest { terminalId ->
             if (terminalId == null) flowOf(null)
             else db.shiftDao().observeLatestRejectedForTerminal(terminalId)
@@ -290,10 +295,10 @@ class ShiftViewModel : ViewModel() {
             operationError.value = "The signed-in profile is unavailable. Reconnect before opening a shift."
             return
         }
-        val assignedTerminalId = app.terminalStore.terminalId()
+        val assignedTerminalId = app.terminalStore.confirmedTerminalId()
         if (assignedTerminalId == null) {
             operationError.value =
-                "This tablet is not assigned to a POS terminal. Reconnect and sign in before opening a shift."
+                "This tablet's workspace is not verified. Reconnect and sign in before opening a shift."
             return
         }
         val assignedBranchId = profile.branchId
@@ -341,10 +346,10 @@ class ShiftViewModel : ViewModel() {
         if (!requireMoneyAccess(shift, "close this shift")) return
         val local = shift.local
         if (local != null && local.state !in setOf(ShiftState.OPEN_PENDING, ShiftState.OPEN_SYNCED)) return
-        val terminalId = app.terminalStore.terminalId()
+        val terminalId = app.terminalStore.confirmedTerminalId()
         if (terminalId == null) {
             operationError.value =
-                "This tablet has no verified POS terminal. Reconnect and sign in before closing the shift."
+                "This tablet's workspace is not verified. Reconnect and sign in before closing the shift."
             return
         }
         val scopeLease = app.cacheIsolation.currentLease() ?: return
@@ -410,10 +415,10 @@ class ShiftViewModel : ViewModel() {
         val shift = resolved.local?.takeIf { it.state == ShiftState.CLOSE_REJECTED } ?: return
         if (!requireMoneyAccess(resolved, "retry this close")) return
         if (busy.value) return
-        val terminalId = app.terminalStore.terminalId()
+        val terminalId = app.terminalStore.confirmedTerminalId()
         if (terminalId == null) {
             operationError.value =
-                "This tablet has no verified POS terminal. Reconnect and sign in before retrying the close."
+                "This tablet's workspace is not verified. Reconnect and sign in before retrying the close."
             return
         }
         val scopeLease = app.cacheIsolation.currentLease() ?: return
@@ -489,11 +494,11 @@ class ShiftViewModel : ViewModel() {
                 "A current shift is already open. Resolve or close it before retrying the saved shift attempt."
             return
         }
-        val terminalId = app.terminalStore.terminalId()
+        val terminalId = app.terminalStore.confirmedTerminalId()
         val branchId = app.shiftCache.profile.value?.branchId
         if (terminalId == null || branchId == null) {
             operationError.value =
-                "Reconnect and sign in to a verified branch and POS terminal before retrying this shift."
+                "Reconnect and sign in to the verified shop workspace before retrying this shift."
             return
         }
         val scopeLease = app.cacheIsolation.currentLease() ?: run {

@@ -5,7 +5,7 @@ from uuid import UUID
 
 import pytest
 
-from app.models import Terminal
+from app.models import AuditLog, Terminal
 from scripts.merge_terminals_to_one import (
     _manifest_json,
     consolidate,
@@ -15,6 +15,7 @@ COMPANY_ID = UUID("11111111-1111-1111-1111-111111111111")
 BRANCH_ID = UUID("22222222-2222-2222-2222-222222222222")
 KEEPER_ID = UUID("33333333-3333-3333-3333-333333333333")
 ARCHIVE_ID = UUID("44444444-4444-4444-4444-444444444444")
+ACTOR_ID = UUID("55555555-5555-5555-5555-555555555555")
 
 
 class _Result:
@@ -39,6 +40,7 @@ class _QueuedSession:
     def __init__(self, results: list[_Result]) -> None:
         self.results = list(results)
         self.statements = []
+        self.added = []
         self.flushes = 0
 
     async def execute(self, statement):
@@ -48,6 +50,9 @@ class _QueuedSession:
 
     async def flush(self) -> None:
         self.flushes += 1
+
+    def add(self, entity) -> None:
+        self.added.append(entity)
 
 
 def _terminal(terminal_id: UUID, name: str, *, purpose: str = "gaming") -> Terminal:
@@ -60,15 +65,50 @@ def _terminal(terminal_id: UUID, name: str, *, purpose: str = "gaming") -> Termi
     )
 
 
-def _consolidation_session(keeper: Terminal, archived: Terminal) -> _QueuedSession:
-    return _QueuedSession(
+def _consolidation_session(
+    keeper: Terminal,
+    archived: Terminal,
+    *,
+    apply: bool = False,
+    blocker_counts: tuple[int, ...] = (0,) * 9,
+) -> _QueuedSession:
+    results = [_Result(scalar=COMPANY_ID)]
+    if apply:
+        results.append(_Result(scalar=ACTOR_ID))
+    results.extend(
         [
-            _Result(scalar=COMPANY_ID),
             _Result(scalar=BRANCH_ID),
+            _Result(rows=[keeper, archived]),
+            *[_Result(scalar=count) for count in blocker_counts],
+        ]
+    )
+    return _QueuedSession(
+        results
+    )
+
+
+def _archived_branch_consolidation_session(
+    keeper: Terminal,
+    archived: Terminal,
+    *,
+    apply: bool = False,
+) -> _QueuedSession:
+    archived_branch = type(
+        "ArchivedBranch",
+        (),
+        {"id": BRANCH_ID, "deleted_at": object()},
+    )()
+    results = [_Result(scalar=COMPANY_ID)]
+    if apply:
+        results.append(_Result(scalar=ACTOR_ID))
+    results.extend(
+        [
+            _Result(scalar=archived_branch),
             _Result(rows=[keeper, archived]),
             *[_Result(scalar=0) for _ in range(9)],
         ]
     )
+    return _QueuedSession(results)
 
 
 def test_terminal_archival_model_defaults_active() -> None:
@@ -114,6 +154,9 @@ def test_consolidation_script_archives_instead_of_rewriting_or_deleting_history(
     assert 'parser.add_argument("--branch-id", required=True' in source
     assert 'parser.add_argument("--keep-terminal-id", required=True' in source
     assert '"--backup-reference"' in source
+    assert '"--actor-user-id"' in source
+    assert '"--expected-state-fingerprint"' in source
+    assert 'action="terminal_workspace_consolidation"' in source
     assert '"--apply"' in source
     assert ".with_for_update()" in source
     assert "session.delete" not in source
@@ -136,6 +179,8 @@ async def test_apply_refuses_before_database_access_without_release_evidence() -
     assert result["errors"] == [
         "--reason is required with --apply",
         "--backup-reference is required with --apply",
+        "--actor-user-id is required with --apply",
+        "--expected-state-fingerprint must be a 64-character SHA-256 with --apply",
     ]
     assert session.statements == []
 
@@ -174,6 +219,7 @@ async def test_dry_run_is_deterministic_and_never_mutates_terminals() -> None:
     assert keeper.purpose == "gaming"
     assert archived.is_active is True
     assert session.flushes == 0
+    assert len(result["state_fingerprint"]) == 64
     assert _manifest_json(result) == _manifest_json(dict(reversed(result.items())))
 
 
@@ -181,7 +227,14 @@ async def test_dry_run_is_deterministic_and_never_mutates_terminals() -> None:
 async def test_apply_archives_only_other_terminal_and_preserves_its_name() -> None:
     keeper = _terminal(KEEPER_ID, "Gaming Area")
     archived = _terminal(ARCHIVE_ID, "Cafe POS", purpose="cafe_pos")
-    session = _consolidation_session(keeper, archived)
+    dry_run = await consolidate(
+        _consolidation_session(keeper, archived),
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+        keep_name="Main Workspace",
+    )
+    session = _consolidation_session(keeper, archived, apply=True)
 
     result = await consolidate(
         session,
@@ -190,8 +243,10 @@ async def test_apply_archives_only_other_terminal_and_preserves_its_name() -> No
         keep_terminal_id=KEEPER_ID,
         keep_name="Main Workspace",
         apply=True,
+        actor_user_id=ACTOR_ID,
         reason="Approved one-workspace release",
         backup_reference="backup-2026-08-28T1900Z",
+        expected_state_fingerprint=dry_run["state_fingerprint"],
     )
 
     assert result["result"] == "applied"
@@ -201,13 +256,88 @@ async def test_apply_archives_only_other_terminal_and_preserves_its_name() -> No
     assert archived.name == "Cafe POS"
     assert archived.is_active is False
     assert session.flushes == 1
+    audit = next(item for item in session.added if isinstance(item, AuditLog))
+    assert audit.actor_user_id == ACTOR_ID
+    assert audit.reason == "Approved one-workspace release"
+    assert audit.before["state_fingerprint"] == dry_run["state_fingerprint"]
+    assert audit.after["backup_reference"] == "backup-2026-08-28T1900Z"
+    assert audit.after["archived_terminal_ids"] == [str(ARCHIVE_ID)]
+
+
+@pytest.mark.asyncio
+async def test_archived_branch_has_the_same_reviewed_consolidation_path() -> None:
+    keeper = _terminal(KEEPER_ID, "Gaming Area")
+    archived = _terminal(ARCHIVE_ID, "Cafe POS", purpose="cafe_pos")
+    dry_run = await consolidate(
+        _archived_branch_consolidation_session(keeper, archived),
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+        keep_name="Historical Workspace",
+    )
+    session = _archived_branch_consolidation_session(
+        keeper,
+        archived,
+        apply=True,
+    )
+
+    result = await consolidate(
+        session,
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+        keep_name="Historical Workspace",
+        apply=True,
+        actor_user_id=ACTOR_ID,
+        reason="Approved archived-shop schema reconciliation",
+        backup_reference="backup-2026-08-29T0100Z",
+        expected_state_fingerprint=dry_run["state_fingerprint"],
+    )
+
+    assert result["result"] == "applied"
+    assert result["preserves_historical_references"] is True
+    assert keeper.name == "Historical Workspace"
+    assert keeper.purpose == "hybrid"
+    assert keeper.is_active is True
+    assert archived.name == "Cafe POS"
+    assert archived.is_active is False
+    assert session.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_archived_company_history_has_a_supported_dry_run_path() -> None:
+    keeper = _terminal(KEEPER_ID, "Historical Gaming")
+    archived = _terminal(ARCHIVE_ID, "Historical POS", purpose="cafe_pos")
+    session = _archived_branch_consolidation_session(keeper, archived)
+
+    result = await consolidate(
+        session,
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+        keep_name="Historical Workspace",
+    )
+
+    assert result["result"] == "planned"
+    assert "companies.deleted_at" not in str(session.statements[0])
+    assert result["preserves_historical_references"] is True
+    assert keeper.purpose == "gaming"
+    assert archived.is_active is True
+    assert session.flushes == 0
 
 
 @pytest.mark.asyncio
 async def test_keeper_rename_collision_refuses_without_mutation() -> None:
     keeper = _terminal(KEEPER_ID, "Cafe POS", purpose="cafe_pos")
     archived = _terminal(ARCHIVE_ID, "Gaming Area")
-    session = _consolidation_session(keeper, archived)
+    dry_run = await consolidate(
+        _consolidation_session(keeper, archived),
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+        keep_name="gaming area",
+    )
+    session = _consolidation_session(keeper, archived, apply=True)
 
     result = await consolidate(
         session,
@@ -216,8 +346,10 @@ async def test_keeper_rename_collision_refuses_without_mutation() -> None:
         keep_terminal_id=KEEPER_ID,
         keep_name="gaming area",
         apply=True,
+        actor_user_id=ACTOR_ID,
         reason="Approved one-workspace release",
         backup_reference="backup-2026-08-28T1900Z",
+        expected_state_fingerprint=dry_run["state_fingerprint"],
     )
 
     assert result["result"] == "refused"
@@ -233,14 +365,18 @@ async def test_keeper_rename_collision_refuses_without_mutation() -> None:
 async def test_any_operational_blocker_refuses_the_whole_apply() -> None:
     keeper = _terminal(KEEPER_ID, "Gaming Area")
     archived = _terminal(ARCHIVE_ID, "Cafe POS", purpose="cafe_pos")
-    session = _QueuedSession(
-        [
-            _Result(scalar=COMPANY_ID),
-            _Result(scalar=BRANCH_ID),
-            _Result(rows=[keeper, archived]),
-            _Result(scalar=1),
-            *[_Result(scalar=0) for _ in range(8)],
-        ]
+    blockers = (1,) + (0,) * 8
+    dry_run = await consolidate(
+        _consolidation_session(keeper, archived, blocker_counts=blockers),
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+    )
+    session = _consolidation_session(
+        keeper,
+        archived,
+        apply=True,
+        blocker_counts=blockers,
     )
 
     result = await consolidate(
@@ -249,11 +385,39 @@ async def test_any_operational_blocker_refuses_the_whole_apply() -> None:
         branch_id=BRANCH_ID,
         keep_terminal_id=KEEPER_ID,
         apply=True,
+        actor_user_id=ACTOR_ID,
         reason="Approved one-workspace release",
         backup_reference="backup-2026-08-28T1900Z",
+        expected_state_fingerprint=dry_run["state_fingerprint"],
     )
 
     assert result["result"] == "refused"
     assert result["blockers"]["unsettled_shifts"] == 1
     assert archived.is_active is True
+    assert session.flushes == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_rejects_state_changed_after_review_without_mutation() -> None:
+    keeper = _terminal(KEEPER_ID, "Gaming Area")
+    archived = _terminal(ARCHIVE_ID, "Cafe POS", purpose="cafe_pos")
+    session = _consolidation_session(keeper, archived, apply=True)
+
+    result = await consolidate(
+        session,
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        keep_terminal_id=KEEPER_ID,
+        apply=True,
+        actor_user_id=ACTOR_ID,
+        reason="Approved one-workspace release",
+        backup_reference="backup-2026-08-28T1900Z",
+        expected_state_fingerprint="0" * 64,
+    )
+
+    assert result["result"] == "refused"
+    assert any("state fingerprint mismatch" in error for error in result["errors"])
+    assert keeper.purpose == "gaming"
+    assert archived.is_active is True
+    assert session.added == []
     assert session.flushes == 0

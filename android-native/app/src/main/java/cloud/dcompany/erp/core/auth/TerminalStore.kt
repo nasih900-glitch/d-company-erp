@@ -26,6 +26,14 @@ data class ValidatedTerminalDisplay(
     val purpose: String,
 )
 
+internal fun confirmedTerminalId(
+    persistedTerminalId: String?,
+    activeTerminal: ValidatedTerminalDisplay?,
+): String? {
+    val persisted = persistedTerminalId?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    return activeTerminal?.terminalId?.takeIf { it == persisted }
+}
+
 /**
  * Which till this tablet is.
  *
@@ -58,6 +66,15 @@ class TerminalStore(private val context: Context) {
         _activeValidatedTerminal.asStateFlow()
 
     fun terminalId(): String? = cached
+
+    /**
+     * Runtime write identity, available only after SessionViewModel has proved
+     * the exact server terminal and activated its matching cache scope. The
+     * persisted id alone is deliberately insufficient: it remains on disk for
+     * offline recovery while logout, reassignment, and failed verification
+     * keep financial screens non-writable.
+     */
+    fun confirmedTerminalId(): String? = confirmedTerminalId(cached, _activeValidatedTerminal.value)
 
     suspend fun load() {
         val prefs = context.terminalDataStore.data.first()

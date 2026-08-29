@@ -11,9 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+import tomllib
+
 DEFAULT_BUILD_FILE = Path("android-native/app/build.gradle.kts")
 DEFAULT_PRODUCTION_ENV_FILE = Path(".env.production.example")
 DEFAULT_COMPOSE_FILE = Path("docker-compose.prod.yml")
+DEFAULT_BACKEND_PROJECT_FILE = Path("backend/pyproject.toml")
+DEFAULT_BACKEND_VERSION_FILE = Path("backend/app/__init__.py")
+DEFAULT_FRONTEND_PACKAGE_FILE = Path("frontend/package.json")
+DEFAULT_FRONTEND_LOCK_FILE = Path("frontend/package-lock.json")
+DEFAULT_FRONTEND_ENV_FILE = Path("frontend/.env.example")
 _RELEASE_TAG = re.compile(r"v[0-9]+(?:\.[0-9]+)*(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?")
 _SNAPSHOT_SAFE_MIN_VERSION_CODE = 5
 
@@ -230,6 +237,96 @@ def validate_production_defaults(
         )
 
 
+def validate_product_version_coherence(
+    version: AndroidVersion,
+    *,
+    backend_project_file: Path = DEFAULT_BACKEND_PROJECT_FILE,
+    backend_version_file: Path = DEFAULT_BACKEND_VERSION_FILE,
+    frontend_package_file: Path = DEFAULT_FRONTEND_PACKAGE_FILE,
+    frontend_lock_file: Path = DEFAULT_FRONTEND_LOCK_FILE,
+    frontend_env_file: Path = DEFAULT_FRONTEND_ENV_FILE,
+    production_env_file: Path = DEFAULT_PRODUCTION_ENV_FILE,
+    compose_file: Path = DEFAULT_COMPOSE_FILE,
+) -> None:
+    """Reject a coordinated release whose platform-visible versions disagree."""
+
+    try:
+        backend_project = tomllib.loads(
+            backend_project_file.read_text(encoding="utf-8")
+        )
+        backend_project_version = backend_project["project"]["version"]
+        backend_source = backend_version_file.read_text(encoding="utf-8")
+        frontend_package = json.loads(frontend_package_file.read_text(encoding="utf-8"))
+        frontend_lock = json.loads(frontend_lock_file.read_text(encoding="utf-8"))
+        frontend_env_source = frontend_env_file.read_text(encoding="utf-8")
+        production_env_source = production_env_file.read_text(encoding="utf-8")
+        compose_source = compose_file.read_text(encoding="utf-8")
+    except (
+        OSError,
+        AttributeError,
+        KeyError,
+        TypeError,
+        tomllib.TOMLDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ReleaseVersionError(f"cannot read coordinated product versions: {exc}") from exc
+
+    def single_match(source: str, pattern: str, label: str) -> str:
+        matches = re.findall(pattern, source, flags=re.MULTILINE)
+        if len(matches) != 1:
+            raise ReleaseVersionError(
+                f"expected exactly one {label}, found {len(matches)}"
+            )
+        return matches[0]
+
+    lock_root = frontend_lock.get("packages", {}).get("", {})
+    values: dict[str, object] = {
+        "backend project": backend_project_version,
+        "backend runtime": single_match(
+            backend_source,
+            r'^__version__\s*=\s*"([^"]+)"\s*$',
+            "backend runtime version",
+        ),
+        "frontend package": frontend_package.get("version"),
+        "frontend lock": frontend_lock.get("version"),
+        "frontend lock root package": lock_root.get("version"),
+        "frontend build environment": single_match(
+            frontend_env_source,
+            r"^VITE_APP_VERSION=([^\s#]+)\s*$",
+            "VITE_APP_VERSION assignment",
+        ),
+        "production environment": single_match(
+            production_env_source,
+            r"^APP_VERSION=([^\s#]+)\s*$",
+            "APP_VERSION assignment",
+        ),
+    }
+
+    compose_versions = re.findall(
+        r"\$\{APP_VERSION:-([^}\s]+)\}",
+        compose_source,
+    )
+    if not compose_versions:
+        raise ReleaseVersionError("expected at least one APP_VERSION fallback in compose")
+    if len(set(compose_versions)) != 1:
+        raise ReleaseVersionError(
+            "production compose APP_VERSION fallbacks disagree: "
+            + ", ".join(compose_versions)
+        )
+    values["production compose"] = compose_versions[0]
+
+    mismatches = [
+        f"{label}={value!r}"
+        for label, value in values.items()
+        if value != version.name
+    ]
+    if mismatches:
+        raise ReleaseVersionError(
+            f"coordinated product versions must all equal {version.name!r}: "
+            + ", ".join(mismatches)
+        )
+
+
 def _fail(message: str) -> NoReturn:
     print(f"Android release version check failed: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -261,6 +358,11 @@ def main() -> int:
             args.production_env_file,
             args.compose_file,
             version,
+        )
+        validate_product_version_coherence(
+            version,
+            production_env_file=args.production_env_file,
+            compose_file=args.compose_file,
         )
         if args.metadata is not None:
             validate_built_metadata(args.metadata, version)

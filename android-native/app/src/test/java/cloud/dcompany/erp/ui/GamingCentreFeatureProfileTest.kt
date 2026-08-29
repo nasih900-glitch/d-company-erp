@@ -112,6 +112,7 @@ class GamingCentreFeatureProfileTest {
         assertFalse(focused.showsRestaurantOperations)
         assertFalse(focused.showsCustomers)
         assertFalse(focused.showsEvents)
+        assertTrue(focused.singleHybridTerminalOnly)
         assertEquals("Legacy/other prepaid revenue", focused.prepaidRevenueLabel)
         assertEquals("Gaming + POS", focused.hybridTerminalLabel)
 
@@ -119,6 +120,7 @@ class GamingCentreFeatureProfileTest {
         assertTrue(full.showsRestaurantOperations)
         assertTrue(full.showsCustomers)
         assertTrue(full.showsEvents)
+        assertFalse(full.singleHybridTerminalOnly)
         assertEquals("Memberships", full.prepaidRevenueLabel)
         assertEquals("Hybrid", full.hybridTerminalLabel)
     }

@@ -5,7 +5,7 @@ This directory is mounted read-only into Caddy and exposed at
 Git. Never copy a keystore, password, signing certificate private key, or an
 unsigned/debug build here.
 
-Use a versioned filename such as `d-company-erp-v3.1.0.apk`; do not overwrite a
+Use a versioned filename such as `d-company-erp-v3.1.1.apk`; do not overwrite a
 published filename. Before enabling the release in the backend configuration:
 
 1. build and sign the APK in the trusted release workflow;

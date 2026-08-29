@@ -1,14 +1,53 @@
 package cloud.dcompany.erp.core.sync
 
 import androidx.work.ExistingWorkPolicy
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.UnresolvedOutboxGroup
 import cloud.dcompany.erp.core.net.BackendReachability
+import cloud.dcompany.erp.core.net.Terminal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BackgroundSyncWorkerPolicyTest {
+    @Test
+    fun `background recovery confirms only the exact single hybrid workspace`() {
+        val hybrid = terminal("hybrid", TerminalPurpose.HYBRID)
+
+        assertEquals(
+            "hybrid",
+            confirmedBackgroundHybridTerminalId(
+                branchId = "branch-1",
+                availableTerminals = listOf(hybrid),
+                savedTerminalId = "hybrid",
+            ),
+        )
+        assertEquals(
+            null,
+            confirmedBackgroundHybridTerminalId(
+                branchId = "branch-1",
+                availableTerminals = listOf(hybrid),
+                savedTerminalId = "stale-terminal",
+            ),
+        )
+    }
+
+    @Test
+    fun `background recovery blocks split active terminal topology`() {
+        assertEquals(
+            null,
+            confirmedBackgroundHybridTerminalId(
+                branchId = "branch-1",
+                availableTerminals = listOf(
+                    terminal("hybrid", TerminalPurpose.HYBRID),
+                    terminal("gaming", TerminalPurpose.GAMING),
+                ),
+                savedTerminalId = "hybrid",
+            ),
+        )
+    }
+
     @Test
     fun `new durable request replaces rather than loses or chains an older handoff`() {
         assertEquals(ExistingWorkPolicy.REPLACE, DURABLE_SYNC_EXISTING_WORK_POLICY)
@@ -81,5 +120,12 @@ class BackgroundSyncWorkerPolicyTest {
         resource = resource,
         state = state,
         count = 1,
+    )
+
+    private fun terminal(id: String, purpose: String) = Terminal(
+        id = id,
+        name = "Workspace $id",
+        branchId = "branch-1",
+        purpose = purpose,
     )
 }

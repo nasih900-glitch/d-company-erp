@@ -81,16 +81,17 @@ fun SettingsScreen(
     LaunchedEffect(state.passwordChanged) {
         if (state.passwordChanged) onPasswordChanged()
     }
-    LaunchedEffect(canManageSystem) {
-        // Owners only need terminal controls when the shop genuinely has more
-        // than one work terminal. Refresh once so a stale cache cannot expose
-        // or hide the advanced control indefinitely.
-        if (canManageSystem) vm.loadTerminalsCache()
+    LaunchedEffect(canManageSystem, presentation.singleHybridTerminalOnly) {
+        // The Gaming Centre profile intentionally has one server-managed
+        // Hybrid workspace. Other profiles load terminal administration only
+        // when they support the advanced multi-terminal workflow.
+        if (canManageSystem && !presentation.singleHybridTerminalOnly) vm.loadTerminalsCache()
     }
     val showTerminalSettings = showAdvancedTerminalSettings(
         canManageSystem = canManageSystem,
         activeTerminalCount = state.allTerminals.size,
         pendingTerminalCount = state.pendingTerminals.size,
+        terminalManagementEnabled = !presentation.singleHybridTerminalOnly,
     )
     val visibleTabs = if (canManageSystem) {
         SettingsTab.entries.filter { it != SettingsTab.Terminals || showTerminalSettings }
@@ -132,7 +133,9 @@ internal fun showAdvancedTerminalSettings(
     canManageSystem: Boolean,
     activeTerminalCount: Int,
     pendingTerminalCount: Int,
-): Boolean = canManageSystem && (activeTerminalCount > 1 || pendingTerminalCount > 0)
+    terminalManagementEnabled: Boolean = true,
+): Boolean = terminalManagementEnabled && canManageSystem &&
+    (activeTerminalCount > 1 || pendingTerminalCount > 0)
 
 @Composable
 private fun Field(

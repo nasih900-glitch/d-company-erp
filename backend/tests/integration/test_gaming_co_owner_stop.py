@@ -39,7 +39,6 @@ async def test_co_owner_can_start_and_stop_same_terminal_session_without_audit_a
     company = seed_owner["company"]
     branch = seed_owner["branch"]
     terminal = seed_owner["terminal"]
-    terminal.purpose = "gaming"
 
     co_owner_role = Role(
         id=uuid4(),

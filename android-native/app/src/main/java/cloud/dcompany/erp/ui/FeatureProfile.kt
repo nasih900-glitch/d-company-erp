@@ -40,6 +40,8 @@ data class WorkspaceFeatureProfile(
     val navigationOrder: List<Destination>,
     val ownerOnly: Set<WorkspaceFeature> = emptySet(),
     val managementOnly: Set<WorkspaceFeature> = emptySet(),
+    /** Hide terminal choice/setup and require one server-confirmed hybrid identity. */
+    val singleHybridTerminalOnly: Boolean = false,
 ) {
     init {
         require(id.isNotBlank())
@@ -129,6 +131,7 @@ object WorkspaceFeatureProfiles {
             WorkspaceFeature.SupportInbox,
         ),
         managementOnly = setOf(WorkspaceFeature.Menu),
+        singleHybridTerminalOnly = true,
     )
 
     /** Dormant reference profile proving hidden hospitality code is retained. */

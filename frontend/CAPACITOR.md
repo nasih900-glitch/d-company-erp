@@ -1,65 +1,24 @@
-# Mobile builds (Capacitor)
+# Archived Capacitor shells — do not release
 
-Capacitor wraps the same React app into native Android + iOS shells.
+The `frontend/android` and `frontend/ios` directories are retained only as
+historical prototypes. They are **not supported D Company ERP clients** and are
+not part of CI, signing, partner distribution, production deployment, or the
+server-driven Android update channel.
 
-## First-time setup (do this once)
+In particular, do not run `frontend/android/gradlew assembleRelease` and do not
+send its APK to staff or partners. That archived wrapper has a different
+application ID (`cloud.dcompany.erp.web`), an obsolete version, and no release
+acceptance evidence. Installing it would create a second Android app instead
+of upgrading D Company ERP.
 
-```bash
-cd frontend
-npm install
+The only supported Android source is:
 
-# Generate the native projects (creates ./android and ./ios folders).
-# Only needs to be run once per platform; commit the resulting folders.
-npx cap add android
-npx cap add ios   # macOS only, Xcode required
+```text
+android-native/
 ```
 
-## Building (each release)
+Use [`../docs/DISTRIBUTION.md`](../docs/DISTRIBUTION.md) for its signed APK/AAB
+workflow. The supported package ID is `cloud.dcompany.erp`.
 
-```bash
-# 1. Build the web bundle with the production API URL baked in
-VITE_API_URL=https://api.dcompany.cloud/api/v1 \
-VITE_APP_VERSION=$(git describe --tags --always) \
-npm run build
-
-# 2. Push the new bundle into the native projects
-npx cap sync
-
-# 3a. Android APK (Linux/Mac/Windows)
-cd android
-./gradlew assembleRelease       # → app/build/outputs/apk/release/app-release-unsigned.apk
-./gradlew bundleRelease         # → app/build/outputs/bundle/release/app-release.aab (Play Store)
-
-# 3b. iOS (Mac + Xcode only)
-npx cap open ios
-# In Xcode: Product → Archive → Distribute App → App Store Connect / TestFlight
-```
-
-## Private App Store / custom app build
-
-Use the dedicated script for the private/custom Apple submission:
-
-```bash
-cd frontend
-npm run ios:prepare:store
-npm run ios:open
-```
-
-This builds against the production API and keeps the real private ERP feature set visible for custom app review.
-
-See `../docs/APP_STORE_SUBMISSION.md` for the full App Store checklist.
-
-## Signing
-
-### Android
-Generate a keystore once and KEEP IT SAFE — Google Play will reject any APK signed with a different key for the same app ID.
-
-```bash
-keytool -genkey -v -keystore release.keystore -alias dcompany \
-        -keyalg RSA -keysize 2048 -validity 10000
-```
-
-Put the keystore path + passwords in `android/keystore.properties` (git-ignored). See `docs/DISTRIBUTION.md`.
-
-### iOS
-Code signing happens through Xcode + your Apple Developer account. Xcode handles certificate creation and provisioning profiles automatically when you sign in with your Apple ID and have a paid Developer Program membership.
+The web ERP remains the primary hosted client. No iOS build is currently
+supported or distributable.

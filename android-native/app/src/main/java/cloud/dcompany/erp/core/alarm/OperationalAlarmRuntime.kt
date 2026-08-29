@@ -5,7 +5,6 @@ import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
 import cloud.dcompany.erp.core.auth.EffectivePermissions
-import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.net.MeResponse
 
@@ -23,7 +22,7 @@ internal fun cachedOperationalAlarmScope(
     if (AccessTokenIdentityParser.parse(accessToken) != OutboxOwnerIdentity.from(profile)) {
         return null
     }
-    val terminalId = if (EffectivePermissions.from(profile).has(ErpPermission.PosRead)) {
+    val terminalId = if (EffectivePermissions.from(profile).requiresOperationalWorkspace()) {
         persistedTerminalId?.trim()?.takeIf(String::isNotEmpty) ?: return null
     } else {
         null

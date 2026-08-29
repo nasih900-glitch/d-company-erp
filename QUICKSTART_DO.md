@@ -249,5 +249,5 @@ Check `docker stats` on the droplet. If RAM is maxed (>1.8 GB), resize the dropl
 | RAM constantly maxed | Resize droplet to 4 GB ($24/mo) |
 | 2nd branch opens | Same droplet handles it. Add another `Branch` in the database. |
 | Café revenue justifies it | Buy `dcompany.in` domain (₹400/yr), point DNS at droplet, edit one .env line |
-| Want App Store listing | Capacitor scaffolding already in place — see `docs/DISTRIBUTION.md` |
+| Want Android distribution | Use only `android-native` and the signed workflow in `docs/DISTRIBUTION.md`; iOS is not currently supported |
 | Want thermal printer + cash drawer | Tell me your printer model, I wire ESC/POS |

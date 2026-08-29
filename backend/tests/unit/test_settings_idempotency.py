@@ -16,6 +16,7 @@ established for Events' check_in_ticket and Memberships' cancel_subscription.
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -344,24 +345,73 @@ async def test_create_terminal_persists_and_stores_response(monkeypatch) -> None
 
     session = _QueuedSession([
         _Result(scalar=_branch()),
+        _Result(scalar=None),  # no existing active Hybrid workspace
         _Result(scalar=None),  # no case-insensitive name conflict
     ])
     payload = TerminalCreate(
         branch_id=BRANCH_ID,
-        name="POS-T2",
-        purpose="cafe_pos",
+        name="Main Workspace",
+        purpose="hybrid",
     )
 
     result = await create_terminal(payload, _request(), session, _tenant())
 
     assert session.flushes == 1
     assert len(session.added) == 1
-    assert result.name == "POS-T2"
-    assert result.purpose == "cafe_pos"
-    assert session.added[0].purpose == "cafe_pos"
+    assert result.name == "Main Workspace"
+    assert result.purpose == "hybrid"
+    assert session.added[0].purpose == "hybrid"
     assert stored["status_code"] == 201
-    assert stored["body"]["name"] == "POS-T2"
-    assert stored["body"]["purpose"] == "cafe_pos"
+    assert stored["body"]["name"] == "Main Workspace"
+    assert stored["body"]["purpose"] == "hybrid"
+
+
+@pytest.mark.asyncio
+async def test_create_terminal_rejects_split_purpose_in_one_workspace_profile(
+    monkeypatch,
+) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
+    session = _QueuedSession([_Result(scalar=_branch())])
+
+    with pytest.raises(BusinessRuleError, match="one Hybrid workspace"):
+        await create_terminal(
+            TerminalCreate(
+                branch_id=BRANCH_ID,
+                name="Gaming Area",
+                purpose="gaming",
+            ),
+            _request(),
+            session,
+            _tenant(),
+        )
+
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_create_terminal_rejects_a_second_active_workspace(monkeypatch) -> None:
+    async def reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
+    active_terminal_id = uuid4()
+    session = _QueuedSession(
+        [_Result(scalar=_branch()), _Result(scalar=active_terminal_id)]
+    )
+
+    with pytest.raises(ConflictError, match="one active Hybrid workspace") as exc:
+        await create_terminal(
+            TerminalCreate(branch_id=BRANCH_ID, name="Second Workspace"),
+            _request(),
+            session,
+            _tenant(),
+        )
+
+    assert exc.value.details == {"active_terminal_id": str(active_terminal_id)}
+    assert session.added == []
 
 
 def test_terminal_purpose_is_explicit_strict_and_migration_safe_by_default() -> None:
@@ -383,6 +433,7 @@ async def test_create_terminal_rejects_duplicate_name_in_the_same_branch(monkeyp
     monkeypatch.setattr(settings_router, "check_or_reserve", reserve)
     session = _QueuedSession([
         _Result(scalar=_branch()),
+        _Result(scalar=None),
         _Result(scalar=uuid4()),
     ])
 
@@ -419,8 +470,7 @@ async def test_update_terminal_renames_history_bearing_row_in_place() -> None:
     result = await update_terminal(
         terminal_id,
         TerminalUpdate(
-            name=" Cafe POS ",
-            purpose="cafe_pos",
+            name=" Main Workspace ",
             device_id=" cafe-tablet ",
         ),
         session,
@@ -429,11 +479,11 @@ async def test_update_terminal_renames_history_bearing_row_in_place() -> None:
 
     assert result.id == terminal_id
     assert result.branch_id == BRANCH_ID
-    assert result.name == "Cafe POS"
-    assert result.purpose == "cafe_pos"
+    assert result.name == "Main Workspace"
+    assert result.purpose == "hybrid"
     assert result.device_id == "cafe-tablet"
-    assert terminal.name == "Cafe POS"
-    assert terminal.purpose == "cafe_pos"
+    assert terminal.name == "Main Workspace"
+    assert terminal.purpose == "hybrid"
     assert session.flushes == 1
     assert session.added == []
 
@@ -458,7 +508,7 @@ async def test_update_terminal_blocks_purpose_change_during_an_open_shift() -> N
     with pytest.raises(BusinessRuleError, match="current shift"):
         await update_terminal(
             terminal_id,
-            TerminalUpdate(purpose="cafe_pos"),
+            TerminalUpdate(purpose="hybrid"),
             session,
             _tenant(),
         )
@@ -538,7 +588,7 @@ async def test_update_terminal_explicit_null_clears_device_binding() -> None:
         id=terminal_id,
         branch_id=BRANCH_ID,
         name="Cafe POS",
-        purpose="cafe_pos",
+        purpose="hybrid",
         device_id="old-device",
     )
     session = _QueuedSession([
@@ -557,6 +607,39 @@ async def test_update_terminal_explicit_null_clears_device_binding() -> None:
 
     assert result.device_id is None
     assert terminal.device_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_rejects_reactivating_a_second_workspace() -> None:
+    terminal_id = uuid4()
+    active_terminal_id = uuid4()
+    terminal = Terminal(
+        id=terminal_id,
+        branch_id=BRANCH_ID,
+        name="Historical Gaming Area",
+        purpose="gaming",
+        is_active=False,
+        device_id=None,
+    )
+    session = _QueuedSession([
+        _Result(scalar=BRANCH_ID),
+        _Result(scalar=_branch()),
+        _Result(scalar=terminal),
+        _Result(scalar=active_terminal_id),
+    ])
+
+    with pytest.raises(ConflictError, match="one active Hybrid workspace") as exc:
+        await update_terminal(
+            terminal_id,
+            TerminalUpdate(purpose="hybrid", is_active=True),
+            session,
+            _tenant(),
+        )
+
+    assert exc.value.details == {"active_terminal_id": str(active_terminal_id)}
+    assert terminal.is_active is False
+    assert terminal.purpose == "gaming"
+    assert session.flushes == 0
 
 
 @pytest.mark.asyncio
@@ -617,6 +700,30 @@ async def test_list_terminals_is_scoped_to_active_tenant_branch() -> None:
     assert BRANCH_ID in compiled.params.values()
     assert "deleted_at IS NULL" in str(session.statement)
     assert "terminals.is_active IS true" in str(session.statement)
+
+
+@pytest.mark.asyncio
+async def test_terminal_listing_guard_accepts_gaming_read_without_pos_access(
+    monkeypatch,
+) -> None:
+    checked: list[str] = []
+
+    async def only_gaming_read(_session, _tenant, permission: str) -> bool:
+        checked.append(permission)
+        return permission == "gaming.read"
+
+    monkeypatch.setattr("app.core.permissions._has_permission", only_gaming_read)
+    dependency = inspect.signature(list_terminals).parameters["tenant"].default.dependency
+    gaming_only = TenantContext(
+        user_id=USER_ID,
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        terminal_id=None,
+        roles=("gaming_supervisor",),
+    )
+
+    assert await dependency(None, gaming_only) is gaming_only
+    assert checked == ["pos.read", "gaming.read"]
 
 
 @pytest.mark.asyncio

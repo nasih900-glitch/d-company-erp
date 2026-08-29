@@ -96,7 +96,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import cloud.dcompany.erp.core.auth.GAMING_SHIFT_ACCESS_REQUIRED_MESSAGE
 import cloud.dcompany.erp.core.auth.GamingAccess
+import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
@@ -295,7 +297,13 @@ fun GamingScreen(
         state.stations.filter { selectedFilter == "all" || stationFilterId(it.type) == selectedFilter }
     }
     val orphanedExtensionActions = state.orphanedPackageExtensionActions()
-    val startTerminalBlockMessage = gamingStartTerminalBlockMessage(activeTerminal?.purpose)
+    // Read-only viewers cannot start a session. Setup guidance therefore
+    // belongs only beside the write controls it can actually unblock.
+    val startTerminalBlockMessage = if (access.canManageSessions) {
+        gamingStartTerminalBlockMessage(activeTerminal?.purpose)
+    } else {
+        null
+    }
     val gridState = rememberLazyGridState()
     val gridHeaderCount = 3 + // alarm, metrics, filters
         (if (!access.canManageSessions) 1 else 0) +
@@ -335,7 +343,13 @@ fun GamingScreen(
         ) {
             if (!access.canManageSessions) {
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    ViewOnlyNotice()
+                    ViewOnlyNotice(
+                        if (access.writeBlockedByMissingShiftRead) {
+                            GAMING_SHIFT_ACCESS_REQUIRED_MESSAGE
+                        } else {
+                            VIEW_ONLY_MESSAGE
+                        },
+                    )
                 }
             }
             startTerminalBlockMessage?.let { message ->

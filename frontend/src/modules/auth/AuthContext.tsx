@@ -14,6 +14,7 @@ import {
 } from '@/lib/api';
 import { DEMO_MODE, DEMO_USER } from '@/lib/demo';
 import type { TerminalDTO } from '@/lib/erp-api';
+import { GAMING_CENTRE_TERMINAL_POLICY } from '@/lib/product-profile';
 import {
   clearStoredTerminal,
   readStoredTerminalId,
@@ -65,7 +66,12 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
       params: me.branch_id ? { branch_id: me.branch_id } : undefined,
       signal,
     });
-    const resolution = resolveTerminal(me.branch_id, readStoredTerminalId(), r.data);
+    const resolution = resolveTerminal(
+      me.branch_id,
+      readStoredTerminalId(),
+      r.data,
+      GAMING_CENTRE_TERMINAL_POLICY,
+    );
     if (resolution.kind === 'ready') {
       storeTerminalId(resolution.terminalId);
       return { terminalId: resolution.terminalId, options: r.data, issue: null };
@@ -73,7 +79,7 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
     clearStoredTerminal();
     return {
       terminalId: null,
-      options: resolution.kind === 'selection_required' ? resolution.terminals : [],
+      options: 'terminals' in resolution ? resolution.terminals : [],
       issue: terminalResolutionMessage(resolution),
     };
   } catch (error) {

@@ -13,6 +13,7 @@ data class WorkspacePresentationPolicy(
     val showsRestaurantOperations: Boolean,
     val showsCustomers: Boolean,
     val showsEvents: Boolean,
+    val singleHybridTerminalOnly: Boolean,
 ) {
     val prepaidRevenueLabel: String
         get() = if (showsMemberships) "Memberships" else "Legacy/other prepaid revenue"
@@ -78,4 +79,5 @@ fun WorkspaceFeatureProfile.presentationPolicy(): WorkspacePresentationPolicy =
         },
         showsCustomers = WorkspaceFeature.Customers in enabled,
         showsEvents = WorkspaceFeature.Events in enabled,
+        singleHybridTerminalOnly = singleHybridTerminalOnly,
     )

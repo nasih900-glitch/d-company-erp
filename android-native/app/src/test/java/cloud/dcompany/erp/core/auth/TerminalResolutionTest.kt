@@ -53,6 +53,55 @@ class TerminalResolutionTest {
     }
 
     @Test
+    fun `gaming centre automatically uses its only hybrid workspace`() {
+        val hybrid = till("hybrid", "Main workspace", purpose = TerminalPurpose.HYBRID)
+        val result = resolve(
+            terminals = listOf(hybrid),
+            singleHybridOnly = true,
+        )
+
+        assertEquals(TerminalResolution.Resolved(hybrid, true), result)
+    }
+
+    @Test
+    fun `gaming centre blocks hybrid plus active gaming instead of hiding the conflict`() {
+        val result = resolve(
+            terminals = listOf(
+                till("hybrid", "Main workspace", purpose = TerminalPurpose.HYBRID),
+                till("gaming", "Gaming Area", purpose = TerminalPurpose.GAMING),
+            ),
+            singleHybridOnly = true,
+        )
+
+        assertTrue(result is TerminalResolution.Blocked)
+        assertTrue((result as TerminalResolution.Blocked).message.contains("more than one active workspace", true))
+    }
+
+    @Test
+    fun `gaming centre rejects a lone legacy purpose without showing a picker`() {
+        val result = resolve(
+            terminals = listOf(till("gaming", "Gaming Area", purpose = TerminalPurpose.GAMING)),
+            singleHybridOnly = true,
+        )
+
+        assertTrue(result is TerminalResolution.Blocked)
+        assertTrue((result as TerminalResolution.Blocked).message.contains("both Gaming and POS"))
+    }
+
+    @Test
+    fun `single hybrid topology keeps unresolved stale-scope work blocked`() {
+        val result = resolve(
+            terminals = listOf(till("hybrid", "Main workspace", purpose = TerminalPurpose.HYBRID)),
+            cached = "old-gaming-terminal",
+            unresolved = true,
+            singleHybridOnly = true,
+        )
+
+        assertTrue(result is TerminalResolution.Blocked)
+        assertTrue((result as TerminalResolution.Blocked).message.contains("saved work", true))
+    }
+
+    @Test
     fun `multiple tills require an explicit stable choice`() {
         val result = resolve(
             terminals = listOf(
@@ -160,21 +209,43 @@ class TerminalResolutionTest {
         assertFalse(remembered)
     }
 
+    @Test
+    fun `confirmed write identity requires active and persisted terminal to agree`() {
+        val active = ValidatedTerminalDisplay(
+            terminalId = "hybrid",
+            terminalName = "Main workspace",
+            branchId = "branch-1",
+            purpose = TerminalPurpose.HYBRID,
+        )
+
+        assertEquals("hybrid", confirmedTerminalId("hybrid", active))
+        assertEquals(null, confirmedTerminalId("legacy", active))
+        assertEquals(null, confirmedTerminalId("hybrid", null))
+    }
+
     private fun resolve(
         terminals: List<Terminal>,
         cached: String? = null,
         unresolved: Boolean = false,
+        singleHybridOnly: Boolean = false,
     ): TerminalResolution = resolveTerminalAssignment(
         requiresPosTerminal = true,
         branchId = "branch-1",
         availableTerminals = terminals,
         cachedTerminalId = cached,
         hasUnresolvedLocalWork = unresolved,
+        singleHybridOnly = singleHybridOnly,
     )
 
-    private fun till(id: String, name: String, branchId: String = "branch-1") = Terminal(
+    private fun till(
+        id: String,
+        name: String,
+        branchId: String = "branch-1",
+        purpose: String = TerminalPurpose.HYBRID,
+    ) = Terminal(
         id = id,
         name = name,
         branchId = branchId,
+        purpose = purpose,
     )
 }

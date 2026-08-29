@@ -238,7 +238,7 @@ function ShiftsTab() {
     if (!LIVE_MODE) { setLoading(false); return; }
     if (!terminalReady || !terminalId) {
       setRows([]);
-      setErr('Select the POS terminal used by this device before managing shifts.');
+      setErr('The shared register could not be verified. Refresh; if the problem remains, ask a protected owner to check the Combined register setup.');
       setLoading(false);
       return;
     }

@@ -16,10 +16,12 @@ import cloud.dcompany.erp.core.auth.CacheScope
 import cloud.dcompany.erp.core.auth.CacheScopeException
 import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.EffectivePermissions
-import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
+import cloud.dcompany.erp.core.auth.TerminalResolution
+import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
 import cloud.dcompany.erp.core.db.UnresolvedOutboxGroup
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.Terminal
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
@@ -144,20 +146,21 @@ class BackgroundSyncWorker(
             return BackgroundScopeResult.BLOCKED
         }
 
-        val requiresTerminal = EffectivePermissions.from(liveProfile).has(ErpPermission.PosRead)
+        val requiresTerminal = EffectivePermissions.from(liveProfile).requiresOperationalWorkspace()
         val terminalId = if (requiresTerminal) {
             val branchId = liveProfile.branchId?.trim()?.takeIf(String::isNotEmpty)
                 ?: return BackgroundScopeResult.BLOCKED
             val savedTerminalId = app.terminalStore.terminalId()?.trim()?.takeIf(String::isNotEmpty)
                 ?: return BackgroundScopeResult.BLOCKED
-            val savedStillValid = ApiClient.api.terminals(branchId).any {
-                it.id == savedTerminalId && it.branchId == branchId
-            }
-            if (!savedStillValid) return BackgroundScopeResult.BLOCKED
+            val verifiedTerminalId = confirmedBackgroundHybridTerminalId(
+                branchId = branchId,
+                availableTerminals = ApiClient.api.terminals(branchId),
+                savedTerminalId = savedTerminalId,
+            ) ?: return BackgroundScopeResult.BLOCKED
             if (!app.terminalStore.hasCachedValidated(savedTerminalId, branchId)) {
                 return BackgroundScopeResult.BLOCKED
             }
-            savedTerminalId
+            verifiedTerminalId
         } else {
             null
         }
@@ -203,6 +206,26 @@ class BackgroundSyncWorker(
         const val LOG_TAG = "DCompanyBackgroundSync"
     }
 }
+
+/**
+ * Background work may reopen only the exact identity previously chosen by the
+ * foreground. It never repairs or reassigns a stale cache. The active Gaming
+ * Centre release also fails closed unless the server returns exactly one
+ * Hybrid workspace for the authenticated branch.
+ */
+internal fun confirmedBackgroundHybridTerminalId(
+    branchId: String?,
+    availableTerminals: List<Terminal>,
+    savedTerminalId: String?,
+): String? = (resolveTerminalAssignment(
+        requiresPosTerminal = true,
+        branchId = branchId,
+        availableTerminals = availableTerminals,
+        cachedTerminalId = savedTerminalId,
+        // A worker is a recovery path, never an assignment path.
+        hasUnresolvedLocalWork = true,
+        singleHybridOnly = true,
+    ) as? TerminalResolution.Resolved)?.terminal?.id
 
 internal sealed interface BackgroundScopeResult {
     data object NO_SESSION : BackgroundScopeResult

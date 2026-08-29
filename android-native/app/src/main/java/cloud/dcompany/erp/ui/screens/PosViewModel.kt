@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -299,9 +300,11 @@ class PosViewModel : ViewModel() {
     @Volatile private var access = PosAccess()
     private val heldOrderRows = db.heldOrderDao().observeAll()
     private val confirmedHeldOrderIds = db.heldOrderDao().observeConfirmedTargetIds()
-    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(
-        app.terminalStore.terminalIdFlow,
-    ).stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
+        .map { it?.terminalId }
+        .distinctUntilChanged()
+    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(confirmedTerminalId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val recentReceipts: StateFlow<List<PosReceiptEntity>> = db.posReceiptDao()
         .observeRecent()
@@ -1339,9 +1342,9 @@ class PosViewModel : ViewModel() {
             notice.value = "Enter enough cash to cover the verified total."
             return
         }
-        val terminalId = app.terminalStore.terminalId()
+        val terminalId = app.terminalStore.confirmedTerminalId()
         if (terminalId == null) {
-            notice.value = "This tablet has no verified POS terminal. Sign in online before collecting."
+            notice.value = "This tablet's workspace is not verified. Sign in online before collecting."
             return
         }
         val scopeLease = app.cacheIsolation.currentLease() ?: return
@@ -1699,13 +1702,13 @@ class PosViewModel : ViewModel() {
             }
             return
         }
-        val terminalIdAtConfirmation = app.terminalStore.terminalId()
+        val terminalIdAtConfirmation = app.terminalStore.confirmedTerminalId()
         if (terminalIdAtConfirmation == null) {
             preparedHeldCheckout.value = null
             viewModelScope.launch {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
-            notice.value = "This tablet no longer has a verified POS terminal. Nothing was saved; " +
+            notice.value = "This tablet's workspace is no longer verified. Nothing was saved; " +
                 "sign in online and review the bill again before collecting."
             return
         }

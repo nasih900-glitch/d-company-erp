@@ -5,6 +5,7 @@ import androidx.room.withTransaction
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.GAMING_SHIFT_ACCESS_REQUIRED_MESSAGE
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.EffectivePermissions
@@ -862,12 +863,13 @@ class GamingViewModel : ViewModel() {
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
     private val gamingApi = ApiClient.create<GamingApi>()
-    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(
-        appCtx.terminalStore.terminalIdFlow,
-    )
     /** Validated, persisted purpose is part of the same terminal authority as X-Terminal-Id. */
     val activeTerminal: StateFlow<ValidatedTerminalDisplay?> =
         appCtx.terminalStore.activeValidatedTerminal
+    private val confirmedTerminalId = activeTerminal
+        .map { it?.terminalId }
+        .distinctUntilChanged()
+    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(confirmedTerminalId)
 
     private val busyStationId = MutableStateFlow<String?>(null)
     private val error = MutableStateFlow<String?>(null)
@@ -1100,7 +1102,11 @@ class GamingViewModel : ViewModel() {
     }
 
     private fun requireWrite(): Boolean = authorizeAction(access.canManageSessions) {
-        error.value = VIEW_ONLY_MESSAGE
+        error.value = if (access.writeBlockedByMissingShiftRead) {
+            GAMING_SHIFT_ACCESS_REQUIRED_MESSAGE
+        } else {
+            VIEW_ONLY_MESSAGE
+        }
     }
 
     private fun requireIdle(): Boolean {

@@ -96,7 +96,6 @@ import cloud.dcompany.erp.core.update.DirectUpdateMetadataResult
 import cloud.dcompany.erp.core.update.matchesDescriptor
 import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
 import cloud.dcompany.erp.core.auth.EffectivePermissions
-import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.alarm.OperationalNotificationDestination
 import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
 import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
@@ -499,7 +498,7 @@ private fun AppRoot(
                     }
                 }
                 val visibleDestination = resolveWorkspaceDestination(currentDestination, destinations)
-                val requiresTill = permissions.has(ErpPermission.PosRead)
+                val requiresTill = permissions.requiresOperationalWorkspace()
                 val locationLabel = workspaceLocationLabel(
                     branchId = s.me.branchId,
                     branchName = s.me.branchName,

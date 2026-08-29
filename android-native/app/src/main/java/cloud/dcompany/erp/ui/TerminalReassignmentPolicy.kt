@@ -102,7 +102,7 @@ internal fun workspaceLocationLabel(
         verifiedBranchName != null -> verifiedBranchName
         else -> "Assigned branch"
     }
-    if (!requiresTill) return "$branch · No till required"
+    if (!requiresTill) return branch
     val exact = activeTerminal?.takeIf { it.branchId == normalizedBranch }
     // `hybrid` is the intentionally invisible one-counter setup: staff work
     // in one shop/shift while the backend retains a terminal id for audit and

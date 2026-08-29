@@ -27,6 +27,7 @@ internal fun resolveTerminalAssignment(
     availableTerminals: List<Terminal>,
     cachedTerminalId: String?,
     hasUnresolvedLocalWork: Boolean,
+    singleHybridOnly: Boolean = false,
 ): TerminalResolution {
     if (!requiresPosTerminal) return TerminalResolution.NotRequired
 
@@ -47,7 +48,30 @@ internal fun resolveTerminalAssignment(
         .toList()
 
     val normalizedCachedId = cachedTerminalId?.trim()?.takeIf(String::isNotEmpty)
-    branchTerminals.firstOrNull { it.id == normalizedCachedId }?.let {
+    if (
+        singleHybridOnly &&
+        (branchTerminals.size != 1 || branchTerminals.singleOrNull()?.purpose != TerminalPurpose.HYBRID)
+    ) {
+        val correction = when {
+            branchTerminals.isEmpty() ->
+                "No Hybrid Gaming + POS workspace is configured for this shop."
+            branchTerminals.size > 1 ->
+                "More than one active workspace is configured for this shop."
+            else ->
+                "This shop's active workspace is not configured for both Gaming and POS."
+        }
+        val savedWork = if (hasUnresolvedLocalWork) {
+            " Saved work was kept under its original internal terminal; do not clear app data."
+        } else {
+            ""
+        }
+        return TerminalResolution.Blocked(
+            "$correction Ask an owner to keep exactly one active Hybrid workspace, then verify again.$savedWork",
+        )
+    }
+
+    val eligibleTerminals = branchTerminals
+    eligibleTerminals.firstOrNull { it.id == normalizedCachedId }?.let {
         return TerminalResolution.Resolved(terminal = it, shouldRemember = false)
     }
 
@@ -58,15 +82,15 @@ internal fun resolveTerminalAssignment(
         )
     }
 
-    return when (branchTerminals.size) {
+    return when (eligibleTerminals.size) {
         0 -> TerminalResolution.Blocked(
             "No POS terminal is configured for this branch. Ask an owner to create one.",
         )
         1 -> TerminalResolution.Resolved(
-            terminal = branchTerminals.single(),
-            shouldRemember = normalizedCachedId != branchTerminals.single().id,
+            terminal = eligibleTerminals.single(),
+            shouldRemember = normalizedCachedId != eligibleTerminals.single().id,
         )
-        else -> TerminalResolution.SelectionRequired(branchTerminals)
+        else -> TerminalResolution.SelectionRequired(eligibleTerminals)
     }
 }
 

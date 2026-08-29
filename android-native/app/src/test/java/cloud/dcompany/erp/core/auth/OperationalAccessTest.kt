@@ -24,6 +24,7 @@ class OperationalAccessTest {
         assertTrue(readOnly.shiftAccess().isViewOnly)
 
         val cashier = permissions(
+            ErpPermission.PosRead,
             ErpPermission.PosWrite,
             ErpPermission.TablesWrite,
             ErpPermission.PosShiftOpen,
@@ -88,6 +89,8 @@ class OperationalAccessTest {
         assertTrue(protectedCosting.inventoryAccess().canManageCosting)
 
         val gaming = permissions(
+            ErpPermission.PosRead,
+            ErpPermission.GamingRead,
             ErpPermission.GamingWrite,
             ErpPermission.GamingTournamentManage,
         )
@@ -99,6 +102,8 @@ class OperationalAccessTest {
         )
 
         val protectedGaming = permissions(
+            ErpPermission.PosRead,
+            ErpPermission.GamingRead,
             ErpPermission.GamingWrite,
             ErpPermission.AdminAuditRead,
         )
@@ -138,6 +143,63 @@ class OperationalAccessTest {
         assertTrue(permissions.eventsAccess().isViewOnly)
         assertTrue(permissions.shiftAccess().isViewOnly)
         assertFalse(permissions.inventoryAccess().canManageInventory)
+    }
+
+    @Test
+    fun `only terminal users with workspace discovery authority require assignment`() {
+        assertFalse(permissions().requiresOperationalWorkspace())
+        assertTrue(permissions(ErpPermission.PosRead).requiresOperationalWorkspace())
+        assertFalse(permissions(ErpPermission.PosWrite).requiresOperationalWorkspace())
+        assertFalse(permissions(ErpPermission.PosShiftClose).requiresOperationalWorkspace())
+        assertTrue(permissions(ErpPermission.GamingRead).requiresOperationalWorkspace())
+        assertFalse(permissions(ErpPermission.GamingWrite).requiresOperationalWorkspace())
+        assertTrue(
+            permissions(
+                ErpPermission.PosRead,
+                ErpPermission.GamingWrite,
+            ).requiresOperationalWorkspace(),
+        )
+        assertTrue(
+            permissions(
+                ErpPermission.SettingsManage,
+                ErpPermission.GamingWrite,
+            ).requiresOperationalWorkspace(),
+        )
+        assertFalse(permissions(ErpPermission.FinanceRead).requiresOperationalWorkspace())
+        assertFalse(permissions(ErpPermission.AnalyticsRead).requiresOperationalWorkspace())
+        assertFalse(permissions(ErpPermission.InventoryWrite).requiresOperationalWorkspace())
+    }
+
+    @Test
+    fun `gaming read discovers workspace while missing shift read keeps controls view only`() {
+        val gamingReader = permissions(ErpPermission.GamingRead)
+        val gamingWithoutShiftRead = permissions(
+            ErpPermission.GamingRead,
+            ErpPermission.GamingWrite,
+        )
+        val staleWriteOnly = permissions(
+            ErpPermission.GamingWrite,
+        )
+
+        assertTrue(gamingReader.requiresOperationalWorkspace())
+        assertFalse(gamingReader.gamingAccess().canManageSessions)
+        assertTrue(gamingWithoutShiftRead.requiresOperationalWorkspace())
+        assertFalse(gamingWithoutShiftRead.gamingAccess().canManageSessions)
+        assertTrue(gamingWithoutShiftRead.gamingAccess().writeBlockedByMissingShiftRead)
+        assertFalse(staleWriteOnly.requiresOperationalWorkspace())
+        assertFalse(staleWriteOnly.gamingAccess().canManageSessions)
+    }
+
+    @Test
+    fun `terminal scoped writes fail closed without terminal discovery authority`() {
+        val writeOnly = permissions(
+            ErpPermission.PosWrite,
+            ErpPermission.PosShiftOpen,
+            ErpPermission.PosShiftClose,
+        )
+
+        assertFalse(writeOnly.posAccess().canCreateAndCollect)
+        assertTrue(writeOnly.shiftAccess().isViewOnly)
     }
 
     @Test

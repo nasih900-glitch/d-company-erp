@@ -6,6 +6,7 @@ import {
   resolveRequiredOpenShift,
   resolveTerminal,
   shiftResolutionMessage,
+  terminalResolutionMessage,
 } from './operational-context';
 
 const branchA = 'branch-a';
@@ -13,7 +14,11 @@ const branchB = 'branch-b';
 const terminalA = 'terminal-a';
 const terminalB = 'terminal-b';
 
-function terminal(id: string, branch_id: string): TerminalDTO {
+function terminal(
+  id: string,
+  branch_id: string,
+  overrides: Partial<TerminalDTO> = {},
+): TerminalDTO {
   return {
     id,
     branch_id,
@@ -22,6 +27,7 @@ function terminal(id: string, branch_id: string): TerminalDTO {
     is_active: true,
     device_id: null,
     last_seen_at: null,
+    ...overrides,
   };
 }
 
@@ -73,6 +79,44 @@ describe('terminal resolution', () => {
       terminal(terminalA, branchA), terminal(terminalB, branchA),
     ]);
     expect(result.kind).toBe('selection_required');
+  });
+
+  it('uses the sole active Hybrid terminal and replaces a stale stored id', () => {
+    expect(resolveTerminal(
+      branchA,
+      'inactive-legacy',
+      [
+        terminal('inactive-legacy', branchA, { is_active: false, purpose: 'gaming' }),
+        terminal(terminalA, branchA),
+      ],
+      { mode: 'single_hybrid' },
+    )).toEqual({
+      kind: 'ready', terminalId: terminalA, source: 'single',
+    });
+  });
+
+  it('blocks a sole active split-purpose terminal in the single-Hybrid profile', () => {
+    const result = resolveTerminal(
+      branchA,
+      terminalA,
+      [terminal(terminalA, branchA, { purpose: 'gaming' })],
+      { mode: 'single_hybrid' },
+    );
+
+    expect(result.kind).toBe('hybrid_required');
+    expect(terminalResolutionMessage(result)).toContain('Combined mode');
+  });
+
+  it('blocks duplicate active terminals even when the stored id matches one', () => {
+    const result = resolveTerminal(
+      branchA,
+      terminalA,
+      [terminal(terminalA, branchA), terminal(terminalB, branchA)],
+      { mode: 'single_hybrid' },
+    );
+
+    expect(result.kind).toBe('configuration_conflict');
+    expect(terminalResolutionMessage(result)).toContain('one shared Combined register');
   });
 });
 

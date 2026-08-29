@@ -719,6 +719,11 @@ async def _require_terminal_purpose(
         raise BusinessRuleError(
             "The selected terminal is not valid for this shop. Refresh your terminal selection."
         )
+    if getattr(terminal, "is_active", True) is False:
+        raise BusinessRuleError(
+            "The selected workspace is archived. Reload the app and use the active "
+            "Hybrid workspace."
+        )
     if terminal.purpose not in allowed:
         raise BusinessRuleError(invalid_message)
     return terminal
@@ -4704,6 +4709,7 @@ async def list_session_pos_target_shifts(
                 Shift.status == "open",
                 Shift.id != source_shift.id,
                 Shift.terminal_id != source_shift.terminal_id,
+                Terminal.is_active.is_(True),
                 Terminal.purpose.in_(_POS_DESTINATION_TERMINAL_PURPOSES),
                 User.company_id == tenant.company_id,
             )
@@ -4858,6 +4864,11 @@ async def handoff_session_to_pos(
     if target_terminal is None or target_terminal.branch_id != target_shift.branch_id:
         raise BusinessRuleError(
             "The selected POS terminal is not valid for this shop. Refresh the till list."
+        )
+    if getattr(target_terminal, "is_active", True) is False:
+        raise BusinessRuleError(
+            "The selected POS workspace is archived. Refresh the till list and use "
+            "the active Hybrid workspace."
         )
     if target_terminal.purpose not in _POS_DESTINATION_TERMINAL_PURPOSES:
         raise BusinessRuleError(

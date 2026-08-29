@@ -106,29 +106,32 @@ D Company ERP currently has two supported clients backed by the same cloud API:
 - **Web** — the primary production client.
 - **Android** — the native Kotlin/Compose app in `android-native`, producing a
   signed `.apk` for direct installation and `.aab` for Play internal testing.
-The iOS project in `frontend/ios` and the Tauri macOS/Windows wrapper in
-`frontend/src-tauri` are outside the supported release scope. Do not describe
-them as distributable clients.
+The old Capacitor shells in `frontend/android` and `frontend/ios`, plus the
+Tauri macOS/Windows wrapper in `frontend/src-tauri`, are outside the supported
+release scope. Never build or distribute `frontend/android`: it is an archived,
+separately identified prototype, not another supported ERP app.
 
 - [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — Android signing, testing, and publishing setup.
 - [`docs/CLOUD_DEPLOY.md`](docs/CLOUD_DEPLOY.md) — backend hosting (Render / AWS / Fly.io).
 - [`frontend/TAURI.md`](frontend/TAURI.md) — desktop build commands.
-- [`frontend/CAPACITOR.md`](frontend/CAPACITOR.md) — mobile build commands.
+- [`frontend/CAPACITOR.md`](frontend/CAPACITOR.md) — archived-shell warning;
+  supported Android releases come only from `android-native`.
 - [`download/index.html`](download/index.html) — release-status landing page that
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current unreleased candidate is `3.1.0`
-(`11`); Android code `8` remains the minimum-compatible floor. The candidate
+`.github/workflows/release.yml`. The current unreleased candidate is `3.1.1`
+(`12`); Android code `8` remains the minimum-compatible floor. The candidate
 adds the Gaming Centre profile, durable session add-ons and verified direct
 updates while retaining contextual Support and the one-shop workspace UI. A
 signed candidate must still pass the complete release gates and API-35 in-place
-upgrades from both `3.0.7` (`8`) and the earlier schema-37 code-`9` candidate.
+upgrades from `3.0.7` (`8`), the earlier schema-37 code-`9` candidate, and the
+signed `3.1.0` (`11`) updater bootstrap.
 This is not physical Redmi Pad 2 proof, a Play upload, or a production rollout.
-The coordinated backend deployment must reach Alembic revision `0055`. Do not
-tag `v3.1.0` until the remaining release gates pass. The
-workflow tests and signs the native Android build, then attaches only verified
-signed Android artifacts to the GitHub Release.
+The coordinated backend deployment must reach Alembic revision `0056`. A
+`v3.1.1` tag reruns the backend, web, and Android release gates, signs the
+native build, and stages only verified artifacts in a private draft GitHub
+Release. Publish that draft only after the `0056` production smoke test passes.
 
 ## License
 

@@ -37,6 +37,7 @@ import {
   type StationDTO,
 } from '@/lib/erp-api';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
+import { GAMING_CENTRE_TERMINAL_POLICY } from '@/lib/product-profile';
 import { createOperationKey, isAmbiguousApiError } from '@/lib/retry-drafts';
 import { subscribeRealtime } from '@/lib/realtime';
 import { useAuth } from '@/modules/auth/AuthContext';
@@ -766,9 +767,9 @@ export default function GamingScreen() {
     if (ownsCurrentShift(session)) return true;
     notifications.error(
       currentShiftId
-        ? `This session belongs to another or no-longer-current terminal shift. Use its owning terminal to ${action}.`
+        ? `This session belongs to a different or no-longer-open shift. Ask a protected owner to review it before you ${action}.`
         : (shiftContextError ?? `Open and verify the current shift before trying to ${action}.`),
-      { title: 'Session is view-only here' },
+      { title: 'Session shift needs review' },
     );
     return false;
   }
@@ -790,7 +791,7 @@ export default function GamingScreen() {
     if (shiftId) return shiftId;
     notifications.error(
       session.shift_id && currentShiftId && session.shift_id !== currentShiftId
-        ? 'This session belongs to another terminal shift. Stop it from the terminal that owns that shift.'
+        ? 'This session belongs to a different or no-longer-open shift. Ask a protected owner to review it before ending the session.'
         : (shiftContextError
             ?? 'The session shift could not be verified. Refresh Gaming and confirm there is a server-confirmed open shift.'),
       { title: 'Session shift not verified' },
@@ -1517,10 +1518,17 @@ export default function GamingScreen() {
         currentTerminalId: terminalId,
         stationBranchId: st.branch_id,
         terminals: terminalOptions ?? [],
+        allowCrossTerminalHandoff:
+          GAMING_CENTRE_TERMINAL_POLICY.allowCrossTerminalPosHandoff,
       });
       if (posRoute === 'terminal_unverified') {
         throw new Error(
           'This device identity could not be verified. Refresh it; if the problem remains, ask an owner to check the device setup. The gaming bill is still saved and unpaid.',
+        );
+      }
+      if (posRoute === 'profile_conflict') {
+        throw new Error(
+          'The shared register is not in Combined mode. The gaming bill remains saved and unpaid; ask a protected owner to repair the register setup.',
         );
       }
       if (posRoute === 'handoff') {
@@ -2213,7 +2221,9 @@ export default function GamingScreen() {
         </div>
       )}
 
-      {LIVE_MODE && currentTerminal?.purpose === 'cafe_pos' && (
+      {LIVE_MODE
+        && GAMING_CENTRE_TERMINAL_POLICY.allowCrossTerminalPosHandoff
+        && currentTerminal?.purpose === 'cafe_pos' && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
           <div>
@@ -2243,7 +2253,7 @@ export default function GamingScreen() {
           <div>
             <div className="font-semibold">Saved extension receipt needs protected review</div>
             <div className="mt-1 text-fg-muted">
-              This device has {paidExtensionInventory.issueCodes.length} older, damaged, or other-scope paid-extension receipt{paidExtensionInventory.issueCodes.length === 1 ? '' : 's'}. Do not clear browser data or create a replacement charge. Use the original employee and terminal, or ask a protected owner to verify the affected session.
+              This device has {paidExtensionInventory.issueCodes.length} older, damaged, or other-scope paid-extension receipt{paidExtensionInventory.issueCodes.length === 1 ? '' : 's'}. Do not clear browser data or create a replacement charge. Use the original employee and matching shift, or ask a protected owner to verify the affected session.
             </div>
           </div>
         </div>
@@ -2389,7 +2399,7 @@ export default function GamingScreen() {
               : session && !session.shift_id && resolvedStopShiftId
               ? 'This server omitted the session shift. End session is available because the current shift is confirmed; the server will verify it before saving.'
               : currentShiftId
-                ? 'This session belongs to another or no-longer-current terminal shift. It is view-only here; continue it from the owning terminal.'
+                ? 'This session belongs to a different or no-longer-open shift. It is view-only until a protected owner reviews it.'
                 : (shiftContextError ?? 'There is no verified open shift, so existing sessions are view-only.');
 
             return (

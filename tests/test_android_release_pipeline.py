@@ -173,7 +173,10 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("reactivecircus/android-emulator-runner@", instrumentation_job)
         self.assertNotIn("ANDROID_KEYSTORE_BASE64", instrumentation_job)
         self.assertNotIn("cache: gradle", instrumentation_job)
-        self.assertIn("needs: android-instrumentation", build_job)
+        self.assertIn(
+            "needs: [coordinated-release-gates, android-instrumentation]",
+            build_job,
+        )
         self.assertNotIn("reactivecircus/android-emulator-runner@", build_job)
         self.assertNotIn("android-actions/setup-android@", build_job)
         self.assertNotIn("cache: gradle", build_job)
@@ -201,6 +204,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         )
         self.assertNotIn("softprops/action-gh-release@", release_job)
         self.assertIn('gh release create "$GITHUB_REF_NAME"', release_job)
+        self.assertIn("--draft", release_job)
         allowed_build_actions = {
             "actions/checkout",
             "actions/setup-java",
@@ -327,10 +331,27 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn('gh release view "$GITHUB_REF_NAME"', workflow)
         self.assertIn('gh release create "$GITHUB_REF_NAME"', workflow)
         self.assertIn("--verify-tag", workflow)
+        self.assertIn("--draft", workflow)
         self.assertIn("sha256sum --check --strict SHA256SUMS", workflow)
         self.assertIn(
             'test "$(find "$package_dir" -mindepth 1 -maxdepth 1 -type f', workflow
         )
+
+    def test_tag_release_rechecks_exact_backend_and_web_contracts(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        coordinated_start = workflow.index("  coordinated-release-gates:")
+        instrumentation_start = workflow.index("  android-instrumentation:")
+        coordinated_job = workflow[coordinated_start:instrumentation_start]
+
+        self.assertIn("python -m pip install -r backend/requirements.lock", coordinated_job)
+        self.assertNotIn("pip install -r backend/requirements.txt", coordinated_job)
+        self.assertIn("python -m pip_audit -r backend/requirements.lock", coordinated_job)
+        self.assertIn("run: alembic upgrade head", coordinated_job)
+        self.assertIn("run: pytest", coordinated_job)
+        self.assertIn("npm audit --omit=dev --audit-level=high", coordinated_job)
+        for gate in ("npm run lint", "npm run typecheck", "npm run test", "npm run build"):
+            with self.subTest(gate=gate):
+                self.assertIn(gate, coordinated_job)
 
     def test_ci_token_is_read_only_and_actions_are_commit_pinned(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")

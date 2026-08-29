@@ -44,6 +44,14 @@ router = APIRouter()
 _IANA_TIMEZONES = available_timezones()
 _INVOICE_SERIES_RE = re.compile(r"^[A-Z0-9]{2}$")
 TerminalPurpose = Literal["hybrid", "cafe_pos", "gaming"]
+_HYBRID_WORKSPACE_REQUIRED = (
+    "This Gaming Centre uses one Hybrid workspace for Gaming, POS and Shift. "
+    "Use purpose 'hybrid'."
+)
+_ACTIVE_WORKSPACE_EXISTS = (
+    "This shop already has its one active Hybrid workspace. Use that workspace "
+    "instead of creating or reactivating another."
+)
 
 
 def _require_idempotency(request: Request, *, what: str) -> tuple[str, str]:
@@ -709,13 +717,15 @@ async def delete_branch(
 @router.get("/terminals", response_model=list[TerminalRead])
 async def list_terminals(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires_any("pos.read", "settings.manage")),
+    tenant: TenantContext = Depends(
+        requires_any("pos.read", "gaming.read", "settings.manage")
+    ),
     branch_id: UUID | None = None,
     include_inactive: bool = False,
 ) -> list[TerminalRead]:
-    # Ordinary POS users may discover tills only in their authenticated
-    # branch. An owner with settings.manage may inspect the company's other
-    # active branches without being granted Audit Log or admin.system access.
+    # Ordinary POS/Gaming users may discover the workspace only in their
+    # authenticated branch. An owner with settings.manage may inspect the
+    # company's other active branches without gaining Audit Log/system access.
     can_manage_settings = await has_permission(session, tenant, "settings.manage")
     if tenant.branch_id is not None and not can_manage_settings:
         if branch_id is not None and branch_id != tenant.branch_id:
@@ -778,6 +788,23 @@ async def create_terminal(
     ).scalar_one_or_none()
     if not b:
         raise NotFoundError("branch not found")
+    if payload.purpose != "hybrid":
+        raise BusinessRuleError(_HYBRID_WORKSPACE_REQUIRED)
+    active_terminal_id = (
+        await session.execute(
+            select(Terminal.id)
+            .where(
+                Terminal.branch_id == payload.branch_id,
+                Terminal.is_active.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if active_terminal_id is not None:
+        raise ConflictError(
+            _ACTIVE_WORKSPACE_EXISTS,
+            details={"active_terminal_id": str(active_terminal_id)},
+        )
     await _ensure_terminal_identity_available(
         session,
         branch_id=payload.branch_id,
@@ -863,6 +890,25 @@ async def update_terminal(
     purpose = payload.purpose if payload.purpose is not None else terminal.purpose
     terminal_is_active = getattr(terminal, "is_active", None) is not False
     is_active = payload.is_active if payload.is_active is not None else terminal_is_active
+    if is_active and purpose != "hybrid":
+        raise BusinessRuleError(_HYBRID_WORKSPACE_REQUIRED)
+    if not terminal_is_active and is_active:
+        active_terminal_id = (
+            await session.execute(
+                select(Terminal.id)
+                .where(
+                    Terminal.branch_id == branch_id,
+                    Terminal.is_active.is_(True),
+                    Terminal.id != terminal.id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if active_terminal_id is not None:
+            raise ConflictError(
+                _ACTIVE_WORKSPACE_EXISTS,
+                details={"active_terminal_id": str(active_terminal_id)},
+            )
     if purpose != terminal.purpose or is_active != terminal_is_active:
         blocking_shift_id = (
             await session.execute(

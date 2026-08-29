@@ -204,31 +204,35 @@ internal data class TerminalPurposeOption(
 
 internal fun terminalPurposeOptions(
     presentation: WorkspacePresentationPolicy,
-): List<TerminalPurposeOption> = listOf(
-    TerminalPurposeOption(
-        id = TerminalPurpose.CAFE_POS,
-        label = presentation.posOnlyTerminalLabel,
-        description = if (presentation.showsRestaurantOperations) {
-            "Takes food payments and receives bills from Gaming Area."
-        } else {
-            "Legacy POS-only till. Use only when a separate payment counter is genuinely required."
-        },
-    ),
-    TerminalPurposeOption(
-        id = TerminalPurpose.GAMING,
-        label = presentation.gamingTerminalLabel,
-        description = if (presentation.showsRestaurantOperations) {
-            "Starts gaming sessions and must hand completed bills to an open Cafe POS shift."
-        } else {
-            "Starts gaming sessions; completed bills require an open receiving POS shift."
-        },
-    ),
-    TerminalPurposeOption(
+): List<TerminalPurposeOption> {
+    val hybrid = TerminalPurposeOption(
         id = TerminalPurpose.HYBRID,
         label = presentation.hybridTerminalLabel,
-        description = "Runs both Gaming and POS locally on this same terminal.",
-    ),
-)
+        description = "Runs Gaming, POS, payments and one accountable shift in the same workspace.",
+    )
+    if (presentation.singleHybridTerminalOnly) return listOf(hybrid)
+    return listOf(
+        TerminalPurposeOption(
+            id = TerminalPurpose.CAFE_POS,
+            label = presentation.posOnlyTerminalLabel,
+            description = if (presentation.showsRestaurantOperations) {
+                "Takes food payments and receives bills from Gaming Area."
+            } else {
+                "Legacy POS-only till. Use only when a separate payment counter is genuinely required."
+            },
+        ),
+        TerminalPurposeOption(
+            id = TerminalPurpose.GAMING,
+            label = presentation.gamingTerminalLabel,
+            description = if (presentation.showsRestaurantOperations) {
+                "Starts gaming sessions and must hand completed bills to an open Cafe POS shift."
+            } else {
+                "Starts gaming sessions; completed bills require an open receiving POS shift."
+            },
+        ),
+        hybrid,
+    )
+}
 
 internal val terminalPurposeOptions: List<TerminalPurposeOption> =
     terminalPurposeOptions(WorkspaceFeatureProfiles.FullHospitality.presentationPolicy())

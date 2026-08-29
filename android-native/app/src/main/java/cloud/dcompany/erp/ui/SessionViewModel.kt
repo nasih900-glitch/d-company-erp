@@ -19,6 +19,7 @@ import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.TerminalResolution
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.activateAndRememberTerminal
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
@@ -279,10 +280,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             if (OutboxOwnerIdentity.from(current) != OutboxOwnerIdentity.from(previous)) return
 
             val authorityChanged = accessAuthorityChanged(previous, refreshed)
-            val gainedPos =
-                !EffectivePermissions.from(previous).has(ErpPermission.PosRead) &&
-                    EffectivePermissions.from(refreshed).has(ErpPermission.PosRead)
-            if (gainedPos && !activateResolvedTerminalOrRequestSelection(
+            val gainedOperationalWorkspace =
+                !EffectivePermissions.from(previous).requiresOperationalWorkspace() &&
+                    EffectivePermissions.from(refreshed).requiresOperationalWorkspace()
+            if (gainedOperationalWorkspace && !activateResolvedTerminalOrRequestSelection(
                     me = refreshed,
                     restoredSession = lease,
                 )
@@ -640,7 +641,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         restoredSession: SessionRefreshLease? = null,
     ): Boolean {
         pendingTerminalSession = null
-        val requiresTerminal = EffectivePermissions.from(me).has(ErpPermission.PosRead)
+        val requiresTerminal = EffectivePermissions.from(me).requiresOperationalWorkspace()
         if (!requiresTerminal) {
             activateValidatedScope(scopeFor(me, terminalId = null))
             return true
@@ -649,9 +650,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val branchId = me.branchId?.trim()?.takeIf(String::isNotEmpty)
         val available = if (branchId == null) emptyList() else ApiClient.api.terminals(branchId)
         val cachedId = terminals.terminalId()
-        val cachedStillValid = branchId != null && available.any {
-            it.id == cachedId && it.branchId == branchId
-        }
+        val singleHybridOnly = WorkspaceFeatureProfiles.Active.singleHybridTerminalOnly
+        val branchTerminals = available
+            .filter { it.id.isNotBlank() && it.branchId == branchId }
+            .distinctBy(Terminal::id)
+        val singleHybridTopologyValid = branchTerminals.size == 1 &&
+            branchTerminals.single().purpose == TerminalPurpose.HYBRID
+        val cachedStillValid = branchId != null &&
+            branchTerminals.any { it.id == cachedId } &&
+            (!singleHybridOnly || singleHybridTopologyValid)
         // The exact saved till is the only scope allowed to reopen unresolved
         // work. A clean install/reassignment must prove the queue is empty.
         val hasUnresolvedLocalWork = if (cachedStillValid) {
@@ -665,6 +672,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             availableTerminals = available,
             cachedTerminalId = cachedId,
             hasUnresolvedLocalWork = hasUnresolvedLocalWork,
+            singleHybridOnly = singleHybridOnly,
         )
 
         return when (resolution) {
@@ -714,10 +722,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (_terminalChange.value !is TerminalChangeUiState.Idle) return
         val me = (_state.value as? AuthState.SignedIn)?.me ?: return
         val canRequest = me.protectedAccess &&
-            EffectivePermissions.from(me).has(ErpPermission.PosRead)
+            EffectivePermissions.from(me).requiresOperationalWorkspace()
         if (!canRequest) {
             _terminalChange.value = TerminalChangeUiState.Blocked(
-                "Only a protected owner with POS access can change this tablet's till.",
+                "Only a protected owner with operational access can change this tablet's workspace.",
             )
             return
         }
@@ -1285,9 +1293,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun cachedScope(me: MeResponse): CacheScope {
-        val terminalId = if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
+        val terminalId = if (EffectivePermissions.from(me).requiresOperationalWorkspace()) {
             terminals.terminalId() ?: throw TerminalScopeException(
-                "Reconnect once to verify this tablet's POS terminal before opening cached data.",
+                "Reconnect once to verify this tablet's workspace before opening saved data.",
             )
         } else {
             null

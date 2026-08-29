@@ -69,11 +69,26 @@ export const GAMING_CENTRE_FEATURES: Readonly<WebFeatureFlags> = Object.freeze({
   advancedInsights: false,
 });
 
+/**
+ * The current shop has one shared operational register. Gaming sessions,
+ * counter sales, and shift reconciliation all belong to this same scope.
+ *
+ * Keep this separate from route feature flags: it is a financial topology
+ * constraint, not a cosmetic preference. A stale second active terminal must
+ * block writes for owner repair instead of silently becoming another till.
+ */
+export const GAMING_CENTRE_TERMINAL_POLICY = Object.freeze({
+  mode: 'single_hybrid' as const,
+  showRoutineSelector: false,
+  allowCrossTerminalPosHandoff: false,
+});
+
 export const WEB_PRODUCT_PROFILE = Object.freeze({
   id: 'gaming-centre',
   label: 'Gaming Centre',
   defaultRoute: '/gaming',
   features: GAMING_CENTRE_FEATURES,
+  terminalPolicy: GAMING_CENTRE_TERMINAL_POLICY,
 });
 
 export type MembershipMoneyKind = 'revenue' | 'refund' | 'discount' | 'allowance';

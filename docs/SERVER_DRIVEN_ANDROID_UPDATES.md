@@ -31,6 +31,8 @@ installer code from the server. Install the signed `3.1.0` APK once through
 Android's normal package installer and prove that its local database/outbox is
 preserved. Server-delivered verified APK updates are available only for later
 versions installed over that `3.1.0` baseline.
+Version `3.1.1` (code `12`) is the next immutable update identity; never
+overwrite the already signed code-`11` APK with changed bytes.
 
 The repository and Compose defaults deliberately keep
 `ANDROID_LATEST_VERSION_CODE=8`. Building a newer APK is not authority to
@@ -75,35 +77,36 @@ installation path.
 ## Safe rollout
 
 Assume the currently installed production build has version code `8`; a test
-tablet may instead hold the earlier schema-37 code-`9` candidate. The new signed
-release has version code `11`.
+tablet may instead hold the earlier schema-37 code-`9` candidate or the signed
+`3.1.0` updater bootstrap at code `11`. The new signed release has version code
+`12`.
 
-1. Produce and verify the signed version-code-11 APK before changing the server.
+1. Produce and verify the signed version-code-12 APK before changing the server.
 2. Publish the APK on the controlled HTTPS release channel.
 3. Confirm its signing-certificate fingerprint matches the installed app.
 4. Configure the backend initially as:
 
    ```dotenv
    ANDROID_MIN_SUPPORTED_VERSION_CODE=8
-   ANDROID_LATEST_VERSION_CODE=11
-   ANDROID_LATEST_VERSION_NAME=3.1.0
-   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.0.apk
+   ANDROID_LATEST_VERSION_CODE=12
+   ANDROID_LATEST_VERSION_NAME=3.1.1
+   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.1.apk
    ANDROID_UPDATE_APK_SHA256=<64-hex APK digest from release-manifest.json>
    ANDROID_UPDATE_APK_SIZE_BYTES=<exact byte size from release-manifest.json>
    ANDROID_UPDATE_SIGNING_CERT_SHA256=<64-hex signer digest from release-manifest.json>
    ANDROID_UPDATE_RELEASE_NOTES=Gaming Centre reliability update
    ```
 
-   Version 8 remains operational and sees an optional update. Version 11 is
+   Version 8 remains operational and sees an optional update. Version 12 is
    current.
 
 5. Let every tablet sync its offline queue, install the update, sign in and
    complete the smoke test.
-6. Only when every active tablet is on version 11 may the minimum be raised:
+6. Only when every active tablet is on version 12 may the minimum be raised:
 
    ```dotenv
-   ANDROID_MIN_SUPPORTED_VERSION_CODE=11
-   ANDROID_LATEST_VERSION_CODE=11
+   ANDROID_MIN_SUPPORTED_VERSION_CODE=12
+   ANDROID_LATEST_VERSION_CODE=12
    ```
 
 ## What the employee experiences

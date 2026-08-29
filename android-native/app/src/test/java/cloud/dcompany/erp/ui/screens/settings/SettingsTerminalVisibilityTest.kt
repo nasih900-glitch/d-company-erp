@@ -23,4 +23,16 @@ class SettingsTerminalVisibilityTest {
         assertTrue(showAdvancedTerminalSettings(true, activeTerminalCount = 1, pendingTerminalCount = 1))
         assertFalse(showAdvancedTerminalSettings(false, activeTerminalCount = 2, pendingTerminalCount = 0))
     }
+
+    @Test
+    fun `gaming centre profile never exposes routine terminal management`() {
+        assertFalse(
+            showAdvancedTerminalSettings(
+                canManageSystem = true,
+                activeTerminalCount = 2,
+                pendingTerminalCount = 1,
+                terminalManagementEnabled = false,
+            ),
+        )
+    }
 }

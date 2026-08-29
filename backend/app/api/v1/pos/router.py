@@ -6979,6 +6979,12 @@ async def open_shift(
             "This workspace has been archived and cannot open a shift. Reload the "
             "app and use the active workspace."
         )
+    if terminal.purpose != "hybrid":
+        raise BusinessRuleError(
+            "This Gaming Centre requires one Hybrid workspace for Gaming, POS and "
+            "Shift. Ask the owner to complete the one-workspace setup before "
+            "opening a shift."
+        )
 
     # The locked active terminal serializes simultaneous clients so they cannot
     # create two live shifts for the same drawer.

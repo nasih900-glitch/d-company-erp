@@ -332,20 +332,13 @@ When you want `dcompany.in` instead of `dcompany.duckdns.org`:
 
 Your old DuckDNS URL still works during transition — keep both for a week, then drop DuckDNS.
 
-### App Store deployment
+### Mobile distribution
 
-When you want to be on Apple App Store + Google Play:
-
-- **Costs:** ₹8,200/year Apple Developer Program + ₹2,100 one-time Google Play Console.
-- **Already prepared:** the Capacitor scaffolding exists from a previous session. We have `frontend/capacitor.config.ts`, the Android + iOS shells ready to wrap the same React code.
-- **Process:**
-  1. Pay the fees.
-  2. Build the `.apk` and `.aab` on any machine (Linux, Mac, Windows) — instructions in [`docs/DISTRIBUTION.md`](DISTRIBUTION.md).
-  3. Build the `.ipa` on a Mac with Xcode (only step that needs a Mac).
-  4. Upload to App Store Connect (iOS) and Play Console (Android).
-  5. Wait 1–4 weeks for review.
-
-**The PWA you have today is essentially the same product** — users feel zero difference. App Store is for discovery and trust badges, not better UX. Most cafés never bother.
+The supported mobile client is the native Kotlin Android app in
+`android-native`. Build and publish it only through the signed process in
+[`DISTRIBUTION.md`](DISTRIBUTION.md). The old `frontend/android` and
+`frontend/ios` Capacitor shells are archived prototypes and must not be sent to
+staff or stores. No iOS release is currently supported.
 
 ---
 

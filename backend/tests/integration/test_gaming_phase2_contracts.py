@@ -32,7 +32,6 @@ from app.models import (
     Role,
     Shift,
     Station,
-    Terminal,
     User,
     UserRole,
 )
@@ -254,24 +253,15 @@ async def test_open_rate_start_rejects_stale_displayed_rate(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_two_terminal_starts_create_exactly_one_active_session(
+async def test_concurrent_same_workspace_starts_create_exactly_one_active_session(
     client,
     session,
     seed_owner,
 ) -> None:
-    """The Station row, not either terminal's Shift, is the race mutex."""
+    """The Station row serializes rapid duplicate starts on one workspace."""
     station = _station(seed_owner)
-    second_terminal = Terminal(
-        id=uuid4(),
-        branch_id=seed_owner["branch"].id,
-        name=f"Gaming race terminal {uuid4().hex[:8]}",
-        device_id=f"gaming-race-{uuid4()}",
-    )
-    first_shift = _shift(seed_owner)
-    second_shift = _shift(seed_owner, terminal_id=second_terminal.id)
-    session.add_all([station, second_terminal])
-    await session.flush()
-    session.add_all([first_shift, second_shift])
+    shift = _shift(seed_owner)
+    session.add_all([station, shift])
     await session.commit()
     token = await _login(client, seed_owner)
     payload = {
@@ -282,18 +272,13 @@ async def test_concurrent_two_terminal_starts_create_exactly_one_active_session(
     first, second = await asyncio.gather(
         client.post(
             "/api/v1/gaming/sessions/start",
-            json={**payload, "shift_id": str(first_shift.id)},
+            json={**payload, "shift_id": str(shift.id)},
             headers=_headers(seed_owner, token, f"race-start-a:{uuid4()}"),
         ),
         client.post(
             "/api/v1/gaming/sessions/start",
-            json={**payload, "shift_id": str(second_shift.id)},
-            headers=_headers(
-                seed_owner,
-                token,
-                f"race-start-b:{uuid4()}",
-                **{"X-Terminal-Id": str(second_terminal.id)},
-            ),
+            json={**payload, "shift_id": str(shift.id)},
+            headers=_headers(seed_owner, token, f"race-start-b:{uuid4()}"),
         ),
     )
 
@@ -315,7 +300,7 @@ async def test_concurrent_two_terminal_starts_create_exactly_one_active_session(
         .all()
     )
     assert len(active_unbilled) == 1
-    assert active_unbilled[0].shift_id in {first_shift.id, second_shift.id}
+    assert active_unbilled[0].shift_id == shift.id
 
 
 @pytest.mark.asyncio
