@@ -9,6 +9,11 @@ test_metadata="${android_root}/app/build/outputs/apk/androidTest/debug/output-me
 app_package='cloud.dcompany.erp'
 device_serial=''
 deep_idle_initial_state=''
+display_size_override_initial=''
+display_density_override_initial=''
+accelerometer_rotation_initial=''
+user_rotation_initial=''
+tablet_viewport_configured=0
 
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
@@ -30,7 +35,63 @@ cleanup_alarm_environment() {
       cleanup_status=1
     fi
   fi
+  if [[ "${tablet_viewport_configured}" -eq 1 ]]; then
+    if [[ -n "${display_size_override_initial}" ]]; then
+      adb -s "${device_serial}" shell wm size "${display_size_override_initial}" >/dev/null 2>&1 || cleanup_status=1
+    else
+      adb -s "${device_serial}" shell wm size reset >/dev/null 2>&1 || cleanup_status=1
+    fi
+    if [[ -n "${display_density_override_initial}" ]]; then
+      adb -s "${device_serial}" shell wm density "${display_density_override_initial}" >/dev/null 2>&1 || cleanup_status=1
+    else
+      adb -s "${device_serial}" shell wm density reset >/dev/null 2>&1 || cleanup_status=1
+    fi
+    restore_system_setting accelerometer_rotation "${accelerometer_rotation_initial}" || cleanup_status=1
+    restore_system_setting user_rotation "${user_rotation_initial}" || cleanup_status=1
+    tablet_viewport_configured=0
+  fi
   return "${cleanup_status}"
+}
+
+restore_system_setting() {
+  local key=$1
+  local value=$2
+  if [[ -z "${value}" || "${value}" == 'null' ]]; then
+    adb -s "${device_serial}" shell settings delete system "${key}" >/dev/null
+  else
+    adb -s "${device_serial}" shell settings put system "${key}" "${value}" >/dev/null
+  fi
+}
+
+configure_tablet_viewport() {
+  local effective_size=''
+  local effective_density=''
+  local report="${diagnostics_dir}/tablet-viewport.txt"
+
+  display_size_override_initial="$({ adb -s "${device_serial}" shell wm size || true; } | tr -d '\r' | sed -n 's/^Override size: //p')"
+  display_density_override_initial="$({ adb -s "${device_serial}" shell wm density || true; } | tr -d '\r' | sed -n 's/^Override density: //p')"
+  accelerometer_rotation_initial="$(adb -s "${device_serial}" shell settings get system accelerometer_rotation | tr -d '\r')"
+  user_rotation_initial="$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
+  tablet_viewport_configured=1
+
+  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
+  adb -s "${device_serial}" shell wm density 320 >/dev/null
+  adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
+  adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
+
+  effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
+  effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
+  {
+    echo "serial=${device_serial}"
+    echo "effective_size=${effective_size}"
+    echo "effective_density=${effective_density}"
+    echo "logical_viewport=1280x800dp"
+    echo "rotation=$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
+  } | tee "${report}"
+
+  [[ "${effective_size}" == '2560x1600' ]]
+  [[ "${effective_density}" == '320' ]]
+  [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
 read_deep_idle_enabled() {
@@ -143,6 +204,7 @@ if ! device_serial="$(select_api_35_emulator)"; then
   exit 1
 fi
 export ANDROID_SERIAL="${device_serial}"
+configure_tablet_viewport
 
 status=0
 ./gradlew --no-daemon --max-workers=2 --stacktrace connectedDebugAndroidTest || status=$?

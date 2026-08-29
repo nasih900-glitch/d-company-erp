@@ -136,6 +136,11 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
+          # Instrumentation includes tablet reachability and density coverage.
+          # The action's default 320x640 phone AVD clips those layouts before
+          # Compose can scroll them; Pixel C keeps the suite on a real tablet
+          # class viewport, matching the 1280x800dp production target closely.
+          profile: pixel_c
           disable-animations: true
           script: bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android test and lint reports

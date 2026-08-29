@@ -148,6 +148,9 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
+          # Match CI and the production tablet class; the shared runner script
+          # then verifies the exact 1280x800dp logical viewport.
+          profile: pixel_c
           disable-animations: true
           script: bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android instrumentation reports

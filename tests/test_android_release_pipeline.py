@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+INSTRUMENTATION_SCRIPT = ROOT / "scripts" / "run_android_instrumentation_ci.sh"
 MAIN_MANIFEST = ROOT / "android-native" / "app" / "src" / "main" / "AndroidManifest.xml"
 DIRECT_MANIFEST = (
     ROOT / "android-native" / "app" / "src" / "directRelease" / "AndroidManifest.xml"
@@ -32,6 +33,19 @@ ANDROID_APPLICATION = (
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+    def test_ci_and_release_prove_the_target_tablet_viewport(self) -> None:
+        ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        release_workflow = WORKFLOW.read_text(encoding="utf-8")
+        instrumentation = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("profile: pixel_c", ci_workflow)
+        self.assertIn("profile: pixel_c", release_workflow)
+        self.assertIn("shell wm size 2560x1600", instrumentation)
+        self.assertIn("shell wm density 320", instrumentation)
+        self.assertIn("logical_viewport=1280x800dp", instrumentation)
+        self.assertIn("shell wm size reset", instrumentation)
+        self.assertIn("shell wm density reset", instrumentation)
+
     def test_required_update_is_restored_and_persisted_at_application_startup(
         self,
     ) -> None:

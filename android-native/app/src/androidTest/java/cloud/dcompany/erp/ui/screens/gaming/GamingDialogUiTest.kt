@@ -982,7 +982,7 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Member phone (optional)")
+        compose.onNodeWithContentDescription("Customer phone (optional)")
             .bringIntoViewIfNeeded()
             .performClick()
             .assertIsFocused()
