@@ -229,7 +229,7 @@ def main() -> int:
             f"Error: {detail}\n\n"
             "The ERP itself is unaffected — this only means last night's off-site backup "
             "didn't happen. Check systemctl status dcompany-backup.service on the server, "
-            "or ask Claude to look into it."
+            "or ask the system administrator to investigate."
         ),
     )
     return 1
