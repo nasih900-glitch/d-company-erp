@@ -2,10 +2,11 @@
 
 ## Scope and evidence boundary
 
-This is a visual and interaction-hierarchy review of the Android `3.1.2`
-(`versionCode 13`) candidate on an API-35 emulator. It is not evidence that the
-candidate is deployed to production, connected to production data, accepted on
-a physical tablet, or ready for unrestricted cafe use.
+This is a visual and interaction-hierarchy review plus local current-source
+release verification of the Android `3.1.2` (`versionCode 13`) directRelease
+artifact on an API-35 emulator. It is not evidence that the artifact is
+deployed to production, connected to production data, accepted on a physical
+tablet, or ready for unrestricted cafe use.
 
 The selected image is an art-direction and workspace-layout target. Its sample
 station counts and billing states are illustrative; the implementation keeps
@@ -49,6 +50,10 @@ typography and action design, but not for pixel-identical business content.
   `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-closed.png`
   and
   `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-closed-history.png`
+- Final signed in-place upgrade, before and after:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-final-upgrade-before-3.1.1.png`
+  and
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-final-upgrade-after-3.1.2.png`
 
 ## Viewport and normalization
 
@@ -80,6 +85,9 @@ typography and action design, but not for pixel-identical business content.
   employee attribution.
 - Shift reconciliation before count, drawer-count dialog, balanced count,
   irreversible-close confirmation, closed success and closed-shift history.
+- Fresh signed in-place upgrade from `3.1.1` (`versionCode 12`) to final
+  `3.1.2` (`versionCode 13`), including private-data persistence and successful
+  post-update process launch.
 
 ## Full-view comparison findings
 
@@ -162,11 +170,10 @@ workflow states that are not present in the art-direction image.
   fields, live expected/counted/difference feedback and anchored actions. Its
   denomination content is scrollable instead of being compressed by the main
   Shift card's remaining height.
-- The pre-drawer-fix automated evidence contained `3/3` premium-foundation
-  contract tests and `3/3` contrast-token tests inside a `712/712` JVM suite.
-  The earlier targeted Room run reported `4/4` tests passed. These checks
-  support, but do not replace, human accessibility testing, and the final
-  current-source suite still needs to be rerun after the drawer-dialog change.
+- The current-source Android JVM matrix passed `715/715` tests independently
+  for debug, release and directRelease. The focused API-35 device run passed
+  `48/48` tests. These checks support, but do not replace, human accessibility
+  testing.
 - No TalkBack exploration, large-font/text-scaling run, switch-access run or
   colour-vision user test was captured for this candidate. No current keyboard-
   open login/dialog screenshot is part of this visual evidence set.
@@ -253,37 +260,59 @@ The cash and UPI success dialogs plus the canonical history/detail captures
 show that the two sales remained individually itemised and retrievable rather
 than being merged into one receipt.
 
-## Upgrade evidence and final-artifact boundary
+## Current-source release and upgrade verification
 
-- The known baseline was the signed package `cloud.dcompany.erp`, `3.1.1`
-  (`versionCode 12`). An earlier, pre-drawer-dialog `3.1.2`
-  (`versionCode 13`) build was installed over that package on `emulator-5554`
-  without uninstalling it. That exercise recorded a matching signer and a
-  retained `firstInstallTime`, so it is valid evidence for the upgrade
-  mechanism that existed at that point.
-- The visible `1 waiting` offline-work indicator is present immediately before
-  and after that earlier upgrade in
-  `dcompany-before-upgrade-3.1.1.png` and
-  `dcompany-after-upgrade-3.1.2-offline.png`, supporting preservation of local
-  app state at the UI layer.
-- The focused Room `39 -> 40` instrumentation test passed and explicitly covers
-  preservation of local evidence while adding the canonical receipt cache.
+### Source and automated gates
 
-The drawer-dialog correction changes the current source after that APK was
-produced. Therefore the earlier installation is not final-artifact proof for
-the current source. The final `3.1.2` APK SHA-256, byte size, signing-certificate
-verification, build timestamp, manifest version check and a fresh
-`versionCode 12 -> 13` in-place upgrade result are intentionally pending the
-final rebuild. Nothing in this section proves production deployment,
-server-advertised update delivery, recovery against a live backend, or a
-successful upgrade on a partner-owned tablet.
+- The application source was clean at commit
+  `f4bd7f1ceb2e` before the final build.
+- Backend: `1121` tests passed.
+- Web: `249` tests passed; typecheck, lint and production build also passed.
+- Android JVM: `715/715` tests passed independently for debug, release and
+  directRelease.
+- Android device: `48/48` focused tests passed on API 35.
+- `lintDebug`, `lintRelease` and `lintDirectRelease` passed. Android builds and
+  the app bundle passed. A clean directRelease unit-test, lint and build run
+  also passed.
+
+### Final directRelease artifact
+
+- Package: `cloud.dcompany.erp`.
+- Version: `3.1.2` (`versionCode 13`).
+- SHA-256:
+  `355f24edb78e20fdc9cda635a87473d85a427d59d3eae8d0e51bfc4839e558eb`.
+- Size: `16,081,876` bytes.
+- Built: `2026-08-29T14:31:28+0100`.
+- Signing-certificate SHA-256:
+  `553081141804d5f71b2b04afb5ba9107e65df86147fa457c19bac948b7e78fe1`.
+- Zip alignment verification passed.
+
+### Fresh signed in-place upgrade
+
+- A fresh `emulator-5554` installation of signed `3.1.1`
+  (`versionCode 12`) was upgraded directly to the final signed `3.1.2`
+  (`versionCode 13`) APK without uninstalling the app.
+- `firstInstallTime` remained `2026-08-29 14:31:43`; `lastUpdateTime` became
+  `2026-08-29 14:32:15`.
+- A private app marker written before the upgrade remained present afterwards.
+- The upgraded app launched, Android reported a running process ID, and no
+  fatal exception was observed.
+- Visual evidence:
+  `dcompany-final-upgrade-before-3.1.1.png` and
+  `dcompany-final-upgrade-after-3.1.2.png`.
+
+This proves the final APK's local build identity, signing, alignment and
+code-12-to-code-13 upgrade path on the disposable API-35 emulator. It does not
+prove production deployment or migration, server-advertised update delivery,
+live-backend recovery, or successful upgrade on a partner-owned tablet.
 
 ## Open questions and residual evidence gaps
 
-- Rebuild the current source, rerun the complete current-source JVM,
-  instrumentation, lint and build checks, then record the final APK metadata,
-  signer verification and a clean baseline-to-final in-place upgrade. The
-  earlier upgrade evidence predates the drawer-dialog correction.
+- Production deployment and migration were not performed or verified in this
+  pass.
+- The server-advertised update flow, including authenticated discovery,
+  download, integrity validation, user-approved installation and post-update
+  recovery, remains unproven end to end.
 - A future polish pass could make the compact online indicator discoverable to
   sighted users without relying on a tap or accessibility service, while
   keeping the header uncluttered.
@@ -311,9 +340,10 @@ Gaming-to-close evidence reconciles `₹83.00` cash plus `₹3.00` UPI to `₹86
 net and finishes with zero active Gaming sessions, pending Gaming payments,
 unpaid orders and open shifts.
 
-This is a pass for the captured emulator UI and isolated workflow only. A final
-current-source APK rebuild, test run, artifact metadata, signed in-place
-upgrade retest and physical Redmi Pad 2 acceptance remain pending; none is
-represented as production proof or partner-device proof.
+The current source also passes the recorded backend, web and Android test/build
+gates; the final directRelease APK identity, signer, alignment and fresh signed
+emulator upgrade are verified above. Physical Redmi Pad 2 acceptance,
+production deployment/migration and server-advertised update delivery remain
+outside this pass and are not represented as proven.
 
 final result: passed

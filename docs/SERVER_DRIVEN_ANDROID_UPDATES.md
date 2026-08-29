@@ -31,8 +31,8 @@ from the server. The already signed `3.1.1` (code `12`) partner APK is now the
 preserved manual-install, update-capable baseline. Never overwrite either
 signed identity with changed bytes, and do not advertise code `12` as a server
 update. Version `3.1.2` (code `13`) is the first later candidate intended to be
-advertised to that baseline through the server. It is not currently signed,
-published, deployed, or advertised.
+advertised to that baseline through the server. A locally signed partner-review
+APK now exists, but it has not been published, deployed, or advertised.
 
 The repository and Compose defaults deliberately keep
 `ANDROID_LATEST_VERSION_CODE=8`. Building a newer APK is not authority to
