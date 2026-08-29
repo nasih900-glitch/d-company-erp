@@ -26,6 +26,21 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from ops.android_update_channel import (
+        AndroidUpdateChannelError,
+        fetch_channel_matrix,
+        verify_local_artifact,
+        verify_public_artifact,
+    )
+except ModuleNotFoundError:  # direct execution from /opt/d-company-erp/ops
+    from android_update_channel import (  # type: ignore[no-redef]
+        AndroidUpdateChannelError,
+        fetch_channel_matrix,
+        verify_local_artifact,
+        verify_public_artifact,
+    )
+
+try:
     from ops.smtp_client import alert_recipients, authenticated_smtp
 except ModuleNotFoundError:  # direct execution: python /opt/.../ops/runtime_monitor.py
     from smtp_client import alert_recipients, authenticated_smtp
@@ -36,6 +51,7 @@ ENV_FILE = ROOT / ".env"
 COMPOSE_FILE = ROOT / "docker-compose.prod.yml"
 STATE_FILE = ROOT / "ops" / ".runtime_monitor_state.json"
 LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")
+ANDROID_RELEASE_DIR = ROOT / "releases/android"
 DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 EXPECTED_SERVICES = frozenset(
     {"caddy", "postgres", "redis", "minio", "backend", "frontend"}
@@ -169,6 +185,58 @@ def check_public_endpoints(
     return issues, metrics
 
 
+def check_android_update_channel(
+    base_url: str,
+    *,
+    release_dir: Path = ANDROID_RELEASE_DIR,
+    timeout_seconds: float = 15,
+) -> tuple[list[Issue], dict[str, float | int | str]]:
+    """Validate the active registry record, local bytes, and public headers.
+
+    Hashing the local read-only APK every five minutes is inexpensive and
+    proves the bytes Caddy can serve have not drifted.  The external monitor
+    performs a periodic full HTTPS hash; this host check uses HEAD publicly to
+    avoid transferring the same APK from the VPS back to itself every run.
+    """
+    try:
+        matrix = fetch_channel_matrix(
+            base_url,
+            baseline_version_code=14,
+            timeout_seconds=timeout_seconds,
+        )
+        probe = matrix.canonical
+        metrics: dict[str, float | int | str] = {
+            "android_minimum_version_code": probe.minimum_supported_version_code,
+            "android_latest_version_code": probe.latest_version_code,
+            "android_policy_revision": probe.policy_revision,
+            "android_release_advertised": 1 if probe.release else 0,
+            "android_probed_version_codes": ",".join(
+                str(value) for value in matrix.probed_version_codes
+            ),
+        }
+        if probe.release is None:
+            return [], metrics
+        local_path = release_dir / probe.release.filename
+        verify_local_artifact(local_path, probe.release)
+        verify_public_artifact(
+            probe.release,
+            timeout_seconds=timeout_seconds,
+            download_body=False,
+        )
+        metrics.update(
+            {
+                "android_release_version_name": probe.release.version_name,
+                "android_release_size_bytes": probe.release.size_bytes,
+                "android_release_sha256": probe.release.sha256,
+            }
+        )
+        return [], metrics
+    except AndroidUpdateChannelError as exc:
+        return [Issue("android_update_channel", str(exc))], {
+            "android_release_advertised": "unknown"
+        }
+
+
 def inspect_containers() -> list[ContainerState]:
     compose_command = [
         "docker",
@@ -298,7 +366,10 @@ def check_capacity(
         issues.append(
             Issue(
                 "disk_capacity",
-                f"disk usage {disk_used_percent:.1f}% is at or above {disk_warning_percent:.1f}%",
+                (
+                    f"disk usage {disk_used_percent:.1f}% is at or above "
+                    f"{disk_warning_percent:.1f}%"
+                ),
             )
         )
 
@@ -340,7 +411,10 @@ def check_backup_freshness(max_age_hours: float) -> tuple[list[Issue], float | N
         issues.append(
             Issue(
                 "backup_stale",
-                f"latest backup is {age_hours:.1f} hours old; limit is {max_age_hours:.1f}",
+                (
+                    f"latest backup is {age_hours:.1f} hours old; "
+                    f"limit is {max_age_hours:.1f}"
+                ),
             )
         )
     return issues, round(age_hours, 1)
@@ -357,6 +431,13 @@ def run_monitor(env: dict[str, str], previous: dict[str, Any]) -> MonitorResult:
     )
     issues.extend(public_issues)
     metrics.update(public_metrics)
+
+    update_issues, update_metrics = check_android_update_channel(
+        base_url,
+        timeout_seconds=_positive_float(env, "MONITOR_HTTP_TIMEOUT_SECONDS", 10),
+    )
+    issues.extend(update_issues)
+    metrics.update(update_metrics)
 
     states: list[ContainerState] = []
     restart_counts: dict[str, int] = {}
@@ -463,8 +544,10 @@ def notification_for(
     lines = "\n".join(f"- {issue.code}: {issue.detail}" for issue in result.issues)
     return (
         "D Company ERP runtime alert",
-        f"Production monitoring detected the following issue(s):\n\n{lines}\n\n"
-        f"Metrics:\n{json.dumps(result.metrics, indent=2, sort_keys=True)}",
+        (
+            f"Production monitoring detected the following issue(s):\n\n{lines}\n\n"
+            f"Metrics:\n{json.dumps(result.metrics, indent=2, sort_keys=True)}"
+        ),
     )
 
 
@@ -492,8 +575,10 @@ def main() -> int:
             send_notice(
                 env,
                 "D Company ERP SMTP verification",
-                "SMTP authentication, TLS negotiation, and delivery were requested by the "
-                "production release verification process.",
+                (
+                    "SMTP authentication, TLS negotiation, and delivery were "
+                    "requested by the production release verification process."
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - CLI must report transport failures
             print(

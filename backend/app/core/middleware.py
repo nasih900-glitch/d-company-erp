@@ -72,6 +72,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         *,
         android_minimum: int,
         android_latest: int,
+        policy_revision: int,
         android_update_url: str | None,
         ios_minimum: int,
         ios_latest: int,
@@ -89,6 +90,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
             "android": (android_minimum, android_latest, android_update_url),
             "ios": (ios_minimum, ios_latest, ios_update_url),
         }
+        self.policy_revision = policy_revision
         self.require_native_headers = require_native_headers
         self.message = message
         self.android_release = {
@@ -105,7 +107,10 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         if request.url.path.endswith("/public/client-compatibility"):
-            return await call_next(request)
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Client-Compatibility-Policy-Revision"] = str(self.policy_revision)
+            return response
 
         platform = request.headers.get("X-Client-Platform", "").strip().lower()
         version_raw = request.headers.get("X-Client-Version-Code", "").strip()
@@ -156,6 +161,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["X-Minimum-Supported-Version-Code"] = str(minimum)
         response.headers["X-Latest-Version-Code"] = str(latest)
+        response.headers["X-Client-Compatibility-Policy-Revision"] = str(self.policy_revision)
         return response
 
     def _reject(
@@ -170,6 +176,10 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         release_details = self.android_release if platform == "android" else {}
         return JSONResponse(
             status_code=426,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Client-Compatibility-Policy-Revision": str(self.policy_revision),
+            },
             content={
                 "error": {
                     "code": code,
@@ -179,6 +189,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "current_version_code": current,
                         "minimum_supported_version_code": minimum,
                         "latest_version_code": latest,
+                        "policy_revision": self.policy_revision,
                         "update_url": update_url,
                         **release_details,
                     },

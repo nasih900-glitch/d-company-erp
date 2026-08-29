@@ -9,27 +9,26 @@ The web ERP at `https://dcompany.duckdns.org` is deployed through the existing
 VPS/Docker Compose procedure in `docs/DEPLOY_LIVE.md`. An Android GitHub Release
 does not deploy the web application.
 
-The `3.1.2` (`13`) partner rollout is deliberately manual:
+The `3.1.3` (`14`) partner rollout is deliberately manual:
 
 ```
-verified signed 3.1.2/code-13 directRelease APK
+verified signed 3.1.3/code-14 directRelease APK
         │
-        ▼ after migrations 0056–0057 + production smoke
+        ▼ after release-head migrations + production smoke
 owner sends that exact APK directly to the partner
         │
         ▼
 partner approves the normal Android installer prompt
 ```
 
-Do not tag, publish, host, or server-advertise code `13` as part of this
+Do not tag, publish, host, register, or server-advertise code `14` as part of this
 rollout. In particular, do not copy its APK into `releases/android`, publish a
-GitHub/Play release, or change the production update API from its existing
-code-`8` latest-version defaults.
+GitHub/Play release, or create an Android release-registry row for it.
 
 The first future server-driven update starts with a new immutable artifact:
 
 ```
-bump to 3.1.3/code 14, then tag v3.1.3
+bump to 3.1.4/code 15, then tag v3.1.4
         │
         ▼
 GitHub Actions: backend + web + Android gates
@@ -40,8 +39,11 @@ newly signed native Android APK + verified release manifest
         ▼
 immutable controlled HTTPS release URL
         │
-        ▼ after same-lineage upgrade and production checks
-server advertises exact URL/hash/size/signer; employee approves install
+        ▼ guarded stage-only tool verifies bytes and registers staged row
+explicitly bound release controller activates after a second public-byte verification
+        │
+        ▼
+employee approves Android's installer prompt
 ```
 
 The Tauri desktop and iOS projects are not built or published by the supported
@@ -100,7 +102,7 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently:
 
 ```bash
-CURRENT_MANUAL_VERSION=3.1.2
+CURRENT_MANUAL_VERSION=3.1.3
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName and a new versionCode)
@@ -111,15 +113,16 @@ CURRENT_MANUAL_VERSION=3.1.2
 # - .env.production.example (APP_VERSION only)
 # - docker-compose.prod.yml (APP_VERSION fallbacks only)
 
-# Keep the Android update-channel values separate. Do not raise
-# ANDROID_LATEST_VERSION_CODE until the signed artifact is privately staged and
-# its in-place upgrade has passed; do not raise the minimum merely for release.
+# Keep mandatory compatibility policy separate. Staging or activating an
+# optional release never authorises raising ANDROID_MIN_SUPPORTED_VERSION_CODE.
+# Increment CLIENT_COMPATIBILITY_POLICY_REVISION for every reviewed minimum
+# change, including rollback; never decrement or reuse it.
 
 python3 scripts/verify_android_release_version.py --tag "v$CURRENT_MANUAL_VERSION"
 ```
 
-That command validates the coordinated code-`13` identity; it does not
-authorise creating or publishing a `v3.1.2` tag. Keep this manual rollout
+That command validates the coordinated code-`14` identity; it does not
+authorise creating or publishing a `v3.1.3` tag. Keep this manual rollout
 untagged and unadvertised. For a future tagged release, first bump every product
 version field and Android `versionCode`, then commit and tag only after the full
 coordinated release gates and signed same-channel upgrade test pass. Never use
@@ -138,7 +141,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, code-13 manual baseline, and the first future update
+## Version-code-8 floor, code-14 manual baseline, and the first future update
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -146,58 +149,61 @@ handoff. Older Android clients do not understand that contract and can select
 the wrong local shift or attempt an invalid local handoff, so code `8` remains
 the minimum-supported compatibility floor.
 
-The signed `3.1.1` APK with version code `12` is the preserved predecessor used
+The signed `3.1.2` APK with version code `13` is the preserved predecessor used
 to prove the supported in-place upgrade. Keep its exact bytes and signing
 lineage; do not rebuild it under the same identity or advertise it through the
 server update API.
 
-The signed `3.1.2` direct-release APK with version code `13` is the manual
+The signed `3.1.3` direct-release APK with version code `14` is the manual
 partner baseline for this rollout. It keeps the internal tenant/branch/terminal
 safety model while adding the refined Gaming command workspace, canonical
 receipt history, reliable real-time refresh, and Room schema 40. It may be sent
-directly to the partner only after the production backend reaches Alembic
-revision `0057` and the production smoke test passes. It is not a hosted or
-server-delivered release: do not publish it to GitHub or Play, copy it into the
-server release directory, or advertise it through the update API. Physical
+directly to the partner only after the production backend reaches the
+repository's release-head migration and the production smoke test passes. It is
+not a hosted or server-delivered release: do not publish it to GitHub or Play,
+copy it into the server release directory, or register it through the update channel. Physical
 Redmi Pad 2 acceptance remains a separate post-install gate.
 
 Code `11` first introduced the verified in-app direct updater. The manually
-installed code-`13` app is now the update-capable baseline. The first release
+installed code-`14` app is now the update-capable baseline. The first release
 that may exercise server-driven delivery from it is a newly versioned and newly
-signed `3.1.3` APK with version code `14`. Production must retain the code-`8`
-latest-version defaults and blank direct-update metadata throughout the code-13
-manual rollout.
+signed `3.1.4` APK with version code `15`. No active optional-release record
+exists throughout the code-`14` manual rollout.
 
 Treat the app and backend as one coordinated release:
 
-1. Preserve the exact signed version-code-12 predecessor and version-code-13
+1. Preserve the exact signed version-code-13 predecessor and version-code-14
    partner APKs, verify their signer, and never replace either immutable
    identity with changed bytes.
 2. While the old backend is still active, bring any previously installed app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Keep the verified version-code-13 APK private and unadvertised. Do not host
+3. Keep the verified version-code-14 APK private and unadvertised. Do not host
    it on the VPS, GitHub, or Play while preparing the production migration.
 4. Back up the database and follow the `0056` maintenance sequence below:
    stop writers, upgrade only through `0055`, review and apply the explicit
    terminal consolidation, and only then upgrade to `0056`/head. Verify the
-   database crosses revision `0056` safely and reaches head revision `0057`
-   before starting the backend. Deploy with
+   database crosses revision `0056` safely and reaches the repository's release
+   head before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
-   `REQUIRE_NATIVE_VERSION_HEADERS=true`, and the last already-published
-   Android version/update metadata. Do not advertise code `13`.
-5. After the production smoke passes, install the exact private version-code-13
+   `REQUIRE_NATIVE_VERSION_HEADERS=true`,
+   `ANDROID_UPDATE_ALLOWED_ORIGIN=https://dcompany.duckdns.org`, and the last
+   already-published Android compatibility policy. Do not advertise code `14`.
+5. After the production smoke passes, install the exact private version-code-14
    package through Android's normal installer and run shift open/close, Gaming
    start/add item/stop/Send-to-POS, cash and UPI settlement, offline retry,
    finance reconciliation, and Support submission. Verify version `7` and
    older receive HTTP 426 before a write handler and version `8` remains
    compatible. The owner may then send that same APK manually to the partner;
-   production update metadata still remains at its code-`8` defaults.
-6. For the first later server-driven update, create `3.1.3` with version code
-   `14`, sign it with the trusted lineage, verify an in-place upgrade from code
-   `13`, publish it once at an immutable HTTPS URL, and verify its exact hash,
-   size, package, version and signer. Only then may the server advertise code
-   `14`; Android still requires the employee to approve installation.
+   no optional release is active.
+6. For the first later server-driven update, create `3.1.4` with version code
+   `15`, sign it with the trusted lineage, verify an in-place upgrade from code
+   `14`, and use `ops/stage_android_release.py` to publish it once at an
+   immutable HTTPS URL and register a staged row. Only the exact company/user
+   identity configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with
+   `admin.system` and audit access, may activate it after review and the
+   backend's second public-byte verification;
+   Android still requires the employee to approve installation.
 
 ### Required production order for migration 0056
 
@@ -378,26 +384,34 @@ order instead:
     Verify health, then smoke-test login, shift open, Gaming start/stop, add-on,
     Send to POS, cash and UPI settlement, receipt, Finance, sync recovery, and
     shift close on the retained Hybrid workspace. Install the exact private
-    code-`13` APK through Android's normal installer for its authenticated app
-    smoke; if code `12` is present, update it in place rather than uninstalling.
+    code-`14` APK through Android's normal installer for its authenticated app
+    smoke; if code `13` is present, update it in place rather than uninstalling.
     Only after the production smoke succeeds may the owner send that same APK
     manually to the partner.
 
-    Do not publish or host code `13`, and do not change the production update
-    configuration. Confirm `/api/v1/app/android/update` still reports the
-    existing code-`8` latest-version policy with no direct APK URL or integrity
-    metadata. If the production smoke fails, do not send the APK.
+    Do not publish, host, or register code `14`. Confirm
+    `/api/v1/public/client-compatibility?platform=android&version_code=14`
+    reports no optional APK release. If the production smoke fails, do not send
+    the APK.
 
 Do not lower the compatibility minimum to keep an older APK operating against
-this backend. Do not raise the minimum to `13` as part of this manual rollout.
-The first future server-advertised release is `3.1.3` (`14`), and its metadata
-may be configured only after the distinct immutable signed artifact and its
-same-lineage upgrade proof exist.
+this backend. Do not raise the minimum as part of this manual rollout. The first
+future server-delivered release is `3.1.4` (`15`); its immutable row may be
+staged only after the distinct signed artifact and same-lineage upgrade proof
+exist. Protected-owner status alone grants no global release authority: only the
+exact company/user identity configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`,
+with `admin.system` and audit access, may activate it.
+
+If an erroneous minimum must be rolled back, deploy the lower minimum together
+with a strictly higher `CLIENT_COMPATIBILITY_POLICY_REVISION`. A code-`14`
+tablet clears its persisted required-update block only after the public endpoint
+returns a newer, non-cacheable `supported` policy that explicitly includes code
+`14`; an equal/stale revision or an unreachable endpoint remains blocked.
 
 ## Android artifacts
 
 For future tagged releases, starting no earlier than the newly versioned
-`3.1.3` (`14`) update, the Android job first reruns the complete backend
+`3.1.4` (`15`) update, the Android job first reruns the complete backend
 migration/test and web
 lint/typecheck/test/build gates. It then runs Android release lint, JVM tests,
 emulator instrumentation, and signature verification. It stages a draft

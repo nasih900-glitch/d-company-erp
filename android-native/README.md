@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.2` |
-| Version code | `13` |
+| Version name | `3.1.3` |
+| Version code | `14` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,29 +23,31 @@ build.
 
 ## Release status
 
-Version `3.1.2` (`13`) is the signed manual partner baseline for this rollout.
+Version `3.1.3` (`14`) is the manual-install partner candidate for this rollout.
 It advances Room from 36 through 40 to protect the employee-owned Support
 outbox, immutable offline Gaming item actions, and the canonical receipt-history
-cache. It still requires exactly one server-confirmed Hybrid Gaming + POS
+cache. It also establishes authenticated installation heartbeat/update-event
+reporting and recoverable verified-APK preparation for later server-delivered
+updates. It still requires exactly one server-confirmed Hybrid Gaming + POS
 workspace for the active shop. The signed code-`12` to code-`13` in-place
-upgrade and API-35 evidence preserve the supported upgrade path, but they do
+upgrade evidence preserves the predecessor path, but code `14` is not a release
+until its own signed same-lineage upgrade and API-35 gates pass. Those gates do
 not replace the full authenticated workflow or physical Redmi Pad 2 acceptance.
 Nothing from Android release preparation deploys the backend or web ERP. Before
 the APK is manually handed to the partner, the coordinated production
 deployment must migrate the server database through Alembic revision `0057`
-and pass the production smoke test.
+and any later release-head migration, then pass the production smoke test.
 
 Android client code `8` remains the minimum-compatible floor. Preserve the
-signed `3.1.1` (`12`) predecessor and the signed `3.1.2` (`13`) baseline as
-immutable artifacts. Code `13` must not be hosted, published, or advertised as
-a server update in this release; production retains the code-`8` latest-version
-defaults and blank direct-update metadata. The first server-driven update will
-instead be a newly signed `3.1.3` (`14`) immutable APK with a verified HTTPS
+signed `3.1.1` (`12`) and `3.1.2` (`13`) predecessors as immutable artifacts.
+Code `14` is installed manually and must not advertise itself as an update to
+code `14`. The first server-driven successor is `3.1.4` (code `15`) and must be
+a newly signed immutable APK with a verified HTTPS
 URL, SHA-256, byte size, package, version, and expected signer. The server may
-advertise that future artifact only after its same-lineage upgrade and release
-gates pass. Android will still require the employee to approve installation.
-Do not raise the minimum to `14` until every active tablet has installed and
-accepted that future build.
+offer that future artifact only after the stage-only operator checks and a
+protected owner activation re-verifies its public bytes. Android will still
+require the employee to approve installation. Do not raise the minimum merely
+because the manual baseline or a future optional release exists.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in

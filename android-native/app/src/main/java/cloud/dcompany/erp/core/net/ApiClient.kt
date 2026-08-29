@@ -16,6 +16,22 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 internal const val TERMINAL_ID_HEADER = "X-Terminal-Id"
+internal const val CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER =
+    "X-Client-Compatibility-Policy-Revision"
+
+/** A 426 body may be unavailable; preserve the monotonic header authority. */
+internal fun resolvedCompatibilityPolicyRevision(
+    bodyPolicyRevision: Int?,
+    headerPolicyRevision: String?,
+): Int {
+    val body = bodyPolicyRevision?.coerceAtLeast(0) ?: 0
+    val header = headerPolicyRevision
+        ?.trim()
+        ?.takeIf { it.matches(Regex("[1-9][0-9]{0,9}")) }
+        ?.toIntOrNull()
+        ?: 0
+    return maxOf(body, header)
+}
 
 /**
  * Process-local terminal authority. Persisted TerminalStore is only a
@@ -348,6 +364,8 @@ object ApiClient {
             backendReachability.recordHttpResponse()
             if (response.isSuccessful) return response
 
+            val compatibilityPolicyRevisionHeader =
+                response.header(CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER)
             val body = response.body?.string().orEmpty()
             response.close()
             val envelope = runCatching {
@@ -372,6 +390,10 @@ object ApiClient {
                         currentVersionCode = details?.currentVersionCode ?: BuildConfig.VERSION_CODE,
                         minimumSupportedVersionCode = details?.minimumSupportedVersionCode,
                         latestVersionCode = details?.latestVersionCode,
+                        policyRevision = resolvedCompatibilityPolicyRevision(
+                            bodyPolicyRevision = details?.policyRevision,
+                            headerPolicyRevision = compatibilityPolicyRevisionHeader,
+                        ),
                         latestVersionName = details?.latestVersionName,
                         releaseNotes = details?.releaseNotes,
                         apkSha256 = details?.apkSha256,

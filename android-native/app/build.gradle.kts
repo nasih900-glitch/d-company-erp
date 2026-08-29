@@ -55,9 +55,10 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        versionCode = 13
-        versionName = "3.1.2"
+        versionCode = 14
+        versionName = "3.1.3"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
+        buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
@@ -82,6 +83,7 @@ android {
             // Debug-only escape hatch for isolated emulator acceptance tests.
             // Release builds remain pinned to the production HTTPS endpoint.
             buildConfigField("String", "API_BASE_URL", buildConfigString(debugApiBaseUrl))
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
         }
         release {
             isMinifyEnabled = false
@@ -93,6 +95,7 @@ android {
             initWith(getByName("release"))
             matchingFallbacks += "release"
             buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "true")
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("direct"))
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }

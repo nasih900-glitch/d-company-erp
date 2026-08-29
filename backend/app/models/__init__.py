@@ -10,6 +10,7 @@ from app.models.bug_report import (
     BugReportInboxRead,
     BugReportPublicReply,
 )
+from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
 from app.models.customer import (
     Customer,
     OrderLoyaltySettlement,
@@ -112,6 +113,7 @@ from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
     "Account",
+    "AndroidRelease",
     "Asset",
     "Attendance",
     "AuditLog",
@@ -127,6 +129,8 @@ __all__ = [
     "Company",
     "Customer",
     "CustomerSpendReconciliation",
+    "ClientInstallation",
+    "ClientUpdateEvent",
     "CustomerMembership",
     "Event",
     "EventTicket",

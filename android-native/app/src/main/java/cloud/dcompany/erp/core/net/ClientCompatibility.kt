@@ -17,6 +17,7 @@ data class ClientUpdateNotice(
     val currentVersionCode: Int?,
     val minimumSupportedVersionCode: Int?,
     val latestVersionCode: Int?,
+    val policyRevision: Int = 0,
     val latestVersionName: String? = null,
     val releaseNotes: String? = null,
     val apkSha256: String? = null,
@@ -50,11 +51,17 @@ class ClientCompatibilityGate(
     // so three seconds preserves the fail-safe update path while letting an
     // offline cafe reach its saved workspace promptly.
     private val startupTimeoutMillis: Long = 3_000L,
+    private val installedVersionCode: Int = BuildConfig.VERSION_CODE,
+    private val optionalUpdateSnoozeMillis: Long = DEFAULT_OPTIONAL_UPDATE_SNOOZE_MILLIS,
+    private val elapsedRealtimeMillis: () -> Long = android.os.SystemClock::elapsedRealtime,
     initialRequiredNotice: ClientUpdateNotice? = null,
     private val persistRequiredNotice: (ClientUpdateNotice) -> Unit = {},
+    private val clearRequiredNotice: (expectedPolicyRevision: Int) -> Boolean = { true },
 ) {
     init {
         require(startupTimeoutMillis > 0) { "Startup compatibility timeout must be positive" }
+        require(installedVersionCode > 0) { "Installed version code must be positive" }
+        require(optionalUpdateSnoozeMillis > 0) { "Optional update snooze must be positive" }
     }
 
     private val _state = MutableStateFlow<ClientCompatibilityState>(
@@ -63,7 +70,8 @@ class ClientCompatibilityGate(
     )
     val state: StateFlow<ClientCompatibilityState> = _state.asStateFlow()
     private val checkMutex = Mutex()
-    private var dismissedOptionalVersionCode: Int? = null
+    private val stateLock = Any()
+    private var optionalUpdateSnooze: OptionalUpdateSnooze? = null
 
     suspend fun checkAtStartup() = checkMutex.withLock {
         try {
@@ -85,7 +93,7 @@ class ClientCompatibilityGate(
                         ClientUpdateNotice(
                             message = failure.message ?: DEFAULT_REQUIRED_MESSAGE,
                             updateUrl = null,
-                            currentVersionCode = BuildConfig.VERSION_CODE,
+                            currentVersionCode = installedVersionCode,
                             minimumSupportedVersionCode = null,
                             latestVersionCode = null,
                         ),
@@ -121,7 +129,7 @@ class ClientCompatibilityGate(
                     ClientUpdateNotice(
                         message = failure.message ?: DEFAULT_REQUIRED_MESSAGE,
                         updateUrl = null,
-                        currentVersionCode = BuildConfig.VERSION_CODE,
+                        currentVersionCode = installedVersionCode,
                         minimumSupportedVersionCode = null,
                         latestVersionCode = null,
                     ),
@@ -134,35 +142,42 @@ class ClientCompatibilityGate(
     }
 
     fun requireUpdate(notice: ClientUpdateNotice) {
-        runCatching { persistRequiredNotice(notice) }
-        _state.value = ClientCompatibilityState.UpdateRequired(notice)
+        val normalized = notice.copy(policyRevision = notice.policyRevision.coerceAtLeast(0))
+        synchronized(stateLock) {
+            val current = _state.value
+            if (
+                current is ClientCompatibilityState.UpdateRequired &&
+                current.notice.policyRevision > normalized.policyRevision
+            ) return
+            runCatching { persistRequiredNotice(normalized) }
+            _state.value = ClientCompatibilityState.UpdateRequired(normalized)
+        }
     }
 
     fun dismissOptionalUpdate() {
-        _state.update { current ->
+        synchronized(stateLock) {
+            val current = _state.value
             if (current is ClientCompatibilityState.UpdateAvailable) {
-                dismissedOptionalVersionCode = current.notice.latestVersionCode
-                ClientCompatibilityState.Supported
-            } else {
-                current
+                val versionCode = current.notice.latestVersionCode
+                val now = runCatching(elapsedRealtimeMillis).getOrNull()
+                optionalUpdateSnooze = if (versionCode != null && now != null && now >= 0) {
+                    OptionalUpdateSnooze(versionCode, now)
+                } else {
+                    null
+                }
+                _state.value = ClientCompatibilityState.Supported
             }
         }
     }
 
     private fun apply(response: ClientCompatibilityResponse) {
         val next = when (response.status) {
-            "update_required" -> {
-                val notice = response.toNotice()
-                runCatching { persistRequiredNotice(notice) }
-                ClientCompatibilityState.UpdateRequired(notice)
-            }
+            "update_required" -> ClientCompatibilityState.UpdateRequired(response.toNotice())
             "update_available" -> {
-                // A foreground compatibility refresh runs every fifteen
-                // minutes. Respect "Later" for this release for the lifetime
-                // of the process instead of repeatedly covering the operator's
-                // work with the same advisory banner. A newer version code is
-                // still shown immediately, and required updates always win.
-                if (response.latestVersionCode == dismissedOptionalVersionCode) {
+                // Respect "Later" for a bounded period instead of repeatedly
+                // covering the operator's work. A newer version, snooze expiry,
+                // clock reset, process restart, or required update shows again.
+                if (optionalUpdateIsSnoozed(response.latestVersionCode)) {
                     ClientCompatibilityState.Supported
                 } else {
                     ClientCompatibilityState.UpdateAvailable(response.toNotice())
@@ -170,22 +185,64 @@ class ClientCompatibilityGate(
             }
             else -> ClientCompatibilityState.Supported
         }
-        _state.update { current ->
-            // A definitive 426 may arrive from another request while the
-            // startup probe is in flight. Never let a supported/optional
-            // result reopen the app in that race. A later authoritative
-            // required response may replace the notice, however, so corrected
-            // download metadata becomes usable without forcing staff to kill
-            // and restart an already-blocked app.
-            if (
-                current is ClientCompatibilityState.UpdateRequired &&
-                next !is ClientCompatibilityState.UpdateRequired
-            ) {
-                current
+        synchronized(stateLock) {
+            val current = _state.value
+            if (current is ClientCompatibilityState.UpdateRequired) {
+                when (next) {
+                    is ClientCompatibilityState.UpdateRequired -> {
+                        // Equal revisions may refresh corrected download metadata. A stale
+                        // response must never replace evidence from a newer 426.
+                        if (next.notice.policyRevision >= current.notice.policyRevision) {
+                            requireUpdate(next.notice)
+                        }
+                    }
+                    ClientCompatibilityState.Supported -> {
+                        if (canAuthoritativelyClearRequired(response, current.notice)) {
+                            // The store performs its own expected-revision compare. This
+                            // closes the race where a newer 426 is persisted while an older
+                            // supported probe is returning.
+                            if (runCatching {
+                                    clearRequiredNotice(current.notice.policyRevision)
+                                }.getOrDefault(false)
+                            ) {
+                                _state.value = ClientCompatibilityState.Supported
+                            }
+                        }
+                    }
+                    is ClientCompatibilityState.UpdateAvailable,
+                    ClientCompatibilityState.Checking -> Unit
+                }
+            } else if (next is ClientCompatibilityState.UpdateRequired) {
+                requireUpdate(next.notice)
             } else {
-                next
+                _state.value = next
             }
         }
+    }
+
+    private fun canAuthoritativelyClearRequired(
+        response: ClientCompatibilityResponse,
+        required: ClientUpdateNotice,
+    ): Boolean =
+        response.status == "supported" &&
+            response.platform == "android" &&
+            response.currentVersionCode == installedVersionCode &&
+            response.minimumSupportedVersionCode in 1..response.latestVersionCode &&
+            installedVersionCode >= response.minimumSupportedVersionCode &&
+            response.policyRevision > required.policyRevision
+
+    private fun optionalUpdateIsSnoozed(versionCode: Int): Boolean = synchronized(stateLock) {
+        val snooze = optionalUpdateSnooze ?: return@synchronized false
+        if (snooze.versionCode != versionCode) return@synchronized false
+        val now = runCatching(elapsedRealtimeMillis).getOrNull()
+            ?: return@synchronized false
+        if (now < snooze.startedAtElapsedMillis) {
+            optionalUpdateSnooze = null
+            return@synchronized false
+        }
+        val active = now - snooze.startedAtElapsedMillis < optionalUpdateSnoozeMillis
+        if (!active) optionalUpdateSnooze = null
+        active
     }
 
     private fun finishUncertainCheck() {
@@ -204,6 +261,7 @@ class ClientCompatibilityGate(
         currentVersionCode = currentVersionCode,
         minimumSupportedVersionCode = minimumSupportedVersionCode,
         latestVersionCode = latestVersionCode,
+        policyRevision = policyRevision.coerceAtLeast(0),
         latestVersionName = latestVersionName,
         releaseNotes = releaseNotes,
         apkSha256 = apkSha256,
@@ -212,10 +270,16 @@ class ClientCompatibilityGate(
     )
 
     private companion object {
+        const val DEFAULT_OPTIONAL_UPDATE_SNOOZE_MILLIS = 4L * 60L * 60L * 1_000L
         const val DEFAULT_REQUIRED_MESSAGE =
             "This app version is no longer compatible with the ERP server. Update before continuing."
     }
 }
+
+private data class OptionalUpdateSnooze(
+    val versionCode: Int,
+    val startedAtElapsedMillis: Long,
+)
 
 /** Only an unambiguous HTTPS URL is ever handed to Android's external browser. */
 fun safeHttpsUpdateUrl(raw: String?): String? {

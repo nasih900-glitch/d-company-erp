@@ -29,3 +29,24 @@ async def test_openapi_renders(client) -> None:
         "/api/v1/admin/audit",
     ]:
         assert any(p.startswith(prefix) for p in paths), f"missing route prefix {prefix}"
+
+    me_schema = spec["components"]["schemas"]["MeResponse"]
+    assert me_schema["properties"]["release_control_access"]["type"] == "boolean"
+    assert "release_control_access" in me_schema["required"]
+    for release_path in [
+        "/api/v1/client-updates/android/releases",
+        "/api/v1/client-updates/android/releases/{release_id}/activate",
+        "/api/v1/client-updates/android/releases/{release_id}/withdraw",
+    ]:
+        assert release_path in spec["paths"]
+
+    release_schema = spec["components"]["schemas"]["AndroidReleaseRead"]
+    for field in (
+        "source_git_sha",
+        "source_release_ref",
+        "source_workflow_run_id",
+        "source_workflow_run_attempt",
+    ):
+        assert field in release_schema["required"]
+    assert release_schema["properties"]["source_workflow_run_id"]["type"] == "string"
+    assert release_schema["properties"]["source_workflow_run_attempt"]["type"] == "integer"

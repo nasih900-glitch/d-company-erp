@@ -1,184 +1,227 @@
 # Server-driven Android updates
 
-D Company ERP already separates release delivery from compatibility policy:
+D Company uses a direct, signed-APK channel for the current partner pilot. The
+server can offer an update, but it cannot silently install one: Android always
+shows its package-installer approval screen. Do not combine direct APK delivery
+and Google Play delivery on the same active tablet fleet without first adding a
+channel-aware compatibility contract and proving both signing lineages.
 
-- the signed APK/AAB is produced by the release workflow;
-- an HTTPS release location hosts the signed APK;
-- the ERP server advertises the latest and minimum-supported version codes;
-- Android shows an optional update banner or a required-update screen; and
-- Android's package installer verifies that the new APK has the same package
-  name and signing lineage before it can replace the installed app.
+## Trust and authority boundaries
 
-The ERP backend must never build, re-sign, or modify an APK. Keep the signing
-key outside the VPS and use the existing release workflow.
+- GitHub Actions builds and signs the APK. The signing key and passwords never
+  belong on the VPS.
+- `ANDROID_EXPECTED_SIGNER_SHA256` is an independently preserved certificate
+  fingerprint. Do not derive it from the candidate being approved.
+- The VPS hosts versioned APK bytes under `/downloads/android/`. Published
+  filenames are never overwritten or reused.
+- The staging tool verifies the exact CI manifest, local APK identity, public
+  HTTPS bytes and cache headers, then creates an immutable **staged** registry
+  record. It has no activation, withdrawal, or minimum-version authority.
+- Only an explicitly bound release-controller account reviews and activates or
+  withdraws an already staged record in the ERP. The account must have
+  `admin.system` and audit access, and its exact immutable company/user UUID pair
+  must appear in `ANDROID_RELEASE_CONTROLLER_BINDINGS`. Protected-owner status
+  alone is deliberately insufficient for this global, pre-login registry.
+  Activation re-fetches and re-hashes the public APK before changing the one
+  active release under a database lock.
+- `ANDROID_MIN_SUPPORTED_VERSION_CODE` remains the separate mandatory-update
+  policy. Staging and activation never raise or lower it.
+- `CLIENT_COMPATIBILITY_POLICY_REVISION` is the monotonic generation for that
+  mandatory policy. Increment it for every minimum change, including an
+  emergency rollback; never decrement or reuse a revision.
+- `ANDROID_UPDATE_ALLOWED_ORIGIN=https://dcompany.duckdns.org` pins registry
+  URLs to the production origin and controlled `/downloads/android/` path even
+  while no optional release is active.
 
-The release workflow also requires the out-of-band repository Actions variable
-`ANDROID_EXPECTED_SIGNER_SHA256`. Set it from a previously trusted installed
-direct APK or the preserved release certificate, not from the candidate built
-in that same run. Release APKs and the Play AAB must all match this fingerprint
-before they can be packaged. Emulator automation and the Gradle build run
-without signing secrets. Their unsigned artifacts are handed to a fresh signing
-runner, where no Gradle process or third-party action is allowed to run after
-the release keystore is decoded. The signer uses the explicitly pinned Android
-35.0.0 `zipalign` and `apksigner` binaries instead of whichever SDK happens to
-be newest on the hosted runner.
+There is deliberately no HTTP upload, signing, metadata-edit, or minimum-policy
+endpoint. A compromised owner browser therefore cannot replace APK bytes,
+change their identity, or lower the compatibility floor.
 
-## One-time bootstrap boundary
+## Current rollout boundary
 
-Version `3.1.0` (code `11`) first introduced the verified in-app direct updater.
-An already-installed `3.0.9` or older app cannot acquire new installer code
-from the server. Preserve the signed `3.1.1` (code `12`) APK as the immutable
-predecessor used to verify the supported in-place upgrade. The signed `3.1.2`
-(code `13`) direct-release APK is the manual-install, update-capable partner
-baseline for this rollout. Never overwrite either signed identity with changed
-bytes.
+`3.1.3` (version code `14`) is the manual, update-capable partner baseline. Send
+that exact signed APK to the partner only after the coordinated production
+deployment and smoke test pass. Code `14` must remain unhosted, unregistered and
+unadvertised; it is the package from which the next update is tested.
 
-Code `13` must not be hosted or advertised through the server in this release.
-It may be sent manually only after production has reached Alembic revision
-`0057` and the production smoke test has passed. Version `3.1.3` (code `14`) is
-the first future release eligible for server-driven delivery to the manually
-installed code-`13` baseline. It must be a distinct, newly signed immutable APK;
-code `13` must never be repurposed as that update.
+The first server-delivered release is a distinct `3.1.4` (version code `15`)
+artifact with a new immutable filename. Never rebuild code `14` or code `15`
+with different bytes under the same version identity.
 
-The repository and Compose defaults deliberately keep
-`ANDROID_LATEST_VERSION_CODE=8`. Building a newer APK is not authority to
-advertise it. The operator raises `ANDROID_LATEST_VERSION_CODE` only after the
-exact APK is published and the complete manifest metadata has been checked.
+Keep the minimum-compatible floor at code `8` during the initial rollout. A
+new build, a green workflow, a hosted APK, or a staged registry row is not
+authority to change that floor.
 
-## Release manifest to backend configuration
+## Release record
 
-The workflow-generated `release-manifest.json` is the verified handoff record,
-not a backend configuration file to import wholesale. Copy only these fields
-into the production compatibility settings after publishing the exact APK:
+The release workflow's `release-manifest.json` is the source attestation. The
+operator tool accepts that exact manifest and APK, then derives the backend's
+strict record containing only:
 
-| Release manifest | Backend environment variable |
-| --- | --- |
-| `version_code` | `ANDROID_LATEST_VERSION_CODE` |
-| `version_name` | `ANDROID_LATEST_VERSION_NAME` |
-| `apk_download_url` | `ANDROID_UPDATE_URL` |
-| `apk_sha256` | `ANDROID_UPDATE_APK_SHA256` |
-| `apk_size_bytes` | `ANDROID_UPDATE_APK_SIZE_BYTES` |
-| `signing_certificate_sha256` | `ANDROID_UPDATE_SIGNING_CERT_SHA256` |
+- `version_code`
+- `version_name`
+- `channel` (`direct`)
+- `update_url`
+- `release_notes`
+- `apk_sha256`
+- `apk_size_bytes`
+- `apk_signing_cert_sha256`
+- `source_git_sha` (full lowercase 40-hex commit)
+- `source_release_ref` (exactly `v<version_name>`)
+- `source_workflow_run_id` (positive GitHub Actions run identifier)
+- `source_workflow_run_attempt` (positive attempt number)
 
-`ANDROID_MIN_SUPPORTED_VERSION_CODE` is a rollout decision and is deliberately
-not generated from the artifact. `ANDROID_UPDATE_RELEASE_NOTES` is maintained
-separately. Keep the minimum at the oldest compatible deployed client until
-every active tablet has drained its offline queue and upgraded successfully.
+These fields are immutable after registration. The database retains staged,
+active and withdrawn rows; withdrawal does not delete release history. The APK
+limit is 512 MiB, matching the Android downloader. The owner API serializes the
+64-bit workflow run ID as a decimal string so browsers cannot round it; public
+compatibility responses deliberately omit CI provenance.
 
-The manifest generator rejects APKs above 512 MiB, matching the Android
-downloader's hard limit. This prevents the server from advertising metadata for
-an artifact the client is required to reject.
+The public compatibility endpoint is:
 
-For a direct `.apk` URL, the backend fails startup if version name, SHA-256,
-byte size, or signer fingerprint is absent. A partial direct-update contract is
-an operational lockout risk, so it is not downgraded to an unverified link.
-Play/managed-store links may omit APK integrity fields because the app does not
-download those bytes through the direct updater.
+```text
+GET /api/v1/public/client-compatibility?platform=android&version_code=<installed-code>
+```
 
-Production and staging also refuse to advertise or require a build newer than
-the code-`8` compatibility floor without an HTTPS update URL. This prevents an
-operator typo from persisting a required-update screen that gives staff no
-installation path.
+When no release is active, it may return the compatibility floor without APK
+metadata. When a release is active, URL, version name, hash, size and signer are
+an all-or-nothing atomic contract and the response uses `Cache-Control:
+no-store`. Every compatibility JSON response and 426 carries the same positive
+`policy_revision`; the response header
+`X-Client-Compatibility-Policy-Revision` must match it. This lets a tablet clear
+a persisted required-update block only after a strictly newer, definitive
+`supported` policy explicitly includes its installed code. Equal/stale policy
+responses and network uncertainty remain blocked. The APK itself must return:
 
-## Safe rollout
+- `Content-Type: application/vnd.android.package-archive`
+- `X-Content-Type-Options: nosniff`
+- an exact `Content-Length`
+- `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
+- no redirect from its same-origin versioned URL
 
-Assume the partner tablet has the exact signed `3.1.2` baseline at code `13`,
-installed manually through Android's package installer after the production
-`0057` smoke. Older supported clients may remain at code `8`, code `9`, the
-signed `3.1.0` code `11`, or the preserved code-`12` predecessor; none is proof
-that the code-`13` partner baseline was installed successfully. The first
-server-delivered release has version code `14` and version name `3.1.3`.
+## Build and stage code 15
 
-1. Confirm the installed code-`13` baseline has the expected signer, no pending
-   offline work, and a working update check.
-2. Produce and verify a newly signed version-code-14 APK without changing the
-   server's update metadata.
-3. Publish that immutable APK once on the controlled HTTPS release channel and
-   confirm its signing-certificate fingerprint matches code `13`.
-4. Only after the artifact and complete manifest are verified, configure the
-   backend initially as:
+1. Confirm the code-`14` tablet is signed by the trusted certificate, can check
+   for updates, and has no pending offline work.
+2. Bump the coordinated application to `3.1.4` / code `15`. Run the complete
+   release workflow and obtain its signed direct APK and
+   `release-manifest.json` from the same workflow run.
+3. Download both files without renaming or modifying either one. First run a
+   verification-only plan:
 
-   ```dotenv
-   ANDROID_MIN_SUPPORTED_VERSION_CODE=8
-   ANDROID_LATEST_VERSION_CODE=14
-   ANDROID_LATEST_VERSION_NAME=3.1.3
-   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.3.apk
-   ANDROID_UPDATE_APK_SHA256=<64-hex APK digest from release-manifest.json>
-   ANDROID_UPDATE_APK_SIZE_BYTES=<exact byte size from release-manifest.json>
-   ANDROID_UPDATE_SIGNING_CERT_SHA256=<64-hex signer digest from release-manifest.json>
-   ANDROID_UPDATE_RELEASE_NOTES=Gaming Centre reliability update
+   ```bash
+   python3 ops/stage_android_release.py \
+     --manifest /secure/release-3.1.4/release-manifest.json \
+     --apk /secure/release-3.1.4/d-company-erp-v3.1.4-direct.apk \
+     --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
+     --release-notes "Gaming Centre reliability and update delivery"
    ```
 
-   Code `13` sees an optional update while the minimum-compatible floor remains
-   code `8`. Code `14` is current only after this configuration is deployed.
+   This checks the manifest, byte size, SHA-256, package
+   `cloud.dcompany.erp`, version code/name, and signing certificate using
+   `apkanalyzer` and `apksigner`. It does not contact or change production.
 
-5. Let every tablet sync its offline queue, install the update, sign in and
-   complete the smoke test.
-6. Only when every active tablet is on version 14 may the minimum be raised:
+4. Review the printed plan. Then stage the exact same inputs:
 
-   ```dotenv
-   ANDROID_MIN_SUPPORTED_VERSION_CODE=14
-   ANDROID_LATEST_VERSION_CODE=14
+   ```bash
+   python3 ops/stage_android_release.py \
+     --manifest /secure/release-3.1.4/release-manifest.json \
+     --apk /secure/release-3.1.4/d-company-erp-v3.1.4-direct.apk \
+     --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
+     --release-notes "Gaming Centre reliability and update delivery" \
+     --ssh-key ~/.ssh/dcompany_erp \
+     --apply
    ```
 
-## What the employee experiences
+   The tool uploads to a random temporary name, verifies it on the VPS, uses a
+   no-replace atomic rename, downloads and verifies every public byte, registers
+   only a staged row through the backend's internal CLI, and writes an
+   append-only attestation. A failure before registration can leave safe,
+   unadvertised immutable bytes; it must never cause a release offer.
 
-For an optional update, the employee can keep working and install later. For a
-required update, financial writes are blocked, but the local database and
-signed-in account are preserved. In the controlled direct-distribution build,
-the employee taps **Download verified update**. The app verifies the exact
-advertised byte size, SHA-256, package, version, expected signer, and signing
-lineage before enabling **Install update**. Android then requires the employee
-to approve installation.
+5. In the owner ERP release screen, compare version, release notes, SHA-256,
+   size, signer and source evidence. Activate only the staged code-`15` row.
+   The backend performs a second no-redirect public byte verification before the
+   atomic status transition and records the owner action in the Audit Log.
+6. On one code-`14` tablet, refresh the update check, download, install and
+   reopen code `15`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+   recovery and finance reconciliation before wider partner rollout.
 
-If any integrity field is missing or invalid, the app refuses the direct path
-and offers only the legacy HTTPS link. The ordinary Play build never requests
-Android's package-install permission and therefore always uses its store/link
-channel.
+Do not activate code `14` as its own update. Do not stage from an arbitrary
+local Gradle build, a renamed APK, a different workflow run, or a candidate
+whose signer merely matches itself.
 
-Once this installed build receives an authoritative required-update decision,
-that block is stored locally and survives process death, an offline restart,
-and later supported/optional responses for the same version code. A successful
-in-place update changes the installed version code and clears the stale block
-at the next startup. Do not tell staff to clear app data to escape the screen;
-that would also endanger locally queued work.
+## Owner activation and emergency withdrawal
 
-Normal Android installations cannot be updated silently. Silent installation
-requires either Google Play managed updates or a tablet enrolled as an Android
-Enterprise device owner. For the current partner pilot, Play Internal Testing
-is the lowest-maintenance choice; direct signed APK delivery remains supported.
+Normal activation and withdrawal happen in the protected owner ERP, but only for
+an account whose exact company/user UUID pair is configured in
+`ANDROID_RELEASE_CONTROLLER_BINDINGS` and which still has `admin.system` and
+audit access. An empty binding list denies everyone. A protected owner who is
+not explicitly bound, and every normal staff session, must not see or invoke
+these controls. `/api/v1/auth/me.release_control_access` is the authoritative UI
+capability; role names alone are not. The control surface can change only
+`staged`, `active`, and `withdrawn` status; it cannot upload, sign, edit metadata,
+delete history, or change the minimum.
 
-GitHub release assets and Caddy URLs are immutable. The workflow refuses to
-replace an existing release tag, and the operator must never overwrite a file
-already served under a versioned URL. A corrected binary requires a higher
-version code, a new tag, and a new filename.
+If the owner UI is unavailable, use the same authenticated protected API with a
+fresh session for that configured release-controller identity. If an internal
+backend CLI is provided, it is safe only when it calls the same transition
+service and produces the same audit record. Never use direct SQL, edit a row,
+rewrite the APK, or invent a second environment-variable activation path.
 
-## Do not mix Play and direct delivery on one active fleet
+Withdrawal stops new offers but cannot uninstall an APK already installed.
+Android does not normally allow a lower code to replace a higher code. A bad
+code-`15` release therefore requires withdrawal followed by a newly signed
+code-`16` hotfix. Do not lower the compatibility minimum as a substitute for a
+fixed binary, and do not ask staff to uninstall while offline work is pending.
 
-The current compatibility contract has one Android `update_url`. It cannot
-simultaneously advertise a Play listing to Play-installed clients and the
-controlled APK to direct-installed clients. Choose one rollout channel for the
-active tablet fleet until a channel-specific compatibility contract is added.
+## Minimum-version rollout
 
-Google Play App Signing can also make the certificate on the APK delivered by
-Play different from the certificate on the locally signed direct APK. The CI
-signer fingerprint describes the direct APK/upload artifact; it does not prove
-the certificate on a Play-delivered split APK. Android will safely reject a
-cross-channel update whose signing lineage does not match, but raising the
-server minimum first would leave that tablet blocked. Verify an in-place update
-on an installation obtained through the exact chosen channel before changing
-`ANDROID_MIN_SUPPORTED_VERSION_CODE`.
+Activation is optional-update authority only. Keep
+`ANDROID_MIN_SUPPORTED_VERSION_CODE=8` until all known active tablets have:
 
-## Rollback
+1. uploaded their offline queues;
+2. installed and opened the chosen release;
+3. completed authenticated operational smoke tests; and
+4. reported the new installation/version telemetry without conflicts.
 
-Android does not allow an older version code to replace a newer one in the
-normal production flow. If a release is defective:
+Changing the minimum is a separately reviewed production configuration change
+with its own backup, deploy, compatibility probes and rollback plan. Increase
+`CLIENT_COMPATIBILITY_POLICY_REVISION` in the same atomic deployment for both a
+raise and a rollback. It is never performed automatically by the staging tool
+or owner activation.
 
-1. remove it from the advertised release channel;
-2. fix the defect;
-3. increment the version code again;
-4. publish a newly signed replacement; and
-5. update the server's latest/minimum policy only after the replacement exists.
+## Monitoring, retention and recovery
 
-Never lower server compatibility merely to make an unsafe binary operational,
-and never ask staff to uninstall while the local offline queue contains work.
+- The VPS runtime monitor validates active compatibility metadata, the exact
+  local hosted bytes and public immutable headers.
+- The external production monitor checks compatibility and public APK headers
+  every five minutes and re-downloads/re-hashes the full advertised APK every
+  six hours and on manual dispatch. A dormant channel downloads no APK.
+- Release monitoring must alert on partial metadata, wrong origin/path,
+  redirects, unsafe content type/cache policy, size/hash mismatch, missing
+  local bytes, or an invalid compatibility status.
+- Retain every APK, CI manifest, workflow provenance, signer fingerprint,
+  staging attestation and audit event needed to reconstruct a release. Keep at
+  least the active APK, the manual code-`14` baseline and previous known-good
+  installers in encrypted backup storage; never expose the signing key there.
+- Test restoration of the registry, hosted bytes and attestations. Restoring
+  metadata without the exact APK must fail closed rather than advertise a
+  broken update.
+
+Authenticated Android heartbeat writes are separately abuse-bounded. Redis
+limits each server-derived company/user principal to
+`CLIENT_HEARTBEAT_USER_LIMIT_PER_MINUTE` (default 30); rotating the client's
+random installation UUID does not change that key. Redis failure returns 503,
+and an exceeded window returns 429 with `Retry-After`. PostgreSQL admission
+locks and triggers preserve hard immutable-ledger ceilings of 8 installations
+per registering user, 32 per company, 1,000 update events per installation,
+2,000 per actor and 10,000 per company. Exact installation and event retries
+remain idempotent at capacity; new evidence receives a clear 409 and no history
+is deleted. Alert on sustained heartbeat 429/409/503 responses and investigate
+the protected owner device list rather than clearing rows.
+
+TLS terminates at the existing production HTTPS edge. A CDN may be added later
+only if it preserves exact bytes, HTTPS, `Content-Length`, immutable headers and
+same-origin/no-redirect behavior expected by the app and monitors. It is not
+needed for the initial one-tablet rollout.

@@ -79,6 +79,7 @@ def create_app() -> FastAPI:
         ClientCompatibilityMiddleware,
         android_minimum=settings.android_min_supported_version_code,
         android_latest=settings.android_latest_version_code,
+        policy_revision=settings.client_compatibility_policy_revision,
         android_update_url=(
             str(settings.android_update_url) if settings.android_update_url else None
         ),

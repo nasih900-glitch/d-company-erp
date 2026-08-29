@@ -46,6 +46,8 @@ export interface MeResponse {
   roles: string[];
   protected_access: boolean;
   audit_access: boolean;
+  /** Dedicated server-authoritative grant for Android release controls. */
+  release_control_access: boolean;
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];
@@ -946,6 +948,95 @@ export interface ExpenseCategoryDTO {
   id: string;
   name: string;
   code: string | null;
+}
+
+// =============================================================================
+// NATIVE CLIENT HEALTH & ANDROID RELEASES — explicit release-controller plane
+// =============================================================================
+export type ClientDistributionChannel = 'direct' | 'play' | 'managed';
+
+export type ClientUpdateState =
+  | 'idle'
+  | 'update_available'
+  | 'downloading'
+  | 'verifying'
+  | 'verified'
+  | 'installer_opened'
+  | 'failed';
+
+export type ClientUpdateErrorCode =
+  | 'network_error'
+  | 'http_error'
+  | 'insufficient_storage'
+  | 'invalid_metadata'
+  | 'size_mismatch'
+  | 'checksum_mismatch'
+  | 'archive_unreadable'
+  | 'package_mismatch'
+  | 'version_mismatch'
+  | 'signer_mismatch'
+  | 'installer_permission_denied'
+  | 'installer_unavailable'
+  | 'installer_not_completed'
+  | 'unknown';
+
+export interface ClientInstallationDTO {
+  installation_id: string;
+  platform: 'android';
+  distribution_channel: ClientDistributionChannel;
+  version_name: string;
+  version_code: number;
+  pending_outbox_count: number;
+  last_successful_sync_at: string | null;
+  update_state: ClientUpdateState;
+  update_error_code: ClientUpdateErrorCode | null;
+  last_seen_at: string;
+  is_stale: boolean;
+  last_user_id: string | null;
+  last_user_name: string | null;
+  terminal_id: string | null;
+  terminal_name: string | null;
+}
+
+export interface ClientInstallationListDTO {
+  server_time: string;
+  stale_after_hours: number;
+  total: number;
+  items: ClientInstallationDTO[];
+}
+
+export type AndroidReleaseStatus = 'staged' | 'active' | 'withdrawn';
+
+export interface AndroidReleaseDTO {
+  id: string;
+  channel: 'direct';
+  version_code: number;
+  version_name: string;
+  update_url: string;
+  release_notes: string;
+  apk_sha256: string;
+  apk_size_bytes: number;
+  apk_signing_cert_sha256: string;
+  manifest_sha256: string;
+  /** Lowercase 40-character Git commit SHA recorded by the release workflow. */
+  source_git_sha: string;
+  /** Immutable release tag/ref; the backend requires v{version_name}. */
+  source_release_ref: string;
+  /** Canonical decimal string so 64-bit workflow IDs remain exact in JavaScript. */
+  source_workflow_run_id: string;
+  source_workflow_run_attempt: number;
+  status: AndroidReleaseStatus;
+  registered_at: string;
+  activated_at: string | null;
+  activated_by: string | null;
+  withdrawn_at: string | null;
+  withdrawn_by: string | null;
+  updated_at: string;
+}
+
+export interface AndroidReleaseListDTO {
+  total: number;
+  items: AndroidReleaseDTO[];
 }
 
 // =============================================================================
@@ -2966,6 +3057,28 @@ export const events = {
     api.get<EventTicketDTO[]>(`/events/${event_id}/tickets`).then((r) => r.data),
   checkIn: (event_id: string, ticket_id: string) =>
     api.post<EventTicketDTO>(`/events/${event_id}/tickets/${ticket_id}/check-in`)
+      .then((r) => r.data),
+};
+
+export const clientInstallations = {
+  list: (params: {
+    stale_after_hours?: number;
+    limit?: number;
+    offset?: number;
+  } = {}) => api.get<ClientInstallationListDTO>('/client-installations', { params })
+    .then((r) => r.data),
+};
+
+export const androidReleases = {
+  list: (limit = 100) =>
+    api.get<AndroidReleaseListDTO>('/client-updates/android/releases', {
+      params: { limit },
+    }).then((r) => r.data),
+  activate: (releaseId: string) =>
+    api.post<AndroidReleaseDTO>(`/client-updates/android/releases/${releaseId}/activate`)
+      .then((r) => r.data),
+  withdraw: (releaseId: string) =>
+    api.post<AndroidReleaseDTO>(`/client-updates/android/releases/${releaseId}/withdraw`)
       .then((r) => r.data),
 };
 

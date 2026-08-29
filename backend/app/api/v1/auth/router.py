@@ -19,6 +19,7 @@ from app.core.permissions import (
     effective_permissions,
     modules_for_permissions,
 )
+from app.core.release_control import has_release_control_access
 from app.core.roles import has_full_access, has_protected_owner_access, public_roles
 from app.core.security import (
     decode_token,
@@ -71,6 +72,9 @@ class MeResponse(BaseModel):
     roles: list[str]
     protected_access: bool = False
     audit_access: bool = False
+    # Separate from tenant-local admin.system: the Android release registry is
+    # global and requires an explicit immutable company/user binding.
+    release_control_access: bool
     company_id: str
     branch_id: str | None
     # Display metadata only. Authorization remains anchored to branch_id in
@@ -776,6 +780,7 @@ async def me(tenant: TenantDep, session: SessionDep) -> MeResponse:
         roles=list(tenant.roles),
         protected_access=tenant.protected_access,
         audit_access=tenant.audit_access,
+        release_control_access=has_release_control_access(tenant),
         company_id=str(tenant.company_id),
         branch_id=str(tenant.branch_id) if tenant.branch_id else None,
         branch_name=branch_name,

@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     account_otp_request_limit: int = Field(default=3, ge=1, le=10)
     login_ip_limit_per_minute: int = Field(default=30, ge=5, le=300)
     login_identity_limit_per_15_minutes: int = Field(default=10, ge=5, le=100)
+    # Native clients normally report at startup/reconnect and roughly every
+    # fifteen foreground minutes. This permits realistic bursts while a
+    # compromised staff token cannot bypass the limit by rotating its random
+    # installation UUID.
+    client_heartbeat_user_limit_per_minute: int = Field(default=30, ge=4, le=120)
     max_request_body_bytes: int = Field(
         default=25 * 1024 * 1024,
         ge=1024,
@@ -80,6 +85,24 @@ class Settings(BaseSettings):
     # advertising JSON that the installed app cannot deserialize.
     android_min_supported_version_code: int = Field(default=8, ge=1, le=2_147_483_647)
     android_latest_version_code: int = Field(default=8, ge=1, le=2_147_483_647)
+    # Monotonic generation for required-version policy. Increment this for
+    # every minimum change, including a rollback, so clients can distinguish a
+    # newer relaxation from a stale cached requirement.
+    client_compatibility_policy_revision: int = Field(
+        default=1,
+        ge=1,
+        le=2_147_483_647,
+    )
+    # Fail-closed SSRF boundary for DB-promoted direct APKs. This is an origin,
+    # not an advertised artifact URL, and therefore remains stable across
+    # releases while ANDROID_UPDATE_URL may be blank for optional DB offers.
+    android_update_allowed_origin: AnyHttpUrl | None = None
+    # Global Android release state is deliberately not tenant-scoped. A local
+    # ``admin.system`` grant therefore cannot be its authority boundary. Only
+    # exact, immutable company/user pairs configured by operations may inspect
+    # or transition that registry. The empty default is intentionally deny-all.
+    # Format: ``<company-uuid>:<user-uuid>[,<company-uuid>:<user-uuid>...]``.
+    android_release_controller_bindings: str = Field(default="", max_length=8_192)
     android_update_url: AnyHttpUrl | None = None
     android_latest_version_name: str | None = Field(default=None, max_length=80)
     android_update_release_notes: str | None = Field(default=None, max_length=2_000)
@@ -152,16 +175,26 @@ class Settings(BaseSettings):
                 if update_url and update_url.scheme != "https":
                     raise ValueError(f"{label} must use HTTPS in prod or staging")
             if (
-                max(
-                    self.android_min_supported_version_code,
-                    self.android_latest_version_code,
-                )
-                > _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE
+                self.android_min_supported_version_code > _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE
                 and self.android_update_url is None
             ):
                 raise ValueError(
                     "ANDROID_UPDATE_URL is required before production advertises "
-                    "or requires an Android build newer than the code-8 compatibility floor"
+                    "a required Android build newer than the code-8 compatibility floor"
+                )
+        if self.android_update_allowed_origin is not None:
+            allowed_origin = self.android_update_allowed_origin
+            if (
+                allowed_origin.scheme != "https"
+                or allowed_origin.username is not None
+                or allowed_origin.password is not None
+                or allowed_origin.fragment is not None
+                or allowed_origin.query is not None
+                or allowed_origin.path not in {"", "/"}
+            ):
+                raise ValueError(
+                    "ANDROID_UPDATE_ALLOWED_ORIGIN must be a credential-free HTTPS origin "
+                    "without path, query, or fragment"
                 )
         for label, update_url in (
             ("ANDROID_UPDATE_URL", self.android_update_url),
@@ -217,8 +250,47 @@ class Settings(BaseSettings):
     def _blank_company_id_is_none(cls, v: object) -> object:
         return None if v == "" else v
 
+    @field_validator("android_release_controller_bindings", mode="before")
+    @classmethod
+    def _normalize_android_release_controller_bindings(cls, v: object) -> str:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return ""
+        if not isinstance(v, str):
+            raise ValueError("must be a comma-separated string of company:user UUID pairs")
+
+        normalized: list[str] = []
+        seen: set[tuple[UUID, UUID]] = set()
+        for raw_binding in v.split(","):
+            binding = raw_binding.strip()
+            parts = binding.split(":")
+            if len(parts) != 2:
+                raise ValueError(
+                    "must contain only <company-uuid>:<user-uuid> bindings"
+                )
+            company_text, user_text = (part.strip() for part in parts)
+            try:
+                company_id = UUID(company_text)
+                user_id = UUID(user_text)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "must contain only valid company:user UUID pairs"
+                ) from exc
+
+            # Accept normal upper/lowercase copy-paste but reject ambiguous UUID
+            # spellings (braces, integer form, missing hyphens) in privileged
+            # production configuration.
+            if company_text.lower() != str(company_id) or user_text.lower() != str(user_id):
+                raise ValueError("UUIDs must use canonical hyphenated form")
+            pair = (company_id, user_id)
+            if pair in seen:
+                raise ValueError("duplicate company:user binding")
+            seen.add(pair)
+            normalized.append(f"{company_id}:{user_id}")
+        return ",".join(normalized)
+
     @field_validator(
         "android_update_url",
+        "android_update_allowed_origin",
         "android_latest_version_name",
         "android_update_release_notes",
         "android_update_apk_sha256",
@@ -257,6 +329,19 @@ class Settings(BaseSettings):
         # verification. Whitespace copied from an environment/secret editor
         # must not turn an otherwise valid signed update into a false reject.
         return v.strip() if v is not None else None
+
+    @property
+    def android_release_controller_binding_set(self) -> frozenset[tuple[UUID, UUID]]:
+        """Return the validated global release-controller identities."""
+        if not self.android_release_controller_bindings:
+            return frozenset()
+        return frozenset(
+            (UUID(company_id), UUID(user_id))
+            for company_id, user_id in (
+                binding.split(":", 1)
+                for binding in self.android_release_controller_bindings.split(",")
+            )
+        )
 
 
 @lru_cache(maxsize=1)

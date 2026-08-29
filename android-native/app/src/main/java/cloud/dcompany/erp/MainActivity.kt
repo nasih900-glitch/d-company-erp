@@ -93,6 +93,7 @@ import cloud.dcompany.erp.core.net.safeHttpsUpdateUrl
 import cloud.dcompany.erp.core.update.AppUpdateUiState
 import cloud.dcompany.erp.core.update.AppUpdateViewModel
 import cloud.dcompany.erp.core.update.DirectUpdateMetadataResult
+import cloud.dcompany.erp.core.update.InstallerLaunchResult
 import cloud.dcompany.erp.core.update.matchesDescriptor
 import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
 import cloud.dcompany.erp.core.auth.EffectivePermissions
@@ -148,16 +149,16 @@ class MainActivity : ComponentActivity() {
      * system installer. Android still owns the final confirmation. The Play
      * build has neither this capability nor the corresponding manifest entry.
      */
-    private fun requestVerifiedUpdateInstall(file: File) {
+    private fun requestVerifiedUpdateInstall(file: File): InstallerLaunchResult {
         if (!BuildConfig.DIRECT_UPDATES_ENABLED) {
             Toast.makeText(this, "This app build uses the normal update link.", Toast.LENGTH_LONG).show()
-            return
+            return InstallerLaunchResult.INSTALLER_UNAVAILABLE
         }
         val updateDirectory = File(cacheDir, "verified-updates").canonicalFile
         val candidate = runCatching { file.canonicalFile }.getOrNull()
         if (candidate == null || candidate.parentFile != updateDirectory || !candidate.isFile) {
             Toast.makeText(this, "The verified update file is no longer available. Download it again.", Toast.LENGTH_LONG).show()
-            return
+            return InstallerLaunchResult.VERIFIED_FILE_UNAVAILABLE
         }
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
@@ -167,27 +168,31 @@ class MainActivity : ComponentActivity() {
                 Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                 Uri.parse("package:$packageName"),
             )
-            runCatching { startActivity(settingsIntent) }.onSuccess {
+            return runCatching { startActivity(settingsIntent) }.fold(
+                onSuccess = {
                 Toast.makeText(
                     this,
                     "Allow installs for D Company ERP, return here, then tap Install update again.",
                     Toast.LENGTH_LONG,
                 ).show()
-            }.onFailure {
-                Toast.makeText(
-                    this,
-                    "Android could not open the install permission. Ask the device owner for help.",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-            return
+                    InstallerLaunchResult.PERMISSION_REQUIRED
+                },
+                onFailure = {
+                    Toast.makeText(
+                        this,
+                        "Android could not open the install permission. Ask the device owner for help.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    InstallerLaunchResult.INSTALLER_UNAVAILABLE
+                },
+            )
         }
 
         val contentUri = runCatching {
             FileProvider.getUriForFile(this, "$packageName.updates", candidate)
         }.getOrElse {
             Toast.makeText(this, "The verified update could not be handed to Android.", Toast.LENGTH_LONG).show()
-            return
+            return InstallerLaunchResult.INSTALLER_UNAVAILABLE
         }
         val installIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(contentUri, "application/vnd.android.package-archive")
@@ -195,13 +200,17 @@ class MainActivity : ComponentActivity() {
             putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
             putExtra(Intent.EXTRA_RETURN_RESULT, false)
         }
-        runCatching { startActivity(installIntent) }.onFailure {
-            Toast.makeText(
-                this,
-                "Android Package Installer could not open. The app was not changed.",
-                Toast.LENGTH_LONG,
-            ).show()
-        }
+        return runCatching { startActivity(installIntent) }.fold(
+            onSuccess = { InstallerLaunchResult.OPENED },
+            onFailure = {
+                Toast.makeText(
+                    this,
+                    "Android Package Installer could not open. The app was not changed.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                InstallerLaunchResult.INSTALLER_UNAVAILABLE
+            },
+        )
     }
 }
 
@@ -209,7 +218,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(
     onOpenUpdateLink: (String) -> Unit,
-    onInstallVerifiedUpdate: (File) -> Unit,
+    onInstallVerifiedUpdate: (File) -> InstallerLaunchResult,
     session: SessionViewModel = viewModel(),
     appUpdate: AppUpdateViewModel = viewModel(),
 ) {
@@ -249,7 +258,12 @@ private fun AppRoot(
                 onCancelDownload = appUpdate::cancel,
                 onOpenUpdateLink = onOpenUpdateLink,
                 onInstall = {
-                    appUpdate.verifiedFile(update.notice)?.let(onInstallVerifiedUpdate)
+                    appUpdate.verifiedFile(update.notice)?.let { file ->
+                        appUpdate.installerLaunchResult(
+                            update.notice,
+                            onInstallVerifiedUpdate(file),
+                        )
+                    }
                 },
             )
             return
@@ -846,7 +860,9 @@ private fun AppRoot(
             onCancelDownload = appUpdate::cancel,
             onOpenUpdateLink = onOpenUpdateLink,
             onInstall = {
-                appUpdate.verifiedFile(notice)?.let(onInstallVerifiedUpdate)
+                appUpdate.verifiedFile(notice)?.let { file ->
+                    appUpdate.installerLaunchResult(notice, onInstallVerifiedUpdate(file))
+                }
             },
         )
     }

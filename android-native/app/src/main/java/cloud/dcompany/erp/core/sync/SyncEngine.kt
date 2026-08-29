@@ -250,6 +250,7 @@ internal class ConnectivityObserver(
     val online: StateFlow<Boolean> = _online.asStateFlow()
 
     private var onRegained: (() -> Unit)? = null
+    private var onValidatedReconnect: (() -> Unit)? = null
     @Volatile private var latestBackendReachability = BackendReachability.UNKNOWN
 
     init {
@@ -266,9 +267,15 @@ internal class ConnectivityObserver(
         }
     }
 
-    fun start(onBackOnline: () -> Unit) {
+    fun start(
+        onValidatedReconnect: () -> Unit = {},
+        onBackOnline: () -> Unit,
+    ) {
         onRegained = onBackOnline
-        updateNetworkValidation(currentlyValidated())
+        this.onValidatedReconnect = onValidatedReconnect
+        // The initial online snapshot starts normal sync/realtime work, but is
+        // not a reconnect. Compatibility has its dedicated startup request.
+        updateNetworkValidation(currentlyValidated(), notifyValidatedReconnect = false)
         // registerDefaultNetworkCallback, NOT a capability-filtered request.
         // The filtered form only reports networks that already match, so in the
         // trial run toggling airplane mode never produced a callback: the
@@ -295,7 +302,10 @@ internal class ConnectivityObserver(
         updateNetworkValidation(currentlyValidated())
     }
 
-    private fun updateNetworkValidation(nowValidated: Boolean) {
+    private fun updateNetworkValidation(
+        nowValidated: Boolean,
+        notifyValidatedReconnect: Boolean = true,
+    ) {
         val networkWasUnavailable = !_networkValidated.value
         _networkValidated.value = nowValidated
         updateEffectiveOnline(
@@ -304,6 +314,15 @@ internal class ConnectivityObserver(
                 backendReachability = latestBackendReachability,
             ),
         )
+        if (
+            shouldNotifyValidatedReconnect(
+                wasValidated = !networkWasUnavailable,
+                nowValidated = nowValidated,
+                notificationsEnabled = notifyValidatedReconnect,
+            )
+        ) {
+            onValidatedReconnect?.invoke()
+        }
         // If internet returned while the last API probe was unreachable, the
         // effective state intentionally remains offline. Trigger one probe so
         // a successful HTTP response can prove recovery and clear the banner.
@@ -340,6 +359,12 @@ internal fun shouldProbeBackendOnValidatedReconnect(
     backendReachability: BackendReachability,
 ): Boolean =
     !wasValidated && nowValidated && backendReachability == BackendReachability.UNREACHABLE
+
+internal fun shouldNotifyValidatedReconnect(
+    wasValidated: Boolean,
+    nowValidated: Boolean,
+    notificationsEnabled: Boolean,
+): Boolean = notificationsEnabled && !wasValidated && nowValidated
 
 /**
  * Thread-safe state machine for conflating fire-and-forget sync requests.

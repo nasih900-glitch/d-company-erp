@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ClientUpdateNotice
 import java.io.File
 import java.io.FileOutputStream
@@ -39,13 +40,20 @@ import okhttp3.Response
 import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 private const val MAX_APK_BYTES = 512L * 1024L * 1024L
 private const val MIN_FREE_SPACE_MARGIN_BYTES = 16L * 1024L * 1024L
 private const val MAX_REDIRECTS = 5
 private const val READY_FILE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L
 private val SHA256 = Regex("^[0-9a-f]{64}$")
+private val UPDATE_VERSION_NAME = Regex("^[0-9A-Za-z][0-9A-Za-z._+\\-]{0,79}$")
 
+internal fun isValidUpdateVersionName(raw: String): Boolean = UPDATE_VERSION_NAME.matches(raw)
+
+@Serializable
 data class DirectUpdateDescriptor(
     val url: String,
     val versionCode: Int,
@@ -54,6 +62,86 @@ data class DirectUpdateDescriptor(
     val sizeBytes: Long,
     val expectedCurrentSignerSha256: String?,
 )
+
+internal class UpdatePreparationException(
+    val errorCode: UpdateErrorCode,
+    message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
+
+@Serializable
+internal data class VerifiedUpdateArtifactRecord(
+    val descriptor: DirectUpdateDescriptor,
+    val fileName: String,
+    val verifiedAtMillis: Long,
+    val telemetryBinding: UpdateTelemetryBinding? = null,
+)
+
+internal fun verifiedArtifactRecordIsStructurallyValid(
+    record: VerifiedUpdateArtifactRecord,
+    nowMillis: Long,
+): Boolean =
+    record.fileName.isNotBlank() &&
+        record.fileName.length <= 160 &&
+        !record.fileName.contains('/') &&
+        !record.fileName.contains('\\') &&
+        record.fileName.endsWith(".apk") &&
+        record.verifiedAtMillis in 1..nowMillis &&
+        nowMillis - record.verifiedAtMillis <= READY_FILE_MAX_AGE_MILLIS &&
+        record.descriptor.versionCode > BuildConfig.VERSION_CODE &&
+        isValidUpdateVersionName(record.descriptor.versionName) &&
+        safeHttpsApkUrl(record.descriptor.url) == record.descriptor.url &&
+        normalizeSha256(record.descriptor.sha256) == record.descriptor.sha256 &&
+        record.descriptor.sizeBytes in 1..MAX_APK_BYTES &&
+        record.descriptor.expectedCurrentSignerSha256 != null &&
+        normalizeSha256(record.descriptor.expectedCurrentSignerSha256) ==
+            record.descriptor.expectedCurrentSignerSha256
+
+/** Metadata is committed only after both digest and PackageManager verification succeed. */
+internal class VerifiedUpdateArtifactStore(context: Context) {
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val lock = Any()
+
+    fun save(record: VerifiedUpdateArtifactRecord): Boolean = synchronized(lock) {
+        prefs.edit()
+            .putString(KEY_RECORD, ApiClient.json.encodeToString(record))
+            .commit()
+    }
+
+    fun restore(nowMillis: Long = System.currentTimeMillis()): VerifiedUpdateArtifactRecord? =
+        synchronized(lock) {
+            val raw = prefs.getString(KEY_RECORD, null) ?: return@synchronized null
+            val record = runCatching {
+                ApiClient.json.decodeFromString<VerifiedUpdateArtifactRecord>(raw)
+            }.getOrNull()
+            if (record == null || !verifiedArtifactRecordIsStructurallyValid(record, nowMillis)) {
+                clearLocked()
+                null
+            } else {
+                record
+            }
+        }
+
+    fun clear(): Boolean = synchronized(lock) { clearLocked() }
+
+    /** A cancelled older operation must never erase a newer operation's record. */
+    fun clearIfMatches(record: VerifiedUpdateArtifactRecord): Boolean = synchronized(lock) {
+        val current = prefs.getString(KEY_RECORD, null)?.let { raw ->
+            runCatching {
+                ApiClient.json.decodeFromString<VerifiedUpdateArtifactRecord>(raw)
+            }.getOrNull()
+        }
+        if (current != record) return@synchronized false
+        clearLocked()
+    }
+
+    private fun clearLocked(): Boolean = prefs.edit().remove(KEY_RECORD).commit()
+
+    private companion object {
+        const val PREFS_NAME = "dcompany_verified_update"
+        const val KEY_RECORD = "artifact"
+    }
+}
 
 enum class DirectUpdateMetadataProblem {
     MissingOrUnsafeApkUrl,
@@ -90,7 +178,7 @@ fun validateDirectUpdateMetadata(
         )
     val versionName = notice.latestVersionName
         ?.trim()
-        ?.takeIf { it.isNotEmpty() && it.length <= 80 }
+        ?.takeIf(::isValidUpdateVersionName)
         ?: return DirectUpdateMetadataResult.Invalid(
             DirectUpdateMetadataProblem.MissingOrInvalidVersion,
         )
@@ -287,17 +375,28 @@ sealed interface AppUpdateUiState {
     data class Verifying(val descriptor: DirectUpdateDescriptor) : AppUpdateUiState {
         val versionCode: Int get() = descriptor.versionCode
     }
-    data class Ready(
+    @ConsistentCopyVisibility
+    data class Ready internal constructor(
         val descriptor: DirectUpdateDescriptor,
         val filePath: String,
+        internal val telemetryBinding: UpdateTelemetryBinding? = null,
     ) : AppUpdateUiState {
         val versionCode: Int get() = descriptor.versionCode
     }
-    data class Failed(
+    @ConsistentCopyVisibility
+    data class Failed internal constructor(
         val versionCode: Int?,
         val message: String,
         val descriptor: DirectUpdateDescriptor? = null,
+        internal val errorCode: UpdateErrorCode = UpdateErrorCode.UNKNOWN,
     ) : AppUpdateUiState
+}
+
+enum class InstallerLaunchResult {
+    OPENED,
+    PERMISSION_REQUIRED,
+    VERIFIED_FILE_UNAVAILABLE,
+    INSTALLER_UNAVAILABLE,
 }
 
 internal fun AppUpdateUiState.matchesDescriptor(descriptor: DirectUpdateDescriptor): Boolean =
@@ -314,25 +413,38 @@ class AppUpdateViewModel : ViewModel() {
     private val app = DCompanyApp.instance
     private val downloader = VerifiedApkDownloader(app)
     private val verifier = AndroidApkVerifier(app)
+    private val artifactStore = VerifiedUpdateArtifactStore(app)
+    private val telemetry = app.updateTelemetry
     private val _state = MutableStateFlow<AppUpdateUiState>(AppUpdateUiState.Idle)
     val state: StateFlow<AppUpdateUiState> = _state.asStateFlow()
     @Volatile
     private var downloadJob: Job? = null
     @Volatile
     private var operationGeneration = 0L
+    @Volatile
+    private var operationBinding: UpdateTelemetryBinding? = null
 
     init {
-        downloader.deleteExpiredFiles()
+        recoverVerifiedArtifact()
     }
 
     fun download(notice: ClientUpdateNotice) {
         if (!BuildConfig.DIRECT_UPDATES_ENABLED) return
+        val binding = telemetry.currentBinding()
         val validation = validateDirectUpdateMetadata(notice)
         if (validation !is DirectUpdateMetadataResult.Valid) {
             invalidateCurrentArtifact()
+            telemetry.recordFailed(
+                descriptor = null,
+                fallbackVersionName = notice.latestVersionName ?: BuildConfig.VERSION_NAME,
+                fallbackVersionCode = notice.latestVersionCode ?: BuildConfig.VERSION_CODE,
+                errorCode = UpdateErrorCode.INVALID_METADATA,
+                binding = binding,
+            )
             _state.value = AppUpdateUiState.Failed(
                 notice.latestVersionCode,
                 "This release does not include complete verified-download details. Open the HTTPS update link instead.",
+                errorCode = UpdateErrorCode.INVALID_METADATA,
             )
             return
         }
@@ -347,8 +459,10 @@ class AppUpdateViewModel : ViewModel() {
         // unreachable before starting the replacement download.
         val previousJob = downloadJob
         val generation = ++operationGeneration
+        operationBinding = binding
         previousJob?.cancel()
         (current as? AppUpdateUiState.Ready)?.let { File(it.filePath).delete() }
+        artifactStore.clear()
 
         // Publish feedback synchronously so a slow DNS/TLS connection never
         // leaves the operator wondering whether the tap was accepted.
@@ -357,10 +471,13 @@ class AppUpdateViewModel : ViewModel() {
             downloadedBytes = 0,
             totalBytes = descriptor.sizeBytes,
         )
+        telemetry.recordDownloadStarted(descriptor, binding)
         val replacementJob = viewModelScope.launch(
             context = Dispatchers.IO,
             start = CoroutineStart.LAZY,
         ) {
+            var preparedFile: File? = null
+            var persistedRecord: VerifiedUpdateArtifactRecord? = null
             try {
                 // The old download owns the same private directory. Wait for
                 // its cancellation cleanup before the replacement may delete,
@@ -377,43 +494,89 @@ class AppUpdateViewModel : ViewModel() {
                         ),
                     )
                 }
+                preparedFile = file
                 if (generation != operationGeneration) {
                     file.delete()
                     return@launch
                 }
                 publishIfCurrent(generation, AppUpdateUiState.Verifying(descriptor))
-                when (val result = verifier.verify(file, descriptor)) {
+                telemetry.recordVerifying(binding)
+                val verification = verifier.verify(file, descriptor)
+                currentCoroutineContext().ensureActive()
+                if (generation != operationGeneration) {
+                    file.delete()
+                    return@launch
+                }
+                when (verification) {
                     ArchiveVerificationResult.Verified -> {
+                        val record = VerifiedUpdateArtifactRecord(
+                            descriptor = descriptor,
+                            fileName = file.name,
+                            verifiedAtMillis = System.currentTimeMillis(),
+                            telemetryBinding = binding,
+                        )
+                        if (!artifactStore.save(record)) {
+                            file.delete()
+                            throw UpdatePreparationException(
+                                UpdateErrorCode.UNKNOWN,
+                                "The verified update could not be saved safely. Download it again.",
+                            )
+                        }
+                        persistedRecord = record
+                        currentCoroutineContext().ensureActive()
+                        if (generation != operationGeneration) {
+                            artifactStore.clearIfMatches(record)
+                            file.delete()
+                            return@launch
+                        }
+                        telemetry.recordDownloadVerified(descriptor, binding)
                         publishIfCurrent(
                             generation,
                             AppUpdateUiState.Ready(
                                 descriptor = descriptor,
                                 filePath = file.absolutePath,
+                                telemetryBinding = binding,
                             ),
                         )
                     }
                     is ArchiveVerificationResult.Rejected -> {
                         file.delete()
+                        artifactStore.clear()
+                        val errorCode = verification.problem.telemetryErrorCode()
+                        telemetry.recordFailed(descriptor, errorCode = errorCode, binding = binding)
                         publishIfCurrent(
                             generation,
                             AppUpdateUiState.Failed(
                                 descriptor.versionCode,
-                                result.problem.userMessage(),
+                                verification.problem.userMessage(),
                                 descriptor,
+                                errorCode,
                             ),
                         )
                     }
                 }
             } catch (cancelled: CancellationException) {
+                persistedRecord?.let(artifactStore::clearIfMatches)
+                preparedFile?.delete()
                 publishIfCurrent(generation, AppUpdateUiState.Idle)
                 throw cancelled
             } catch (failure: Exception) {
+                preparedFile?.delete()
+                artifactStore.clear()
+                val errorCode = (failure as? UpdatePreparationException)?.errorCode
+                    ?: UpdateErrorCode.UNKNOWN
+                telemetry.recordFailed(descriptor, errorCode = errorCode, binding = binding)
                 publishIfCurrent(
                     generation,
                     AppUpdateUiState.Failed(
                         descriptor.versionCode,
-                        failure.message ?: "The verified update could not be prepared.",
+                        if (failure is UpdatePreparationException) {
+                            failure.message ?: "The verified update could not be prepared."
+                        } else {
+                            "The verified update could not be prepared. Nothing was installed."
+                        },
                         descriptor,
+                        errorCode,
                     ),
                 )
             } finally {
@@ -426,9 +589,18 @@ class AppUpdateViewModel : ViewModel() {
     }
 
     fun cancel() {
+        val current = _state.value
+        val descriptor = when (current) {
+            is AppUpdateUiState.Downloading -> current.descriptor
+            is AppUpdateUiState.Verifying -> current.descriptor
+            else -> null
+        }
+        descriptor?.let { telemetry.recordCancelled(it, operationBinding) }
         operationGeneration += 1
         val currentJob = downloadJob
         currentJob?.cancel()
+        artifactStore.clear()
+        downloader.deleteVerifiedFiles()
         if (currentJob == null) downloader.deletePartialFiles()
         _state.value = AppUpdateUiState.Idle
     }
@@ -438,16 +610,62 @@ class AppUpdateViewModel : ViewModel() {
             ?.descriptor ?: return null
         val ready = _state.value as? AppUpdateUiState.Ready ?: return null
         if (ready.descriptor != descriptor) return null
-        return File(ready.filePath).takeIf { it.isFile && it.parentFile == downloader.directory }
+        val file = File(ready.filePath).takeIf {
+            it.isFile && it.parentFile == downloader.directory
+        }
+        if (file == null) {
+            artifactStore.clear()
+            telemetry.recordFailed(
+                descriptor,
+                errorCode = UpdateErrorCode.ARCHIVE_UNREADABLE,
+                binding = ready.telemetryBinding,
+            )
+            _state.value = AppUpdateUiState.Failed(
+                versionCode = descriptor.versionCode,
+                message = "The verified update file is no longer available. Download it again.",
+                descriptor = descriptor,
+                errorCode = UpdateErrorCode.ARCHIVE_UNREADABLE,
+            )
+        }
+        return file
     }
 
     fun discard() {
+        val ready = _state.value as? AppUpdateUiState.Ready
+        ready?.let { telemetry.recordCancelled(it.descriptor, it.telemetryBinding) }
         operationGeneration += 1
         val currentJob = downloadJob
         currentJob?.cancel()
-        (_state.value as? AppUpdateUiState.Ready)?.let { File(it.filePath).delete() }
+        ready?.let { File(it.filePath).delete() }
+        artifactStore.clear()
         if (currentJob == null) downloader.deletePartialFiles()
+        telemetry.recordIdle()
         _state.value = AppUpdateUiState.Idle
+    }
+
+    fun installerLaunchResult(notice: ClientUpdateNotice, result: InstallerLaunchResult) {
+        val descriptor = (validateDirectUpdateMetadata(notice) as? DirectUpdateMetadataResult.Valid)
+            ?.descriptor ?: return
+        val ready = _state.value as? AppUpdateUiState.Ready
+        val binding = ready?.takeIf { it.descriptor == descriptor }?.telemetryBinding
+        when (result) {
+            InstallerLaunchResult.OPENED -> telemetry.recordInstallerOpened(descriptor, binding)
+            InstallerLaunchResult.PERMISSION_REQUIRED -> telemetry.recordFailed(
+                descriptor,
+                errorCode = UpdateErrorCode.INSTALLER_PERMISSION_DENIED,
+                binding = binding,
+            )
+            InstallerLaunchResult.VERIFIED_FILE_UNAVAILABLE -> telemetry.recordFailed(
+                descriptor,
+                errorCode = UpdateErrorCode.ARCHIVE_UNREADABLE,
+                binding = binding,
+            )
+            InstallerLaunchResult.INSTALLER_UNAVAILABLE -> telemetry.recordFailed(
+                descriptor,
+                errorCode = UpdateErrorCode.INSTALLER_UNAVAILABLE,
+                binding = binding,
+            )
+        }
     }
 
     override fun onCleared() {
@@ -463,7 +681,48 @@ class AppUpdateViewModel : ViewModel() {
         val currentJob = downloadJob
         currentJob?.cancel()
         (_state.value as? AppUpdateUiState.Ready)?.let { File(it.filePath).delete() }
+        artifactStore.clear()
         if (currentJob == null) downloader.deletePartialFiles()
+    }
+
+    private fun recoverVerifiedArtifact() {
+        val generation = operationGeneration
+        viewModelScope.launch(Dispatchers.IO) {
+            downloader.deleteExpiredFiles()
+            if (!BuildConfig.DIRECT_UPDATES_ENABLED) {
+                artifactStore.clear()
+                if (generation == operationGeneration) telemetry.recordIdle()
+                return@launch
+            }
+            val record = artifactStore.restore()
+            if (record == null) {
+                if (generation == operationGeneration) telemetry.recordIdle()
+                return@launch
+            }
+            val file = File(downloader.directory, record.fileName)
+            val validFile = file.parentFile == downloader.directory &&
+                verifyFileSizeAndSha256(file, record.descriptor)
+            val archiveResult = if (validFile) {
+                runCatching { verifier.verify(file, record.descriptor) }.getOrNull()
+            } else {
+                null
+            }
+            if (generation != operationGeneration) return@launch
+            if (archiveResult == ArchiveVerificationResult.Verified) {
+                telemetry.restoreVerifiedState(record.telemetryBinding)
+                publishIfCurrent(
+                    generation,
+                    AppUpdateUiState.Ready(
+                        descriptor = record.descriptor,
+                        filePath = file.absolutePath,
+                        telemetryBinding = record.telemetryBinding,
+                    ),
+                )
+            } else {
+                file.delete()
+                artifactStore.clear()
+            }
+        }
     }
 
     private fun publishIfCurrent(generation: Long, next: AppUpdateUiState) {
@@ -493,7 +752,10 @@ private class VerifiedApkDownloader(context: Context) {
 
         val usableSpace = directory.usableSpace
         if (usableSpace > 0 && usableSpace < descriptor.sizeBytes + MIN_FREE_SPACE_MARGIN_BYTES) {
-            throw IOException("Not enough free storage for this update.")
+            throw UpdatePreparationException(
+                UpdateErrorCode.INSUFFICIENT_STORAGE,
+                "Not enough free storage for this update.",
+            )
         }
         val stem = "d-company-${descriptor.versionCode}-${descriptor.sha256.take(12)}"
         val partial = File(directory, "$stem.apk.part")
@@ -502,12 +764,21 @@ private class VerifiedApkDownloader(context: Context) {
             val response = openFollowingSafeRedirects(descriptor.url)
             response.use { safeResponse ->
                 if (!safeResponse.isSuccessful) {
-                    throw IOException("Update download failed (HTTP ${safeResponse.code}).")
+                    throw UpdatePreparationException(
+                        UpdateErrorCode.HTTP_ERROR,
+                        "Update download failed (HTTP ${safeResponse.code}).",
+                    )
                 }
-                val body = safeResponse.body ?: throw IOException("The update download was empty.")
+                val body = safeResponse.body ?: throw UpdatePreparationException(
+                    UpdateErrorCode.SIZE_MISMATCH,
+                    "The update download was empty.",
+                )
                 val declaredLength = body.contentLength()
                 if (declaredLength >= 0 && declaredLength != descriptor.sizeBytes) {
-                    throw IOException("The update size did not match the server release details.")
+                    throw UpdatePreparationException(
+                        UpdateErrorCode.SIZE_MISMATCH,
+                        "The update size did not match the server release details.",
+                    )
                 }
 
                 val digest = MessageDigest.getInstance("SHA-256")
@@ -522,7 +793,10 @@ private class VerifiedApkDownloader(context: Context) {
                             if (read == -1) break
                             total += read
                             if (total > descriptor.sizeBytes) {
-                                throw IOException("The update exceeded its advertised size.")
+                                throw UpdatePreparationException(
+                                    UpdateErrorCode.SIZE_MISMATCH,
+                                    "The update exceeded its advertised size.",
+                                )
                             }
                             digest.update(buffer, 0, read)
                             output.write(buffer, 0, read)
@@ -536,11 +810,17 @@ private class VerifiedApkDownloader(context: Context) {
                     output.fd.sync()
                 }
                 if (total != descriptor.sizeBytes) {
-                    throw IOException("The update was incomplete. Nothing was installed.")
+                    throw UpdatePreparationException(
+                        UpdateErrorCode.SIZE_MISMATCH,
+                        "The update was incomplete. Nothing was installed.",
+                    )
                 }
                 val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
                 if (actualSha != descriptor.sha256) {
-                    throw IOException("The update failed its security checksum. Nothing was installed.")
+                    throw UpdatePreparationException(
+                        UpdateErrorCode.CHECKSUM_MISMATCH,
+                        "The update failed its security checksum. Nothing was installed.",
+                    )
                 }
             }
 
@@ -564,6 +844,12 @@ private class VerifiedApkDownloader(context: Context) {
             .forEach(File::delete)
     }
 
+    fun deleteVerifiedFiles() {
+        directory.listFiles().orEmpty()
+            .filter { it.extension == "apk" }
+            .forEach(File::delete)
+    }
+
     fun deleteExpiredFiles(nowMillis: Long = System.currentTimeMillis()) {
         directory.listFiles().orEmpty()
             .filter { nowMillis - it.lastModified() > READY_FILE_MAX_AGE_MILLIS }
@@ -572,9 +858,15 @@ private class VerifiedApkDownloader(context: Context) {
 
     private fun ensureDirectory() {
         if (!directory.exists() && !directory.mkdirs()) {
-            throw IOException("The update download folder could not be created.")
+            throw UpdatePreparationException(
+                UpdateErrorCode.INSUFFICIENT_STORAGE,
+                "The update download folder could not be created.",
+            )
         }
-        if (!directory.isDirectory) throw IOException("The update download folder is unavailable.")
+        if (!directory.isDirectory) throw UpdatePreparationException(
+            UpdateErrorCode.INSUFFICIENT_STORAGE,
+            "The update download folder is unavailable.",
+        )
     }
 
     private suspend fun openFollowingSafeRedirects(initialUrl: String): Response {
@@ -586,19 +878,56 @@ private class VerifiedApkDownloader(context: Context) {
                 .header("Accept", "application/vnd.android.package-archive, application/octet-stream")
                 .header("Accept-Encoding", "identity")
                 .build()
-            val response = client.newCall(request).await()
+            val response = try {
+                client.newCall(request).await()
+            } catch (failure: IOException) {
+                throw UpdatePreparationException(
+                    UpdateErrorCode.NETWORK_ERROR,
+                    "The update could not be downloaded. Check the connection and try again.",
+                    failure,
+                )
+            }
             if (!response.isRedirect) return response
             val location = response.header("Location")
             response.close()
             if (redirectCount == MAX_REDIRECTS || location.isNullOrBlank()) {
-                throw IOException("The update link redirected too many times.")
+                throw UpdatePreparationException(
+                    UpdateErrorCode.HTTP_ERROR,
+                    "The update link redirected too many times.",
+                )
             }
             val resolved = runCatching { URI(url).resolve(location).toASCIIString() }.getOrNull()
             url = safeHttpsApkUrl(resolved)
-                ?: throw IOException("The update redirected to an unsafe address.")
+                ?: throw UpdatePreparationException(
+                    UpdateErrorCode.INVALID_METADATA,
+                    "The update redirected to an unsafe address.",
+                )
         }
-        throw IOException("The update link redirected too many times.")
+        throw UpdatePreparationException(
+            UpdateErrorCode.HTTP_ERROR,
+            "The update link redirected too many times.",
+        )
     }
+}
+
+internal fun verifyFileSizeAndSha256(
+    file: File,
+    descriptor: DirectUpdateDescriptor,
+): Boolean {
+    if (!file.isFile || file.length() != descriptor.sizeBytes) return false
+    val digest = runCatching {
+        val md = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 8)
+            while (true) {
+                val read = input.read(buffer)
+                if (read == -1) break
+                md.update(buffer, 0, read)
+            }
+        }
+        md.digest().joinToString("") { "%02x".format(it) }
+    }.getOrNull() ?: return false
+    return digest == descriptor.sha256
 }
 
 private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
@@ -632,4 +961,14 @@ private fun ArchiveVerificationProblem.userMessage(): String = when (this) {
     ArchiveVerificationProblem.UnexpectedSigner,
     ArchiveVerificationProblem.BrokenSigningLineage ->
         "The update signature does not match the installed D Company ERP app. Nothing was installed."
+}
+
+private fun ArchiveVerificationProblem.telemetryErrorCode(): UpdateErrorCode = when (this) {
+    ArchiveVerificationProblem.UnreadableArchive,
+    ArchiveVerificationProblem.MissingSignature -> UpdateErrorCode.ARCHIVE_UNREADABLE
+    ArchiveVerificationProblem.WrongPackage -> UpdateErrorCode.PACKAGE_MISMATCH
+    ArchiveVerificationProblem.WrongVersion,
+    ArchiveVerificationProblem.NotNewer -> UpdateErrorCode.VERSION_MISMATCH
+    ArchiveVerificationProblem.UnexpectedSigner,
+    ArchiveVerificationProblem.BrokenSigningLineage -> UpdateErrorCode.SIGNER_MISMATCH
 }

@@ -1508,6 +1508,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             ) return false
+            (getApplication() as DCompanyApp).onVerifiedScopeAvailable()
             return true
         }
 

@@ -116,6 +116,38 @@ class BackgroundSyncWorkerPolicyTest {
         )
     }
 
+    @Test
+    fun `compatibility reconnect skips the initial snapshot and repeated capabilities`() {
+        assertFalse(
+            shouldNotifyValidatedReconnect(
+                wasValidated = false,
+                nowValidated = true,
+                notificationsEnabled = false,
+            ),
+        )
+        assertTrue(
+            shouldNotifyValidatedReconnect(
+                wasValidated = false,
+                nowValidated = true,
+                notificationsEnabled = true,
+            ),
+        )
+        assertFalse(
+            shouldNotifyValidatedReconnect(
+                wasValidated = true,
+                nowValidated = true,
+                notificationsEnabled = true,
+            ),
+        )
+        assertFalse(
+            shouldNotifyValidatedReconnect(
+                wasValidated = true,
+                nowValidated = false,
+                notificationsEnabled = true,
+            ),
+        )
+    }
+
     private fun group(resource: String, state: String) = UnresolvedOutboxGroup(
         resource = resource,
         state = state,

@@ -85,6 +85,8 @@ async def test_me_masks_protected_owner_role(client, session, seed_owner) -> Non
     assert me.json()["roles"] == ["owner"]
     assert me.json()["protected_access"] is True
     assert me.json()["audit_access"] is True
+    # A protected owner is not implicitly a global Android release controller.
+    assert me.json()["release_control_access"] is False
     assert "finance.write" in me.json()["effective_permissions"]
     assert "admin.audit.read" in me.json()["effective_permissions"]
     assert "admin.system" in me.json()["effective_permissions"]

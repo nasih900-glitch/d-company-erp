@@ -14,16 +14,28 @@ class ClientCompatibilityTest {
     @Test
     fun clientIdentityUsesCentralAndroidAndNumericBuildHeaders() {
         val request = Request.Builder().url("https://example.test/api/v1/auth/me").build()
-            .withAndroidClientIdentity(42)
+            .withAndroidClientIdentity(42, "direct")
 
         assertEquals("android", request.header(CLIENT_PLATFORM_HEADER))
         assertEquals("42", request.header(CLIENT_VERSION_CODE_HEADER))
+        assertEquals("direct", request.header(CLIENT_DISTRIBUTION_CHANNEL_HEADER))
+    }
+
+    @Test
+    fun requiredPolicyRevisionUsesMonotonicBodyOrHeaderAuthority() {
+        assertEquals(12, resolvedCompatibilityPolicyRevision(12, "11"))
+        assertEquals(12, resolvedCompatibilityPolicyRevision(11, "12"))
+        assertEquals(12, resolvedCompatibilityPolicyRevision(null, " 12 "))
+        assertEquals(11, resolvedCompatibilityPolicyRevision(11, "invalid"))
+        assertEquals(0, resolvedCompatibilityPolicyRevision(null, "0"))
+        assertEquals(0, resolvedCompatibilityPolicyRevision(null, "2147483648"))
     }
 
     @Test
     fun explicitContractDistinguishesOptionalAndRequiredUpdates() = runBlocking {
         val optional = ClientCompatibilityGate(
             checkCompatibility = { compatibility("update_available") },
+            elapsedRealtimeMillis = { 1_000L },
         )
         optional.checkAtStartup()
         assertTrue(optional.state.value is ClientCompatibilityState.UpdateAvailable)
@@ -56,6 +68,7 @@ class ClientCompatibilityTest {
         assertEquals("ab".repeat(32), notice.apkSha256)
         assertEquals(42_000_000L, notice.apkSizeBytes)
         assertEquals("12".repeat(32), notice.apkSigningCertSha256)
+        assertEquals(1, notice.policyRevision)
     }
 
     @Test
@@ -120,15 +133,52 @@ class ClientCompatibilityTest {
 
     @Test
     fun dismissedOptionalReleaseDoesNotReappearOnForegroundRefresh() = runBlocking {
+        var now = 1_000L
         val gate = ClientCompatibilityGate(
             checkCompatibility = { compatibility("update_available", latestVersionCode = 2) },
+            optionalUpdateSnoozeMillis = 4_000L,
+            elapsedRealtimeMillis = { now },
         )
         gate.checkAtStartup()
         gate.dismissOptionalUpdate()
 
+        now = 4_999L
         gate.recheckNonBlocking()
 
         assertEquals(ClientCompatibilityState.Supported, gate.state.value)
+    }
+
+    @Test
+    fun dismissedOptionalReleaseReappearsExactlyAtSnoozeExpiry() = runBlocking {
+        var now = 1_000L
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = { compatibility("update_available", latestVersionCode = 2) },
+            optionalUpdateSnoozeMillis = 4_000L,
+            elapsedRealtimeMillis = { now },
+        )
+        gate.checkAtStartup()
+        gate.dismissOptionalUpdate()
+
+        now = 5_000L
+        gate.recheckNonBlocking()
+
+        assertTrue(gate.state.value is ClientCompatibilityState.UpdateAvailable)
+    }
+
+    @Test
+    fun elapsedClockResetExpiresOptionalSnoozeFailOpen() = runBlocking {
+        var now = 10_000L
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = { compatibility("update_available", latestVersionCode = 2) },
+            elapsedRealtimeMillis = { now },
+        )
+        gate.checkAtStartup()
+        gate.dismissOptionalUpdate()
+
+        now = 1_000L
+        gate.recheckNonBlocking()
+
+        assertTrue(gate.state.value is ClientCompatibilityState.UpdateAvailable)
     }
 
     @Test
@@ -138,6 +188,7 @@ class ClientCompatibilityTest {
             checkCompatibility = {
                 compatibility("update_available", latestVersionCode = latest)
             },
+            elapsedRealtimeMillis = { 1_000L },
         )
         gate.checkAtStartup()
         gate.dismissOptionalUpdate()
@@ -147,6 +198,22 @@ class ClientCompatibilityTest {
 
         val state = gate.state.value as ClientCompatibilityState.UpdateAvailable
         assertEquals(3, state.notice.latestVersionCode)
+    }
+
+    @Test
+    fun requiredUpdateBypassesOptionalSnoozeForTheSameVersion() = runBlocking {
+        var status = "update_available"
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = { compatibility(status, latestVersionCode = 2) },
+            elapsedRealtimeMillis = { 1_000L },
+        )
+        gate.checkAtStartup()
+        gate.dismissOptionalUpdate()
+
+        status = "update_required"
+        gate.recheckNonBlocking()
+
+        assertTrue(gate.state.value is ClientCompatibilityState.UpdateRequired)
     }
 
     @Test
@@ -164,10 +231,18 @@ class ClientCompatibilityTest {
     @Test
     fun definitiveRequiredSignalCannotBeDowngradedByLateStartupResponse() = runBlocking {
         val gate = ClientCompatibilityGate(
-            checkCompatibility = { compatibility("supported") },
+            checkCompatibility = { compatibility("supported", policyRevision = 4) },
+            installedVersionCode = 1,
         )
         gate.requireUpdate(
-            ClientUpdateNotice("Update now", "https://updates.example.test/app.apk", 1, 2, 3),
+            ClientUpdateNotice(
+                "Update now",
+                "https://updates.example.test/app.apk",
+                1,
+                2,
+                3,
+                policyRevision = 4,
+            ),
         )
 
         gate.checkAtStartup()
@@ -219,15 +294,161 @@ class ClientCompatibilityTest {
             currentVersionCode = 1,
             minimumSupportedVersionCode = 2,
             latestVersionCode = 2,
+            policyRevision = 7,
         )
         val gate = ClientCompatibilityGate(
-            checkCompatibility = { compatibility("supported") },
+            checkCompatibility = { compatibility("supported", policyRevision = 7) },
+            installedVersionCode = 1,
             initialRequiredNotice = restored,
         )
 
         assertEquals(ClientCompatibilityState.UpdateRequired(restored), gate.state.value)
         gate.checkAtStartup()
         assertEquals(ClientCompatibilityState.UpdateRequired(restored), gate.state.value)
+    }
+
+    @Test
+    fun newerSupportedPolicyClearsPersistedRequiredBlockAfterMinimumRollback() = runBlocking {
+        val required = ClientUpdateNotice(
+            message = "Update required",
+            updateUrl = null,
+            currentVersionCode = 14,
+            minimumSupportedVersionCode = 15,
+            latestVersionCode = 15,
+            policyRevision = 9,
+        )
+        val cleared = mutableListOf<Int>()
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = {
+                compatibility(
+                    status = "supported",
+                    latestVersionCode = 14,
+                    minimumVersionCode = 8,
+                    currentVersionCode = 14,
+                    policyRevision = 10,
+                )
+            },
+            installedVersionCode = 14,
+            initialRequiredNotice = required,
+            clearRequiredNotice = { revision ->
+                cleared += revision
+                true
+            },
+        )
+
+        gate.checkAtStartup()
+
+        assertEquals(ClientCompatibilityState.Supported, gate.state.value)
+        assertEquals(listOf(9), cleared)
+    }
+
+    @Test
+    fun newerSupportedPolicyCannotClearWhenInstalledBuildIsStillBelowMinimum() = runBlocking {
+        val required = requiredNotice(policyRevision = 9)
+        var clearCalls = 0
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = {
+                compatibility(
+                    status = "supported",
+                    minimumVersionCode = 15,
+                    latestVersionCode = 15,
+                    currentVersionCode = 14,
+                    policyRevision = 10,
+                )
+            },
+            installedVersionCode = 14,
+            initialRequiredNotice = required,
+            clearRequiredNotice = {
+                clearCalls += 1
+                true
+            },
+        )
+
+        gate.checkAtStartup()
+
+        assertEquals(ClientCompatibilityState.UpdateRequired(required), gate.state.value)
+        assertEquals(0, clearCalls)
+    }
+
+    @Test
+    fun newerOptionalPolicyCannotClearRequiredBlock() = runBlocking {
+        val required = requiredNotice(policyRevision = 9)
+        var clearCalls = 0
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = {
+                compatibility(
+                    status = "update_available",
+                    minimumVersionCode = 8,
+                    currentVersionCode = 14,
+                    policyRevision = 10,
+                )
+            },
+            installedVersionCode = 14,
+            initialRequiredNotice = required,
+            clearRequiredNotice = {
+                clearCalls += 1
+                true
+            },
+        )
+
+        gate.checkAtStartup()
+
+        assertEquals(ClientCompatibilityState.UpdateRequired(required), gate.state.value)
+        assertEquals(0, clearCalls)
+    }
+
+    @Test
+    fun staleSupportedResponseCannotClearNewerConcurrent426() = runBlocking {
+        val response = CompletableDeferred<ClientCompatibilityResponse>()
+        val cleared = mutableListOf<Int>()
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = { response.await() },
+            installedVersionCode = 14,
+            clearRequiredNotice = { revision ->
+                cleared += revision
+                true
+            },
+        )
+        val startup = launch { gate.checkAtStartup() }
+        val newerRequired = requiredNotice(policyRevision = 12)
+        gate.requireUpdate(newerRequired)
+
+        response.complete(
+            compatibility(
+                status = "supported",
+                latestVersionCode = 14,
+                minimumVersionCode = 8,
+                currentVersionCode = 14,
+                policyRevision = 11,
+            ),
+        )
+        startup.join()
+
+        assertEquals(ClientCompatibilityState.UpdateRequired(newerRequired), gate.state.value)
+        assertTrue(cleared.isEmpty())
+    }
+
+    @Test
+    fun failedCompareAndClearKeepsRequiredState() = runBlocking {
+        val required = requiredNotice(policyRevision = 9)
+        val gate = ClientCompatibilityGate(
+            checkCompatibility = {
+                compatibility(
+                    status = "supported",
+                    latestVersionCode = 14,
+                    minimumVersionCode = 8,
+                    currentVersionCode = 14,
+                    policyRevision = 10,
+                )
+            },
+            installedVersionCode = 14,
+            initialRequiredNotice = required,
+            clearRequiredNotice = { false },
+        )
+
+        gate.checkAtStartup()
+
+        assertEquals(ClientCompatibilityState.UpdateRequired(required), gate.state.value)
     }
 
     @Test
@@ -266,14 +487,27 @@ class ClientCompatibilityTest {
     private fun compatibility(
         status: String,
         latestVersionCode: Int = 2,
+        minimumVersionCode: Int = 1,
+        currentVersionCode: Int = 1,
+        policyRevision: Int = 1,
     ) = ClientCompatibilityResponse(
         platform = "android",
-        currentVersionCode = 1,
-        minimumSupportedVersionCode = 1,
+        currentVersionCode = currentVersionCode,
+        minimumSupportedVersionCode = minimumVersionCode,
         latestVersionCode = latestVersionCode,
+        policyRevision = policyRevision,
         status = status,
         updateUrl = "https://updates.example.test/app.apk",
         message = "Compatibility message",
         checkedAt = "2026-08-25T12:00:00Z",
+    )
+
+    private fun requiredNotice(policyRevision: Int) = ClientUpdateNotice(
+        message = "Update required",
+        updateUrl = null,
+        currentVersionCode = 14,
+        minimumSupportedVersionCode = 15,
+        latestVersionCode = 15,
+        policyRevision = policyRevision,
     )
 }

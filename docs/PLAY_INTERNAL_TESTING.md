@@ -11,22 +11,21 @@ Current manually distributed Android identity:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.2` |
-| Version code | `13` |
+| Version name | `3.1.3` |
+| Version code | `14` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-The signed `3.1.2` code-`13` direct-release APK is the manual partner baseline
+The signed `3.1.3` code-`14` direct-release APK is the manual partner baseline
 for this rollout. It may be sent to the partner only after production reaches
-Alembic revision `0057` and the production smoke test passes. Do not upload
-code `13` to Play, publish or host it, or advertise it through the server update
-API as part of this release. Production retains the code-`8` latest-version
-defaults and blank direct-update metadata. Physical Redmi Pad 2 acceptance
+the repository's release-head migration and the production smoke test passes.
+Do not upload code `14` to Play, publish or host it, or register it through the
+server update channel as part of this release. Physical Redmi Pad 2 acceptance
 remains unverified.
 
 The rest of this document is a future Play-channel playbook; it is not an
 instruction to upload the current partner APK. The first planned server-driven
-direct update is a distinct `3.1.3` code-`14` APK. Do not mix that direct channel
+direct update is a distinct `3.1.4` code-`15` APK. Do not mix that direct channel
 with Play on the active fleet. If D Company later moves the fleet to Play, use a
 new, higher, previously unused version code and verify that channel's signing
 lineage and in-place upgrade independently.
@@ -143,7 +142,7 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload a future Play build (not 3.1.2/code 13)
+## 5. Upload a future Play build (not 3.1.3/code 14)
 
 Do not perform this section for the current manual partner rollout. First choose
 Play as the fleet's deliberate future delivery channel, assign a version code

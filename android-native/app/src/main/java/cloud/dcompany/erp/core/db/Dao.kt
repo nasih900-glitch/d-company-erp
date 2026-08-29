@@ -351,6 +351,10 @@ interface SyncMetaDao {
 
     @Query("DELETE FROM sync_meta WHERE key = :key")
     suspend fun delete(key: String): Int
+
+    /** Dirty markers are not successful server refreshes and must not inflate heartbeat freshness. */
+    @Query("SELECT MAX(lastSyncMillis) FROM sync_meta WHERE key NOT LIKE 'dirty:%'")
+    suspend fun latestSuccessfulSyncMillis(): Long?
 }
 
 @Database(

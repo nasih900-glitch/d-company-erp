@@ -19,10 +19,17 @@ class AppError(Exception):
     status_code: int = 500
     code: str = "internal_error"
 
-    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
+        self.headers = headers or {}
 
 
 class NotFoundError(AppError):
@@ -33,6 +40,12 @@ class NotFoundError(AppError):
 class ConflictError(AppError):
     status_code = 409
     code = "conflict"
+
+
+class ClientTelemetryCapacityError(ConflictError):
+    """Immutable client evidence reached a configured admission ceiling."""
+
+    code = "client_telemetry_capacity"
 
 
 class CheckoutClaimRequiredError(ConflictError):
@@ -238,6 +251,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         log.warning("app.error", code=exc.code, msg=exc.message, details=exc.details)
         return JSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content={
                 "error": {
                     "code": exc.code,

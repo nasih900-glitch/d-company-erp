@@ -7,11 +7,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from ops.android_update_channel import (
+    AdvertisedAndroidRelease,
+    ChannelMatrix,
+    ChannelProbe,
+)
 from ops.runtime_monitor import (
     LOCAL_BACKUP_DIR,
     ContainerState,
     Issue,
     MonitorResult,
+    check_android_update_channel,
     check_backup_freshness,
     evaluate_containers,
     notification_for,
@@ -76,9 +82,11 @@ class SMTPClientTest(unittest.TestCase):
         self.assertEqual(2, session.ehlo.call_count)
 
     def test_credentials_are_required(self) -> None:
-        with self.assertRaises(SMTPConfigurationError):
-            with authenticated_smtp({"SMTP_HOST": "smtp.example.test"}):
-                pass
+        with (
+            self.assertRaises(SMTPConfigurationError),
+            authenticated_smtp({"SMTP_HOST": "smtp.example.test"}),
+        ):
+            pass
 
 
 class RuntimeMonitorTest(unittest.TestCase):
@@ -169,6 +177,64 @@ class RuntimeMonitorTest(unittest.TestCase):
         self.assertEqual(
             {"backup_empty", "backup_stale"}, {issue.code for issue in issues}
         )
+
+    @patch("ops.runtime_monitor.verify_public_artifact")
+    @patch("ops.runtime_monitor.verify_local_artifact")
+    @patch("ops.runtime_monitor.fetch_channel_matrix")
+    def test_active_android_release_checks_local_bytes_and_public_headers(
+        self,
+        fetch_matrix: MagicMock,
+        verify_local: MagicMock,
+        verify_public: MagicMock,
+    ) -> None:
+        release = AdvertisedAndroidRelease(
+            version_code=15,
+            version_name="3.1.4",
+            url=(
+                "https://dcompany.duckdns.org/downloads/android/"
+                "d-company-erp-v3.1.4-direct.apk"
+            ),
+            sha256="ab" * 32,
+            size_bytes=123,
+            signing_certificate_sha256="cd" * 32,
+        )
+        fetch_matrix.return_value = ChannelMatrix(
+            ChannelProbe(8, 15, release, {}, 3),
+            (1, 8, 14, 15),
+        )
+
+        issues, metrics = check_android_update_channel(
+            "https://dcompany.duckdns.org",
+            release_dir=Path("/safe/releases"),
+        )
+
+        self.assertEqual([], issues)
+        verify_local.assert_called_once_with(
+            Path("/safe/releases/d-company-erp-v3.1.4-direct.apk"),
+            release,
+        )
+        verify_public.assert_called_once_with(
+            release,
+            timeout_seconds=15,
+            download_body=False,
+        )
+        self.assertEqual(15, metrics["android_latest_version_code"])
+        self.assertEqual(3, metrics["android_policy_revision"])
+
+    @patch("ops.runtime_monitor.fetch_channel_matrix")
+    def test_dormant_android_channel_is_safe_and_does_not_fetch_an_apk(
+        self,
+        fetch_matrix: MagicMock,
+    ) -> None:
+        fetch_matrix.return_value = ChannelMatrix(
+            ChannelProbe(8, 8, None, {}, 3),
+            (1, 8, 14),
+        )
+
+        issues, metrics = check_android_update_channel("https://dcompany.duckdns.org")
+
+        self.assertEqual([], issues)
+        self.assertEqual(0, metrics["android_release_advertised"])
 
 
 class BackupServiceInstallationTest(unittest.TestCase):

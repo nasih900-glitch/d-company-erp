@@ -26,6 +26,7 @@ import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.SHIFT_CLOSING_WRITE_GUARD_CALLBACK
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ClientCompatibilityGate
+import cloud.dcompany.erp.core.net.ClientCompatibilityState
 import cloud.dcompany.erp.core.net.ClientUpdateRequirementStore
 import cloud.dcompany.erp.core.sync.ConnectivityObserver
 import cloud.dcompany.erp.core.sync.BackgroundSyncScheduler
@@ -33,6 +34,7 @@ import cloud.dcompany.erp.core.sync.RealtimeClient
 import cloud.dcompany.erp.core.sync.RealtimeEvent
 import cloud.dcompany.erp.core.sync.RealtimeRefreshPolicy
 import cloud.dcompany.erp.core.sync.SyncEngine
+import cloud.dcompany.erp.core.update.UpdateTelemetryCoordinator
 import cloud.dcompany.erp.ui.screens.settings.BugReportPrivacyScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +45,112 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+
+internal fun compatibilityCheckIsDue(
+    nowElapsedMillis: Long,
+    lastCheckElapsedMillis: Long,
+    intervalMillis: Long,
+): Boolean {
+    require(intervalMillis > 0)
+    return nowElapsedMillis >= lastCheckElapsedMillis &&
+        nowElapsedMillis - lastCheckElapsedMillis >= intervalMillis
+}
+
+internal fun nextCompatibilityDelayMillis(
+    nowElapsedMillis: Long,
+    lastCheckElapsedMillis: Long,
+    intervalMillis: Long,
+): Long {
+    require(intervalMillis > 0)
+    if (nowElapsedMillis < lastCheckElapsedMillis) return intervalMillis
+    val elapsed = nowElapsedMillis - lastCheckElapsedMillis
+    return if (elapsed >= intervalMillis) intervalMillis else intervalMillis - elapsed
+}
+
+/**
+ * Thread-safe admission control shared by startup, foreground and reconnect
+ * compatibility checks. Recording before a coroutine is launched prevents two
+ * Android network callbacks from queueing duplicate requests behind the
+ * compatibility gate's network mutex.
+ */
+internal class CompatibilityRecheckThrottle {
+    private val lock = Any()
+    private var lastAttemptElapsedMillis: Long? = null
+
+    fun recordAttempt(nowElapsedMillis: Long) {
+        require(nowElapsedMillis >= 0)
+        synchronized(lock) {
+            lastAttemptElapsedMillis = nowElapsedMillis
+        }
+    }
+
+    fun claimIfDue(nowElapsedMillis: Long, minimumGapMillis: Long): Boolean {
+        require(nowElapsedMillis >= 0)
+        require(minimumGapMillis > 0)
+        return synchronized(lock) {
+            val previous = lastAttemptElapsedMillis
+            when {
+                previous == null -> true
+                nowElapsedMillis < previous -> false
+                nowElapsedMillis - previous < minimumGapMillis -> false
+                else -> true
+            }.also { claimed ->
+                // Treat an elapsed-realtime reset as a new baseline. This is
+                // defensive for tests/vendor clock bugs; elapsedRealtime does
+                // not normally move backwards within one Android process.
+                if (claimed || previous == null || nowElapsedMillis < previous) {
+                    lastAttemptElapsedMillis = nowElapsedMillis
+                }
+            }
+        }
+    }
+
+    fun nextDelayMillis(nowElapsedMillis: Long, intervalMillis: Long): Long {
+        require(nowElapsedMillis >= 0)
+        require(intervalMillis > 0)
+        return synchronized(lock) {
+            val previous = lastAttemptElapsedMillis ?: return@synchronized intervalMillis
+            nextCompatibilityDelayMillis(
+                nowElapsedMillis = nowElapsedMillis,
+                lastCheckElapsedMillis = previous,
+                intervalMillis = intervalMillis,
+            )
+        }
+    }
+
+    /** Delay before a new attempt may be claimed; zero means it may run now. */
+    fun delayUntilClaimAllowed(nowElapsedMillis: Long, minimumGapMillis: Long): Long {
+        require(nowElapsedMillis >= 0)
+        require(minimumGapMillis > 0)
+        return synchronized(lock) {
+            val previous = lastAttemptElapsedMillis ?: return@synchronized 0L
+            if (nowElapsedMillis < previous) {
+                lastAttemptElapsedMillis = nowElapsedMillis
+                return@synchronized minimumGapMillis
+            }
+            (minimumGapMillis - (nowElapsedMillis - previous)).coerceAtLeast(0L)
+        }
+    }
+}
+
+/** Pure start/stop accounting prevents overlapping periodic jobs in multi-window mode. */
+internal class ForegroundActivityTracker {
+    private var startedCount = 0
+
+    fun onStarted(): Boolean {
+        startedCount += 1
+        return startedCount == 1
+    }
+
+    fun onStopped(): Boolean {
+        if (startedCount == 0) return false
+        startedCount -= 1
+        return startedCount == 0
+    }
+}
 
 class DCompanyApp : Application() {
 
@@ -56,6 +164,10 @@ class DCompanyApp : Application() {
         private const val STARTUP_STATE_TRACE = "DCompany.persisted-startup-state"
         private const val PERFORMANCE_LOG_TAG = "DCompanyPerformance"
         private const val COMPATIBILITY_RECHECK_INTERVAL_MILLIS = 15L * 60L * 1_000L
+        // Matches the bounded compatibility request. It suppresses the pair of
+        // Android callbacks generated by one recovery without delaying a
+        // genuinely later successful reconnect by fifteen minutes.
+        private const val RECONNECT_RECHECK_THROTTLE_MILLIS = 3_000L
 
         lateinit var instance: DCompanyApp
             private set
@@ -83,17 +195,37 @@ class DCompanyApp : Application() {
         private set
     lateinit var clientCompatibility: ClientCompatibilityGate
         private set
+    internal lateinit var updateTelemetry: UpdateTelemetryCoordinator
+        private set
     internal lateinit var notificationRoutes: OperationalNotificationRouteStore
         private set
 
-    private val appScope = CoroutineScope(SupervisorJob())
-    private var lastCompatibilityCheckAtMillis = 0L
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val compatibilityRecheckThrottle = CompatibilityRecheckThrottle()
+    private val reconnectCompatibilityLock = Any()
+    private var reconnectCompatibilityJob: Job? = null
+    private val foregroundLock = Any()
+    private val foregroundActivities = ForegroundActivityTracker()
+    private var foregroundMaintenanceJob: Job? = null
     private val compatibilityRecheckCallbacks = object : Application.ActivityLifecycleCallbacks {
-        override fun onActivityResumed(activity: Activity) = requestCompatibilityRecheck()
+        override fun onActivityResumed(activity: Activity) {
+            appScope.launch { updateTelemetry.reconcileInstallerReturn() }
+        }
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-        override fun onActivityStarted(activity: Activity) = Unit
+        override fun onActivityStarted(activity: Activity) {
+            synchronized(foregroundLock) {
+                if (foregroundActivities.onStarted()) startForegroundMaintenanceLocked()
+            }
+        }
         override fun onActivityPaused(activity: Activity) = Unit
-        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivityStopped(activity: Activity) {
+            synchronized(foregroundLock) {
+                if (foregroundActivities.onStopped()) {
+                    foregroundMaintenanceJob?.cancel()
+                    foregroundMaintenanceJob = null
+                }
+            }
+        }
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
         override fun onActivityDestroyed(activity: Activity) = Unit
     }
@@ -129,6 +261,7 @@ class DCompanyApp : Application() {
                     )
                 }
             },
+            clearRequiredNotice = updateRequirementStore::clearIfPolicyRevision,
         )
         ApiClient.onUpdateRequired = clientCompatibility::requireUpdate
 
@@ -143,6 +276,17 @@ class DCompanyApp : Application() {
 
         outboxSafety = OutboxSafetyGate(db, outboxOwnerStore, tokens)
         cacheIsolation = CacheIsolationCoordinator(this, db)
+        updateTelemetry = UpdateTelemetryCoordinator(
+            context = this,
+            tokens = tokens,
+            cacheIsolation = cacheIsolation,
+            db = db,
+        )
+        updateTelemetry.installation.observeInstalledVersion(
+            currentVersionCode = BuildConfig.VERSION_CODE,
+            currentVersionName = BuildConfig.VERSION_NAME,
+            installedOverExistingApp = installedOverExistingApp(),
+        )
         sync = SyncEngine(
             db = db,
             scope = appScope,
@@ -156,14 +300,25 @@ class DCompanyApp : Application() {
             scope = appScope,
             backendReachability = ApiClient.backendReachability.state,
         )
+
+        // Establish the startup attempt before ConnectivityObserver publishes
+        // its initial online edge. Otherwise an already-connected launch can
+        // enqueue a reconnect recheck and a startup check back-to-back.
+        compatibilityRecheckThrottle.recordAttempt(SystemClock.elapsedRealtime())
+        appScope.launch { clientCompatibility.checkAtStartup() }
+
         // Draining the queue the instant the link returns is the whole point:
         // staff should never have to remember to press a sync button.
-        connectivity.start {
-            if (tokens.hasSession() && cacheIsolation.isReady()) {
-                sync.requestSync()
-                realtime.connect()
-            }
-        }
+        connectivity.start(
+            onValidatedReconnect = ::requestCompatibilityRecheckAfterReconnect,
+            onBackOnline = {
+                if (tokens.hasSession() && cacheIsolation.isReady()) {
+                    sync.requestSync()
+                    realtime.connect()
+                    appScope.launch { updateTelemetry.heartbeat() }
+                }
+            },
+        )
 
         // The one place a "changed" event turns into an action: pull every
         // cache affected by that resource and, except for KDS's dedicated
@@ -196,8 +351,11 @@ class DCompanyApp : Application() {
 
         // Bounded and non-destructive: a definitive old-build result blocks,
         // while timeout/offline continues with the existing local state.
-        lastCompatibilityCheckAtMillis = SystemClock.elapsedRealtime()
-        appScope.launch { clientCompatibility.checkAtStartup() }
+        appScope.launch {
+            clientCompatibility.state.collect { state ->
+                recordCompatibilityOfferIfScoped(state)
+            }
+        }
         registerActivityLifecycleCallbacks(compatibilityRecheckCallbacks)
 
         createAlarmChannel()
@@ -243,13 +401,85 @@ class DCompanyApp : Application() {
      * runs, and the throttle prevents rapid app switching from causing a burst
      * of compatibility traffic.
      */
-    private fun requestCompatibilityRecheck() {
+    private fun startForegroundMaintenanceLocked() {
+        if (foregroundMaintenanceJob?.isActive == true) return
+        foregroundMaintenanceJob = appScope.launch {
+            while (isActive) {
+                runForegroundMaintenance()
+                delay(
+                    compatibilityRecheckThrottle.nextDelayMillis(
+                        nowElapsedMillis = SystemClock.elapsedRealtime(),
+                        intervalMillis = COMPATIBILITY_RECHECK_INTERVAL_MILLIS,
+                    ),
+                )
+            }
+        }
+    }
+
+    private suspend fun runForegroundMaintenance() {
         if (!connectivity.online.value) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastCompatibilityCheckAtMillis < COMPATIBILITY_RECHECK_INTERVAL_MILLIS) return
-        lastCompatibilityCheckAtMillis = now
-        appScope.launch { clientCompatibility.recheckNonBlocking() }
+        if (compatibilityRecheckThrottle.claimIfDue(now, COMPATIBILITY_RECHECK_INTERVAL_MILLIS)) {
+            clientCompatibility.recheckNonBlocking()
+        }
+        if (tokens.hasSession() && cacheIsolation.isReady()) {
+            updateTelemetry.heartbeat()
+        }
     }
+
+    private fun requestCompatibilityRecheckAfterReconnect() {
+        val now = SystemClock.elapsedRealtime()
+        synchronized(reconnectCompatibilityLock) {
+            if (reconnectCompatibilityJob?.isActive == true) return
+            val waitMillis = compatibilityRecheckThrottle.delayUntilClaimAllowed(
+                nowElapsedMillis = now,
+                minimumGapMillis = RECONNECT_RECHECK_THROTTLE_MILLIS,
+            )
+            reconnectCompatibilityJob = appScope.launch {
+                if (waitMillis > 0) delay(waitMillis)
+                val attemptAt = SystemClock.elapsedRealtime()
+                if (
+                    compatibilityRecheckThrottle.claimIfDue(
+                        nowElapsedMillis = attemptAt,
+                        minimumGapMillis = RECONNECT_RECHECK_THROTTLE_MILLIS,
+                    )
+                ) {
+                    clientCompatibility.recheckNonBlocking()
+                }
+            }
+        }
+    }
+
+    /** Invoked only after cache ownership and the authenticated outbox owner agree. */
+    internal fun onVerifiedScopeAvailable() {
+        appScope.launch {
+            recordCompatibilityOfferIfScoped(clientCompatibility.state.value)
+            updateTelemetry.promotePendingUpgrade()
+            updateTelemetry.reconcileInstallerReturn()
+            if (connectivity.online.value) updateTelemetry.heartbeat()
+        }
+    }
+
+    private fun recordCompatibilityOfferIfScoped(state: ClientCompatibilityState) {
+        val notice = when (state) {
+            is ClientCompatibilityState.UpdateAvailable -> state.notice
+            is ClientCompatibilityState.UpdateRequired -> state.notice
+            ClientCompatibilityState.Checking,
+            ClientCompatibilityState.Supported -> return
+        }
+        val versionCode = notice.latestVersionCode?.takeIf { it > BuildConfig.VERSION_CODE } ?: return
+        val versionName = notice.latestVersionName
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= 80 }
+            ?: return
+        updateTelemetry.recordOffered(versionName, versionCode)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun installedOverExistingApp(): Boolean = runCatching {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        info.lastUpdateTime > info.firstInstallTime
+    }.getOrDefault(false)
 
     /**
      * Room changes are cancellation signals too: a paid/voided/removed order

@@ -49,6 +49,7 @@ class AppUpdatePolicyTest {
             notice().copy(latestVersionCode = null),
             notice().copy(latestVersionName = null),
             notice().copy(latestVersionName = " "),
+            notice().copy(latestVersionName = "3.1 release"),
             notice().copy(latestVersionName = "x".repeat(81)),
         ).forEach { invalid ->
             val result = validateDirectUpdateMetadata(invalid, installedVersionCode = 10)

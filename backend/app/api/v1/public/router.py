@@ -14,13 +14,13 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.db import SessionDep
-from app.models import Company, MenuCategory, MenuItem
+from app.models import AndroidRelease, Company, MenuCategory, MenuItem
 
 router = APIRouter()
 
@@ -49,6 +49,7 @@ class PublicMenuDTO(BaseModel):
 class ClientCompatibilityDTO(BaseModel):
     platform: Literal["android", "ios"]
     current_version_code: int
+    policy_revision: int
     minimum_supported_version_code: int
     latest_version_code: int
     status: Literal["supported", "update_available", "update_required"]
@@ -65,20 +66,59 @@ class ClientCompatibilityDTO(BaseModel):
 # ---------------------------------------------------------------- endpoints
 @router.get("/client-compatibility", response_model=ClientCompatibilityDTO)
 async def client_compatibility(
+    response: Response,
+    session: SessionDep,
     platform: Literal["android", "ios"],
     version_code: int = Query(ge=1),
 ) -> ClientCompatibilityDTO:
-    """Return the server-authoritative minimum/latest native build contract."""
+    """Return required policy plus the independently promoted optional offer.
+
+    The environment minimum remains the required-update authority used by the
+    426 middleware.  For supported Android clients, only a verified active DB
+    release is an optional offer; staging a row never advertises it.
+    """
+    response.headers["Cache-Control"] = "no-store"
     settings = get_settings()
+    response.headers["X-Client-Compatibility-Policy-Revision"] = str(
+        settings.client_compatibility_policy_revision
+    )
     if platform == "android":
         minimum = settings.android_min_supported_version_code
-        latest = settings.android_latest_version_code
-        update_url = str(settings.android_update_url) if settings.android_update_url else None
-        latest_version_name = settings.android_latest_version_name
-        release_notes = settings.android_update_release_notes
-        apk_sha256 = settings.android_update_apk_sha256
-        apk_size_bytes = settings.android_update_apk_size_bytes
-        apk_signing_cert_sha256 = settings.android_update_signing_cert_sha256
+        active_release = (
+            await session.execute(
+                select(AndroidRelease).where(
+                    AndroidRelease.channel == "direct",
+                    AndroidRelease.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
+        if active_release is not None and active_release.version_code >= minimum:
+            latest = active_release.version_code
+            update_url = active_release.update_url
+            latest_version_name = active_release.version_name
+            release_notes = active_release.release_notes
+            apk_sha256 = active_release.apk_sha256
+            apk_size_bytes = active_release.apk_size_bytes
+            apk_signing_cert_sha256 = active_release.apk_signing_cert_sha256
+        elif version_code < minimum:
+            # Required-update recovery remains deploy-time policy so an owner
+            # cannot accidentally strand an already-blocked client by
+            # withdrawing the optional offer.
+            latest = max(minimum, settings.android_latest_version_code)
+            update_url = str(settings.android_update_url) if settings.android_update_url else None
+            latest_version_name = settings.android_latest_version_name
+            release_notes = settings.android_update_release_notes
+            apk_sha256 = settings.android_update_apk_sha256
+            apk_size_bytes = settings.android_update_apk_size_bytes
+            apk_signing_cert_sha256 = settings.android_update_signing_cert_sha256
+        else:
+            latest = minimum
+            update_url = None
+            latest_version_name = None
+            release_notes = None
+            apk_sha256 = None
+            apk_size_bytes = None
+            apk_signing_cert_sha256 = None
     else:
         minimum = settings.ios_min_supported_version_code
         latest = settings.ios_latest_version_code
@@ -95,7 +135,10 @@ async def client_compatibility(
             "This app version is no longer compatible with the ERP server. "
             "Update before continuing; saved offline work will remain on this device."
         )
-    elif version_code < latest:
+    elif platform == "android" and update_url is not None and version_code < latest:
+        compatibility_status = "update_available"
+        default_message = "A newer app version is available. You can continue for now."
+    elif platform == "ios" and version_code < latest:
         compatibility_status = "update_available"
         default_message = "A newer app version is available. You can continue for now."
     else:
@@ -105,6 +148,7 @@ async def client_compatibility(
     return ClientCompatibilityDTO(
         platform=platform,
         current_version_code=version_code,
+        policy_revision=settings.client_compatibility_policy_revision,
         minimum_supported_version_code=minimum,
         latest_version_code=latest,
         status=compatibility_status,
@@ -131,37 +175,42 @@ async def public_menu(session: SessionDep) -> PublicMenuDTO:
     items with is_available=False and items in deleted categories.
     """
     company = (
-        await session.execute(
-            select(Company).where(Company.deleted_at.is_(None)).limit(1)
-        )
+        await session.execute(select(Company).where(Company.deleted_at.is_(None)).limit(1))
     ).scalar_one_or_none()
     if not company:
-        return PublicMenuDTO(company_name="D Company", company_gstin=None,
-                             categories=[], items=[])
+        return PublicMenuDTO(company_name="D Company", company_gstin=None, categories=[], items=[])
 
     cats = (
-        await session.execute(
-            select(MenuCategory)
-            .where(
-                MenuCategory.company_id == company.id,
-                MenuCategory.deleted_at.is_(None),
+        (
+            await session.execute(
+                select(MenuCategory)
+                .where(
+                    MenuCategory.company_id == company.id,
+                    MenuCategory.deleted_at.is_(None),
+                )
+                .order_by(MenuCategory.sort_order)
             )
-            .order_by(MenuCategory.sort_order)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     cat_meta = {c.id: (c.name, c.sort_order) for c in cats}
 
     items = (
-        await session.execute(
-            select(MenuItem)
-            .where(
-                MenuItem.company_id == company.id,
-                MenuItem.deleted_at.is_(None),
-                MenuItem.is_available.is_(True),
+        (
+            await session.execute(
+                select(MenuItem)
+                .where(
+                    MenuItem.company_id == company.id,
+                    MenuItem.deleted_at.is_(None),
+                    MenuItem.is_available.is_(True),
+                )
+                .order_by(MenuItem.name)
             )
-            .order_by(MenuItem.name)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     out_items: list[PublicItemDTO] = []
     for it in items:
@@ -170,7 +219,10 @@ async def public_menu(session: SessionDep) -> PublicMenuDTO:
             continue
         out_items.append(
             PublicItemDTO(
-                id=it.id, sku=it.sku, name=it.name, type=it.type,
+                id=it.id,
+                sku=it.sku,
+                name=it.name,
+                type=it.type,
                 base_price_minor=it.base_price_minor,
                 tax_rate=float(it.tax_rate),
                 description=it.description,
@@ -183,9 +235,6 @@ async def public_menu(session: SessionDep) -> PublicMenuDTO:
     return PublicMenuDTO(
         company_name=company.name,
         company_gstin=company.gstin,
-        categories=[
-            {"id": str(c.id), "name": c.name, "sort_order": c.sort_order}
-            for c in cats
-        ],
+        categories=[{"id": str(c.id), "name": c.name, "sort_order": c.sort_order} for c in cats],
         items=out_items,
     )

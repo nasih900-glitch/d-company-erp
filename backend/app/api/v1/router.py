@@ -9,6 +9,8 @@ from app.api.v1.admin.router import router as admin_router
 from app.api.v1.analytics.router import router as analytics_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.bug_reports.router import router as bug_reports_router
+from app.api.v1.client_installations.router import router as client_installations_router
+from app.api.v1.client_updates.router import router as client_updates_router
 from app.api.v1.customers.router import router as customers_router
 from app.api.v1.events.router import router as events_router
 from app.api.v1.finance.router import router as finance_router
@@ -29,6 +31,16 @@ from app.api.v1.ws.router import router as ws_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
+api_router.include_router(
+    client_installations_router,
+    prefix="/client-installations",
+    tags=["client-installations"],
+)
+api_router.include_router(
+    client_updates_router,
+    prefix="/client-updates",
+    tags=["client-updates"],
+)
 api_router.include_router(bug_reports_router, prefix="/bug-reports", tags=["bug-reports"])
 api_router.include_router(pos_router, prefix="/pos", tags=["pos"])
 api_router.include_router(tables_router, prefix="/tables", tags=["tables"])
