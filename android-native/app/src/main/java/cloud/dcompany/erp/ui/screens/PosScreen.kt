@@ -101,6 +101,9 @@ import cloud.dcompany.erp.core.checkout.OneShotHeldPaymentConfirmation
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.ErpButton
@@ -166,6 +169,7 @@ fun PosScreen(
     onSnoozeOverdue: () -> Unit,
     onUnmuteOverdue: () -> Unit,
     onDismissHeldFocus: () -> Unit,
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     var offlinePaymentConfirmation by remember { mutableStateOf<DirectPaymentConfirmation?>(null) }
     var showStatusDetails by rememberSaveable { mutableStateOf(false) }
@@ -379,6 +383,7 @@ fun PosScreen(
         OrderDetailsDialog(
             state = state,
             canDiscount = access.canApplyDiscount,
+            presentation = presentation,
             onDismiss = { showOrderDetails = false },
             onSave = { name, phone, note, discount ->
                 showOrderDetails = false
@@ -482,6 +487,7 @@ fun PosScreen(
             offlineAllowed = true,
             confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
             confirmationIdentity = "${quote.localId}:${quote.revision}:${quote.dueMinor}",
+            showCustomerBenefits = presentation.showsCustomers,
             onDismiss = { offlinePaymentConfirmation = null },
             onConfirm = { method, tendered ->
                 offlinePaymentConfirmation = null
@@ -499,6 +505,7 @@ fun PosScreen(
                     checkout = checkout,
                     online = state.online,
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
+                    showCustomerBenefits = presentation.showsCustomers,
                     onDismiss = onDismissDirectCheckout,
                     onVoid = if (access.canVoid) {
                         {
@@ -527,8 +534,9 @@ fun PosScreen(
                     loyaltyPointsBalance = state.customerLoyaltyPoints,
                     pointsRedeemed = checkout.pointsRedeemed,
                     pointsRedeemedMinor = checkout.pointsRedeemedMinor,
+                    showCustomerBenefits = presentation.showsCustomers,
                     onApplyPoints = onRedeemDirectPoints.takeIf {
-                        !state.customerPhone.isNullOrBlank()
+                        presentation.showsCustomers && !state.customerPhone.isNullOrBlank()
                     },
                     onDismiss = onDismissDirectCheckout,
                     onVoid = if (access.canVoid) {
@@ -593,6 +601,7 @@ fun PosScreen(
                     verifiedSharedOrder = true,
                     paymentSubject = checkout.sourceLabel,
                     confirmationIdentity = checkout.orderId,
+                    showCustomerBenefits = presentation.showsCustomers,
                     onDismiss = onDismissHeldOrder,
                     onVoid = if (access.canVoid) {
                         {
@@ -845,7 +854,7 @@ private fun PosVoidDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    "This cancels the unpaid bill, keeps its audit history, and tells the kitchen that released items were cancelled.",
+                    "This cancels the unpaid bill, keeps its audit history, and notifies any linked fulfilment workflow.",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -857,7 +866,7 @@ private fun PosVoidDialog(
                 )
                 if (!online) {
                     Text(
-                        "Reconnect before voiding so the audit record and kitchen cancellation are saved together.",
+                        "Reconnect before voiding so the audit record and linked cancellation are saved together.",
                         color = Brand.Warning,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -1449,7 +1458,7 @@ private fun HeldPaymentStatusStrip(
             fontWeight = FontWeight.Bold,
         )
         Text(
-            "Money was already marked received for these Tables/Gaming orders. Never collect it " +
+            "Money was already marked received for these held orders. Never collect it " +
                 "again. Account switching stays locked until each saved payment is confirmed or reconciled.",
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
@@ -1654,7 +1663,7 @@ internal fun heldOrderSelectionBlockReason(state: PosUiState, access: PosAccess)
     state.draftState in setOf(SyncState.PREPARING, SyncState.AWAITING_PAYMENT) ->
         "Finish or recover the current direct POS bill before selecting a held order."
     !state.canCollectPayment ->
-        "Open the correct shift on this terminal before collecting a held order."
+        "Open the correct shift before collecting a held order."
     else -> null
 }
 
@@ -1890,6 +1899,7 @@ internal fun ProductConfigurationDialog(
 private fun OrderDetailsDialog(
     state: PosUiState,
     canDiscount: Boolean,
+    presentation: WorkspacePresentationPolicy,
     onDismiss: () -> Unit,
     onSave: (String?, String?, String?, Long) -> Unit,
 ) {
@@ -1912,46 +1922,52 @@ private fun OrderDetailsDialog(
         onDismissRequest = onDismiss,
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
-        title = { Text("Customer, note & discount") },
+        title = { Text("Sale details & discount") },
         text = {
             Column(
                 Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
-                    "These details stay with this saved cart. Customer benefits and the final total are verified online before payment.",
+                    if (presentation.showsCustomers) {
+                        "These details stay with this saved counter sale. Any customer benefit and the final total are verified online before payment."
+                    } else {
+                        "The note and discount stay with this saved counter sale. The final total is verified online before payment."
+                    },
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                OutlinedTextField(
-                    value = customerName,
-                    onValueChange = { customerName = it.take(200) },
-                    label = { Text("Customer name (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = customerPhone,
-                    onValueChange = { input ->
-                        customerPhone = input.filter { it.isDigit() || it == '+' }.take(20)
-                    },
-                    label = { Text("Customer phone (optional)") },
-                    supportingText = {
-                        Text(
-                            if (phoneInvalid) "Enter 7–20 digits, or leave this blank."
-                            else "Used to find loyalty or membership benefits.",
-                        )
-                    },
-                    isError = phoneInvalid,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (presentation.showsCustomers) {
+                    OutlinedTextField(
+                        value = customerName,
+                        onValueChange = { customerName = it.take(200) },
+                        label = { Text("Customer name (optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = customerPhone,
+                        onValueChange = { input ->
+                            customerPhone = input.filter { it.isDigit() || it == '+' }.take(20)
+                        },
+                        label = { Text("Customer phone (optional)") },
+                        supportingText = {
+                            Text(
+                                if (phoneInvalid) "Enter 7–20 digits, or leave this blank."
+                                else "Optional customer reference for this sale.",
+                            )
+                        },
+                        isError = phoneInvalid,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 OutlinedTextField(
                     value = orderNote,
                     onValueChange = { orderNote = it.take(500) },
                     label = { Text("Order note (optional)") },
-                    placeholder = { Text("Example: birthday table, takeaway packaging") },
+                    placeholder = { Text("Example: controller issue or product request") },
                     minLines = 2,
                     maxLines = 4,
                     modifier = Modifier.fillMaxWidth(),
@@ -1983,7 +1999,8 @@ private fun OrderDetailsDialog(
         },
         confirmButton = {
             PrimaryButton(
-                enabled = !phoneInvalid && (!canDiscount || !discountInvalid),
+                enabled = (!presentation.showsCustomers || !phoneInvalid) &&
+                    (!canDiscount || !discountInvalid),
                 onClick = {
                     onSave(
                         customerName.trim().takeIf(String::isNotEmpty),
@@ -2562,6 +2579,7 @@ private fun PayDialog(
     loyaltyPointsBalance: Int? = null,
     pointsRedeemed: Int = 0,
     pointsRedeemedMinor: Long = 0,
+    showCustomerBenefits: Boolean = true,
     onApplyPoints: ((Int) -> Unit)? = null,
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
@@ -2634,7 +2652,11 @@ private fun PayDialog(
                         }
                         pointsRedeemedMinor.takeIf { it > 0L }?.let {
                             PaymentAmountRow(
-                                "Loyalty points ($pointsRedeemed)",
+                                if (showCustomerBenefits) {
+                                    "Loyalty points ($pointsRedeemed)"
+                                } else {
+                                    "Legacy customer credit"
+                                },
                                 -it,
                                 Brand.Good,
                             )
@@ -2664,7 +2686,7 @@ private fun PayDialog(
                         )
                     }
                 }
-                if (onApplyPoints != null) {
+                if (showCustomerBenefits && onApplyPoints != null) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
                             .background(Brand.SurfaceRaised)
@@ -2713,7 +2735,7 @@ private fun PayDialog(
                                 supportingText = {
                                     Text(
                                         pointsError
-                                            ?: "10 points = ₹1 · the server verifies active reservations",
+                                            ?: "10 points = ₹1 · the server verifies the live balance",
                                     )
                                 },
                                 isError = pointsError != null,
@@ -2817,7 +2839,7 @@ private fun PayDialog(
                     Text(
                         if (offlineAllowed) {
                             "Offline: this saves a provisional sale on this tablet; it does not " +
-                                "print a receipt. The GST tax-invoice number is issued when the " +
+                                "print a receipt. The official receipt number is issued when the " +
                                 "tablet reconnects and the server confirms it."
                         } else {
                             "Reconnect before taking this payment. Shared orders can change on " +
@@ -2899,6 +2921,7 @@ private fun DirectZeroTotalCompletionDialog(
     checkout: PreparedDirectCheckout,
     online: Boolean,
     confirmEnabled: Boolean,
+    showCustomerBenefits: Boolean,
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
     onConfirm: () -> Unit,
@@ -2915,7 +2938,11 @@ private fun DirectZeroTotalCompletionDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    "The server verified that discounts or customer benefits cover this bill in full.",
+                    if (showCustomerBenefits) {
+                        "The server verified that discounts or customer benefits cover this bill in full."
+                    } else {
+                        "The server verified that recorded discounts or legacy credits cover this bill in full."
+                    },
                     color = Brand.Good,
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -2927,7 +2954,11 @@ private fun DirectZeroTotalCompletionDialog(
                 }
                 if (checkout.pointsRedeemedMinor > 0L) {
                     PaymentAmountRow(
-                        "Loyalty points (${checkout.pointsRedeemed})",
+                        if (showCustomerBenefits) {
+                            "Loyalty points (${checkout.pointsRedeemed})"
+                        } else {
+                            "Legacy customer credit"
+                        },
                         -checkout.pointsRedeemedMinor,
                         Brand.Good,
                     )

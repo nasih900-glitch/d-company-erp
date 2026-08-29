@@ -3,6 +3,8 @@ package cloud.dcompany.erp.ui.screens.reports
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.presentationPolicy
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlinx.serialization.SerializationException
@@ -16,6 +18,39 @@ import org.junit.Test
 class ReportsPresentationPolicyTest {
 
     private val date = LocalDate.of(2026, 8, 26)
+
+    @Test
+    fun `gaming centre report preserves hidden-module money under one neutral row`() {
+        val revenue = ReportRevenue(
+            foodMinor = 1_000,
+            gamingMinor = 2_000,
+            hookahMinor = 3_000,
+            eventTicketsMinor = 4_000,
+            membershipsMinor = 5_000,
+            deliveryAggregatorMinor = 6_000,
+            otherMinor = 7_000,
+            manualCollectionsMinor = 8_000,
+        )
+        val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
+        val rows = revenue.presentedSources(presentation)
+
+        assertEquals(36_000L, rows.sumOf { it.amountMinor })
+        assertEquals(22_000L, rows.single { it.label == "Legacy/other revenue" }.amountMinor)
+        assertEquals(22_000L, revenue.hiddenLegacySourceMinor(presentation))
+        assertFalse(rows.any { it.label.contains("membership", ignoreCase = true) })
+        assertFalse(rows.any { it.label.contains("event", ignoreCase = true) })
+        assertFalse(rows.any { it.label.contains("delivery", ignoreCase = true) })
+    }
+
+    @Test
+    fun `gaming centre hides zero legacy sources and event ticket metric`() {
+        val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
+        val rows = ReportRevenue(gamingMinor = 400).presentedSources(presentation)
+        val metrics = reportSecondaryMetrics(ReportData(ticketsCount = 9), presentation)
+
+        assertFalse(rows.any { it.label == "Legacy/other revenue" })
+        assertFalse(metrics.any { it.label == "Tickets" })
+    }
 
     @Test
     fun `failed refresh never presents a cached empty report as confirmed empty`() {

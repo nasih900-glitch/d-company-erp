@@ -4,7 +4,7 @@ export type GamingPosRoute = 'local' | 'handoff' | 'terminal_unverified';
 
 /**
  * Terminal purpose, not terminal count or a name convention, decides where a
- * gaming bill belongs. This prevents Cafe POS from accidentally handing a
+ * gaming bill belongs. This prevents POS from accidentally handing a
  * bill "backwards" to Gaming Area when both terminals are configured.
  */
 export function resolveGamingPosRoute({

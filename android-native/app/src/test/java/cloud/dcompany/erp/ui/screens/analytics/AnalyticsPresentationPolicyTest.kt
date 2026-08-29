@@ -2,6 +2,8 @@ package cloud.dcompany.erp.ui.screens.analytics
 
 import cloud.dcompany.erp.core.auth.BranchScopeMismatchException
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.presentationPolicy
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
@@ -11,6 +13,37 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnalyticsPresentationPolicyTest {
+
+    @Test
+    fun `gaming centre groups dormant revenue without dropping a paise`() {
+        val dashboard = DashboardKpis(
+            revenueFoodMinor = 1_100,
+            revenueGamingMinor = 2_200,
+            revenueHookahMinor = 3_300,
+            revenueEventsMinor = 4_400,
+            revenueMembershipsMinor = 5_500,
+            revenueManualCollectionsMinor = 6_600,
+        )
+        val rows = dashboard.presentedRevenueStreams(
+            WorkspaceFeatureProfiles.GamingCentre.presentationPolicy(),
+        )
+
+        assertEquals(23_100L, rows.sumOf { it.second })
+        assertEquals(9_900L, rows.single { it.first == "Legacy/other revenue" }.second)
+        assertTrue(rows.any { it.first == "Products / snacks / drinks" })
+        assertTrue(rows.any { it.first == "Shisha" })
+        assertFalse(rows.any { it.first.contains("membership", ignoreCase = true) })
+        assertFalse(rows.any { it.first.contains("event", ignoreCase = true) })
+    }
+
+    @Test
+    fun `gaming centre omits an empty legacy revenue row`() {
+        val rows = DashboardKpis(revenueGamingMinor = 500).presentedRevenueStreams(
+            WorkspaceFeatureProfiles.GamingCentre.presentationPolicy(),
+        )
+
+        assertEquals(listOf("Gaming" to 500L), rows)
+    }
 
     @Test
     fun `cached dashboard is labelled stale after refresh failure`() {

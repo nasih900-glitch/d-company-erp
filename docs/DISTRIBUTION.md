@@ -45,10 +45,36 @@ Set these GitHub Actions secrets:
 - `ANDROID_KEY_ALIAS` — normally `dcompany`
 - `ANDROID_KEY_PASSWORD`
 
-The workflow fails closed before building when any signing secret is absent.
+Also set the repository Actions variable
+`ANDROID_EXPECTED_SIGNER_SHA256` to the 64-hex SHA-256 certificate
+fingerprint from a previously trusted, installed direct APK (or from the
+preserved release certificate). The fingerprint is public and is deliberately
+stored independently from the keystore secrets. Do not populate it from an
+artifact produced by the same workflow run: the check exists to reject a wrong
+or substituted keystore and a first-install APK signed by an unexpected key.
+
+The release workflow runs both third-party emulator automation and the Gradle
+build without signing secrets. The build emits an exact checksummed unsigned
+handoff, then a separate fresh runner verifies that handoff before it receives
+the keystore. No Gradle process or third-party action runs in that signing job.
+It uses the pinned Android 35.0.0 signing tools, verifies every APK/AAB against
+the expected fingerprint, and removes the keystore before inspecting or
+uploading signed artifacts. GitHub Releases are created with the runner's `gh`
+CLI so a third-party publishing action cannot rewrite verified artifacts.
+
+The workflow fails closed before producing signed artifacts when any signing
+secret is absent.
 Create the Play Console app with package name `cloud.dcompany.erp`, matching
 `android-native/app/build.gradle.kts`. Play Store requires a Google Play Console
 account; direct APK sideloading does not.
+
+Building both artifacts does not mean they are interchangeable on an installed
+tablet. The server currently advertises one Android update URL, and Google Play
+App Signing may sign the delivered app with a certificate different from the
+direct APK. Use one delivery channel for the active fleet, verify an in-place
+upgrade from an app installed through that same channel, and do not raise the
+minimum supported version until that proof passes. See
+[`SERVER_DRIVEN_ANDROID_UPDATES.md`](SERVER_DRIVEN_ANDROID_UPDATES.md).
 
 ## Versioning each release
 
@@ -83,7 +109,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor and the 3.0.9 candidate
+## Version-code-8 floor and the 3.1.0 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -91,39 +117,44 @@ handoff. Older Android clients do not understand that contract and can select
 the wrong local shift or attempt an invalid local handoff, so code `8` remains
 the minimum-supported compatibility floor.
 
-The current unreleased candidate is `3.0.9` with version code `10`. It retains
+The current unreleased candidate is `3.1.0` with version code `11`. It retains
 the internal tenant/branch/terminal safety model while presenting the current
-one-shop installation as one automatic workspace, and it adds contextual
-Support reporting with optional privacy-reviewed screenshots, durable retry,
-and owner replies. A locally signed APK exists, but the complete release gates
-and signed upgrades from code `8` and the earlier schema-37 code-`9` candidate
-must be rerun for code `10`. It has not passed physical Redmi Pad 2 acceptance,
+one-shop installation as one automatic workspace, and it adds the Gaming Centre
+profile, durable offline session add-ons, combined POS billing, contextual
+Support, and verified direct updates. The complete release gates and signed
+upgrades from code `8` and the earlier schema-37 code-`9` candidate must pass
+for code `11`. It has not passed physical Redmi Pad 2 acceptance,
 been uploaded to Play, or been rolled out to production.
+
+Code `11` is also the first build with the verified in-app direct updater.
+Install it once through Android's normal installer; only later builds can use
+that new in-app path. The production template intentionally continues to
+advertise code `8` until the code-`11` APK and all manifest fields are published.
 
 Treat the app and backend as one coordinated release:
 
-1. Produce, sign, and verify the version-code-10 artifact before changing the
+1. Produce, sign, and verify the version-code-11 artifact before changing the
    server or advertising it to installed clients.
 2. While the old backend is still active, bring every installed older app
    online and confirm its offline queue is empty. Do not uninstall an app with
    pending work.
-3. Make the version-10 APK/update channel available to staff.
+3. Make the version-11 APK/update channel available to staff.
 4. Back up the database, complete the deployment preflight, and run
    `alembic upgrade head`; for this candidate, verify the database reaches
-   revision `0054` before starting the backend. Deploy with
+   revision `0055` before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
-   `ANDROID_LATEST_VERSION_CODE=10`, a verified HTTPS update URL, and
+   `ANDROID_LATEST_VERSION_CODE=11`, a verified HTTPS update URL, and
    `REQUIRE_NATIVE_VERSION_HEADERS=true` in the same maintenance window.
 5. Verify version 7 and older receive HTTP 426 before a write handler and
-   version 8 remains operational with an optional update while version 10 is
-   current. Then run shift open/close, POS payment, Tables/KDS handoff, Gaming
-   start/stop/Send-to-POS, offline retry, and Support-report submission from
-   version 10.
+   version 8 remains operational with an optional update while version 11 is
+   current. Then run shift open/close, Gaming start/add item/stop/Send-to-POS,
+   cash and UPI settlement, offline retry, finance reconciliation, and Support
+   submission from version 11.
 
 Do not lower the minimum to keep an older APK operating against this backend.
-If version 10 is not ready to distribute, do not advertise it as latest or
+If version 11 is not ready to distribute, do not advertise it as latest or
 deploy the matching production compatibility configuration. Do not raise the
-minimum to `10` until every active tablet is upgraded and accepted.
+minimum to `11` until every active tablet is upgraded and accepted.
 
 ## Android artifacts
 

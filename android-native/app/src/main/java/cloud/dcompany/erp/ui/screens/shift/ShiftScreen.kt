@@ -54,9 +54,13 @@ import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftHistoryRow
 import cloud.dcompany.erp.core.db.ShiftHistorySource
+import cloud.dcompany.erp.core.db.ShiftAccountingBreakdown
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -76,10 +80,44 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+internal data class ShiftLegacyMoneyRow(
+    val label: String,
+    val amountMinor: Long,
+    val isRefund: Boolean,
+)
+
+internal fun shiftLegacyMoneyRows(
+    accounting: ShiftAccountingBreakdown,
+    presentation: WorkspacePresentationPolicy,
+): List<ShiftLegacyMoneyRow> = buildList {
+    if (presentation.showsMemberships || accounting.membershipCollectionsMinor != 0L) {
+        add(
+            ShiftLegacyMoneyRow(
+                presentation.shiftPrepaidReceiptsLabel,
+                accounting.membershipCollectionsMinor,
+                isRefund = false,
+            ),
+        )
+    }
+    if (presentation.showsMemberships || accounting.settledMembershipRefundsMinor != 0L) {
+        add(
+            ShiftLegacyMoneyRow(
+                presentation.shiftPrepaidRefundsLabel,
+                accounting.settledMembershipRefundsMinor,
+                isRefund = true,
+            ),
+        )
+    }
+}
+
+internal fun ShiftAccountingBreakdown.hasLegacyPrepaidMoney(): Boolean =
+    membershipCollectionsMinor != 0L || settledMembershipRefundsMinor != 0L
+
 @Composable
 fun ShiftScreen(
     access: ShiftAccess = ShiftAccess(),
     vm: ShiftViewModel = viewModel(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
@@ -110,6 +148,7 @@ fun ShiftScreen(
                             access.canClose,
                             access.canOpen,
                             compactLayout = false,
+                            presentation = presentation,
                         )
                     }
                     PastShiftsPanel(state, Modifier.width(350.dp))
@@ -125,6 +164,7 @@ fun ShiftScreen(
                             access.canClose,
                             access.canOpen,
                             compactLayout = true,
+                            presentation = presentation,
                         )
                     },
                     historyPanel = {
@@ -232,7 +272,7 @@ private fun ShiftSummaryRow(state: ShiftUiState) {
                 label = if (open == null) "Closed shift history" else "Opened by",
                 value = if (open == null) state.history.size.toString() else (opener ?: "Verifying"),
                 detail = if (open == null) {
-                    "Loaded for this terminal"
+                    "Loaded for this device"
                 } else {
                     historyDateFormat.format(Date(open.openedAtMillis))
                 },
@@ -287,7 +327,7 @@ private fun ShiftSummaryRow(state: ShiftUiState) {
 private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) {
     SectionCard(
         title = "Past shifts",
-        subtitle = "Latest closed shifts for this terminal",
+        subtitle = "Latest closed shifts for this device",
         icon = Icons.Filled.History,
         modifier = modifier,
     ) {
@@ -302,7 +342,7 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
             } else {
                 DesignedEmptyState(
                     title = "No closed shifts yet",
-                    body = "Completed shifts from this terminal will remain available here for reconciliation.",
+                    body = "Completed shifts from this device will remain available here for reconciliation.",
                     icon = Icons.Filled.History,
                     modifier = Modifier.heightIn(min = 170.dp),
                 )
@@ -313,7 +353,7 @@ private fun PastShiftsPanel(state: ShiftUiState, modifier: Modifier = Modifier) 
             }
         }
         Text(
-            "Showing up to the latest 200 shifts for this terminal.",
+            "Showing up to the latest 200 shifts for this device.",
             color = Brand.ForegroundFaint,
             style = MaterialTheme.typography.labelSmall,
         )
@@ -360,7 +400,7 @@ internal fun OpenShiftForm(
     val validFloat = float.isBlank() || parsedFloat != null
 
     SectionCard(
-        title = "Open this terminal's shift",
+        title = "Open shift",
         subtitle = "Record the drawer cash before accepting the first payment.",
         icon = Icons.Filled.AccountBalanceWallet,
         modifier = Modifier.fillMaxWidth(),
@@ -462,6 +502,7 @@ private fun CloseShiftCard(
     canClosePermission: Boolean,
     canOpenPermission: Boolean,
     compactLayout: Boolean,
+    presentation: WorkspacePresentationPolicy,
 ) {
     val shift = state.open!!
     val closing = shift.local?.state == ShiftState.CLOSE_PENDING
@@ -616,12 +657,24 @@ private fun CloseShiftCard(
             }
             if (accountingExpanded) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("POS receipts (may include tips)", color = Brand.ForegroundMuted)
+                    Text(
+                        if (presentation.showsRestaurantOperations) {
+                            "POS receipts (may include tips)"
+                        } else {
+                            "POS and gaming receipts (may include tips)"
+                        },
+                        color = Brand.ForegroundMuted,
+                    )
                     Text(accounting.posCollectionsMinor.asRupees(), color = Brand.Foreground)
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Membership receipts", color = Brand.ForegroundMuted)
-                    Text(accounting.membershipCollectionsMinor.asRupees(), color = Brand.Foreground)
+                shiftLegacyMoneyRows(accounting, presentation).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(row.label, color = Brand.ForegroundMuted)
+                        Text(
+                            row.amountMinor.asRupees(),
+                            color = if (row.isRefund && row.amountMinor > 0) Brand.Danger else Brand.Foreground,
+                        )
+                    }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Settled POS refunds", color = Brand.ForegroundMuted)
@@ -630,11 +683,12 @@ private fun CloseShiftCard(
                         color = if (accounting.settledPosRefundsMinor > 0) Brand.Danger else Brand.ForegroundMuted,
                     )
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Settled membership refunds", color = Brand.ForegroundMuted)
+                if (!presentation.showsMemberships && accounting.hasLegacyPrepaidMoney()) {
                     Text(
-                        accounting.settledMembershipRefundsMinor.asRupees(),
-                        color = if (accounting.settledMembershipRefundsMinor > 0) Brand.Danger else Brand.ForegroundMuted,
+                        "Historical hidden-module money remains included in Gross, Refunds and Net. " +
+                            "Owners should reconcile it against protected history; it has not been removed.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
                     )
                 }
             }

@@ -449,6 +449,7 @@ class GamingViewModelRecoveryTest {
         assertTrue(failedSend.canSendToPos())
         assertFalse(sendPending.canSendToPos())
         assertFalse(zeroValue.canSendToPos())
+        assertTrue(zeroValue.canSendToPos(hasActiveAddons = true))
         assertTrue(zeroValue.canCancelUnbilled())
         assertTrue(failedSend.canCancelUnbilled())
         assertFalse(sendPending.canCancelUnbilled())
@@ -456,14 +457,73 @@ class GamingViewModelRecoveryTest {
 
         val ui = GamingUiState(
             sessions = listOf(failedStart, failedStop, failedSend, sendPending, zeroValue, paused),
+            sessionAddons = listOf(
+                GamingSessionAddonUi(
+                    id = "addon-zero",
+                    serverAddonId = "addon-zero",
+                    serverSessionId = zeroValue.id,
+                    clientLineId = "line-zero",
+                    menuItemId = "complimentary-can",
+                    menuItemName = "Complimentary can",
+                    menuItemType = "drink",
+                    qty = 1,
+                    unitPriceMinor = 0,
+                    lineTotalMinor = 0,
+                ),
+            ),
         )
         assertEquals("start", ui.activeFor("station-start")?.id)
         assertEquals("stop", ui.activeFor("station-stop")?.id)
         assertEquals("send", ui.activeFor("station-send")?.id)
         assertEquals("zero", ui.activeFor("station-zero")?.id)
         assertEquals("paused", ui.activeFor("station-paused")?.id)
-        assertEquals(listOf("send"), ui.readyForPos.map { it.id })
-        assertEquals(listOf("zero"), ui.needsCancellation.map { it.id })
+        assertEquals(listOf("send", "zero"), ui.readyForPos.map { it.id })
+        assertTrue(ui.needsCancellation.isEmpty())
+        assertEquals(37_500L, ui.pendingBillSnapshotMinor(failedSend))
+        assertEquals(0L, ui.pendingBillSnapshotMinor(zeroValue))
+        assertEquals(
+            listOf("zero"),
+            GamingUiState(sessions = listOf(zeroValue)).needsCancellation.map { it.id },
+        )
+    }
+
+    @Test
+    fun pendingBillSnapshotIncludesActiveItemsAndExcludesVoidedOrRejectedAdds() {
+        val ended = session(
+            id = "combined",
+            status = "ended",
+            localState = GamingSessionState.SEND_REJECTED,
+            amountMinor = 20_000,
+        )
+        val base = GamingSessionAddonUi(
+            id = "paid",
+            serverAddonId = "paid",
+            serverSessionId = ended.id,
+            clientLineId = "line-paid",
+            menuItemId = "drink",
+            menuItemName = "Drink",
+            menuItemType = "drink",
+            qty = 1,
+            unitPriceMinor = 1_249,
+            lineTotalMinor = 1_249,
+        )
+        val ui = GamingUiState(
+            sessions = listOf(ended),
+            sessionAddons = listOf(
+                base,
+                base.copy(id = "voided", clientLineId = "line-voided", lineTotalMinor = 500, voided = true),
+                base.copy(
+                    id = "rejected",
+                    serverAddonId = null,
+                    clientLineId = "line-rejected",
+                    lineTotalMinor = 700,
+                    localActionType = cloud.dcompany.erp.core.db.GamingSessionAddonActionType.ADD,
+                    localState = cloud.dcompany.erp.core.db.GamingSessionAddonActionState.REJECTED,
+                ),
+            ),
+        )
+
+        assertEquals(21_249L, ui.pendingBillSnapshotMinor(ended))
     }
 
     @Test

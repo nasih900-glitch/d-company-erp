@@ -73,6 +73,44 @@ class BugReportApiContractTest {
     }
 
     @Test
+    fun `protected support inbox uses the company scoped admin route`() {
+        val inbox = SupportInboxApi::class.java.methods.single { it.name == "inbox" }
+
+        assertEquals("bug-reports", inbox.getAnnotation(GET::class.java)?.value)
+
+        val page = ApiClient.json.decodeFromString<BugReportInboxPage>(
+            """{
+              "items":[{
+                "id":"33333333-3333-4333-8333-333333333333",
+                "title":"Staff needs help · Gaming",
+                "description":"The station action did not complete.",
+                "severity":"high",
+                "status":"open",
+                "reporter":{
+                  "user_id":"44444444-4444-4444-8444-444444444444",
+                  "name":"Rafi",
+                  "email":"rafi@example.test"
+                },
+                "client_context":{
+                  "platform":"android",
+                  "current_screen":"Gaming",
+                  "connectivity":"online"
+                },
+                "created_at":"2026-08-28T10:16:00Z",
+                "updated_at":"2026-08-28T10:20:00Z",
+                "internal_resolution_note":"owner-only data is safely ignored"
+              }],
+              "total":1,"limit":50,"offset":0,
+              "summary":{"counts_by_status":{"open":1}}
+            }""".trimIndent(),
+        )
+
+        assertEquals("Rafi", page.items.single().reporter.name)
+        assertEquals("Gaming", page.items.single().clientContext.currentScreen)
+        assertEquals(1, page.total)
+    }
+
+    @Test
     fun `request uses allowlisted contextual contract with no secrets or screenshot bytes`() {
         val request = BugReportDraft(
             reason = SupportRequestReason.SomethingFailed,

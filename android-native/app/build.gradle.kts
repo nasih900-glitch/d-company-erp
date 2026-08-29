@@ -55,8 +55,9 @@ android {
         // Every Room schema change must ship under a strictly newer Android
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
-        versionCode = 10
-        versionName = "3.0.9"
+        versionCode = 11
+        versionName = "3.1.0"
+        buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
@@ -84,6 +85,14 @@ android {
         }
         release {
             isMinifyEnabled = false
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+        create("directRelease") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "true")
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }

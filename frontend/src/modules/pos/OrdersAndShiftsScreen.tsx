@@ -20,6 +20,7 @@ import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
+import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
   orders, shifts,
   type OrderListItemDTO, type ShiftDTO,
@@ -308,7 +309,16 @@ function ShiftsTab() {
         </div>
       ) : (
         <div className="space-y-3">
-          {rows.map((s) => (
+          {rows.map((s) => {
+            const legacyRevenueLabel = profileMembershipMoneyLabel(
+              'revenue',
+              s.membership_sales_minor ?? 0,
+            );
+            const legacyRefundLabel = profileMembershipMoneyLabel(
+              'refund',
+              s.settled_membership_refunds_minor ?? 0,
+            );
+            return (
             <div key={s.id} className="card">
               <div className="flex justify-between items-start gap-3 flex-wrap">
                 <div>
@@ -344,7 +354,9 @@ function ShiftsTab() {
 
               <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                 <Stat label="POS collections" value={inr(s.pos_sales_minor ?? 0)}/>
-                <Stat label="Memberships" value={inr(s.membership_sales_minor ?? 0)}/>
+                {legacyRevenueLabel && (
+                  <Stat label={legacyRevenueLabel} value={inr(s.membership_sales_minor ?? 0)}/>
+                )}
                 <Stat label="Gross collections" value={inr(s.gross_collections_minor ?? 0)}/>
               </div>
               <p className="mt-1 text-[10px] text-fg-muted">
@@ -352,7 +364,9 @@ function ShiftsTab() {
               </p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                 <Stat label="POS refunds" value={inr(s.settled_pos_refunds_minor ?? 0)}/>
-                <Stat label="Membership refunds" value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+                {legacyRefundLabel && (
+                  <Stat label={legacyRefundLabel} value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+                )}
                 <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
                 <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
               </div>
@@ -367,7 +381,8 @@ function ShiftsTab() {
                         Math.abs(s.variance_minor) < 5000 ? 'gold' : 'bad'}/>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

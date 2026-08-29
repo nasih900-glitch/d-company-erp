@@ -191,7 +191,7 @@ export function shiftResolutionMessage(resolution: ShiftResolution): string {
     case 'station_branch_mismatch':
       return 'This gaming station belongs to a different branch than the selected terminal.';
     case 'no_open_shift':
-      return 'No shift is open for this terminal. Open a shift from the Shifts tab before taking orders or starting sessions — whoever opens it is responsible for its cash and payment closing.';
+      return 'No shift is open. Open a shift from the Shift tab before taking orders or starting sessions — whoever opens it is responsible for its cash and payment closing.';
     case 'ambiguous_open_shifts':
       return 'More than one open shift exists for this terminal. Close the duplicate shift before continuing.';
     case 'ready':

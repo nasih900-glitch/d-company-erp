@@ -39,9 +39,9 @@ class GamingPosHandoffViewModelPolicyTest {
     @Test
     fun `cafe terminal cannot start gaming while gaming and hybrid can`() {
         val cafePosGuidance = gamingStartTerminalBlockMessage(TerminalPurpose.CAFE_POS).orEmpty()
-        assertTrue(cafePosGuidance.contains("Cafe POS"))
+        assertTrue(cafePosGuidance.contains("POS only"))
         assertTrue(cafePosGuidance.contains("Change terminal"))
-        assertTrue(cafePosGuidance.contains("Gaming Area"))
+        assertTrue(cafePosGuidance.contains("Gaming"))
         assertFalse(cafePosGuidance.contains("Hybrid"))
         assertNull(gamingStartTerminalBlockMessage(TerminalPurpose.GAMING))
         assertNull(gamingStartTerminalBlockMessage(TerminalPurpose.HYBRID))
@@ -52,7 +52,7 @@ class GamingPosHandoffViewModelPolicyTest {
     fun `gaming-only terminal never falls back when no eligible cafe shift is open`() {
         val message = posTargetListError(emptyList(), sourceTerminalId = "gaming-terminal")
 
-        assertTrue(message.orEmpty().contains("No eligible Cafe POS shift is open"))
+        assertTrue(message.orEmpty().contains("No eligible receiving POS shift is open"))
         assertTrue(message.orEmpty().contains("remains saved"))
     }
 
@@ -85,13 +85,29 @@ class GamingPosHandoffViewModelPolicyTest {
         )
 
         assertNull(posHandoffResponseError(session, "gaming-terminal", target, receipt))
+        assertNull(
+            posHandoffResponseError(
+                session,
+                "gaming-terminal",
+                target,
+                receipt.copy(amountMinor = 0),
+            ),
+        )
+        assertTrue(
+            posHandoffResponseError(
+                session,
+                "gaming-terminal",
+                target,
+                receipt.copy(amountMinor = -1),
+            ).orEmpty().contains("complete held-order receipt"),
+        )
         assertTrue(
             posHandoffResponseError(
                 session,
                 "gaming-terminal",
                 target,
                 receipt.copy(targetShiftId = "different-shift"),
-            ).orEmpty().contains("selected Cafe POS shift"),
+            ).orEmpty().contains("selected POS shift"),
         )
         assertTrue(
             posHandoffResponseError(

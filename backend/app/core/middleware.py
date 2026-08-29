@@ -78,6 +78,11 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         ios_update_url: str | None,
         require_native_headers: bool,
         message: str | None,
+        android_latest_version_name: str | None = None,
+        android_release_notes: str | None = None,
+        android_apk_sha256: str | None = None,
+        android_apk_size_bytes: int | None = None,
+        android_apk_signing_cert_sha256: str | None = None,
     ) -> None:
         super().__init__(app)
         self.versions = {
@@ -86,6 +91,13 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         }
         self.require_native_headers = require_native_headers
         self.message = message
+        self.android_release = {
+            "latest_version_name": android_latest_version_name,
+            "release_notes": android_release_notes,
+            "apk_sha256": android_apk_sha256,
+            "apk_size_bytes": android_apk_size_bytes,
+            "apk_signing_cert_sha256": android_apk_signing_cert_sha256,
+        }
 
     async def dispatch(
         self,
@@ -155,6 +167,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         current: int | None = None,
     ) -> JSONResponse:
         minimum, latest, update_url = self.versions[platform]
+        release_details = self.android_release if platform == "android" else {}
         return JSONResponse(
             status_code=426,
             content={
@@ -167,6 +180,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "minimum_supported_version_code": minimum,
                         "latest_version_code": latest,
                         "update_url": update_url,
+                        **release_details,
                     },
                 }
             },

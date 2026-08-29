@@ -55,6 +55,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.MenuAccess
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
@@ -72,8 +75,37 @@ import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 
+internal fun menuItemTypeOptions(
+    presentation: WorkspacePresentationPolicy,
+): List<Pair<String, String>> = if (presentation.showsRestaurantOperations) {
+    ITEM_TYPES.map { it to it.replaceFirstChar(Char::titlecase) }
+} else {
+    listOf(
+        "food" to "Snack / product",
+        "drink" to "Drink",
+    )
+}
+
+/** Historical item types stay visible, but dormant workflows are not advertised as active choices. */
+internal fun menuItemTypeLabel(
+    type: String,
+    presentation: WorkspacePresentationPolicy,
+): String = if (presentation.showsRestaurantOperations) {
+    type.replaceFirstChar(Char::titlecase)
+} else {
+    when (type.lowercase()) {
+        "food" -> "Snack / product"
+        "drink" -> "Drink"
+        "dessert" -> "Legacy product"
+        else -> "Legacy service"
+    }
+}
+
 @Composable
-fun MenuScreen(access: MenuAccess = MenuAccess()) {
+fun MenuScreen(
+    access: MenuAccess = MenuAccess(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
     val vm: MenuViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
@@ -121,6 +153,7 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
                 MenuItemsPanel(
                     state = state,
                     access = access,
+                    presentation = presentation,
                     search = search,
                     searchedItems = searchedItems,
                     modifier = modifier,
@@ -173,6 +206,7 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
             onChange = vm::itemDetailsChanged,
             onCancel = vm::cancelItemDetailsEdit,
             onSave = vm::saveItemDetails,
+            presentation = presentation,
         )
     }
     state.itemPricingEditor?.takeIf { access.canManageMenu }?.let { ed ->
@@ -183,6 +217,7 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
             onChange = vm::itemPricingChanged,
             onCancel = vm::cancelItemPricingEdit,
             onSave = vm::saveItemPricing,
+            presentation = presentation,
         )
     }
     state.itemCreateEditor?.takeIf { access.canManageMenu }?.let { ed ->
@@ -197,6 +232,7 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
             onChange = vm::itemCreateChanged,
             onCancel = vm::cancelItemCreate,
             onSave = vm::saveItemCreate,
+            presentation = presentation,
         )
     }
     if (state.showPricingUnlock && access.canManageMenu) {
@@ -286,6 +322,7 @@ private fun MenuCategoryPanel(
 private fun MenuItemsPanel(
     state: MenuUiState,
     access: MenuAccess,
+    presentation: WorkspacePresentationPolicy,
     search: String,
     searchedItems: List<ItemRow>,
     modifier: Modifier,
@@ -326,7 +363,11 @@ private fun MenuItemsPanel(
             }
             selected == null -> DesignedEmptyState(
                 title = "Select a category",
-                body = "Choose a category to review its products, availability, pricing and tax configuration.",
+                body = if (presentation.showsRestaurantOperations) {
+                    "Choose a category to review its products, availability, pricing and tax configuration."
+                } else {
+                    "Choose a category to review its products, availability and pricing."
+                },
                 icon = Icons.Filled.Category,
             )
             state.visibleItems.isEmpty() -> DesignedEmptyState(
@@ -346,6 +387,7 @@ private fun MenuItemsPanel(
                     ItemRowCard(
                         item = item,
                         canWrite = access.canManageMenu,
+                        presentation = presentation,
                         onEditDetails = { onEditDetails(item) },
                         onEditPricing = { onEditPricing(item) },
                         onRetrySync = { onRetrySync(item) },
@@ -408,6 +450,7 @@ private fun CategoryRowItem(
 private fun ItemRowCard(
     item: ItemRow,
     canWrite: Boolean,
+    presentation: WorkspacePresentationPolicy,
     onEditDetails: () -> Unit,
     onEditPricing: () -> Unit,
     onRetrySync: () -> Unit,
@@ -424,7 +467,11 @@ private fun ItemRowCard(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(item.name, color = Brand.Foreground, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text("${item.sku} · ${item.type}", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                Text(
+                    "${item.sku} · ${menuItemTypeLabel(item.type, presentation)}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
                 item.description?.takeIf(String::isNotBlank)?.let {
                     Text(it, color = Brand.ForegroundFaint, style = MaterialTheme.typography.bodySmall, maxLines = 1)
                 }
@@ -437,14 +484,25 @@ private fun ItemRowCard(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(item.basePriceMinor.asRupees(), color = Brand.Foreground, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    "${"%.0f".format(item.taxRate * 100)}% GST · ${if (item.priceIncludesTax) "tax included" else "tax added"}",
-                    color = Brand.ForegroundFaint,
-                    style = MaterialTheme.typography.labelSmall,
-                )
+                if (presentation.showsRestaurantOperations || item.taxRate != 0.0) {
+                    Text(
+                        if (presentation.showsRestaurantOperations) {
+                            "${"%.0f".format(item.taxRate * 100)}% GST · ${if (item.priceIncludesTax) "tax included" else "tax added"}"
+                        } else {
+                            "${"%.0f".format(item.taxRate * 100)}% recorded tax · ${if (item.priceIncludesTax) "included" else "added"}"
+                        },
+                        color = Brand.ForegroundFaint,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                ErpButton("Price & tax", onEditPricing, enabled = canWrite, intent = ActionIntent.Secondary)
+                ErpButton(
+                    if (presentation.showsRestaurantOperations) "Price & tax" else "Price",
+                    onEditPricing,
+                    enabled = canWrite,
+                    intent = ActionIntent.Secondary,
+                )
                 ErpButton("Details", onEditDetails, enabled = canWrite, intent = ActionIntent.Quiet)
             }
         }
@@ -526,6 +584,7 @@ private fun ItemDetailsDialog(
     onChange: (ItemDetailsEditor) -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
     FormDialog(
         title = "Item details",
@@ -565,7 +624,11 @@ private fun ItemDetailsDialog(
             )
         }
         Text(
-            "Price, tax and HSN are edited separately (needs your password).",
+            if (presentation.showsRestaurantOperations) {
+                "Price, tax and HSN are edited separately (needs your password)."
+            } else {
+                "Price is edited separately and needs your password."
+            },
             style = MaterialTheme.typography.labelSmall,
             color = Brand.ForegroundMuted,
         )
@@ -580,9 +643,10 @@ private fun ItemPricingDialog(
     onChange: (ItemPricingEditor) -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
     FormDialog(
-        title = "Price & tax",
+        title = if (presentation.showsRestaurantOperations) "Price & tax" else "Price",
         confirmLabel = "Save price",
         busy = saving,
         error = error,
@@ -603,32 +667,34 @@ private fun ItemPricingDialog(
             } else null,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
-            value = editor.taxRatePercent,
-            onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
-            label = { Text("GST rate (%)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            isError = !editor.taxRateValid,
-            supportingText = if (!editor.taxRateValid) {
-                { Text("GST rate must be between 0 and 100.") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = editor.hsnCode,
-            onValueChange = { onChange(editor.copy(hsnCode = it)) },
-            label = { Text("HSN/SAC (optional — a default is used if blank)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Price includes tax", color = Brand.Foreground)
-            Switch(
-                checked = editor.priceIncludesTax,
-                onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
-                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+        if (presentation.showsRestaurantOperations) {
+            OutlinedTextField(
+                value = editor.taxRatePercent,
+                onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
+                label = { Text("GST rate (%)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                isError = !editor.taxRateValid,
+                supportingText = if (!editor.taxRateValid) {
+                    { Text("GST rate must be between 0 and 100.") }
+                } else null,
+                modifier = Modifier.fillMaxWidth(),
             )
+            OutlinedTextField(
+                value = editor.hsnCode,
+                onValueChange = { onChange(editor.copy(hsnCode = it)) },
+                label = { Text("HSN/SAC (optional — a default is used if blank)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Price includes tax", color = Brand.Foreground)
+                Switch(
+                    checked = editor.priceIncludesTax,
+                    onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+                )
+            }
         }
     }
 }
@@ -642,6 +708,7 @@ private fun ItemCreateDialog(
     onChange: (ItemCreateEditor) -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
     FormDialog(
         title = "New item",
@@ -672,7 +739,11 @@ private fun ItemCreateDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        TypeDropdown(selected = editor.type, onSelect = { onChange(editor.copy(type = it)) })
+        TypeDropdown(
+            selected = editor.type,
+            presentation = presentation,
+            onSelect = { onChange(editor.copy(type = it)) },
+        )
         OutlinedTextField(
             value = editor.basePriceRupees,
             onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
@@ -685,25 +756,27 @@ private fun ItemCreateDialog(
             } else null,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
-            value = editor.taxRatePercent,
-            onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
-            label = { Text("GST rate (%, optional)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            isError = !editor.taxRateValid,
-            supportingText = if (!editor.taxRateValid) {
-                { Text("GST rate must be between 0 and 100.") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = editor.hsnCode,
-            onValueChange = { onChange(editor.copy(hsnCode = it)) },
-            label = { Text("HSN/SAC (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (presentation.showsRestaurantOperations) {
+            OutlinedTextField(
+                value = editor.taxRatePercent,
+                onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
+                label = { Text("GST rate (%, optional)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                isError = !editor.taxRateValid,
+                supportingText = if (!editor.taxRateValid) {
+                    { Text("GST rate must be between 0 and 100.") }
+                } else null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = editor.hsnCode,
+                onValueChange = { onChange(editor.copy(hsnCode = it)) },
+                label = { Text("HSN/SAC (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OutlinedTextField(
             value = editor.description,
             onValueChange = { onChange(editor.copy(description = it)) },
@@ -738,11 +811,15 @@ private fun CategoryDropdown(categories: List<CategoryRow>, selectedId: String, 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TypeDropdown(selected: String, onSelect: (String) -> Unit) {
+private fun TypeDropdown(
+    selected: String,
+    presentation: WorkspacePresentationPolicy,
+    onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
-            value = selected,
+            value = menuItemTypeLabel(selected, presentation),
             onValueChange = {},
             readOnly = true,
             label = { Text("Type") },
@@ -750,8 +827,8 @@ private fun TypeDropdown(selected: String, onSelect: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            ITEM_TYPES.forEach { t ->
-                DropdownMenuItem(text = { Text(t) }, onClick = { onSelect(t); expanded = false })
+            menuItemTypeOptions(presentation).forEach { (id, label) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(id); expanded = false })
             }
         }
     }

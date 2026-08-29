@@ -6,6 +6,7 @@
 import { inr, inrInWords } from '@/lib/inr';
 import type { OrderDTO } from '@/lib/erp-api';
 import { DEFAULT_BUSINESS_TIMEZONE, isValidTimeZone } from '@/lib/manual-collections';
+import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
   formatPlaceOfSupply,
   receiptDocumentTitle,
@@ -105,7 +106,7 @@ export default function LiveReceipt({
           );
           return membershipSavings > 0 && (
             <div className="mb-1 text-[10px] text-fg-muted print:text-black/70">
-              Membership savings already included in item prices: {inr(membershipSavings)}
+              {profileMembershipMoneyLabel('discount', membershipSavings)} already included in item prices: {inr(membershipSavings)}
             </div>
           );
         })()}

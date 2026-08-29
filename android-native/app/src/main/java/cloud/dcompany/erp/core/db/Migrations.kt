@@ -2542,6 +2542,113 @@ val MIGRATION_37_38 = object : Migration(37, 38) {
     }
 }
 
+/**
+ * Gaming-session food/drink/dessert staging.
+ *
+ * The server cache is replaceable. The action table is durable and captures a
+ * complete owner/workspace/request snapshot before any network attempt, so an
+ * account or terminal switch can never replay the command under new authority.
+ */
+val MIGRATION_38_39 = object : Migration(38, 39) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `gaming_session_addon_cache` (
+                `id` TEXT NOT NULL,
+                `gamingSessionId` TEXT NOT NULL,
+                `clientLineId` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `menuItemName` TEXT NOT NULL,
+                `menuItemType` TEXT NOT NULL,
+                `variantId` TEXT,
+                `variantSnapshotJson` TEXT,
+                `modifiersJson` TEXT NOT NULL,
+                `qty` INTEGER NOT NULL,
+                `catalogUnitPriceMinor` INTEGER NOT NULL,
+                `unitPriceMinor` INTEGER NOT NULL,
+                `lineTotalMinor` INTEGER NOT NULL,
+                `discountMinor` INTEGER NOT NULL,
+                `hsnOrSac` TEXT,
+                `taxRate` REAL NOT NULL,
+                `taxableValueMinor` INTEGER NOT NULL,
+                `cgstMinor` INTEGER NOT NULL,
+                `sgstMinor` INTEGER NOT NULL,
+                `igstMinor` INTEGER NOT NULL,
+                `cessMinor` INTEGER NOT NULL,
+                `note` TEXT,
+                `createdBy` TEXT NOT NULL,
+                `createdTerminalId` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `voidedAtMillis` INTEGER,
+                `voidedBy` TEXT,
+                `voidReason` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_gaming_session_addon_cache_gamingSessionId` " +
+                "ON `gaming_session_addon_cache` (`gamingSessionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_gaming_session_addon_cache_clientLineId` " +
+                "ON `gaming_session_addon_cache` (`clientLineId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_gaming_session_addon_actions` (
+                `actionId` TEXT NOT NULL,
+                `actionType` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `terminalId` TEXT NOT NULL,
+                `localSessionId` TEXT,
+                `serverSessionId` TEXT,
+                `shiftId` TEXT NOT NULL,
+                `clientLineId` TEXT NOT NULL,
+                `serverAddonId` TEXT,
+                `menuItemId` TEXT NOT NULL,
+                `menuItemName` TEXT NOT NULL,
+                `menuItemType` TEXT NOT NULL,
+                `variantId` TEXT,
+                `modifierSelectionsJson` TEXT NOT NULL,
+                `qty` INTEGER NOT NULL,
+                `expectedUnitPriceMinor` INTEGER NOT NULL,
+                `note` TEXT,
+                `voidReason` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `resolvedAtMillis` INTEGER,
+                `resolutionReason` TEXT,
+                PRIMARY KEY(`actionId`)
+            )
+            """.trimIndent(),
+        )
+        listOf(
+            "state",
+            "localSessionId",
+            "serverSessionId",
+            "shiftId",
+            "clientLineId",
+        ).forEach { column ->
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_local_gaming_session_addon_actions_$column` " +
+                    "ON `local_gaming_session_addon_actions` (`$column`)",
+            )
+        }
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_local_gaming_session_addon_actions_ownerCompanyId_ownerUserId_branchId_terminalId_state` " +
+                "ON `local_gaming_session_addon_actions` " +
+                "(`ownerCompanyId`, `ownerUserId`, `branchId`, `terminalId`, `state`)",
+        )
+        installShiftClosingWriteGuards(db)
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2549,5 +2656,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
     MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
     MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
-    MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38,
+    MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
 )

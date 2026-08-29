@@ -1,11 +1,52 @@
 package cloud.dcompany.erp.ui.screens.finance
 
 import cloud.dcompany.erp.core.net.CostingCoverage
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.presentationPolicy
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FinancePresentationPolicyTest {
+
+    @Test
+    fun `gaming centre business metrics contain no membership or customer workspace copy`() {
+        val metrics = BusinessMetrics(
+            periodStart = "2026-08-01",
+            periodEnd = "2026-08-29",
+            aovMinor = 12_500,
+            ordersCount = 8,
+            mrrMinor = 2_000,
+            arrMinor = 24_000,
+            activeMembersCount = 3,
+            cacMinor = 500,
+            newCustomersCount = 2,
+            marketingSpendMinor = 1_000,
+            ltvMinor = 50_000,
+            customersCount = 4,
+            burnRateMinor = 2_500,
+        )
+
+        val presented = metrics.presentedMetrics(
+            WorkspaceFeatureProfiles.GamingCentre.presentationPolicy(),
+        )
+        val copy = presented.joinToString(" ") { "${it.label} ${it.detail}" }
+
+        assertEquals(4, presented.size)
+        assertFalse(copy.contains("membership", ignoreCase = true))
+        assertFalse(copy.contains("customer", ignoreCase = true))
+        assertTrue(copy.contains("gaming", ignoreCase = true))
+        assertTrue(presented.any { it.value == "₹125.00" })
+    }
+
+    @Test
+    fun `focused asset category neutralises legacy kitchen equipment without deleting it`() {
+        val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
+
+        assertEquals("Legacy equipment", assetCategoryLabel("kitchen_equipment", presentation))
+        assertEquals("Gaming", assetCategoryLabel("gaming", presentation))
+    }
 
     private val completeCosting = CostingCoverage(
         inventoryItemCount = 1,

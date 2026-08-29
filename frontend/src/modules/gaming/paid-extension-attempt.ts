@@ -664,7 +664,7 @@ export function paidExtensionPersistenceGuidance(error: PaidExtensionPersistence
     return 'Paid extension was not sent because this session already has an older or damaged saved attempt that cannot prove whether it was charged. Do not retry with a new extension. A protected owner must verify the session and extension receipt first.';
   }
   if (error.code === 'current_scope_unverified') {
-    return 'Paid extension was not sent because the employee, company, branch, terminal, session, shift, or pricing snapshot could not be verified. Refresh Gaming and confirm this terminal has the correct open shift.';
+    return 'Paid extension was not sent because the staff, shop, device, session, shift, or pricing snapshot could not be verified. Refresh Gaming and confirm the current shift is open.';
   }
   return 'Paid extension was not sent because this device could not save and verify its recovery receipt. Check site storage or free device storage, reload Gaming, and try again. Do not take payment or add the extension manually.';
 }

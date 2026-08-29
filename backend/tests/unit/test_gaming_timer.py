@@ -12,10 +12,12 @@ from app.api.v1.gaming.router import (
     SessionRead,
     SessionStart,
     _elapsed_billable_whole_minutes,
+    _require_session_pos_eligible,
     _session_pos_description,
     session_amount_minor,
     session_read,
 )
+from app.core.errors import BusinessRuleError
 from app.models import GamingPackage, GamingSession, GamingSessionExtension
 
 
@@ -98,6 +100,53 @@ def test_session_read_order_id_is_none_before_send_to_pos():
 def test_session_read_includes_source_shift_id():
     gs = _session()
     assert session_read(gs).shift_id == gs.shift_id
+
+
+@pytest.mark.asyncio
+async def test_positive_session_is_pos_eligible_without_addon_query():
+    class NoAddonQuerySession:
+        async def execute(self, _statement):
+            raise AssertionError("positive gameplay must short-circuit the add-on query")
+
+    await _require_session_pos_eligible(
+        NoAddonQuerySession(),
+        gaming_session=_session(status="ended", amount_minor=1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_complimentary_session_with_active_addon_is_pos_eligible():
+    class AddonCountSession:
+        async def execute(self, _statement):
+            class Result:
+                @staticmethod
+                def scalar_one():
+                    return 1
+
+            return Result()
+
+    await _require_session_pos_eligible(
+        AddonCountSession(),
+        gaming_session=_session(status="ended", amount_minor=0),
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_session_without_addons_still_requires_reasoned_cancellation():
+    class EmptyAddonSession:
+        async def execute(self, _statement):
+            class Result:
+                @staticmethod
+                def scalar_one():
+                    return None
+
+            return Result()
+
+    with pytest.raises(BusinessRuleError, match="no play charge or saved items"):
+        await _require_session_pos_eligible(
+            EmptyAddonSession(),
+            gaming_session=_session(status="ended", amount_minor=0),
+        )
 
 
 def test_session_read_replays_pre_0038_stored_response_and_derives_package_mode():

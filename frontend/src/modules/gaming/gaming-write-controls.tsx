@@ -16,6 +16,8 @@ export const GAMING_WRITE_OPERATION_NAMES = [
   'sendToPos',
   'handoffToPos',
   'reconcileToPos',
+  'addSessionAddon',
+  'voidSessionAddon',
 ] as const;
 
 type GamingWriteOperationName = (typeof GAMING_WRITE_OPERATION_NAMES)[number];

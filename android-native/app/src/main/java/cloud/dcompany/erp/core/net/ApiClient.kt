@@ -372,6 +372,11 @@ object ApiClient {
                         currentVersionCode = details?.currentVersionCode ?: BuildConfig.VERSION_CODE,
                         minimumSupportedVersionCode = details?.minimumSupportedVersionCode,
                         latestVersionCode = details?.latestVersionCode,
+                        latestVersionName = details?.latestVersionName,
+                        releaseNotes = details?.releaseNotes,
+                        apkSha256 = details?.apkSha256,
+                        apkSizeBytes = details?.apkSizeBytes,
+                        apkSigningCertSha256 = details?.apkSigningCertSha256,
                     ),
                 )
             }

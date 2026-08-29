@@ -919,7 +919,7 @@ class SettingsViewModel : ViewModel() {
         val purpose = _state.value.terminalPurpose
         if (!TerminalPurpose.isKnown(purpose)) {
             _state.value = _state.value.copy(
-                terminalFormError = "Choose whether this is Cafe POS, Gaming Area, or Hybrid.",
+                terminalFormError = "Choose POS only, Gaming, or Gaming + POS.",
             )
             return
         }
@@ -1175,10 +1175,9 @@ private fun ApiException.readable(): String {
         status == 409 && server.contains("invoice series", ignoreCase = true) ->
             "$server Choose a different two-character series, then save again."
         status == 422 && code == null ->
-            "$server The server rejected one of these values — timezone (must be an " +
-                "IANA name like Asia/Kolkata), GSTIN (15 characters), PAN (10 " +
-                "characters), UPI ID (name@bank), FSSAI (14 digits) or opening hours " +
-                "(HH:MM)."
+            "$server The server rejected one of these values — check the required field " +
+                "formats, timezone (use an IANA name like Asia/Kolkata), company identity, " +
+                "UPI ID (name@bank), licences and opening hours (HH:MM)."
         isAmbiguous ->
             "$server It is not known whether the change was applied. Tap save again — " +
                 "the same request is replayed, so it cannot be applied twice."

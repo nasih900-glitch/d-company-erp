@@ -156,6 +156,34 @@ data class BugReportMinePage(
 )
 
 @Serializable
+data class BugReportInboxPage(
+    val items: List<BugReportInboxItem> = emptyList(),
+    val total: Int = 0,
+    val limit: Int = 50,
+    val offset: Int = 0,
+)
+
+@Serializable
+data class BugReportInboxItem(
+    val id: String,
+    val title: String,
+    val description: String,
+    val severity: String,
+    val status: String,
+    val reporter: BugReportInboxReporter,
+    @SerialName("client_context") val clientContext: BugReportClientContext,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class BugReportInboxReporter(
+    @SerialName("user_id") val userId: String,
+    val name: String,
+    val email: String,
+)
+
+@Serializable
 data class BugReportMineItem(
     val id: String,
     val title: String,

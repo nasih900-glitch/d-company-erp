@@ -26,6 +26,7 @@ import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.SHIFT_CLOSING_WRITE_GUARD_CALLBACK
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ClientCompatibilityGate
+import cloud.dcompany.erp.core.net.ClientUpdateRequirementStore
 import cloud.dcompany.erp.core.sync.ConnectivityObserver
 import cloud.dcompany.erp.core.sync.BackgroundSyncScheduler
 import cloud.dcompany.erp.core.sync.RealtimeClient
@@ -108,12 +109,25 @@ class DCompanyApp : Application() {
         outboxOwnerStore = OutboxOwnerStore(this)
         loadPersistedStartupState()
         ApiClient.init(tokens, terminalStore)
+        val updateRequirementStore = ClientUpdateRequirementStore(
+            context = this,
+            installedVersionCode = BuildConfig.VERSION_CODE,
+        )
         clientCompatibility = ClientCompatibilityGate(
             checkCompatibility = {
                 ApiClient.api.clientCompatibility(
                     platform = "android",
                     versionCode = BuildConfig.VERSION_CODE,
                 )
+            },
+            initialRequiredNotice = updateRequirementStore.restore(),
+            persistRequiredNotice = { notice ->
+                if (!updateRequirementStore.persist(notice)) {
+                    Log.e(
+                        "DCompanyUpdate",
+                        "Could not persist the server-required update block.",
+                    )
+                }
             },
         )
         ApiClient.onUpdateRequired = clientCompatibility::requireUpdate

@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.analytics
 
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -58,6 +59,35 @@ data class DashboardKpis(
             "Memberships" to revenueMembershipsMinor,
             "Manual" to revenueManualCollectionsMinor,
         ).filter { it.second > 0 }.sortedByDescending { it.second }
+
+    /**
+     * Product-profile grouping for the owner dashboard. Hidden source fields
+     * remain part of the graph under a neutral legacy row; no source amount is
+     * dropped merely because its operational module is dormant.
+     */
+    internal fun presentedRevenueStreams(
+        presentation: WorkspacePresentationPolicy,
+    ): List<Pair<String, Long>> {
+        val legacyMinor =
+            (if (presentation.showsEvents) 0L else revenueEventsMinor) +
+                (if (presentation.showsMemberships) 0L else revenueMembershipsMinor)
+        return buildList {
+            add(
+                (if (presentation.showsRestaurantOperations) "Food" else "Products / snacks / drinks") to
+                    revenueFoodMinor,
+            )
+            add("Gaming" to revenueGamingMinor)
+            add((if (presentation.showsRestaurantOperations) "Hookah" else "Shisha") to revenueHookahMinor)
+            if (presentation.showsEvents) add("Events" to revenueEventsMinor)
+            if (presentation.showsMemberships) add("Memberships" to revenueMembershipsMinor)
+            add("Manual collections" to revenueManualCollectionsMinor)
+            if (legacyMinor > 0L) add("Legacy/other revenue" to legacyMinor)
+        }.filter { it.second > 0L }.sortedByDescending { it.second }
+    }
+
+    internal fun hiddenLegacyRevenueMinor(presentation: WorkspacePresentationPolicy): Long =
+        (if (presentation.showsEvents) 0L else revenueEventsMinor) +
+            (if (presentation.showsMemberships) 0L else revenueMembershipsMinor)
 }
 
 @Serializable

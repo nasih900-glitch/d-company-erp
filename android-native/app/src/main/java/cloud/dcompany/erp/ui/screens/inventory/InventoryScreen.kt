@@ -76,6 +76,9 @@ import cloud.dcompany.erp.core.auth.InventoryAccess
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
@@ -108,7 +111,11 @@ private val UNITS = listOf(
 )
 
 @Composable
-fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryViewModel = viewModel()) {
+fun InventoryScreen(
+    access: InventoryAccess = InventoryAccess(),
+    vm: InventoryViewModel = viewModel(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
 
@@ -165,18 +172,21 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
                         state,
                         access.canManageInventory,
                         vm,
+                        presentation,
                         Modifier.weight(1f),
                     )
                     InventoryTab.SUPPLIERS -> SuppliersPane(
                         state,
                         access.canManageInventory,
                         vm,
+                        presentation,
                         Modifier.weight(1f),
                     )
                     InventoryTab.RECIPES -> RecipesPane(
                         state = state,
                         canManageCosting = access.canManageCosting,
                         vm = vm,
+                        presentation = presentation,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -186,7 +196,7 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
 
     when (val d = state.dialog.takeIf { access.canManageInventory }) {
         is InventoryDialog.IngredientForm -> IngredientDialog(d.editing, state, vm)
-        is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm)
+        is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm, presentation)
         is InventoryDialog.Grn -> GrnDialog(state, vm)
         is InventoryDialog.Adjust -> AdjustDialog(d.ingredient, state, vm)
         is InventoryDialog.RecipeCreate -> RecipeCreateDialog(d.menuItem, state, vm)
@@ -583,6 +593,7 @@ private fun RecipesPane(
     state: InventoryUiState,
     canManageCosting: Boolean,
     vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
     modifier: Modifier = Modifier,
 ) {
     if (!canManageCosting) return
@@ -590,7 +601,11 @@ private fun RecipesPane(
         SectionCard(modifier, elevated = true) {
             DesignedEmptyState(
                 title = "No stock-costed menu items",
-                body = "Food, drink, dessert and hookah items appear here after the menu has synced.",
+                body = if (presentation.showsRestaurantOperations) {
+                    "Food, drink, dessert and hookah items appear here after the menu has synced."
+                } else {
+                    "Products configured for stock costing appear here after the menu has synced."
+                },
                 icon = Icons.Default.Inventory2,
                 primaryLabel = "Refresh",
                 onPrimary = vm::retry,
@@ -794,6 +809,7 @@ private fun IngredientsPane(
     state: InventoryUiState,
     canWrite: Boolean,
     vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
     modifier: Modifier = Modifier,
 ) {
     if (state.ingredientsUnavailable) {
@@ -813,8 +829,13 @@ private fun IngredientsPane(
         SectionCard(modifier, elevated = true) {
             DesignedEmptyState(
                 title = "No ingredients yet",
-                body = "Add what the kitchen and bar actually consume, then record a stock receipt " +
-                    "so each ingredient has a costed FIFO batch to draw from.",
+                body = if (presentation.showsRestaurantOperations) {
+                    "Add what the kitchen and bar actually consume, then record a stock receipt " +
+                        "so each ingredient has a costed FIFO batch to draw from."
+                } else {
+                    "Add the stock items used by products you sell, then record a stock receipt " +
+                        "so each item has a costed FIFO batch to draw from."
+                },
                 icon = Icons.Default.Inventory2,
                 primaryLabel = if (canWrite) "New ingredient" else null,
                 onPrimary = if (canWrite) {
@@ -1272,6 +1293,7 @@ private fun SuppliersPane(
     state: InventoryUiState,
     canWrite: Boolean,
     vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
     modifier: Modifier = Modifier,
 ) {
     if (state.suppliersUnavailable) {
@@ -1309,7 +1331,8 @@ private fun SuppliersPane(
         if (needle.isBlank()) state.suppliers else state.suppliers.filter {
             it.name.contains(needle, ignoreCase = true) ||
                 it.contact.orEmpty().contains(needle, ignoreCase = true) ||
-                it.gstin.orEmpty().contains(needle, ignoreCase = true)
+                (presentation.showsRestaurantOperations &&
+                    it.gstin.orEmpty().contains(needle, ignoreCase = true))
         }
     }
 
@@ -1317,7 +1340,11 @@ private fun SuppliersPane(
         SearchInput(
             value = query,
             onValueChange = { query = it },
-            placeholder = "Search suppliers, contact, or GSTIN",
+            placeholder = if (presentation.showsRestaurantOperations) {
+                "Search suppliers, contact, or GSTIN"
+            } else {
+                "Search suppliers or contact"
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         SectionCard(
@@ -1330,7 +1357,11 @@ private fun SuppliersPane(
             if (filtered.isEmpty()) {
                 DesignedEmptyState(
                     title = "No matching suppliers",
-                    body = "Try another supplier name, contact, or GSTIN.",
+                    body = if (presentation.showsRestaurantOperations) {
+                        "Try another supplier name, contact, or GSTIN."
+                    } else {
+                        "Try another supplier name or contact."
+                    },
                     icon = Icons.Default.LocalShipping,
                 )
             } else {
@@ -1339,6 +1370,7 @@ private fun SuppliersPane(
                         SupplierRowCard(
                             supplier = supplier,
                             canWrite = canWrite,
+                            presentation = presentation,
                             onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
                             onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
                             onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
@@ -1356,6 +1388,7 @@ private fun SuppliersPane(
 private fun SupplierRowCard(
     supplier: SupplierRow,
     canWrite: Boolean,
+    presentation: WorkspacePresentationPolicy,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onCancelRemoval: () -> Unit,
@@ -1399,13 +1432,15 @@ private fun SupplierRowCard(
             },
             trailing = {
                 Column(Modifier.width(180.dp), horizontalAlignment = Alignment.End) {
-                    Text(
-                        supplier.gstin?.let { "GSTIN $it" } ?: "GSTIN not saved",
-                        color = Brand.Foreground,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (presentation.showsRestaurantOperations) {
+                        Text(
+                            supplier.gstin?.let { "GSTIN $it" } ?: "GSTIN not saved",
+                            color = Brand.Foreground,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         supplier.paymentTerms ?: "No payment terms",
                         color = Brand.ForegroundMuted,
@@ -1588,7 +1623,12 @@ private fun IngredientDialog(
 }
 
 @Composable
-private fun SupplierDialog(editing: SupplierRow?, state: InventoryUiState, vm: InventoryViewModel) {
+private fun SupplierDialog(
+    editing: SupplierRow?,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var name by remember { mutableStateOf(editing?.name ?: "") }
     var contact by remember { mutableStateOf(editing?.contact ?: "") }
     var gstin by remember { mutableStateOf(editing?.gstin ?: "") }
@@ -1619,13 +1659,15 @@ private fun SupplierDialog(editing: SupplierRow?, state: InventoryUiState, vm: I
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
-            value = gstin,
-            onValueChange = { gstin = it.uppercase() },
-            label = { Text("GSTIN") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (presentation.showsRestaurantOperations) {
+            OutlinedTextField(
+                value = gstin,
+                onValueChange = { gstin = it.uppercase() },
+                label = { Text("GSTIN") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OutlinedTextField(
             value = terms,
             onValueChange = { terms = it },

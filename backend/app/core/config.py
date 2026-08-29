@@ -12,6 +12,8 @@ from uuid import UUID
 from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE = 8
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -73,11 +75,23 @@ class Settings(BaseSettings):
     # and the explicit Gaming Area -> Cafe POS handoff. Older clients can route
     # a bill to the wrong local shift, so they must be stopped before reaching
     # operational write handlers.
-    android_min_supported_version_code: int = Field(default=8, ge=1)
-    android_latest_version_code: int = Field(default=8, ge=1)
+    # Android and the native wire DTO both carry version codes as signed
+    # 32-bit integers. Reject an operator typo at server startup instead of
+    # advertising JSON that the installed app cannot deserialize.
+    android_min_supported_version_code: int = Field(default=8, ge=1, le=2_147_483_647)
+    android_latest_version_code: int = Field(default=8, ge=1, le=2_147_483_647)
     android_update_url: AnyHttpUrl | None = None
-    ios_min_supported_version_code: int = Field(default=1, ge=1)
-    ios_latest_version_code: int = Field(default=1, ge=1)
+    android_latest_version_name: str | None = Field(default=None, max_length=80)
+    android_update_release_notes: str | None = Field(default=None, max_length=2_000)
+    android_update_apk_sha256: str | None = None
+    android_update_apk_size_bytes: int | None = Field(
+        default=None,
+        ge=1,
+        le=512 * 1024 * 1024,
+    )
+    android_update_signing_cert_sha256: str | None = None
+    ios_min_supported_version_code: int = Field(default=1, ge=1, le=2_147_483_647)
+    ios_latest_version_code: int = Field(default=1, ge=1, le=2_147_483_647)
     ios_update_url: AnyHttpUrl | None = None
     client_update_message: str | None = Field(default=None, max_length=500)
     require_native_version_headers: bool = True
@@ -128,8 +142,7 @@ class Settings(BaseSettings):
             )
         if self.ios_latest_version_code < self.ios_min_supported_version_code:
             raise ValueError(
-                "IOS_LATEST_VERSION_CODE cannot be lower than "
-                "IOS_MIN_SUPPORTED_VERSION_CODE"
+                "IOS_LATEST_VERSION_CODE cannot be lower than IOS_MIN_SUPPORTED_VERSION_CODE"
             )
         if self.env in {"prod", "staging"}:
             for label, update_url in (
@@ -138,6 +151,65 @@ class Settings(BaseSettings):
             ):
                 if update_url and update_url.scheme != "https":
                     raise ValueError(f"{label} must use HTTPS in prod or staging")
+            if (
+                max(
+                    self.android_min_supported_version_code,
+                    self.android_latest_version_code,
+                )
+                > _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE
+                and self.android_update_url is None
+            ):
+                raise ValueError(
+                    "ANDROID_UPDATE_URL is required before production advertises "
+                    "or requires an Android build newer than the code-8 compatibility floor"
+                )
+        for label, update_url in (
+            ("ANDROID_UPDATE_URL", self.android_update_url),
+            ("IOS_UPDATE_URL", self.ios_update_url),
+        ):
+            if update_url and (
+                update_url.username is not None
+                or update_url.password is not None
+                or update_url.fragment is not None
+            ):
+                raise ValueError(f"{label} must not contain credentials or a URL fragment")
+        integrity_fields = (
+            self.android_update_apk_sha256,
+            self.android_update_apk_size_bytes,
+            self.android_update_signing_cert_sha256,
+        )
+        is_direct_apk_url = bool(
+            self.android_update_url and self.android_update_url.path.lower().endswith(".apk")
+        )
+        if any(value is not None for value in integrity_fields) and not all(
+            value is not None for value in integrity_fields
+        ):
+            raise ValueError(
+                "ANDROID_UPDATE_APK_SHA256, ANDROID_UPDATE_APK_SIZE_BYTES and "
+                "ANDROID_UPDATE_SIGNING_CERT_SHA256 must be configured together"
+            )
+        if all(value is not None for value in integrity_fields) and (
+            self.android_update_url is None or self.android_latest_version_name is None
+        ):
+            raise ValueError(
+                "Verified Android direct updates also require ANDROID_UPDATE_URL "
+                "and ANDROID_LATEST_VERSION_NAME"
+            )
+        if is_direct_apk_url and (
+            not all(value is not None for value in integrity_fields)
+            or self.android_latest_version_name is None
+        ):
+            raise ValueError(
+                "An Android .apk update URL requires ANDROID_LATEST_VERSION_NAME "
+                "and the complete SHA-256, byte-size and signing-certificate metadata"
+            )
+        if all(value is not None for value in integrity_fields):
+            assert self.android_update_url is not None
+            if (
+                self.android_update_url.scheme != "https"
+                or not self.android_update_url.path.lower().endswith(".apk")
+            ):
+                raise ValueError("Verified Android direct updates require an HTTPS .apk URL")
         return self
 
     @field_validator("account_security_company_id", mode="before")
@@ -147,13 +219,44 @@ class Settings(BaseSettings):
 
     @field_validator(
         "android_update_url",
+        "android_latest_version_name",
+        "android_update_release_notes",
+        "android_update_apk_sha256",
+        "android_update_signing_cert_sha256",
         "ios_update_url",
         "client_update_message",
         mode="before",
     )
     @classmethod
     def _blank_optional_text_is_none(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("android_update_apk_size_bytes", mode="before")
+    @classmethod
+    def _blank_optional_integer_is_none(cls, v: object) -> object:
         return None if v == "" else v
+
+    @field_validator(
+        "android_update_apk_sha256",
+        "android_update_signing_cert_sha256",
+        mode="after",
+    )
+    @classmethod
+    def _normalize_sha256(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip().lower().replace(":", "")
+        if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ValueError("must contain exactly 64 hexadecimal SHA-256 digits")
+        return normalized
+
+    @field_validator("android_latest_version_name", mode="after")
+    @classmethod
+    def _normalize_android_version_name(cls, v: str | None) -> str | None:
+        # PackageManager compares versionName exactly during archive
+        # verification. Whitespace copied from an environment/secret editor
+        # must not turn an otherwise valid signed update into a false reject.
+        return v.strip() if v is not None else None
 
 
 @lru_cache(maxsize=1)

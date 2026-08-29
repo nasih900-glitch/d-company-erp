@@ -21,6 +21,11 @@ import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
+  GAMING_CENTRE_FEATURES,
+  profileDeferredMoneyLabel,
+  profileMembershipMoneyLabel,
+} from '@/lib/product-profile';
+import {
   finance, insights, pos, settings, reports,
   type ExpenseDTO, type PartnerDTO, type BranchReferenceDTO, type ExpenseCategoryDTO,
   type CapitalEntryDTO, type ReportDataDTO, type PartnerPLReportDTO,
@@ -37,6 +42,8 @@ import TipPayoutsTab from './TipPayoutsTab';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 type Tab = 'overview' | 'expenses' | 'collections' | 'tips' | 'partners' | 'assets';
+
+const TAX_COMPLIANCE_UI_ENABLED = GAMING_CENTRE_FEATURES.taxCompliance;
 
 export default function FinanceScreen() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -92,7 +99,7 @@ function OverviewTab() {
     setLoading(true); setErr(null);
     try {
       const [receiptIdentity, daily, businessMetrics, costingCoverage] = await Promise.all([
-        pos.receiptBusiness().catch(() => null),
+        TAX_COMPLIANCE_UI_ENABLED ? pos.receiptBusiness().catch(() => null) : Promise.resolve(null),
         reports.daily(),
         finance.businessMetrics(),
         insights.costingCoverage(),
@@ -116,8 +123,15 @@ function OverviewTab() {
   const tax = data.tax_collected;
   const exp = data.expense_total_minor;
   const net = data.net_profit_minor;
-  const totalGst = tax.cgst_minor + tax.sgst_minor + tax.igst_minor;
+  const totalGst = tax.total_minor;
   const manualCollections = data.manual_collections_minor;
+  const membershipRevenueLabel = profileMembershipMoneyLabel(
+    'revenue',
+    rev.memberships_minor,
+  );
+  const eventRevenueLabel = profileDeferredMoneyLabel('eventRevenue', rev.event_tickets_minor);
+  const deliveryRevenueLabel = profileDeferredMoneyLabel('deliveryRevenue', rev.delivery_aggregator_minor);
+  const taxCollectedLabel = profileDeferredMoneyLabel('taxCollected', totalGst);
   const empty = data.orders_count === 0 && data.tickets_count === 0
     && manualCollections === 0 && exp === 0;
 
@@ -142,7 +156,7 @@ function OverviewTab() {
         </div>
       )}
 
-      {!gstRegistered && (
+      {TAX_COMPLIANCE_UI_ENABLED && !gstRegistered && (
         <div className="card mb-4 border-bg-border bg-bg-raised text-sm text-fg-muted">
           <b>Not GST-registered.</b> The GST fields below are inactive placeholders for when
           you register — they are not live tax figures, and no GST is actually being charged
@@ -178,7 +192,13 @@ function OverviewTab() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
         <Stat label="Revenue (gross)"   value={inrShort(rev.total_minor)} sub={inr(rev.total_minor)} tone="good"/>
-        {gstRegistered && <Stat label="GST collected"     value={inrShort(totalGst)} sub="CGST + SGST + IGST"/>}
+        {taxCollectedLabel && (
+          <Stat
+            label={taxCollectedLabel}
+            value={inrShort(totalGst)}
+            sub={TAX_COMPLIANCE_UI_ENABLED ? 'CGST + SGST + IGST' : 'retained from historical records'}
+          />
+        )}
         <Stat label="Expenses"          value={inrShort(exp)} sub={inr(exp)} tone="bad"/>
         <Stat label="Operating profit (today)" value={inrShort(net)} sub={`${inr(net)} · after equipment depreciation`} tone={net >= 0 ? 'good' : 'bad'}/>
       </div>
@@ -188,13 +208,19 @@ function OverviewTab() {
           <h3 className="font-semibold mb-4 flex items-center gap-2">
             <TrendingUp size={16} className="text-accent-good"/> Revenue
           </h3>
-          {rev.food_minor > 0 && <Row label={gstRegistered ? 'Food (5% GST)' : 'Food'} v={rev.food_minor}/>}
-          {rev.gaming_minor > 0 && <Row label={gstRegistered ? 'Gaming (18% GST)' : 'Gaming'} v={rev.gaming_minor}/>}
-          {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label={gstRegistered ? 'Shisha (18% GST)' : 'Shisha'} v={rev.hookah_minor}/>}
-          {rev.event_tickets_minor > 0 && <Row label={gstRegistered ? 'Event tickets (18% GST)' : 'Event tickets'} v={rev.event_tickets_minor}/>}
-          {rev.memberships_minor > 0 && <Row label="Memberships" v={rev.memberships_minor}/>}
-          {rev.delivery_aggregator_minor > 0 && (
-            <Row label={gstRegistered ? 'Delivery aggregator (§9(5))' : 'Delivery aggregator'} v={rev.delivery_aggregator_minor} sub={gstRegistered ? 'zero GST on our invoice' : undefined}/>
+          {rev.food_minor > 0 && <Row label={TAX_COMPLIANCE_UI_ENABLED && gstRegistered ? 'Food (5% GST)' : 'Food / drinks / snacks'} v={rev.food_minor}/>}
+          {rev.gaming_minor > 0 && <Row label={TAX_COMPLIANCE_UI_ENABLED && gstRegistered ? 'Gaming (18% GST)' : 'Gaming'} v={rev.gaming_minor}/>}
+          {isAppStoreAllowedType('hookah') && rev.hookah_minor > 0 && <Row label={TAX_COMPLIANCE_UI_ENABLED && gstRegistered ? 'Shisha (18% GST)' : 'Shisha'} v={rev.hookah_minor}/>}
+          {eventRevenueLabel && <Row label={eventRevenueLabel} v={rev.event_tickets_minor}/>}
+          {membershipRevenueLabel && (
+            <Row label={membershipRevenueLabel} v={rev.memberships_minor}/>
+          )}
+          {deliveryRevenueLabel && (
+            <Row
+              label={deliveryRevenueLabel}
+              v={rev.delivery_aggregator_minor}
+              sub={TAX_COMPLIANCE_UI_ENABLED && gstRegistered ? 'zero GST on our invoice' : undefined}
+            />
           )}
           {rev.manual_collections_minor > 0 && (
             <Row label="Manual collections (unitemized)" v={rev.manual_collections_minor}
@@ -211,16 +237,24 @@ function OverviewTab() {
           {rev.rounding_expense_minor > 0 && (
             <Row label="Less: invoice round-down" v={-rev.rounding_expense_minor}/>
           )}
-          {gstRegistered && (
+          {TAX_COMPLIANCE_UI_ENABLED && gstRegistered ? (
             <>
               <Divider/>
               {tax.cgst_minor > 0 && <Row label="Less: Output CGST" v={-tax.cgst_minor}/>}
               {tax.sgst_minor > 0 && <Row label="Less: Output SGST" v={-tax.sgst_minor}/>}
               {tax.igst_minor > 0 && <Row label="Less: Output IGST" v={-tax.igst_minor}/>}
+              {tax.cess_minor > 0 && <Row label="Less: Output cess" v={-tax.cess_minor}/>}
               <Divider/>
               <Row label="Net revenue (after GST)" v={data.net_revenue_minor} bold/>
             </>
-          )}
+          ) : taxCollectedLabel ? (
+            <>
+              <Divider/>
+              <Row label="Less: recorded indirect tax" v={-totalGst}/>
+              <Divider/>
+              <Row label="Net revenue after recorded tax" v={data.net_revenue_minor} bold/>
+            </>
+          ) : null}
           <Divider/>
           <Row label="Less: recorded cost of goods sold" v={-data.cogs_minor}
             sub={costing && !costing.is_complete ? 'incomplete until all sellable stock items have recipes and costed ingredients' : 'what the food/drinks/items you sold actually cost you'}/>
@@ -265,8 +299,10 @@ function OverviewTab() {
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
             <Stat label="Avg order value (this period)" value={inrShort(metrics.aov_minor)}
               sub={`${metrics.orders_count} order${metrics.orders_count === 1 ? '' : 's'} this period`}/>
-            <Stat label="Active memberships" value={metrics.active_members_count.toString()}
-              sub="unexpired, non-revoked terms active right now"/>
+            {GAMING_CENTRE_FEATURES.memberships && (
+              <Stat label="Active memberships" value={metrics.active_members_count.toString()}
+                sub="unexpired, non-revoked terms active right now"/>
+            )}
             <Stat label="Customer LTV (all-time)" value={inrShort(metrics.ltv_minor)}
               sub={`avg across ${metrics.customers_count} customer${metrics.customers_count === 1 ? '' : 's'}, all-time`}/>
             <Stat label="CAC" value={metrics.cac_minor === null ? '—' : inrShort(metrics.cac_minor)}
@@ -277,10 +313,12 @@ function OverviewTab() {
               tone={metrics.burn_rate_minor > 0 ? 'bad' : 'good'}
               sub={metrics.burn_rate_minor > 0 ? 'lost money this period, after cost of goods sold and expenses' : 'profitable this period'}/>
           </div>
-          <p className="text-xs text-fg-muted mt-3">
-            Memberships are prepaid manual terms, not recurring subscriptions. MRR/ARR stay
-            hidden until an actual recurring-billing provider is operating.
-          </p>
+          {GAMING_CENTRE_FEATURES.memberships && (
+            <p className="text-xs text-fg-muted mt-3">
+              Memberships are prepaid manual terms, not recurring subscriptions. MRR/ARR stay
+              hidden until an actual recurring-billing provider is operating.
+            </p>
+          )}
         </div>
       )}
     </>

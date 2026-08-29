@@ -28,9 +28,12 @@ import { parseRupeesToMinor } from '@/lib/money-input';
 import { APP_STORE_REVIEW, isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
   gaming,
+  menu as menuApi,
   shifts,
   type GamingPackageDTO,
   type GamingPosTargetShiftDTO,
+  type GamingSessionAddonDTO,
+  type MenuItemDTO,
   type StationDTO,
 } from '@/lib/erp-api';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
@@ -73,6 +76,32 @@ import {
 import { resolveGamingPosRoute } from './gaming-pos-handoff';
 import { runningBillMinor } from './running-bill';
 import { sessionTimerMinutesForLocalState } from './session-start-snapshot';
+import {
+  SessionAddonPickerModal,
+  SessionAddonsPanel,
+  SessionAddonVoidModal,
+} from './GamingAddonControls';
+import {
+  availableGamingAddonItems,
+  createClientLineId,
+  gridVisibleGamingSessions,
+  isGamingAddonLedgerAuthoritative,
+  reconcileAddonVoidAttempt,
+  resolveAddonVoidAttempt,
+  type GamingAddonDraft,
+  type GamingAddonVoidAttempt,
+} from './gaming-addons';
+import {
+  GamingAddonCreatePersistenceError,
+  clearGamingAddonCreateAttempt,
+  gamingAddonCreatePersistenceGuidance,
+  inspectGamingAddonCreateAttempt,
+  sendDurablyPersistedGamingAddon,
+  withGamingAddonCreateLock,
+  type DurableGamingAddonCreateAttempt,
+  type GamingAddonCreateLockManager,
+  type GamingAddonCreateTerminalScope,
+} from './gaming-addon-create-attempt';
 
 const ICON: Record<StationDTO['type'], React.ReactNode> = {
   ps5:       <Gamepad2 size={22}/>,
@@ -158,6 +187,15 @@ type PaidExtensionRecoveryState = {
   error: PaidExtensionPersistenceError | null;
 };
 
+type AddonModalTarget = {
+  station: StationDTO;
+  sessionId: string;
+};
+
+type AddonVoidTarget = AddonModalTarget & {
+  addon: GamingSessionAddonDTO;
+};
+
 type CurrentShiftContext =
   | { shiftId: string; error: null }
   | { shiftId: null; error: string };
@@ -191,6 +229,10 @@ export default function GamingScreen() {
     protectedAccess: me?.protected_access,
     roles: me?.roles,
   });
+  // Add-ons are part of the Gaming session lifecycle. The backend authorises
+  // them with gaming.write, including the gaming-supervisor role that does not
+  // independently operate POS checkout.
+  const canManageSessionAddons = canManageStations;
 
   function requireGamingWrite(actionTitle: string): GamingWriteDispatcher {
     return createGamingWriteDispatcher(canManageStations, () => {
@@ -204,6 +246,13 @@ export default function GamingScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, LocalSession>>({});
+  const [addonCatalog, setAddonCatalog] = useState<MenuItemDTO[]>([]);
+  const [addonCatalogError, setAddonCatalogError] = useState<string | null>(null);
+  const [addonsBySession, setAddonsBySession] = useState<Record<string, GamingSessionAddonDTO[]>>({});
+  const [addonLoadErrors, setAddonLoadErrors] = useState<Record<string, string>>({});
+  const [addonAuthoritativeLedgerSessions, setAddonAuthoritativeLedgerSessions] = useState<
+    ReadonlySet<string>
+  >(new Set());
   const [currentShiftId, setCurrentShiftId] = useState<string | null>(null);
   const [shiftContextError, setShiftContextError] = useState<string | null>(null);
   const [, setTick] = useState(0); // force overtime/countdown recompute every second
@@ -253,6 +302,125 @@ export default function GamingScreen() {
   const [repairingBilling, setRepairingBilling] = useState<string | null>(null);
   const [paidExtensionReceiptRevision, setPaidExtensionReceiptRevision] = useState(0);
   const repairKeyRef = useRef<string | null>(null);
+  const [addonModalTarget, setAddonModalTarget] = useState<AddonModalTarget | null>(null);
+  const [addonVoidTarget, setAddonVoidTarget] = useState<AddonVoidTarget | null>(null);
+  const [addonCreateAttempt, setAddonCreateAttempt] = useState<DurableGamingAddonCreateAttempt | null>(null);
+  const [addonVoidAttempt, setAddonVoidAttempt] = useState<GamingAddonVoidAttempt | null>(null);
+  const [addonCreateError, setAddonCreateError] = useState<string | null>(null);
+  const [addonVoidError, setAddonVoidError] = useState<string | null>(null);
+  const [addonCreatePersistenceError, setAddonCreatePersistenceError] = useState<
+    GamingAddonCreatePersistenceError | null
+  >(null);
+  const [addonCreateReceiptRevision, setAddonCreateReceiptRevision] = useState(0);
+  const [addingAddonTo, setAddingAddonTo] = useState<string | null>(null);
+  const [voidingAddon, setVoidingAddon] = useState<string | null>(null);
+  const addonCreateBusyRef = useRef(false);
+  const addonVoidBusyRef = useRef(false);
+
+  const addonCreateTerminalScope = useMemo<GamingAddonCreateTerminalScope | null>(() => {
+    if (
+      !LIVE_MODE
+      || !me?.user_id
+      || !me.company_id
+      || !me.branch_id
+      || !terminalReady
+      || !terminalId
+    ) return null;
+    return {
+      actorUserId: me.user_id,
+      companyId: me.company_id,
+      branchId: me.branch_id,
+      terminalId,
+    };
+  }, [me?.user_id, me?.company_id, me?.branch_id, terminalReady, terminalId]);
+
+  const inspectedAddonCreateAttempt = useMemo(() => {
+    void addonCreateReceiptRevision;
+    if (!addonCreateTerminalScope) {
+      return {
+        attempt: null as DurableGamingAddonCreateAttempt | null,
+        error: null as GamingAddonCreatePersistenceError | null,
+      };
+    }
+    try {
+      return {
+        attempt: inspectGamingAddonCreateAttempt({
+          storageProvider: () => globalThis.localStorage,
+          scope: addonCreateTerminalScope,
+        }),
+        error: null as GamingAddonCreatePersistenceError | null,
+      };
+    } catch (cause) {
+      return {
+        attempt: null as DurableGamingAddonCreateAttempt | null,
+        error: cause instanceof GamingAddonCreatePersistenceError
+          ? cause
+          : new GamingAddonCreatePersistenceError(
+              'storage_unavailable',
+              'The saved Gaming item receipt could not be inspected safely.',
+            ),
+      };
+    }
+  }, [addonCreateTerminalScope, addonCreateReceiptRevision]);
+
+  useEffect(() => {
+    if (inspectedAddonCreateAttempt.error) {
+      setAddonCreatePersistenceError(inspectedAddonCreateAttempt.error);
+      return;
+    }
+    setAddonCreatePersistenceError(null);
+    setAddonCreateAttempt(inspectedAddonCreateAttempt.attempt);
+  }, [inspectedAddonCreateAttempt]);
+
+  const clearDurableAddonCreateAttempt = useCallback((
+    expectedAttempt: DurableGamingAddonCreateAttempt,
+  ) => {
+    clearGamingAddonCreateAttempt({
+      storageProvider: () => globalThis.localStorage,
+      expectedAttempt,
+    });
+    setAddonCreateAttempt((current) => (
+      current?.idempotencyKey === expectedAttempt.idempotencyKey ? null : current
+    ));
+    setAddonCreatePersistenceError(null);
+    setAddonCreateReceiptRevision((revision) => revision + 1);
+  }, []);
+
+  // A reload can recover a request whose response was lost. Only an
+  // authoritative full-ledger result may reconcile that receipt here; a
+  // single mutation response is deliberately insufficient to clear a prior
+  // ledger-load failure or to prove that every staged line was reviewed.
+  useEffect(() => {
+    const attempt = addonCreateAttempt;
+    if (
+      !attempt
+      || !isGamingAddonLedgerAuthoritative(
+        attempt.sessionId,
+        addonAuthoritativeLedgerSessions,
+        addonLoadErrors,
+      )
+    ) return;
+    const ledger = addonsBySession[attempt.sessionId];
+    if (!ledger?.some((addon) => addon.client_line_id === attempt.body.client_line_id)) return;
+    try {
+      clearDurableAddonCreateAttempt(attempt);
+    } catch (cause) {
+      setAddonCreatePersistenceError(
+        cause instanceof GamingAddonCreatePersistenceError
+          ? cause
+          : new GamingAddonCreatePersistenceError(
+              'clear_verification_failed',
+              'The confirmed Gaming item receipt could not be cleared safely.',
+            ),
+      );
+    }
+  }, [
+    addonCreateAttempt,
+    addonLoadErrors,
+    addonAuthoritativeLedgerSessions,
+    addonsBySession,
+    clearDurableAddonCreateAttempt,
+  ]);
 
   const inspectPaidExtensionRecovery = useCallback((session: LocalSession): PaidExtensionRecoveryState => {
     if (
@@ -370,9 +538,17 @@ export default function GamingScreen() {
           .then((shiftId) => ({ shiftId, error: null }))
           .catch((cause: unknown) => ({
             shiftId: null,
-            error: cause instanceof Error ? cause.message : 'The current terminal shift could not be verified.',
+            error: cause instanceof Error ? cause.message : 'The current shift could not be verified.',
           }));
-        const [stationRows, activeSessions, pausedSessions, endedSessions, packageRows, shiftContext] = await Promise.all([
+        const [
+          stationRows,
+          activeSessions,
+          pausedSessions,
+          endedSessions,
+          packageRows,
+          shiftContext,
+          catalogResult,
+        ] = await Promise.all([
           gaming.listStations(),
           gaming.listSessions('active'),
           gaming.listSessions('paused'),
@@ -382,11 +558,58 @@ export default function GamingScreen() {
           gaming.listSessions('ended', { unbilledOnly: true, limit: 500 }),
           gaming.listPackages(),
           shiftContextPromise,
+          menuApi.items()
+            .then((items) => ({ items: availableGamingAddonItems(items), error: null }))
+            .catch((cause: unknown) => ({
+              items: [] as MenuItemDTO[],
+              error: cause instanceof Error
+                ? cause.message
+                : 'The drinks and snacks catalogue could not be loaded.',
+            })),
         ]);
         setCurrentShiftId(shiftContext.shiftId);
         setShiftContextError(shiftContext.error);
         setStations(stationRows.filter((station) => isAppStoreAllowedType(station.type)));
         setPackages(packageRows);
+        setAddonCatalog(catalogResult.items);
+        setAddonCatalogError(catalogResult.error);
+        const visibleSessions = gridVisibleGamingSessions(
+          activeSessions,
+          pausedSessions,
+          endedSessions,
+        );
+        const visibleSessionIds = new Set(visibleSessions.map((sessionRow) => sessionRow.id));
+        const addonResults = await Promise.allSettled(
+          visibleSessions.map((sessionRow) => gaming.listSessionAddons(sessionRow.id)),
+        );
+        const loadedAddons: Record<string, GamingSessionAddonDTO[]> = {};
+        const loadErrors: Record<string, string> = {};
+        addonResults.forEach((result, index) => {
+          const sessionId = visibleSessions[index].id;
+          if (result.status === 'fulfilled') {
+            loadedAddons[sessionId] = result.value;
+          } else {
+            loadErrors[sessionId] = result.reason instanceof Error
+              ? result.reason.message
+              : 'Saved drinks and snacks could not be loaded.';
+          }
+        });
+        setAddonsBySession((previous) => {
+          const next: Record<string, GamingSessionAddonDTO[]> = {};
+          for (const sessionRow of visibleSessions) {
+            next[sessionRow.id] = loadedAddons[sessionRow.id]
+              ?? previous[sessionRow.id]
+              ?? [];
+          }
+          return next;
+        });
+        setAddonLoadErrors(loadErrors);
+        setAddonAuthoritativeLedgerSessions(new Set(Object.keys(loadedAddons)));
+        setAddonVoidAttempt((attempt) => reconcileAddonVoidAttempt(
+          attempt,
+          visibleSessionIds,
+          loadedAddons,
+        ));
         // Rehydrate running sessions, AND any stopped-but-not-yet-sent session,
         // so a page refresh never silently drops an unbilled amount from view.
         setSessions((prev) => {
@@ -498,7 +721,7 @@ export default function GamingScreen() {
     }
     if (!terminalReady || !terminalId) {
       throw new Error(
-        `Select the POS terminal used by this device before ${purpose === 'start' ? 'starting' : 'reconciling'} a session.`,
+        `This device is not ready to ${purpose === 'start' ? 'start' : 'reconcile'} a session. Refresh it; if the problem remains, ask an owner to check the device setup.`,
       );
     }
     try {
@@ -511,7 +734,7 @@ export default function GamingScreen() {
       const message = (error as Error).message;
       if (purpose === 'reconcile' && message.startsWith('No shift is open')) {
         throw new Error(
-          'No shift is open for this terminal. Open the correct shift from the Shifts tab, then retry this reconciliation.',
+          'No shift is open. Open a shift from the Shift tab, then retry this reconciliation.',
         );
       }
       throw error;
@@ -544,7 +767,7 @@ export default function GamingScreen() {
     notifications.error(
       currentShiftId
         ? `This session belongs to another or no-longer-current terminal shift. Use its owning terminal to ${action}.`
-        : (shiftContextError ?? `Open and verify this terminal's shift before trying to ${action}.`),
+        : (shiftContextError ?? `Open and verify the current shift before trying to ${action}.`),
       { title: 'Session is view-only here' },
     );
     return false;
@@ -569,7 +792,7 @@ export default function GamingScreen() {
       session.shift_id && currentShiftId && session.shift_id !== currentShiftId
         ? 'This session belongs to another terminal shift. Stop it from the terminal that owns that shift.'
         : (shiftContextError
-            ?? 'The session shift could not be verified. Refresh Gaming and confirm this terminal has a server-confirmed open shift.'),
+            ?? 'The session shift could not be verified. Refresh Gaming and confirm there is a server-confirmed open shift.'),
       { title: 'Session shift not verified' },
     );
     return null;
@@ -616,7 +839,7 @@ export default function GamingScreen() {
       || !terminalId
     ) {
       notifications.error(
-        'The employee, company, branch, or terminal is not verified. Refresh Gaming before starting a package session.',
+        'The staff, shop, or device context could not be verified. Refresh Gaming before starting a package session.',
         { title: 'Package session not started' },
       );
       return false;
@@ -1041,7 +1264,7 @@ export default function GamingScreen() {
       || !s.shift_id
     ) {
       notifications.error(
-        'Paid extension was not sent because the employee, company, branch, terminal, session, or shift could not be verified. Refresh Gaming and confirm this terminal has the correct open shift.',
+        'Paid extension was not sent because the staff, shop, device, session, or shift could not be verified. Refresh Gaming and confirm the current shift is open.',
         { title: 'Extension not sent' },
       );
       return;
@@ -1153,6 +1376,31 @@ export default function GamingScreen() {
     if (!s) return;
     const write = requireGamingWrite('Cannot stop session');
     if (!write.allowed) return;
+    // A damaged/unreadable durable Add receipt is stronger than an ordinary
+    // ledger-load failure: the original POST may have committed, but this
+    // browser can no longer prove the exact body/key needed for safe replay.
+    // Stop would make an uncommitted Add permanently ineligible on the server,
+    // so keep the session running until the retained receipt is reconciled.
+    if (s.backend_session_id && addonCreatePersistenceError) {
+      notifications.error(
+        gamingAddonCreatePersistenceGuidance(addonCreatePersistenceError),
+        { title: 'Saved item review required' },
+      );
+      return;
+    }
+    if (
+      s.backend_session_id
+      && (
+        addonCreateAttempt?.sessionId === s.backend_session_id
+        || addonVoidAttempt?.sessionId === s.backend_session_id
+      )
+    ) {
+      notifications.error(
+        'Confirm the pending drink or snack action before ending this session.',
+        { title: 'Item confirmation pending' },
+      );
+      return;
+    }
     const resolvedStopShiftId = requireStopShift(s);
     if (!resolvedStopShiftId) return;
     if (!requireVerifiedActiveBillingMode(s, 'stop it')) return;
@@ -1225,6 +1473,36 @@ export default function GamingScreen() {
     if (!write.allowed) return;
     const s = sessions[st.id];
     if (!s?.backend_session_id) return;
+    if (addonCreatePersistenceError) {
+      notifications.error(
+        gamingAddonCreatePersistenceGuidance(addonCreatePersistenceError),
+        { title: 'Saved item review required' },
+      );
+      return;
+    }
+    if (
+      addonCreateAttempt?.sessionId === s.backend_session_id
+      || addonVoidAttempt?.sessionId === s.backend_session_id
+    ) {
+      notifications.error(
+        'Confirm the pending drink or snack action before sending this session to POS.',
+        { title: 'Item confirmation pending' },
+      );
+      return;
+    }
+    if (
+      !isGamingAddonLedgerAuthoritative(
+        s.backend_session_id,
+        addonAuthoritativeLedgerSessions,
+        addonLoadErrors,
+      )
+    ) {
+      notifications.error(
+        'Saved drinks and snacks could not be reviewed. Refresh Gaming before sending this session to POS.',
+        { title: 'Item review required' },
+      );
+      return;
+    }
     if (!requireCurrentShiftOwnership(s, 'send it to POS')) return;
     if (!requirePaidExtensionResolved(s, 'sent to POS')) return;
     setSendingToPos(st.id);
@@ -1242,14 +1520,14 @@ export default function GamingScreen() {
       });
       if (posRoute === 'terminal_unverified') {
         throw new Error(
-          'This device terminal could not be verified. Select the correct terminal and refresh; the gaming bill is still saved and unpaid.',
+          'This device identity could not be verified. Refresh it; if the problem remains, ask an owner to check the device setup. The gaming bill is still saved and unpaid.',
         );
       }
       if (posRoute === 'handoff') {
         const targets = await gaming.listPosTargetShifts(s.backend_session_id);
         if (targets.length === 0) {
           throw new Error(
-            'No POS shift is open on another terminal. Ask the Cafe POS cashier to open a shift, then retry. This gaming bill is still saved and unpaid.',
+            'No POS shift is open on another terminal. Ask the POS cashier to open a shift, then retry. This gaming bill is still saved and unpaid.',
           );
         }
         setPendingPosHandoff({ station: st, targets });
@@ -1281,6 +1559,23 @@ export default function GamingScreen() {
     if (!write.allowed) return;
     const current = sessions[pending.station.id];
     if (!current?.backend_session_id) return;
+    if (
+      addonCreatePersistenceError
+      ||
+      addonCreateAttempt?.sessionId === current.backend_session_id
+      || addonVoidAttempt?.sessionId === current.backend_session_id
+      || !isGamingAddonLedgerAuthoritative(
+        current.backend_session_id,
+        addonAuthoritativeLedgerSessions,
+        addonLoadErrors,
+      )
+    ) {
+      notifications.error(
+        'Refresh and confirm the session drinks and snacks before completing this POS handoff.',
+        { title: 'Item review required' },
+      );
+      return;
+    }
     if (!requireCurrentShiftOwnership(current, 'send it to POS')) return;
     if (!requirePaidExtensionResolved(current, 'sent to POS')) return;
 
@@ -1306,7 +1601,7 @@ export default function GamingScreen() {
         result.already_linked
           ? `${pending.station.name} was already waiting at ${targetShift.terminal_name}; no duplicate bill was created.`
           : `${pending.station.name} is ready to bill at ${targetShift.terminal_name}.`,
-        { title: result.already_linked ? 'Already in POS' : 'Sent to Cafe POS' },
+        { title: result.already_linked ? 'Already in POS' : 'Sent to POS' },
       );
     } catch (e) {
       const message = (e as Error).message;
@@ -1329,6 +1624,23 @@ export default function GamingScreen() {
     if (!me?.audit_access || resolvingReconciliation || reconciling) return;
     const session = sessions[st.id];
     if (!session?.backend_session_id || !requirePaidExtensionResolved(session, 'reconciled')) return;
+    if (
+      addonCreatePersistenceError
+      ||
+      addonCreateAttempt?.sessionId === session.backend_session_id
+      || addonVoidAttempt?.sessionId === session.backend_session_id
+      || !isGamingAddonLedgerAuthoritative(
+        session.backend_session_id,
+        addonAuthoritativeLedgerSessions,
+        addonLoadErrors,
+      )
+    ) {
+      notifications.error(
+        'Refresh and confirm the session drinks and snacks before reconciling it to POS.',
+        { title: 'Item review required' },
+      );
+      return;
+    }
     setResolvingReconciliation(st.id);
     try {
       const targetShiftId = await ensureShiftId(st, 'reconcile');
@@ -1348,6 +1660,23 @@ export default function GamingScreen() {
     if (!write.allowed) return;
     const current = sessions[pending.station.id];
     if (!current?.backend_session_id || !reason.trim()) return;
+    if (
+      addonCreatePersistenceError
+      ||
+      addonCreateAttempt?.sessionId === current.backend_session_id
+      || addonVoidAttempt?.sessionId === current.backend_session_id
+      || !isGamingAddonLedgerAuthoritative(
+        current.backend_session_id,
+        addonAuthoritativeLedgerSessions,
+        addonLoadErrors,
+      )
+    ) {
+      notifications.error(
+        'Refresh and confirm the session drinks and snacks before reconciling it to POS.',
+        { title: 'Item review required' },
+      );
+      return;
+    }
     if (!requirePaidExtensionResolved(current, 'reconciled')) return;
     setReconciling(pending.station.id);
     try {
@@ -1371,7 +1700,7 @@ export default function GamingScreen() {
       notifications.success(
         result.already_linked
           ? `${pending.station.name} was already waiting in POS; no duplicate bill was created.`
-          : `${pending.station.name} was reconciled to this terminal's open shift and is ready in POS.`,
+          : `${pending.station.name} was reconciled to the current open shift and is ready in POS.`,
         { title: result.already_linked ? 'Already in POS' : 'Reconciliation complete' },
       );
     } catch (e) {
@@ -1386,6 +1715,37 @@ export default function GamingScreen() {
     if (!write.allowed) return;
     const current = sessions[st.id];
     if (!current?.backend_session_id) return;
+    const activeAddons = addonsBySession[current.backend_session_id]?.filter(
+      (addon) => !addon.voided_at,
+    ) ?? [];
+    if (
+      addonCreatePersistenceError
+      || !isGamingAddonLedgerAuthoritative(
+        current.backend_session_id,
+        addonAuthoritativeLedgerSessions,
+        addonLoadErrors,
+      )
+      ||
+      addonCreateAttempt?.sessionId === current.backend_session_id
+      || addonVoidAttempt?.sessionId === current.backend_session_id
+      || activeAddons.length > 0
+    ) {
+      notifications.error(
+        addonCreatePersistenceError
+          ? gamingAddonCreatePersistenceGuidance(addonCreatePersistenceError)
+          : !isGamingAddonLedgerAuthoritative(
+              current.backend_session_id,
+              addonAuthoritativeLedgerSessions,
+              addonLoadErrors,
+            )
+            ? 'Saved drinks and snacks could not be reviewed. Refresh Gaming before cancelling this session.'
+            : activeAddons.length > 0
+          ? 'Void every staged drink or snack with a reason before cancelling this session.'
+          : 'Confirm the pending drink or snack action before cancelling this session.',
+        { title: 'Session items must be resolved' },
+      );
+      return;
+    }
     if (!requireCurrentShiftOwnership(current, 'cancel it')) return;
     if (!requirePaidExtensionResolved(current, 'cancelled')) return;
     if (!reason.trim()) return;
@@ -1495,6 +1855,278 @@ export default function GamingScreen() {
     }
   }
 
+  function storeSessionAddon(addon: GamingSessionAddonDTO) {
+    setAddonsBySession((current) => {
+      const existing = current[addon.gaming_session_id] ?? [];
+      return {
+        ...current,
+        [addon.gaming_session_id]: [
+          ...existing.filter((candidate) => candidate.id !== addon.id),
+          addon,
+        ].sort((left, right) => left.created_at.localeCompare(right.created_at)),
+      };
+    });
+  }
+
+  async function refreshSessionAddons(sessionId: string): Promise<GamingSessionAddonDTO[] | null> {
+    try {
+      const rows = await gaming.listSessionAddons(sessionId);
+      setAddonsBySession((current) => ({ ...current, [sessionId]: rows }));
+      setAddonLoadErrors((current) => {
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
+      setAddonAuthoritativeLedgerSessions((current) => new Set(current).add(sessionId));
+      return rows;
+    } catch (cause) {
+      setAddonLoadErrors((current) => ({
+        ...current,
+        [sessionId]: cause instanceof Error
+          ? cause.message
+          : 'Saved drinks and snacks could not be loaded.',
+      }));
+      setAddonAuthoritativeLedgerSessions((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
+      return null;
+    }
+  }
+
+  async function refreshAddonCatalog() {
+    try {
+      setAddonCatalog(availableGamingAddonItems(await menuApi.items()));
+      setAddonCatalogError(null);
+    } catch (cause) {
+      setAddonCatalogError(
+        cause instanceof Error ? cause.message : 'The drinks and snacks catalogue could not be loaded.',
+      );
+    }
+  }
+
+  function openAddonPicker(station: StationDTO, sessionId: string) {
+    if (addonCreatePersistenceError) {
+      notifications.error(
+        gamingAddonCreatePersistenceGuidance(addonCreatePersistenceError),
+        { title: 'Cannot add item safely' },
+      );
+      return;
+    }
+    if (addonCreateAttempt && addonCreateAttempt.sessionId !== sessionId) {
+      notifications.error(
+        'Confirm the pending item on its original station before adding another item.',
+        { title: 'Item confirmation pending' },
+      );
+      return;
+    }
+    setAddonCreateError(null);
+    setAddonModalTarget({ station, sessionId });
+  }
+
+  async function submitSessionAddon(draft: GamingAddonDraft) {
+    const target = addonModalTarget;
+    if (!target || addonCreateBusyRef.current) return;
+    const write = createGamingWriteDispatcher(canManageSessionAddons, () => {
+      notifications.error(
+        'This account cannot add items to Gaming sessions. Ask an owner to enable Gaming write access.',
+        { title: 'Cannot add item' },
+      );
+    }, gaming);
+    if (!write.allowed) return;
+    const scope = addonCreateTerminalScope;
+    const localSession = sessions[target.station.id];
+    if (
+      !scope
+      || localSession?.backend_session_id !== target.sessionId
+      || !localSession.shift_id
+    ) {
+      const persistenceError = new GamingAddonCreatePersistenceError(
+        'current_scope_unverified',
+        'The staff, device, Gaming session, or owning shift could not be verified.',
+      );
+      setAddonCreatePersistenceError(persistenceError);
+      setAddonCreateError(gamingAddonCreatePersistenceGuidance(persistenceError));
+      return;
+    }
+
+    addonCreateBusyRef.current = true;
+    setAddingAddonTo(target.sessionId);
+    setAddonCreateError(null);
+    let attempt: DurableGamingAddonCreateAttempt | null = null;
+    try {
+      await withGamingAddonCreateLock({
+        scope,
+        lockProvider: () => (globalThis.navigator as Navigator & {
+          locks?: GamingAddonCreateLockManager;
+        }).locks,
+        action: async () => {
+          try {
+            const result = await sendDurablyPersistedGamingAddon({
+              storageProvider: () => globalThis.localStorage,
+              context: {
+                ...scope,
+                sessionId: target.sessionId,
+                shiftId: localSession.shift_id!,
+                draft,
+              },
+              factories: {
+                clientLineId: createClientLineId,
+                idempotencyKey: () => `gaming-addon-add:${createOperationKey()}`,
+              },
+              send: async (savedAttempt) => {
+                attempt = savedAttempt;
+                setAddonCreateAttempt(savedAttempt);
+                setAddonCreatePersistenceError(null);
+                setAddonCreateReceiptRevision((revision) => revision + 1);
+                return write.dispatch(
+                  'addSessionAddon',
+                  savedAttempt.sessionId,
+                  savedAttempt.body,
+                  savedAttempt.idempotencyKey,
+                );
+              },
+            });
+            attempt = result.attempt;
+            storeSessionAddon(result.response);
+            clearDurableAddonCreateAttempt(result.attempt);
+            setAddonModalTarget(null);
+            notifications.success(
+              `${result.response.qty} × ${result.response.menu_item_name} was added to ${target.station.name}.`,
+              { title: 'Item staged for the combined bill' },
+            );
+          } catch (cause) {
+            if (attempt && isAmbiguousApiError(cause)) {
+              const rows = await refreshSessionAddons(target.sessionId);
+              const confirmed = rows?.find(
+                (addon) => addon.client_line_id === attempt!.body.client_line_id,
+              );
+              if (confirmed) {
+                clearDurableAddonCreateAttempt(attempt);
+                setAddonModalTarget(null);
+                notifications.success(
+                  `${confirmed.qty} × ${confirmed.menu_item_name} was confirmed after refresh.`,
+                  { title: 'Item safely recovered' },
+                );
+              } else {
+                setAddonCreateError(
+                  'The server response was lost. Retry this exact saved item; its line ID and receipt key will be reused so it cannot be duplicated.',
+                );
+              }
+              return;
+            }
+            if (cause instanceof GamingAddonCreatePersistenceError) throw cause;
+            if (attempt) clearDurableAddonCreateAttempt(attempt);
+            setAddonCreateError((cause as Error).message);
+            if ((cause as ApiError).status === 409) await refreshAddonCatalog();
+          }
+        },
+      });
+    } catch (cause) {
+      if (cause instanceof GamingAddonCreatePersistenceError) {
+        setAddonCreatePersistenceError(cause);
+        setAddonCreateError(gamingAddonCreatePersistenceGuidance(cause));
+      } else {
+        setAddonCreateError((cause as Error).message);
+      }
+    } finally {
+      addonCreateBusyRef.current = false;
+      setAddingAddonTo(null);
+    }
+  }
+
+  function openAddonVoid(
+    station: StationDTO,
+    sessionId: string,
+    addon: GamingSessionAddonDTO,
+  ) {
+    if (
+      addonVoidAttempt
+      && (addonVoidAttempt.sessionId !== sessionId || addonVoidAttempt.addonId !== addon.id)
+    ) {
+      notifications.error(
+        'Confirm the pending item void before voiding another item.',
+        { title: 'Void confirmation pending' },
+      );
+      return;
+    }
+    setAddonVoidError(null);
+    setAddonVoidTarget({ station, sessionId, addon });
+  }
+
+  async function submitAddonVoid(reason: string) {
+    const target = addonVoidTarget;
+    if (!target || addonVoidBusyRef.current) return;
+    const write = createGamingWriteDispatcher(canManageSessionAddons, () => {
+      notifications.error(
+        'This account cannot void Gaming session items. Ask an owner to enable Gaming write access.',
+        { title: 'Cannot void item' },
+      );
+    }, gaming);
+    if (!write.allowed) return;
+
+    let attempt: GamingAddonVoidAttempt;
+    try {
+      attempt = resolveAddonVoidAttempt(
+        addonVoidAttempt,
+        target.sessionId,
+        target.addon.id,
+        reason,
+        () => `gaming-addon-void:${createOperationKey()}`,
+      );
+    } catch (cause) {
+      setAddonVoidError((cause as Error).message);
+      return;
+    }
+
+    addonVoidBusyRef.current = true;
+    setAddonVoidAttempt(attempt);
+    setVoidingAddon(target.addon.id);
+    setAddonVoidError(null);
+    try {
+      const voided = await write.dispatch(
+        'voidSessionAddon',
+        target.sessionId,
+        target.addon.id,
+        attempt.reason,
+        attempt.idempotencyKey,
+      );
+      storeSessionAddon(voided);
+      setAddonVoidAttempt(null);
+      setAddonVoidTarget(null);
+      notifications.success(
+        `${target.addon.menu_item_name} was removed from the combined bill and kept in the audit trail.`,
+        { title: 'Item voided' },
+      );
+    } catch (cause) {
+      if (isAmbiguousApiError(cause)) {
+        const rows = await refreshSessionAddons(target.sessionId);
+        const confirmed = rows?.find(
+          (addon) => addon.id === target.addon.id && addon.voided_at,
+        );
+        if (confirmed) {
+          setAddonVoidAttempt(null);
+          setAddonVoidTarget(null);
+          notifications.success(
+            `${confirmed.menu_item_name} was confirmed voided after refresh.`,
+            { title: 'Void safely recovered' },
+          );
+        } else {
+          setAddonVoidError(
+            'The server response was lost. Retry this exact saved void; its reason and receipt key will be reused.',
+          );
+        }
+      } else {
+        setAddonVoidAttempt(null);
+        setAddonVoidError((cause as Error).message);
+      }
+    } finally {
+      addonVoidBusyRef.current = false;
+      setVoidingAddon(null);
+    }
+  }
+
   const activeCount = useMemo(
     () => Object.values(sessions).filter((s) => s.status === 'active').length,
     [sessions],
@@ -1545,6 +2177,30 @@ export default function GamingScreen() {
         </div>
       )}
 
+      {LIVE_MODE && addonCatalogError && (
+        <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
+          <div>
+            <div className="font-semibold text-accent-gold">Drinks and snacks are temporarily unavailable</div>
+            <div className="mt-1 text-fg-muted">
+              {addonCatalogError} Existing sessions and saved items remain safe. Refresh before adding another item.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {LIVE_MODE && addonCreatePersistenceError && (
+        <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-sm flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-bad"/>
+          <div>
+            <div className="font-semibold text-accent-bad">Saved Gaming item needs review</div>
+            <div className="mt-1 text-fg-muted">
+              {gamingAddonCreatePersistenceGuidance(addonCreatePersistenceError)} Ending, sending, or cancelling the session is blocked until the recovery receipt can be verified.
+            </div>
+          </div>
+        </div>
+      )}
+
       {!canManageStations && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
@@ -1561,9 +2217,9 @@ export default function GamingScreen() {
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0 text-accent-gold"/>
           <div>
-            <div className="font-semibold text-accent-gold">Viewing Gaming from Cafe POS</div>
+            <div className="font-semibold text-accent-gold">Gaming starts are unavailable on this device</div>
             <div className="mt-1 text-fg-muted">
-              Sessions are monitored here, but new sessions must be started from the Gaming Area terminal so the correct shift owns them.
+              Sessions are monitored here, but this device is configured for counter sales. Ask an owner to enable Gaming or Combined mode before starting sessions.
             </div>
           </div>
         </div>
@@ -1694,13 +2350,47 @@ export default function GamingScreen() {
               hasSavedAttempt: Boolean(savedPaidExtension),
               hasRecoveryError: Boolean(paidExtensionRecoveryError),
             });
+            const backendSessionId = session?.backend_session_id ?? null;
+            const sessionAddons = backendSessionId ? (addonsBySession[backendSessionId] ?? []) : [];
+            const addonLoadError = backendSessionId ? (addonLoadErrors[backendSessionId] ?? null) : null;
+            const addonListReady = Boolean(
+              backendSessionId
+              && isGamingAddonLedgerAuthoritative(
+                backendSessionId,
+                addonAuthoritativeLedgerSessions,
+                addonLoadErrors,
+              ),
+            );
+            const activeSessionAddons = sessionAddons.filter((addon) => !addon.voided_at);
+            const pendingAddonCreate = Boolean(
+              backendSessionId && addonCreateAttempt?.sessionId === backendSessionId,
+            );
+            const pendingAddonVoidId = backendSessionId && addonVoidAttempt?.sessionId === backendSessionId
+              ? addonVoidAttempt.addonId
+              : null;
+            const addonMutationPending = pendingAddonCreate || Boolean(pendingAddonVoidId);
+            const addonMutationBusy = Boolean(
+              backendSessionId
+              && (addingAddonTo === backendSessionId || (
+                pendingAddonVoidId && voidingAddon === pendingAddonVoidId
+              )),
+            );
+            const canMutateSessionAddons = Boolean(
+              backendSessionId
+              && canManageSessionAddons
+              && sessionOwned
+              && canStartOnSelectedTerminal
+              && addonListReady
+              && !addonCreatePersistenceError
+              && !addonLoadError,
+            );
             const sessionScopeMessage = !canManageStations
               ? 'Gaming is view-only for this account. An owner can enable the Gaming module for this role.'
               : session && !session.shift_id && resolvedStopShiftId
-              ? 'This server omitted the session shift. End session is available because this terminal has a confirmed open shift; the server will verify it before saving.'
+              ? 'This server omitted the session shift. End session is available because the current shift is confirmed; the server will verify it before saving.'
               : currentShiftId
                 ? 'This session belongs to another or no-longer-current terminal shift. It is view-only here; continue it from the owning terminal.'
-                : (shiftContextError ?? 'This terminal has no verified open shift, so existing sessions are view-only.');
+                : (shiftContextError ?? 'There is no verified open shift, so existing sessions are view-only.');
 
             return (
               <div key={st.id} className={`card ${session ? 'border-accent/40' : ''}`}>
@@ -1766,6 +2456,22 @@ export default function GamingScreen() {
                   </div>
                 )}
 
+                {LIVE_MODE && session && backendSessionId && (
+                  <SessionAddonsPanel
+                    addons={sessionAddons}
+                    ready={addonListReady}
+                    error={addonLoadError}
+                    canMutate={canMutateSessionAddons}
+                    canAdd={canMutateSessionAddons && session.status !== 'ended'}
+                    catalogReady={addonCatalog.length > 0 && !addonCatalogError}
+                    pendingCreate={pendingAddonCreate}
+                    pendingVoidAddonId={pendingAddonVoidId}
+                    busy={addonMutationBusy}
+                    onAdd={() => openAddonPicker(st, backendSessionId)}
+                    onVoid={(addon) => openAddonVoid(st, backendSessionId, addon)}
+                  />
+                )}
+
                 {session?.status === 'ended' ? (
                   <>
                     <div className="bg-bg-raised rounded-lg p-3 mb-3">
@@ -1791,7 +2497,7 @@ export default function GamingScreen() {
                       {legacyBillingAmbiguous && (
                         <div className="mt-2 pt-2 border-t border-bg-border text-xs text-accent-gold flex items-start gap-1.5">
                           <AlertCircle size={12} className="mt-0.5 shrink-0"/>
-                          Legacy billing mode could not be proven. The server preserves this locked total and will not infer hourly membership benefits.
+                          Legacy billing mode could not be proven. The server preserves this locked total and will not infer any historical programme benefits.
                         </div>
                       )}
                       {sendErrors[st.id] && (
@@ -1805,7 +2511,7 @@ export default function GamingScreen() {
                         <GamingMutationButton
                           canManageSessions={canManageStations}
                           className="btn btn-primary"
-                          disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
+                          disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || Boolean(addonCreatePersistenceError) || addonMutationPending || !addonListReady || Boolean(addonLoadError) || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
                           onClick={() => sendToPos(st)}>
                           {sendingToPos === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
@@ -1814,8 +2520,10 @@ export default function GamingScreen() {
                         <GamingMutationButton
                           canManageSessions={canManageStations}
                           className="btn btn-ghost text-accent-bad"
-                          disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
-                          title="Cancel with an audit reason"
+                          disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || Boolean(addonCreatePersistenceError) || addonMutationPending || !addonListReady || Boolean(addonLoadError) || activeSessionAddons.length > 0 || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
+                          title={activeSessionAddons.length > 0
+                            ? 'Void every staged drink or snack before cancelling this session'
+                            : 'Cancel with an audit reason'}
                           onClick={() => setCancelStationTarget(st)}>
                           {cancelling === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
@@ -1833,10 +2541,14 @@ export default function GamingScreen() {
                             sendingToPos === st.id
                             || cancelling === st.id
                             || paidExtensionLifecycleBlocked
+                            || Boolean(addonCreatePersistenceError)
+                            || addonMutationPending
+                            || !addonListReady
+                            || Boolean(addonLoadError)
                             || resolvingReconciliation
                             || reconciling,
                           )}
-                          title="Protected-owner recovery: keep the original shift as history and create the bill on this terminal's current open shift"
+                          title="Protected-owner recovery: keep the original shift as history and create the bill on the current open shift"
                           onClick={() => { void prepareReconciliation(st); }}
                         >
                           {resolvingReconciliation === st.id
@@ -2017,7 +2729,7 @@ export default function GamingScreen() {
                       <GamingMutationButton
                         canManageSessions={canManageStations}
                         className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
-                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || paidExtensionLifecycleBlocked}
+                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || paidExtensionLifecycleBlocked || addonMutationPending}
                         onClick={() => stopSession(st)}>
                         <Square size={14}/> End session
                       </GamingMutationButton>
@@ -2065,7 +2777,7 @@ export default function GamingScreen() {
                             title={packageStartRecoveryReady
                               ? canStartOnSelectedTerminal
                                 ? `Start ${tier.name}`
-                                : 'Switch this device to the Gaming Area terminal to start a session'
+                                : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'
                               : 'Package sessions require verified paid-extension recovery storage on this device'}>
                             <span>{tier.name}</span>
                             <span className="font-mono font-bold">
@@ -2080,7 +2792,7 @@ export default function GamingScreen() {
                       {!packageStartRecoveryReady && (
                         <div className="mb-2 rounded-lg border border-accent-bad/30 bg-accent-bad/10 p-2 text-xs text-accent-bad flex items-start gap-1.5">
                           <AlertCircle size={12} className="mt-0.5 shrink-0"/>
-                          Package start is unavailable until this terminal and its recovery storage are verified. Hourly sessions remain available.
+                          Package start is unavailable until this device context and its recovery storage are verified. Hourly sessions remain available.
                         </div>
                       )}
                       {showControllerStepper && (
@@ -2145,7 +2857,7 @@ export default function GamingScreen() {
                       disabled={!st.is_active || !canStartOnSelectedTerminal}
                       title={canStartOnSelectedTerminal
                         ? undefined
-                        : 'Switch this device to the Gaming Area terminal to start a session'}>
+                        : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'}>
                       <Play size={14}/> Start session
                       {pendingDuration[st.id] ? ` · ${pendingDuration[st.id]}m` : ''}
                     </GamingMutationButton>
@@ -2158,6 +2870,43 @@ export default function GamingScreen() {
       )}
 
       <GamingWriteOnly allowed={canManageStations}>
+        {addonModalTarget && (
+          <SessionAddonPickerModal
+            key={`${addonModalTarget.sessionId}:${addonCreateAttempt?.idempotencyKey ?? 'new'}`}
+            stationName={addonModalTarget.station.name}
+            items={addonCatalog}
+            attempt={addonCreateAttempt?.sessionId === addonModalTarget.sessionId
+              ? addonCreateAttempt
+              : null}
+            busy={addingAddonTo === addonModalTarget.sessionId}
+            requestError={addonCreateError}
+            onSubmit={(draft) => { void submitSessionAddon(draft); }}
+            onClose={() => {
+              if (!addingAddonTo) {
+                setAddonModalTarget(null);
+                setAddonCreateError(null);
+              }
+            }}
+          />
+        )}
+        {addonVoidTarget && (
+          <SessionAddonVoidModal
+            key={`${addonVoidTarget.addon.id}:${addonVoidAttempt?.idempotencyKey ?? 'new'}`}
+            addon={addonVoidTarget.addon}
+            attempt={addonVoidAttempt?.addonId === addonVoidTarget.addon.id
+              ? addonVoidAttempt
+              : null}
+            busy={voidingAddon === addonVoidTarget.addon.id}
+            requestError={addonVoidError}
+            onSubmit={(reason) => { void submitAddonVoid(reason); }}
+            onClose={() => {
+              if (!voidingAddon) {
+                setAddonVoidTarget(null);
+                setAddonVoidError(null);
+              }
+            }}
+          />
+        )}
         {addOpen && (
           <StationForm
             canManageSessions={canManageStations}
@@ -2218,7 +2967,7 @@ export default function GamingScreen() {
         {pendingReconciliation && (
           <PromptModal
             title={`Reconcile ${pendingReconciliation.station.name} to POS`}
-            label="Reason required. The original closed shift remains unchanged; this creates the held bill on this terminal's current open shift."
+            label="Reason required. The original closed shift remains unchanged; this creates the held bill on the current open shift."
             placeholder="Why did this session miss POS before the shift closed?"
             confirmLabel="Create POS bill"
             busy={reconciling === pendingReconciliation.station.id}

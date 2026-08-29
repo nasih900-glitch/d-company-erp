@@ -1579,6 +1579,7 @@ async def test_session_send_uses_the_sessions_original_shift(monkeypatch) -> Non
     session = _Session(
         _Result(scalar=gaming_session),
         _Result(scalar=original_shift),
+        _Result(rows=[]),  # no staged Gaming add-ons to copy into this bill
         entities={
             (Station, station.id): station,
             (Terminal, terminal.id): terminal,
@@ -1675,6 +1676,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
     first_session = _Session(
         _Result(scalar=gaming_session),
         _Result(scalar=shift),
+        _Result(scalar=0),  # no active add-ons block whole-session cancellation
         entities={(Station, station.id): station},
     )
 
@@ -1725,6 +1727,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             _Session(
                 _Result(scalar=gaming_session),
                 _Result(scalar=shift),
+                _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
             wrong_terminal,
@@ -1746,6 +1749,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             _Session(
                 _Result(scalar=gaming_session),
                 _Result(scalar=shift),
+                _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
             other_staff,
@@ -1766,6 +1770,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             _Session(
                 _Result(scalar=gaming_session),
                 _Result(scalar=shift),
+                _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
             protected_owner,

@@ -45,6 +45,12 @@ import {
 
 const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
 const SCREENSHOT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const OPEN_SUPPORT_EVENT = 'dcompany:open-support';
+
+/** Open the shared support workflow from navigation or another app surface. */
+export function openSupportLauncher(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(OPEN_SUPPORT_EVENT));
+}
 
 type SupportTab = 'report' | 'mine';
 
@@ -274,6 +280,15 @@ export default function SupportLauncher({ inboxUnread = 0 }: { inboxUnread?: num
   useEffect(() => {
     setDraft(readDraft(draftKey));
   }, [draftKey]);
+
+  useEffect(() => {
+    const handleOpen = () => {
+      setFailureContext(readLastFailedSupportAction());
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_SUPPORT_EVENT, handleOpen);
+    return () => window.removeEventListener(OPEN_SUPPORT_EVENT, handleOpen);
+  }, []);
 
   useEffect(() => {
     // Never carry a private screenshot or its operation identity into another

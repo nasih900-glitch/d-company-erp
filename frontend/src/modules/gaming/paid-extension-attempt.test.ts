@@ -8,6 +8,7 @@ import {
   inspectPaidExtensionAttemptForSession,
   inspectPaidExtensionAttemptsForTerminal,
   isPaidExtensionLifecycleBlocked,
+  paidExtensionPersistenceGuidance,
   paidExtensionSubmissionMode,
   paidExtensionRecoveryRequired,
   paidExtensionStorageKey,
@@ -531,5 +532,18 @@ describe('paid gaming extension persistence', () => {
       createIdempotencyKey: () => 'gaming-extension:attempt-1',
     })).toThrowError(PaidExtensionPersistenceError);
     expect(storageProvider).not.toHaveBeenCalled();
+  });
+
+  it('uses simple device-and-shift guidance for an ordinary context error but keeps real scope conflicts precise', () => {
+    const currentContext = paidExtensionPersistenceGuidance(
+      new PaidExtensionPersistenceError('current_scope_unverified', 'unverified'),
+    );
+    const conflictingContext = paidExtensionPersistenceGuidance(
+      new PaidExtensionPersistenceError('scope_mismatch', 'mismatch'),
+    );
+
+    expect(currentContext).toContain('confirm the current shift is open');
+    expect(currentContext).not.toContain('terminal');
+    expect(conflictingContext).toContain('original terminal');
   });
 });

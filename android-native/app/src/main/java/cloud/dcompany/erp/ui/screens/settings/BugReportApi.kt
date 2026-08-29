@@ -31,3 +31,13 @@ interface BugReportApi {
         @Header("Idempotency-Key") idempotencyKey: String,
     ): BugReportAttachment
 }
+
+/** Protected company inbox contract kept separate from staff's own report API
+ * so an ordinary reporter client can never accidentally call an owner route. */
+interface SupportInboxApi {
+    @GET("bug-reports")
+    suspend fun inbox(
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0,
+    ): BugReportInboxPage
+}

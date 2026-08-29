@@ -58,9 +58,10 @@ class SessionAuthorityRefreshTest {
         val before = profile(effective = listOf(ErpPermission.PosRead))
         val after = profile(effective = listOf(ErpPermission.KitchenRead))
 
-        assertTrue(Destination.Pos in allowedDestinations(before))
-        assertFalse(Destination.Pos in allowedDestinations(after))
-        assertTrue(Destination.Kitchen in allowedDestinations(after))
+        val full = WorkspaceFeatureProfiles.FullHospitality
+        assertTrue(Destination.Pos in allowedDestinations(before, full))
+        assertFalse(Destination.Pos in allowedDestinations(after, full))
+        assertTrue(Destination.Kitchen in allowedDestinations(after, full))
     }
 
     @Test

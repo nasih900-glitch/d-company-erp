@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.0.9` |
-| Version code | `10` |
+| Version name | `3.1.0` |
+| Version code | `11` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,18 +23,18 @@ build.
 
 ## Release status
 
-Version `3.0.9` (`10`) is an unreleased candidate, not a declared production
-rollout. The current source advances Room from 36 through 38 to protect the
-employee-owned Support outbox. The focused 36-to-38 migration tests pass on an
-API-35 emulator, but the signed APK and in-place release upgrade must be rebuilt
-and reverified after this schema change before handoff. That evidence does not
+Version `3.1.0` (`11`) is an unreleased Gaming Centre candidate, not a declared
+production rollout. The current source advances Room from 36 through 39 to
+protect both the employee-owned Support outbox and immutable offline Gaming
+item actions. The focused migration tests must pass on an API-35 emulator and
+the signed in-place release upgrade must be reverified before handoff. That evidence does not
 replace the full authenticated staff workflow or physical Redmi Pad 2
 acceptance, and no Play AAB has been uploaded. Nothing from this Android release
 preparation has deployed the backend or web ERP to production. A coordinated
-deployment must migrate the server database through Alembic revision `0054`.
+deployment must migrate the server database through Alembic revision `0055`.
 
-Android client code `8` remains the minimum-compatible floor while code `10` is
-offered as the optional latest update. Do not raise the minimum to `10` until
+Android client code `8` remains the minimum-compatible floor while code `11` is
+offered as the optional latest update. Do not raise the minimum to `11` until
 every active tablet has installed and accepted this candidate.
 
 Do not give a build to café staff until all automated gates are green, a signed

@@ -7,6 +7,11 @@ import org.junit.Test
 class PosPresentationPolicyTest {
 
     @Test
+    fun directTabletCartUsesCounterSaleTypeWhileHeldWorkflowsKeepTheirServerTypes() {
+        assertEquals("takeaway", DIRECT_COUNTER_SALE_ORDER_TYPE)
+    }
+
+    @Test
     fun blankSearchPreservesTheCategoryFilteredOrder() {
         val items = listOf(item("cold", "Cold Brew", "CB-01"), item("cap", "Cappuccino", "CP-01"))
 

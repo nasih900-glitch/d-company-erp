@@ -15,6 +15,9 @@ import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
+import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
 import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
@@ -23,6 +26,13 @@ import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
+import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuModifierEntity
+import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
+import cloud.dcompany.erp.core.db.encodeModifierSelections
 import cloud.dcompany.erp.core.db.RecoveredLegacyServerDisposition
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.net.ApiClient
@@ -33,6 +43,8 @@ import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
+import cloud.dcompany.erp.ui.screens.CartModifierSelection
+import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -67,6 +79,13 @@ data class GamingUiState(
     val online: Boolean = false,
     /** Durable paid extensions which still require confirmation or staff review. */
     val packageExtensionActions: List<PackageExtensionActionUi> = emptyList(),
+    val addonCatalog: List<MenuItemEntity> = emptyList(),
+    val addonVariants: List<MenuVariantEntity> = emptyList(),
+    val addonModifierGroups: List<MenuModifierGroupEntity> = emptyList(),
+    val addonModifiers: List<MenuModifierEntity> = emptyList(),
+    /** Server receipts merged with durable local Add/Void overlays. */
+    val sessionAddons: List<GamingSessionAddonUi> = emptyList(),
+    val sessionAddonActions: List<SessionAddonActionUi> = emptyList(),
 ) {
     val initialLoading: Boolean
         get() = !everSynced && stations.isEmpty() && refreshing
@@ -83,13 +102,169 @@ data class GamingUiState(
         }
 
     val readyForPos: List<GameSession>
-        get() = sessions.filter(GameSession::canSendToPos)
+        get() = sessions.filter { session ->
+            session.canSendToPos(hasActiveAddons(session))
+        }
 
     val needsCancellation: List<GameSession>
-        get() = sessions.filter { it.canCancelUnbilled() && it.amountMinor == 0L }
+        get() = sessions.filter {
+            it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
+        }
 
     fun packageExtensionFor(serverSessionId: String): PackageExtensionActionUi? =
         packageExtensionActions.firstOrNull { it.serverSessionId == serverSessionId }
+
+    fun addonsFor(session: GameSession): List<GamingSessionAddonUi> = sessionAddons.filter {
+        it.serverSessionId == session.id || it.localSessionId == session.id
+    }
+
+    fun hasActiveAddons(session: GameSession): Boolean = addonsFor(session).any {
+        !it.voided && !it.isRejectedLocalAdd()
+    }
+
+    /**
+     * Best locally available combined-bill snapshot before POS creates the
+     * authoritative rounded order. Keeping this calculation next to the
+     * add-on merge policy prevents payment surfaces from silently displaying
+     * only the play charge while consumed items remain payable.
+     */
+    fun pendingBillSnapshotMinor(session: GameSession): Long =
+        Math.addExact(
+            session.amountMinor ?: 0L,
+            gamingSessionAddonBillableTotalMinor(addonsFor(session)),
+        )
+
+    fun unresolvedAddonsFor(session: GameSession): List<SessionAddonActionUi> =
+        sessionAddonActions.filter {
+            it.serverSessionId == session.id || it.localSessionId == session.id
+        }
+}
+
+data class GamingSessionAddonUi(
+    val id: String,
+    val serverAddonId: String? = null,
+    val serverSessionId: String? = null,
+    val localSessionId: String? = null,
+    val clientLineId: String,
+    val menuItemId: String,
+    val menuItemName: String,
+    val menuItemType: String,
+    val variantId: String? = null,
+    val modifierSelectionsJson: String = "[]",
+    val qty: Int,
+    val unitPriceMinor: Long,
+    val lineTotalMinor: Long,
+    val note: String? = null,
+    val voided: Boolean = false,
+    val voidReason: String? = null,
+    val localState: String? = null,
+    val localActionType: String? = null,
+    val actionId: String? = null,
+    val lastError: String? = null,
+)
+
+/**
+ * A definitive Add rejection means the server did not accept this local item.
+ * Keep the row for staff review, but never present it as part of the bill. A
+ * rejected Void is deliberately different: its server item remains billable.
+ */
+internal fun GamingSessionAddonUi.isRejectedLocalAdd(): Boolean =
+    serverAddonId == null &&
+        localActionType == GamingSessionAddonActionType.ADD &&
+        localState == GamingSessionAddonActionState.REJECTED
+
+internal fun gamingSessionAddonBillableTotalMinor(addons: List<GamingSessionAddonUi>): Long =
+    addons.asSequence()
+        .filterNot(GamingSessionAddonUi::voided)
+        .filterNot(GamingSessionAddonUi::isRejectedLocalAdd)
+        .sumOf(GamingSessionAddonUi::lineTotalMinor)
+
+data class SessionAddonActionUi(
+    val actionId: String,
+    val actionType: String,
+    val serverSessionId: String?,
+    val localSessionId: String?,
+    val clientLineId: String,
+    val state: String,
+    val lastError: String?,
+)
+
+internal fun mergeGamingSessionAddons(
+    cache: List<GamingSessionAddonCacheEntity>,
+    actions: List<LocalGamingSessionAddonActionEntity>,
+): List<GamingSessionAddonUi> {
+    val unresolved = actions.filter {
+        it.state !in setOf(
+            GamingSessionAddonActionState.CONFIRMED,
+            GamingSessionAddonActionState.DISCARDED,
+        )
+    }
+    val cachedKeys = cache.map { it.gamingSessionId to it.clientLineId }.toSet()
+    val serverRows = cache.map { row ->
+        val action = unresolved
+            .filter { it.serverSessionId == row.gamingSessionId && it.clientLineId == row.clientLineId }
+            .maxByOrNull { if (it.actionType == GamingSessionAddonActionType.VOID) 1 else 0 }
+        GamingSessionAddonUi(
+            id = row.id,
+            serverAddonId = row.id,
+            serverSessionId = row.gamingSessionId,
+            clientLineId = row.clientLineId,
+            menuItemId = row.menuItemId,
+            menuItemName = row.menuItemName,
+            menuItemType = row.menuItemType,
+            variantId = row.variantId,
+            modifierSelectionsJson = row.modifiersJson,
+            qty = row.qty,
+            unitPriceMinor = row.unitPriceMinor,
+            lineTotalMinor = row.lineTotalMinor,
+            note = row.note,
+            voided = row.voidedAtMillis != null,
+            voidReason = row.voidReason,
+            localState = action?.state,
+            localActionType = action?.actionType,
+            actionId = action?.actionId,
+            lastError = action?.lastError,
+        )
+    }
+    val localRows = unresolved
+        .filter { it.actionType == GamingSessionAddonActionType.ADD }
+        .filter { action ->
+            action.serverSessionId?.let { it to action.clientLineId } !in cachedKeys
+        }
+        .map { add ->
+            val void = unresolved.firstOrNull {
+                it.actionType == GamingSessionAddonActionType.VOID &&
+                    it.clientLineId == add.clientLineId &&
+                    it.localSessionId == add.localSessionId &&
+                    it.serverSessionId == add.serverSessionId
+            }
+            GamingSessionAddonUi(
+                id = add.actionId,
+                serverAddonId = add.serverAddonId,
+                serverSessionId = add.serverSessionId,
+                localSessionId = add.localSessionId,
+                clientLineId = add.clientLineId,
+                menuItemId = add.menuItemId,
+                menuItemName = add.menuItemName,
+                menuItemType = add.menuItemType,
+                variantId = add.variantId,
+                modifierSelectionsJson = add.modifierSelectionsJson,
+                qty = add.qty,
+                unitPriceMinor = add.expectedUnitPriceMinor,
+                lineTotalMinor = add.expectedUnitPriceMinor * add.qty,
+                note = add.note,
+                voided = false,
+                localState = void?.state ?: add.state,
+                localActionType = void?.actionType ?: add.actionType,
+                actionId = void?.actionId ?: add.actionId,
+                lastError = void?.lastError ?: add.lastError,
+            )
+        }
+    return (serverRows + localRows).sortedWith(
+        compareBy<GamingSessionAddonUi> { it.serverSessionId ?: it.localSessionId.orEmpty() }
+            .thenBy { it.menuItemName }
+            .thenBy { it.clientLineId },
+    )
 }
 
 data class PackageExtensionActionUi(
@@ -403,7 +578,7 @@ internal fun gamingStartShiftBlockMessage(
     activeShiftServerConfirmed: Boolean,
 ): String? = when {
     activeShiftId == null ->
-        "No open shift for this tablet's POS terminal. Open or refresh the shift before starting a session."
+        "No shift is open. Open or refresh Shift before starting a session."
     !activeShiftServerConfirmed ->
         "Shift is saved offline. Reconnect and let it confirm before starting Gaming."
     else -> null
@@ -422,7 +597,7 @@ internal fun gamingPosRoute(terminalPurpose: String?): GamingPosRoute = when (te
 
 internal fun gamingStartTerminalBlockMessage(terminalPurpose: String?): String? = when (terminalPurpose) {
     TerminalPurpose.CAFE_POS ->
-        "This tablet is set to Cafe POS. Use Change terminal and select Gaming Area before starting a session."
+        "This tablet is set to POS only. Use Change terminal and select Gaming before starting a session."
     TerminalPurpose.GAMING,
     TerminalPurpose.HYBRID,
     -> null
@@ -442,7 +617,7 @@ internal fun posTargetListError(
     sourceTerminalId: String,
 ): String? = when {
     targets.isEmpty() ->
-        "No eligible Cafe POS shift is open. Ask the Cafe POS cashier to open a shift, then retry. " +
+        "No eligible receiving POS shift is open. Ask its cashier to open a shift, then retry. " +
             "This ended bill remains saved in Gaming."
     targets.any {
         it.shiftId.isBlank() || it.terminalId.isBlank() || it.terminalId == sourceTerminalId ||
@@ -465,25 +640,25 @@ internal fun posHandoffResponseError(
     target: PosTargetShift,
     result: SessionPosHandoffResult,
 ): String? = when {
-    result.orderId.isBlank() || result.amountMinor <= 0L ->
+    result.orderId.isBlank() || result.amountMinor < 0L ->
         "The server did not return a complete held-order receipt."
     session.shiftId.isNullOrBlank() || result.sourceShiftId != session.shiftId ->
         "The server receipt did not preserve the gaming session's source shift."
     result.sourceTerminalId != sourceTerminalId ->
         "The server receipt did not match this Gaming Area terminal."
     result.targetShiftId != target.shiftId || result.targetTerminalId != target.terminalId ->
-        "The server receipt did not match the selected Cafe POS shift."
+        "The server receipt did not match the selected POS shift."
     else -> null
 }
 
 internal fun posTargetLoadFailureMessage(failure: ApiException): String = when {
     failure.status == null ->
-        "Reconnect to load open Cafe POS shifts. This ended bill remains saved in Gaming."
+        "Reconnect to load open POS shifts. This ended bill remains saved in Gaming."
     failure.status == 401 || failure.status == 403 ->
-        "This account cannot choose a Cafe POS shift. Ask an owner to verify Gaming and POS access. " +
+        "This account cannot choose a POS shift. Ask an owner to verify Gaming and POS access. " +
             "This ended bill remains saved in Gaming."
     else ->
-        "Could not load Cafe POS shifts: ${failure.message ?: "refresh Gaming and try again."} " +
+        "Could not load POS shifts: ${failure.message ?: "refresh Gaming and try again."} " +
             "This ended bill remains saved in Gaming."
 }
 
@@ -505,13 +680,97 @@ internal fun calculateCapturedTimerEndsAtMillis(startedAtMillis: Long, timerMinu
     }.getOrNull()
 }
 
-internal fun GameSession.canSendToPos(): Boolean =
-    isUnbilledEnded() && (amountMinor ?: 0L) > 0L &&
+internal fun GameSession.canSendToPos(hasActiveAddons: Boolean = false): Boolean =
+    isUnbilledEnded() && amountMinor != null && (amountMinor > 0L || hasActiveAddons) &&
         localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
 
 internal fun GameSession.canCancelUnbilled(): Boolean =
     isUnbilledEnded() && amountMinor != null &&
         localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
+
+/**
+ * Backend cancellation deliberately refuses a session while any add-on still
+ * contributes to its bill. Explain that constraint before staff enter a
+ * whole-session void reason; the item ledger must be reason-voided first.
+ */
+internal fun sessionCancellationAddonBlockMessage(
+    addons: List<GamingSessionAddonUi>,
+): String? {
+    val active = addons.filterNot { it.voided }
+    if (active.isEmpty()) return null
+    return when {
+        active.any {
+            it.localActionType == GamingSessionAddonActionType.VOID &&
+                it.localState == GamingSessionAddonActionState.REJECTED
+        } -> "An item void was refused. Tap Review on that item, then void it again before voiding the whole session."
+        active.any {
+            it.localActionType == GamingSessionAddonActionType.VOID &&
+                it.localState in setOf(
+                    GamingSessionAddonActionState.PENDING,
+                    GamingSessionAddonActionState.AMBIGUOUS,
+                )
+        } -> "An item void is awaiting server confirmation. Keep this session here until Sync finishes."
+        active.any {
+            it.localActionType == GamingSessionAddonActionType.ADD &&
+                it.localState == GamingSessionAddonActionState.REJECTED
+        } -> "A saved item Add was refused. Tap Review on that item before voiding the whole session."
+        active.any {
+            it.localActionType == GamingSessionAddonActionType.ADD &&
+                it.localState in setOf(
+                    GamingSessionAddonActionState.PENDING,
+                    GamingSessionAddonActionState.AMBIGUOUS,
+                )
+        } -> "Saved items are awaiting server confirmation. After Sync, void each item with a reason before voiding the whole session."
+        else -> "Void ${active.size} active Gaming item${if (active.size == 1) "" else "s"} above with a reason before voiding the whole session."
+    }
+}
+
+/** Fail before durable capture if the customisation dialog became stale or was bypassed. */
+internal fun gamingAddonSelectionError(
+    item: MenuItemEntity,
+    selectedVariant: MenuVariantEntity?,
+    selections: List<CartModifierSelection>,
+    currentVariants: List<MenuVariantEntity>,
+    currentGroups: List<MenuModifierGroupEntity>,
+    currentModifiers: List<MenuModifierEntity>,
+): String? {
+    val variantById = currentVariants.associateBy(MenuVariantEntity::id)
+    if (selectedVariant != null) {
+        val current = variantById[selectedVariant.id]
+        if (current == null || current != selectedVariant || !current.isActive || current.menuItemId != item.id) {
+            return "That item variant changed or is no longer available. Choose the item again."
+        }
+    }
+    if (selections.map { it.modifier.id }.distinct().size != selections.size) {
+        return "An item option was selected more than once. Review the customisation."
+    }
+    val groups = currentGroups.filter { it.menuItemId == item.id && it.isActive }
+    if (groups.any { it.minSelect < 0 || it.maxSelect < it.minSelect }) {
+        return "This item's option rules are invalid. Ask a manager to review the menu."
+    }
+    val groupById = groups.associateBy(MenuModifierGroupEntity::id)
+    val modifierById = currentModifiers.associateBy(MenuModifierEntity::id)
+    val selectedByGroup = mutableMapOf<String, Int>()
+    selections.forEach { selection ->
+        val current = modifierById[selection.modifier.id]
+        val group = current?.modifierGroupId?.let(groupById::get)
+        if (
+            current == null || current != selection.modifier || !current.isActive ||
+            current.menuItemId != item.id || group == null || group.menuItemId != item.id ||
+            selection.qty !in 1..current.maxQuantity
+        ) {
+            return "One of the selected item options changed or is no longer available. Choose the item again."
+        }
+        selectedByGroup[group.id] = (selectedByGroup[group.id] ?: 0) + selection.qty
+    }
+    groups.forEach { group ->
+        val count = selectedByGroup[group.id] ?: 0
+        if (count !in group.minSelect..group.maxSelect) {
+            return "${group.name} requires ${group.minSelect}–${group.maxSelect} selections. Review the item."
+        }
+    }
+    return null
+}
 
 private fun GameSession.isUnbilledEnded(): Boolean = status == "ended" && orderId == null
 
@@ -627,8 +886,51 @@ class GamingViewModel : ViewModel() {
         val refreshError: String?,
     )
 
-    val state: StateFlow<GamingUiState> = combine(
+    private data class ReferenceState(
+        val stations: List<GamingStationEntity>,
+        val packages: List<GamingPackageCacheEntity>,
+        val items: List<MenuItemEntity>,
+        val variants: List<MenuVariantEntity>,
+        val modifierGroups: List<MenuModifierGroupEntity>,
+        val modifiers: List<MenuModifierEntity>,
+    )
+
+    private data class AddonState(
+        val packageExtensions: List<LocalGamingPackageExtensionEntity>,
+        val cache: List<GamingSessionAddonCacheEntity>,
+        val actions: List<LocalGamingSessionAddonActionEntity>,
+    )
+
+    private data class AddonCatalogState(
+        val items: List<MenuItemEntity>,
+        val variants: List<MenuVariantEntity>,
+        val modifierGroups: List<MenuModifierGroupEntity>,
+        val modifiers: List<MenuModifierEntity>,
+    )
+
+    private val referenceState = combine(
         combine(db.gamingDao().observeStations(), db.gamingDao().observePackages(), ::Pair),
+        combine(
+            db.menuDao().observeItems(),
+            db.menuDao().observeVariants(),
+            db.menuDao().observeModifierGroups(),
+            db.menuDao().observeModifiers(),
+        ) { items, variants, groups, modifiers ->
+            AddonCatalogState(items, variants, groups, modifiers)
+        },
+    ) { gaming, menu ->
+        ReferenceState(
+            stations = gaming.first,
+            packages = gaming.second,
+            items = menu.items,
+            variants = menu.variants,
+            modifierGroups = menu.modifierGroups,
+            modifiers = menu.modifiers,
+        )
+    }
+
+    val state: StateFlow<GamingUiState> = combine(
+        referenceState,
         db.gamingDao().observeSessionCache(),
         db.gamingDao().observeActiveLocalSessions(),
         (combine(
@@ -652,14 +954,19 @@ class GamingViewModel : ViewModel() {
                 )
             },
             resolvedShift,
-            db.gamingDao().observeUnresolvedPackageExtensions(),
-        ) { actionState, currentShift, packageExtensions ->
-            Triple(actionState, currentShift, packageExtensions)
+            combine(
+                db.gamingDao().observeUnresolvedPackageExtensions(),
+                db.gamingDao().observeSessionAddonCache(),
+                db.gamingDao().observeUnresolvedSessionAddonActions(),
+            ) { packageExtensions, addonCache, addonActions ->
+                AddonState(packageExtensions, addonCache, addonActions)
+            },
+        ) { actionState, currentShift, addons ->
+            Triple(actionState, currentShift, addons)
         }),
         combine(db.syncMetaDao().observe("gaming"), appCtx.connectivity.online, ::Pair),
-    ) { stationData, cache, local, ui, syncState ->
-        val (stations, packages) = stationData
-        val (actionState, currentShift, packageExtensions) = ui
+    ) { references, cache, local, ui, syncState ->
+        val (actionState, currentShift, addons) = ui
         val (meta, online) = syncState
         // Overlay an in-flight local stop/send on the older server cache row;
         // otherwise a successfully stopped session still renders "active"
@@ -676,8 +983,8 @@ class GamingViewModel : ViewModel() {
             .filter { it.serverId == null || it.serverId !in cachedServerIds }
             .map { it.toGameSession() }
         GamingUiState(
-            stations = stations.map { it.toStation() },
-            packages = packages.map { it.toGamingPackage() },
+            stations = references.stations.map { it.toStation() },
+            packages = references.packages.map { it.toGamingPackage() },
             sessions = cacheSessions + localOnly,
             busyStationId = actionState.busyStationId,
             error = actionState.actionError,
@@ -692,11 +999,29 @@ class GamingViewModel : ViewModel() {
                 shift.server != null || shift.local?.serverShiftId != null
             } == true,
             online = online,
-            packageExtensionActions = packageExtensions.map {
+            packageExtensionActions = addons.packageExtensions.map {
                 PackageExtensionActionUi(
                     actionId = it.actionId,
                     serverSessionId = it.serverSessionId,
                     shiftId = it.shiftId,
+                    state = it.state,
+                    lastError = it.lastError,
+                )
+            },
+            addonCatalog = references.items.filter {
+                it.isAvailable && it.type.lowercase() in setOf("food", "drink", "dessert")
+            },
+            addonVariants = references.variants.filter { it.isActive },
+            addonModifierGroups = references.modifierGroups.filter { it.isActive },
+            addonModifiers = references.modifiers.filter { it.isActive },
+            sessionAddons = mergeGamingSessionAddons(addons.cache, addons.actions),
+            sessionAddonActions = addons.actions.map {
+                SessionAddonActionUi(
+                    actionId = it.actionId,
+                    actionType = it.actionType,
+                    serverSessionId = it.serverSessionId,
+                    localSessionId = it.localSessionId,
+                    clientLineId = it.clientLineId,
                     state = it.state,
                     lastError = it.lastError,
                 )
@@ -800,11 +1125,34 @@ class GamingViewModel : ViewModel() {
         return false
     }
 
+    private fun requireNoSessionAddonActions(session: GameSession, action: String): Boolean {
+        val unresolved = state.value.unresolvedAddonsFor(session)
+        if (unresolved.isEmpty()) return true
+        val rejected = unresolved.firstOrNull { it.state == GamingSessionAddonActionState.REJECTED }
+        error.value = when {
+            rejected != null ->
+                "A saved Gaming item action was refused: ${rejected.lastError ?: "review it in this session."} " +
+                    "Resolve the retained item before $action."
+            unresolved.any { it.state == GamingSessionAddonActionState.AMBIGUOUS } ->
+                "A Gaming item may already be saved or voided on the server. Wait for exact replay before $action."
+            else ->
+                "${unresolved.size} Gaming item action(s) are waiting for server confirmation. " +
+                    "Keep the bill here until Sync finishes before $action."
+        }
+        return false
+    }
+
+    private fun requireNoActiveSessionAddons(session: GameSession): Boolean {
+        val message = sessionCancellationAddonBlockMessage(state.value.addonsFor(session)) ?: return true
+        error.value = message
+        return false
+    }
+
     private fun requireCurrentShiftSession(session: GameSession, action: String): Boolean {
         val message = when (session.authority(state.value.activeShiftId)) {
             GamingSessionAuthority.CURRENT_SHIFT -> return true
             GamingSessionAuthority.NO_OPEN_SHIFT ->
-                "Open this terminal's POS shift before $action."
+                "Open a shift before $action."
             GamingSessionAuthority.OTHER_SHIFT ->
                 "This session belongs to another POS shift or terminal. Use the terminal that started it, " +
                     "or ask a protected owner to reconcile it after the session ends."
@@ -1027,6 +1375,248 @@ class GamingViewModel : ViewModel() {
                 error.value = "The stop request was not saved. The session is still running; try again."
             } finally {
                 busyStationId.value = null
+            }
+        }
+    }
+
+    fun addSessionAddon(
+        session: GameSession,
+        item: MenuItemEntity,
+        variant: MenuVariantEntity?,
+        modifiers: List<CartModifierSelection>,
+        note: String?,
+        qty: Int = 1,
+    ) {
+        if (!requireWrite() || !requireIdle()) return
+        if (
+            session.orderId != null ||
+            !(session.status in setOf("active", "paused") ||
+                (session.status == "starting" && session.localState == GamingSessionState.START_PENDING))
+        ) {
+            error.value = "Items can only be added while this Gaming session is running."
+            return
+        }
+        if (!requireCurrentShiftSession(session, "adding an item")) return
+        val catalog = state.value
+        val currentItem = catalog.addonCatalog.firstOrNull { it.id == item.id }
+        if (
+            currentItem == null || currentItem != item || !currentItem.isAvailable ||
+            currentItem.type.lowercase() !in setOf("food", "drink", "dessert")
+        ) {
+            error.value = "${item.name} is not available for session add-ons. Refresh the menu."
+            return
+        }
+        if (qty !in 1..100) {
+            error.value = "Choose an item quantity between 1 and 100."
+            return
+        }
+        gamingAddonSelectionError(
+            item = currentItem,
+            selectedVariant = variant,
+            selections = modifiers,
+            currentVariants = catalog.addonVariants,
+            currentGroups = catalog.addonModifierGroups,
+            currentModifiers = catalog.addonModifiers,
+        )?.let {
+            error.value = it
+            return
+        }
+        val unitPriceMinor = runCatching { configuredUnitPriceMinor(currentItem, variant, modifiers) }.getOrNull()
+        if (unitPriceMinor == null || unitPriceMinor !in 0L..9_999_999_999L) {
+            error.value = "This item price is outside the supported range. Refresh the menu."
+            return
+        }
+        val normalizedNote = note?.trim()?.takeIf(String::isNotEmpty)
+        if ((normalizedNote?.length ?: 0) > 500) {
+            error.value = "Keep the item note within 500 characters."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val scope = scopeLease.scope
+        val branchId = scope.branchId ?: run {
+            error.value = "This workspace has no verified branch. Reconnect before adding an item."
+            return
+        }
+        val terminalId = scope.terminalId ?: run {
+            error.value = "This workspace has no verified terminal. Reconnect before adding an item."
+            return
+        }
+        val actionId = UUID.randomUUID().toString()
+        val clientLineId = UUID.randomUUID().toString()
+        busyStationId.value = session.stationId
+        error.value = null
+        notice.value = null
+        viewModelScope.launch {
+            try {
+                var captured = false
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val dao = db.gamingDao()
+                        val local = dao.localSessionByEitherId(session.id)
+                        val shiftId = local?.shiftId ?: session.shiftId
+                        if (!shiftId.isNullOrBlank()) {
+                            captured = dao.captureSessionAddonAction(
+                                LocalGamingSessionAddonActionEntity(
+                                    actionId = actionId,
+                                    actionType = GamingSessionAddonActionType.ADD,
+                                    ownerCompanyId = scope.companyId,
+                                    ownerUserId = scope.userId,
+                                    branchId = branchId,
+                                    terminalId = terminalId,
+                                    localSessionId = local?.localId,
+                                    serverSessionId = local?.serverId ?: session.id.takeIf { local == null },
+                                    shiftId = shiftId,
+                                    clientLineId = clientLineId,
+                                    menuItemId = currentItem.id,
+                                    menuItemName = currentItem.name,
+                                    menuItemType = currentItem.type.lowercase(),
+                                    variantId = variant?.id,
+                                    modifierSelectionsJson = encodeModifierSelections(
+                                        modifiers.map {
+                                            LocalModifierSelectionSnapshot(
+                                                modifierId = it.modifier.id,
+                                                modifierGroupId = it.modifier.modifierGroupId,
+                                                name = it.modifier.name,
+                                                priceDeltaMinor = it.modifier.priceDeltaMinor,
+                                                qty = it.qty,
+                                            )
+                                        },
+                                    ),
+                                    qty = qty,
+                                    expectedUnitPriceMinor = unitPriceMinor,
+                                    note = normalizedNote,
+                                    createdAtMillis = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                    }
+                ) return@launch
+                if (!captured) {
+                    error.value = "The item was not queued because the session or shift changed. Refresh Gaming and try again."
+                    return@launch
+                }
+                notice.value = "${currentItem.name} ×$qty saved. It will join this session's single POS bill after Sync."
+                appCtx.sync.requestSync()
+            } catch (failure: Exception) {
+                error.value = failure.message?.takeIf { it.contains("already captured", ignoreCase = true) }
+                    ?: "The item was not saved on this tablet. No bill line was queued; try again."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    fun voidSessionAddon(session: GameSession, addon: GamingSessionAddonUi, reason: String) {
+        if (!requireWrite() || !requireIdle()) return
+        if (
+            session.orderId != null ||
+            session.status !in setOf("starting", "active", "paused", "stopping", "ended") ||
+            (session.status == "ended" && !session.isUnbilledEnded())
+        ) {
+            error.value = "This item can only be voided before the Gaming bill is sent to POS."
+            return
+        }
+        if (!requireCurrentShiftSession(session, "voiding this item")) return
+        if (addon.voided) {
+            error.value = "This item is already voided. Its original line remains visible for audit."
+            return
+        }
+        if (addon.localState == GamingSessionAddonActionState.REJECTED) {
+            error.value = "Resolve the rejected saved item action before creating a void."
+            return
+        }
+        val normalizedReason = reason.trim()
+        if (normalizedReason.length !in 3..500) {
+            error.value = "Enter a void reason between 3 and 500 characters."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val scope = scopeLease.scope
+        val branchId = scope.branchId ?: return
+        val terminalId = scope.terminalId ?: return
+        val actionId = UUID.randomUUID().toString()
+        busyStationId.value = session.stationId
+        error.value = null
+        notice.value = null
+        viewModelScope.launch {
+            try {
+                var captured = false
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        val dao = db.gamingDao()
+                        val local = dao.localSessionByEitherId(session.id)
+                        val shiftId = local?.shiftId ?: session.shiftId
+                        if (!shiftId.isNullOrBlank()) {
+                            captured = dao.captureSessionAddonAction(
+                                LocalGamingSessionAddonActionEntity(
+                                    actionId = actionId,
+                                    actionType = GamingSessionAddonActionType.VOID,
+                                    ownerCompanyId = scope.companyId,
+                                    ownerUserId = scope.userId,
+                                    branchId = branchId,
+                                    terminalId = terminalId,
+                                    localSessionId = local?.localId ?: addon.localSessionId,
+                                    serverSessionId = local?.serverId ?: addon.serverSessionId,
+                                    shiftId = shiftId,
+                                    clientLineId = addon.clientLineId,
+                                    serverAddonId = addon.serverAddonId,
+                                    menuItemId = addon.menuItemId,
+                                    menuItemName = addon.menuItemName,
+                                    menuItemType = addon.menuItemType,
+                                    variantId = addon.variantId,
+                                    modifierSelectionsJson = addon.modifierSelectionsJson,
+                                    qty = addon.qty,
+                                    expectedUnitPriceMinor = addon.unitPriceMinor,
+                                    note = addon.note,
+                                    voidReason = normalizedReason,
+                                    createdAtMillis = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                    }
+                ) return@launch
+                if (!captured) {
+                    error.value = "This item already has a saved void, or the session changed. Refresh Gaming."
+                    return@launch
+                }
+                notice.value = "Void saved with its reason. The original item remains visible until Sync confirms it."
+                appCtx.sync.requestSync()
+            } catch (_: Exception) {
+                error.value = "The item void was not saved. The item remains billable; try again."
+            } finally {
+                busyStationId.value = null
+            }
+        }
+    }
+
+    fun discardRejectedSessionAddonAction(actionId: String, reason: String) {
+        if (!requireWrite() || !requireIdle()) return
+        val normalizedReason = reason.trim()
+        if (normalizedReason.length !in 3..500) {
+            error.value = "Enter a review reason between 3 and 500 characters."
+            return
+        }
+        val action = state.value.sessionAddonActions.firstOrNull { it.actionId == actionId }
+        if (action?.state != GamingSessionAddonActionState.REJECTED) {
+            error.value = "Only a definitively rejected Gaming item action can be dismissed."
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            val changed = appCtx.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                db.gamingDao().discardRejectedSessionAddonAction(
+                    actionId,
+                    normalizedReason,
+                    System.currentTimeMillis(),
+                )
+            }
+            if (changed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed && changed.value == 1) {
+                notice.value = if (action.actionType == GamingSessionAddonActionType.VOID) {
+                    "Rejected item Void acknowledged. The item remains billable; void it again if removal is still required."
+                } else {
+                    "Rejected item Add acknowledged. The server did not add it, and no request was rewritten or replayed."
+                }
+                appCtx.sync.requestSync()
+            } else {
+                error.value = "The rejected action changed state. Refresh Gaming before reviewing it again."
             }
         }
     }
@@ -1368,9 +1958,10 @@ class GamingViewModel : ViewModel() {
      */
     fun sendToPos(session: GameSession) {
         if (!requireWrite()) return
-        if (!session.canSendToPos()) return
+        if (!session.canSendToPos(state.value.hasActiveAddons(session))) return
         if (!requireIdle()) return
         if (!requireNoPackageExtension(session, "sending the bill to POS")) return
+        if (!requireNoSessionAddonActions(session, "sending the bill to POS")) return
         if (!requireCurrentShiftSession(session, "sending it to POS")) return
         val terminal = activeTerminal.value ?: run {
             error.value =
@@ -1400,12 +1991,20 @@ class GamingViewModel : ViewModel() {
             try {
                 var changed = true
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
-                        val dao = db.gamingDao()
-                        val existing = dao.localSessionByEitherId(session.id)
-                        if (existing != null) {
-                            changed = dao.requestSessionSend(existing.localId) != 0
-                        } else {
-                            dao.insertLocalSession(
+                        db.withTransaction {
+                            val dao = db.gamingDao()
+                            val existing = dao.localSessionByEitherId(session.id)
+                            if (
+                                dao.unresolvedSessionAddonActionCount(
+                                    existing?.localId,
+                                    existing?.serverId ?: session.id,
+                                ) > 0
+                            ) {
+                                changed = false
+                            } else if (existing != null) {
+                                changed = dao.requestSessionSend(existing.localId) != 0
+                            } else {
+                                dao.insertLocalSession(
                                 LocalGamingSessionEntity(
                                     localId = UUID.randomUUID().toString(),
                                     serverId = session.id,
@@ -1431,6 +2030,7 @@ class GamingViewModel : ViewModel() {
                                     extraControllers = session.extraControllers,
                                 ),
                             )
+                            }
                         }
                     }
                 ) return@launch
@@ -1454,7 +2054,7 @@ class GamingViewModel : ViewModel() {
     ) {
         if (!state.value.online) {
             error.value =
-                "Reconnect to load open Cafe POS shifts. This ended bill remains saved in Gaming."
+                "Reconnect to load open POS shifts. This ended bill remains saved in Gaming."
             return
         }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
@@ -1510,7 +2110,7 @@ class GamingViewModel : ViewModel() {
                 }
             } catch (_: Exception) {
                 error.value =
-                    "Could not verify open Cafe POS shifts. This ended bill remains saved in Gaming; " +
+                    "Could not verify open POS shifts. This ended bill remains saved in Gaming; " +
                         "check the connection and try again."
             } finally {
                 busyStationId.value = null
@@ -1526,14 +2126,15 @@ class GamingViewModel : ViewModel() {
     fun handoffToPos(targetShiftId: String) {
         val selection = _posTargetSelection.value ?: return
         val target = selection.targets.firstOrNull { it.shiftId == targetShiftId } ?: run {
-            error.value = "Choose one of the open Cafe POS shifts shown in this dialog."
+            error.value = "Choose one of the open POS shifts shown in this dialog."
             return
         }
         val session = selection.session
         if (!requireWrite()) return
-        if (!session.canSendToPos()) return
+        if (!session.canSendToPos(state.value.hasActiveAddons(session))) return
         if (!requireIdle()) return
         if (!requireNoPackageExtension(session, "sending the bill to POS")) return
+        if (!requireNoSessionAddonActions(session, "sending the bill to POS")) return
         if (!requireCurrentShiftSession(session, "sending it to POS")) return
         val active = activeTerminal.value
         if (
@@ -1930,6 +2531,7 @@ class GamingViewModel : ViewModel() {
         }
         if (!requireIdle()) return
         if (!requireNoPackageExtension(session, "repairing billing")) return
+        if (!requireNoSessionAddonActions(session, "repairing billing")) return
         if (session.status != "ended" || session.orderId != null || session.amountMinor != null) {
             error.value = "This session no longer has missing billing. Refresh Gaming before repairing it."
             return
@@ -2074,11 +2676,12 @@ class GamingViewModel : ViewModel() {
             error.value = "Only a protected owner can reconcile a session from a closed shift."
             return
         }
-        if (!session.canSendToPos() || !requireIdle()) return
+        if (!session.canSendToPos(state.value.hasActiveAddons(session)) || !requireIdle()) return
         if (!requireNoPackageExtension(session, "reconciling the bill to POS")) return
+        if (!requireNoSessionAddonActions(session, "reconciling the bill to POS")) return
         val targetShiftId = state.value.activeShiftId
         if (targetShiftId == null) {
-            error.value = "Open the receiving POS shift on this terminal before reconciling this session."
+            error.value = "Open the receiving POS shift before reconciling this session."
             return
         }
         val normalizedReason = reason.trim()
@@ -2149,6 +2752,8 @@ class GamingViewModel : ViewModel() {
         if (!requireWrite()) return
         if (!session.canCancelUnbilled() || !requireIdle()) return
         if (!requireNoPackageExtension(session, "voiding the session")) return
+        if (!requireNoSessionAddonActions(session, "voiding the whole session")) return
+        if (!requireNoActiveSessionAddons(session)) return
         if (
             session.authority(state.value.activeShiftId) != GamingSessionAuthority.CURRENT_SHIFT &&
             !access.canReconcileLegacySessions

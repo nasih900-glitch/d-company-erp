@@ -61,6 +61,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
+/** Direct tablet carts are counter sales; table and gaming workflows retain their own server types. */
+internal const val DIRECT_COUNTER_SALE_ORDER_TYPE = "takeaway"
+
 data class PreparedHeldCheckout(
     val orderId: String,
     /** Prevents a claim prepared under one drawer shift being paid after a shift rollover. */
@@ -800,7 +803,7 @@ class PosViewModel : ViewModel() {
                         val order = (current?.order ?: LocalOrderEntity(
                             localId = localId,
                             shiftId = shiftId,
-                            type = "dine_in",
+                            type = DIRECT_COUNTER_SALE_ORDER_TYPE,
                             estimateMinor = 0L,
                             createdAtMillis = now,
                             syncState = SyncState.DRAFT,
@@ -1247,7 +1250,7 @@ class PosViewModel : ViewModel() {
             return
         }
         if (!app.connectivity.online.value) {
-            notice.value = "Reconnect before voiding a released bill so the audit and kitchen cancellation are saved together."
+            notice.value = "Reconnect before voiding a released bill so the audit and linked cancellation are saved together."
             return
         }
         if (checkoutBusy.value) return
@@ -1266,7 +1269,7 @@ class PosViewModel : ViewModel() {
                         db.orderDao().deleteDraft(direct.localId)
                     }
                 }
-                notice.value = "Bill voided with reason: $cleanReason. The audit and kitchen cancellation are retained."
+                notice.value = "Bill voided with reason: $cleanReason. The audit and linked cancellation are retained."
                 app.sync.refresh("orders")
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -2052,7 +2055,7 @@ class PosViewModel : ViewModel() {
     private fun authorisedShiftId(): String? {
         val resolved = resolvedShift.value
         if (resolved == null) {
-            notice.value = "No open shift on this terminal. Open a shift before billing."
+            notice.value = "No shift is open. Open Shift before billing."
             return null
         }
         val actor = app.shiftCache.profile.value?.let {

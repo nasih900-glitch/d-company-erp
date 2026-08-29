@@ -123,8 +123,8 @@ class AndroidReleaseVersionTest(unittest.TestCase):
 
     def write_production_defaults(
         self,
-        env_code: int = 7,
-        compose_code: int = 7,
+        env_code: int = 5,
+        compose_code: int = 5,
         env_minimum: int = 5,
         compose_minimum: int = 5,
         env_requires_headers: bool = True,
@@ -154,7 +154,7 @@ class AndroidReleaseVersionTest(unittest.TestCase):
         )
         return env_file, compose_file
 
-    def test_production_defaults_match_version_code(self) -> None:
+    def test_production_defaults_may_safely_remain_on_deployed_floor(self) -> None:
         env_file, compose_file = self.write_production_defaults()
 
         validate_production_defaults(
@@ -166,12 +166,29 @@ class AndroidReleaseVersionTest(unittest.TestCase):
     def test_production_defaults_fail_when_compose_is_stale(self) -> None:
         env_file, compose_file = self.write_production_defaults(compose_code=6)
 
-        with self.assertRaisesRegex(ReleaseVersionError, "env=7, compose=6"):
+        with self.assertRaisesRegex(ReleaseVersionError, "env=5, compose=6"):
             validate_production_defaults(
                 env_file,
                 compose_file,
                 AndroidVersion(code=7, name="3.1.0"),
             )
+
+    def test_production_latest_default_cannot_precede_minimum_or_exceed_build(self) -> None:
+        for latest in (4, 8):
+            with self.subTest(latest=latest):
+                env_file, compose_file = self.write_production_defaults(
+                    env_code=latest,
+                    compose_code=latest,
+                )
+                with self.assertRaisesRegex(
+                    ReleaseVersionError,
+                    "must be between the minimum supported build and the signed source build",
+                ):
+                    validate_production_defaults(
+                        env_file,
+                        compose_file,
+                        AndroidVersion(code=7, name="3.1.0"),
+                    )
 
     def test_production_defaults_fail_below_snapshot_safe_minimum(self) -> None:
         env_file, compose_file = self.write_production_defaults(

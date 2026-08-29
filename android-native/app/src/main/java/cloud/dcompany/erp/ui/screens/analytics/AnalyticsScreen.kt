@@ -45,6 +45,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.PremiumTabBar
@@ -57,7 +60,9 @@ import cloud.dcompany.erp.ui.theme.Spacing
 import java.util.Locale
 
 @Composable
-fun AnalyticsScreen() {
+fun AnalyticsScreen(
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
     val vm: AnalyticsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
 
@@ -70,9 +75,10 @@ fun AnalyticsScreen() {
         )
         Box(Modifier.fillMaxSize()) {
             when (state.tab) {
-                AnalyticsTab.Today -> TodayTab(state, vm::retryToday)
+                AnalyticsTab.Today -> TodayTab(state, presentation, vm::retryToday)
                 AnalyticsTab.Growth -> GrowthTab(
                     state,
+                    presentation,
                     vm::selectGrowthPeriod,
                     vm::retryGrowth,
                     vm::retryTopItems,
@@ -85,27 +91,37 @@ fun AnalyticsScreen() {
 // -------------------------------------------------------------------- today
 
 @Composable
-private fun TodayTab(state: AnalyticsUiState, onRetry: () -> Unit) {
+private fun TodayTab(
+    state: AnalyticsUiState,
+    presentation: WorkspacePresentationPolicy,
+    onRetry: () -> Unit,
+) {
     val dashboard = state.dashboard
     when (cachedDataPresentation(dashboard != null, state.todayLoading, state.todayError)) {
         CachedDataPresentation.INITIAL_LOADING -> LoadingPanel()
         CachedDataPresentation.BLOCKING_ERROR -> ErrorPanel(state.todayError!!, onRetry)
         CachedDataPresentation.FRESH -> TodayBody(
             dashboard!!,
+            presentation,
             state.todayLoading,
             state.dashboardFetchedAtMillis,
         )
         CachedDataPresentation.STALE -> Column(Modifier.fillMaxSize()) {
             StaleDataBanner("Today's saved figures", state.todayError!!, onRetry)
             Box(Modifier.weight(1f)) {
-                TodayBody(dashboard!!, state.todayLoading, state.dashboardFetchedAtMillis)
+                TodayBody(dashboard!!, presentation, state.todayLoading, state.dashboardFetchedAtMillis)
             }
         }
     }
 }
 
 @Composable
-private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMillis: Long?) {
+private fun TodayBody(
+    dashboard: DashboardKpis,
+    presentation: WorkspacePresentationPolicy,
+    refreshing: Boolean,
+    fetchedAtMillis: Long?,
+) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 720.dp
         val columns = if (wide) 4 else 2
@@ -131,8 +147,18 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
 
             val tiles = listOf(
                 KpiTile("Gross revenue", dashboard.revenueTotalMinor.asRupees()),
-                KpiTile("Orders", "${dashboard.ordersCount} (${dashboard.ticketsCount} tickets)"),
-                KpiTile("Average ticket", dashboard.avgTicketMinor.asRupees()),
+                KpiTile(
+                    "Orders",
+                    if (presentation.showsEvents) {
+                        "${dashboard.ordersCount} (${dashboard.ticketsCount} tickets)"
+                    } else {
+                        dashboard.ordersCount.toString()
+                    },
+                ),
+                KpiTile(
+                    if (presentation.showsEvents) "Average ticket" else "Average paid bill",
+                    dashboard.avgTicketMinor.asRupees(),
+                ),
                 KpiTile(
                     "Net profit today",
                     dashboard.netProfitMinor.asRupees(),
@@ -149,7 +175,7 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
             }
 
             RightNowCard(dashboard)
-            ProfitBridgeCard(dashboard)
+            ProfitBridgeCard(dashboard, presentation)
 
             if (dashboard.unissuedPaidOrdersCount > 0) {
                 OperationalBanner(
@@ -164,7 +190,11 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
             if (dashboard.discountsAndPointsRedeemedMinor > 0) {
                 Text(
                     "Revenue above is already net of ${dashboard.discountsAndPointsRedeemedMinor.asRupees()} " +
-                        "in discounts and loyalty points redeemed today.",
+                        if (presentation.showsCustomers || presentation.showsMemberships) {
+                            "in discounts and loyalty points redeemed today."
+                        } else {
+                            "in discounts and customer credits applied today."
+                        },
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -185,18 +215,36 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
                 }
             }
 
-            if (dashboard.revenueStreams.isNotEmpty()) {
+            val revenueStreams = dashboard.presentedRevenueStreams(presentation)
+            if (revenueStreams.isNotEmpty()) {
                 SectionCard {
                     CardTitle("Gross revenue sources (today)")
                     Text(
-                        "Category values are before refunds and GST. Discounts and loyalty " +
-                            "redemptions are applied in the gross-revenue total above.",
+                        (if (presentation.showsRestaurantOperations) {
+                            "Category values are before refunds and GST. "
+                        } else {
+                            "Category values are before refunds and accounting adjustments. "
+                        }) +
+                            if (presentation.showsCustomers || presentation.showsMemberships) {
+                                "Discounts and loyalty redemptions are applied in the gross-revenue total above."
+                            } else {
+                                "Discounts and customer credits are applied in the gross-revenue total above."
+                            },
                         style = MaterialTheme.typography.labelSmall,
                         color = Brand.ForegroundMuted,
                     )
-                    val max = dashboard.revenueStreams.maxOf { it.second }
-                    dashboard.revenueStreams.forEach { (label, amountMinor) ->
+                    val max = revenueStreams.maxOf { it.second }
+                    revenueStreams.forEach { (label, amountMinor) ->
                         RevenueBar(label, amountMinor, max)
+                    }
+                    if (dashboard.hiddenLegacyRevenueMinor(presentation) > 0L) {
+                        Text(
+                            "Legacy/other revenue preserves historical money from modules hidden " +
+                                "in this Gaming Centre profile. Review the audited source records " +
+                                "before making a reconciliation adjustment.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Brand.ForegroundMuted,
+                        )
                     }
                 }
             }
@@ -206,14 +254,24 @@ private fun TodayBody(dashboard: DashboardKpis, refreshing: Boolean, fetchedAtMi
 }
 
 @Composable
-private fun ProfitBridgeCard(dashboard: DashboardKpis) {
+private fun ProfitBridgeCard(
+    dashboard: DashboardKpis,
+    presentation: WorkspacePresentationPolicy,
+) {
     SectionCard {
         CardTitle("Profit bridge")
         AnalyticsMoneyRow("Gross revenue", dashboard.revenueTotalMinor)
         if (dashboard.refundsIssuedMinor > 0) {
             AnalyticsMoneyRow("Less: refunds", -dashboard.refundsIssuedMinor)
         }
-        AnalyticsMoneyRow("Net revenue after refunds and GST", dashboard.netRevenueMinor)
+        AnalyticsMoneyRow(
+            if (presentation.showsRestaurantOperations) {
+                "Net revenue after refunds and GST"
+            } else {
+                "Net revenue after refunds and recorded adjustments"
+            },
+            dashboard.netRevenueMinor,
+        )
         AnalyticsMoneyRow("Less: cost of goods sold", -dashboard.cogsMinor)
         AnalyticsMoneyRow("Gross profit", dashboard.grossProfitMinor, bold = true)
         AnalyticsMoneyRow("Less: operating expenses", -dashboard.expenseTotalMinor)
@@ -325,6 +383,7 @@ private fun RevenueBar(label: String, amountMinor: Long, maxMinor: Long) {
 @Composable
 private fun GrowthTab(
     state: AnalyticsUiState,
+    presentation: WorkspacePresentationPolicy,
     onSelectPeriod: (GrowthPeriodOption) -> Unit,
     onRetry: () -> Unit,
     onRetryTopItems: () -> Unit,
@@ -343,12 +402,13 @@ private fun GrowthTab(
             CachedDataPresentation.FRESH -> GrowthBody(
                 growth!!,
                 state,
+                presentation,
                 onRetryTopItems,
             )
             CachedDataPresentation.STALE -> Column(Modifier.fillMaxSize()) {
                 StaleDataBanner("Saved growth comparison", state.growthError!!, onRetry)
                 Box(Modifier.weight(1f)) {
-                    GrowthBody(growth!!, state, onRetryTopItems)
+                    GrowthBody(growth!!, state, presentation, onRetryTopItems)
                 }
             }
         }
@@ -359,6 +419,7 @@ private fun GrowthTab(
 private fun GrowthBody(
     growth: GrowthData,
     state: AnalyticsUiState,
+    presentation: WorkspacePresentationPolicy,
     onRetryTopItems: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -432,9 +493,11 @@ private fun GrowthBody(
             }
             if (growth.current.membershipsMinor > 0 || growth.previous.membershipsMinor > 0) {
                 Text(
-                    "Paid memberships: ${growth.current.membershipsMinor.asRupees()} this period, " +
-                        "${growth.previous.membershipsMinor.asRupees()} in ${growth.previous.label}. " +
-                        "They do not increase POS order counts or top-item totals.",
+                    presentation.prepaidComparisonDetail(
+                        current = growth.current.membershipsMinor.asRupees(),
+                        previous = growth.previous.membershipsMinor.asRupees(),
+                        previousLabel = growth.previous.label,
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -447,14 +510,18 @@ private fun GrowthBody(
                 )
             }
 
-            TopItemsCard(state, onRetryTopItems)
+            TopItemsCard(state, presentation, onRetryTopItems)
             Spacer(Modifier.height(16.dp))
         }
     }
 }
 
 @Composable
-private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
+private fun TopItemsCard(
+    state: AnalyticsUiState,
+    presentation: WorkspacePresentationPolicy,
+    onRetry: () -> Unit,
+) {
     SectionCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             CardTitle("Top items by gross line sales (this month)")
@@ -465,7 +532,11 @@ private fun TopItemsCard(state: AnalyticsUiState, onRetry: () -> Unit) {
         }
         Text(
             "Ranked from immutable sold-item names and line totals before order-level " +
-                "discounts, refunds and GST adjustments.",
+                if (presentation.showsRestaurantOperations) {
+                    "discounts, refunds and GST adjustments."
+                } else {
+                    "discounts, refunds and accounting adjustments."
+                },
             style = MaterialTheme.typography.labelSmall,
             color = Brand.ForegroundMuted,
         )

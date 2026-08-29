@@ -64,6 +64,48 @@ data class GamingSessionCacheEntity(
     val orderId: String? = null,
 )
 
+/**
+ * Server-authoritative food/drink/dessert staged against an unbilled Gaming
+ * session. These rows are display receipts only and may be replaced after a
+ * complete per-session pull. The local financial command always lives in
+ * [LocalGamingSessionAddonActionEntity].
+ */
+@Entity(
+    tableName = "gaming_session_addon_cache",
+    indices = [Index("gamingSessionId"), Index("clientLineId")],
+)
+data class GamingSessionAddonCacheEntity(
+    @PrimaryKey val id: String,
+    val gamingSessionId: String,
+    val clientLineId: String,
+    val menuItemId: String,
+    val menuItemName: String,
+    val menuItemType: String,
+    val variantId: String? = null,
+    /** Immutable server JSON; never reconstructed from the mutable catalogue. */
+    val variantSnapshotJson: String? = null,
+    val modifiersJson: String = "[]",
+    val qty: Int,
+    val catalogUnitPriceMinor: Long,
+    val unitPriceMinor: Long,
+    val lineTotalMinor: Long,
+    val discountMinor: Long,
+    val hsnOrSac: String? = null,
+    val taxRate: Double,
+    val taxableValueMinor: Long,
+    val cgstMinor: Long,
+    val sgstMinor: Long,
+    val igstMinor: Long,
+    val cessMinor: Long,
+    val note: String? = null,
+    val createdBy: String,
+    val createdTerminalId: String,
+    val createdAtMillis: Long,
+    val voidedAtMillis: Long? = null,
+    val voidedBy: String? = null,
+    val voidReason: String? = null,
+)
+
 object GamingSessionState {
     /** Started on this tablet, not yet confirmed by the server. */
     const val START_PENDING = "start_pending"
@@ -268,6 +310,76 @@ object GamingPackageExtensionState {
     /** A deterministic refusal acknowledged by staff after an authoritative refresh. */
     const val DISCARDED = "discarded"
 }
+
+object GamingSessionAddonActionType {
+    const val ADD = "add"
+    const val VOID = "void"
+}
+
+object GamingSessionAddonActionState {
+    /** Durable and not yet attempted. */
+    const val PENDING = "pending"
+    /** Request may have committed; replay only the exact same action/body/key. */
+    const val AMBIGUOUS = "ambiguous"
+    /** Server receipt was validated and committed locally. */
+    const val CONFIRMED = "confirmed"
+    /** Deterministic refusal requires explicit staff review. */
+    const val REJECTED = "rejected"
+    /** A deterministic refusal was acknowledged without rewriting the request. */
+    const val DISCARDED = "discarded"
+}
+
+/**
+ * Immutable, owner-scoped Gaming add-on command.
+ *
+ * [actionId] is the sole HTTP idempotency key. For ADD, [clientLineId] is the
+ * durable line identity sent to the server. For VOID it identifies the exact
+ * retained line snapshot and [serverAddonId] is filled only from a validated
+ * server receipt (or was already known when the void was captured).
+ *
+ * ADD may be captured before an offline session Start receives its server id;
+ * [localSessionId] retains that dependency. Sync resolves the id without ever
+ * changing the selected item, quantity, options, price, actor, or workspace.
+ */
+@Entity(
+    tableName = "local_gaming_session_addon_actions",
+    indices = [
+        Index("state"),
+        Index("localSessionId"),
+        Index("serverSessionId"),
+        Index("shiftId"),
+        Index("clientLineId"),
+        Index(value = ["ownerCompanyId", "ownerUserId", "branchId", "terminalId", "state"]),
+    ],
+)
+data class LocalGamingSessionAddonActionEntity(
+    @PrimaryKey val actionId: String,
+    val actionType: String,
+    val ownerCompanyId: String,
+    val ownerUserId: String,
+    val branchId: String,
+    val terminalId: String,
+    val localSessionId: String? = null,
+    val serverSessionId: String? = null,
+    val shiftId: String,
+    val clientLineId: String,
+    val serverAddonId: String? = null,
+    val menuItemId: String,
+    val menuItemName: String,
+    val menuItemType: String,
+    val variantId: String? = null,
+    /** Immutable local selection snapshot used to recreate the exact body. */
+    val modifierSelectionsJson: String = "[]",
+    val qty: Int,
+    val expectedUnitPriceMinor: Long,
+    val note: String? = null,
+    val voidReason: String? = null,
+    val createdAtMillis: Long,
+    val state: String = GamingSessionAddonActionState.PENDING,
+    val lastError: String? = null,
+    val resolvedAtMillis: Long? = null,
+    val resolutionReason: String? = null,
+)
 
 /**
  * Durable money-affecting package-extension request.

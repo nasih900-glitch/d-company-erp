@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.StopCircle
@@ -100,6 +101,9 @@ import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.GamingPackageExtensionState
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
+import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
@@ -121,6 +125,7 @@ import cloud.dcompany.erp.ui.components.VOID_REASON_COMPACT_EDITOR_HEIGHT
 import cloud.dcompany.erp.ui.components.VOID_REASON_OTHER_ID
 import cloud.dcompany.erp.ui.components.VoidReasonInput
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
+import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -166,6 +171,17 @@ private data class PackageExtensionRequest(
 
 private data class PackageExtensionDiscardRequest(
     val action: PackageExtensionActionUi,
+)
+
+private data class AddonConfigurationRequest(
+    val session: GameSession,
+    val item: MenuItemEntity,
+    val qty: Int = 1,
+)
+
+private data class AddonVoidRequest(
+    val session: GameSession,
+    val addon: GamingSessionAddonUi,
 )
 
 private val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a")
@@ -250,6 +266,10 @@ fun GamingScreen(
     var repairingBilling by remember { mutableStateOf<GameSession?>(null) }
     var resolvingLegacyStart by remember { mutableStateOf<GameSession?>(null) }
     var discardingPackageExtension by remember { mutableStateOf<PackageExtensionDiscardRequest?>(null) }
+    var choosingAddonFor by remember { mutableStateOf<GameSession?>(null) }
+    var configuringAddon by remember { mutableStateOf<AddonConfigurationRequest?>(null) }
+    var voidingAddon by remember { mutableStateOf<AddonVoidRequest?>(null) }
+    var reviewingRejectedAddon by remember { mutableStateOf<SessionAddonActionUi?>(null) }
     var paymentQueueOpen by rememberSaveable { mutableStateOf(false) }
     var cancellationQueueOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -322,7 +342,7 @@ fun GamingScreen(
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     OperationalBanner(
                         title = if (activeTerminal?.purpose == TerminalPurpose.CAFE_POS) {
-                            "Gaming starts are disabled on Cafe POS"
+                            "Gaming starts are disabled on a POS-only till"
                         } else {
                             "Terminal purpose needs verification"
                         },
@@ -422,11 +442,11 @@ fun GamingScreen(
             }
 
             if (state.readyForPos.isNotEmpty()) {
-                val total = state.readyForPos.sumOf { it.amountMinor ?: 0L }
+                val total = state.readyForPos.sumOf(state::pendingBillSnapshotMinor)
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     OperationalBanner(
                         title = "${state.readyForPos.size} ${sessionWord(state.readyForPos.size)} awaiting payment",
-                        detail = "${total.asRupees()} total · review each session before sending it to POS",
+                        detail = "Estimated ${total.asRupees()} combined · POS confirms each final total",
                         tone = UiTone.Warning,
                         icon = Icons.Filled.Payments,
                     ) {
@@ -487,6 +507,7 @@ fun GamingScreen(
                         station = station,
                         session = stationSession,
                         packageExtensionAction = stationSession?.let { state.packageExtensionFor(it.id) },
+                        sessionAddons = stationSession?.let(state::addonsFor).orEmpty(),
                         wallClock = wallClock,
                         actionInProgress = state.busyStationId != null,
                         busyHere = state.busyStationId == station.id,
@@ -517,6 +538,15 @@ fun GamingScreen(
                         onDiscardPackageExtension = { action ->
                             discardingPackageExtension = PackageExtensionDiscardRequest(action)
                         },
+                        onAddItems = { choosingAddonFor = it },
+                        onVoidAddon = { session, addon ->
+                            voidingAddon = AddonVoidRequest(session, addon)
+                        },
+                        onReviewRejectedAddon = { actionId ->
+                            reviewingRejectedAddon = state.sessionAddonActions.firstOrNull {
+                                it.actionId == actionId
+                            }
+                        },
                     )
                 }
             }
@@ -535,6 +565,72 @@ fun GamingScreen(
         )
     }
 
+    choosingAddonFor?.takeIf { access.canManageSessions }?.let { session ->
+        GamingAddonPickerDialog(
+            items = state.addonCatalog,
+            onDismiss = { choosingAddonFor = null },
+            onSelect = { item ->
+                choosingAddonFor = null
+                configuringAddon = AddonConfigurationRequest(session, item)
+            },
+        )
+    }
+
+    configuringAddon?.takeIf { access.canManageSessions }?.let { request ->
+        ProductConfigurationDialog(
+            item = request.item,
+            variants = state.addonVariants.filter { it.menuItemId == request.item.id },
+            modifierGroups = state.addonModifierGroups.filter { it.menuItemId == request.item.id },
+            modifiers = state.addonModifiers.filter { it.menuItemId == request.item.id },
+            onDismiss = { configuringAddon = null },
+            onAdd = { variant, modifiers, note ->
+                configuringAddon = null
+                vm.addSessionAddon(
+                    session = request.session,
+                    item = request.item,
+                    variant = variant,
+                    modifiers = modifiers,
+                    note = note,
+                    qty = request.qty,
+                )
+            },
+        )
+    }
+
+    voidingAddon?.takeIf { access.canManageSessions }?.let { request ->
+        GamingAddonReasonDialog(
+            title = "Void ${request.addon.menuItemName}?",
+            detail = "The original line remains visible for audit. It will be excluded from the POS bill only after the server confirms this reason.",
+            confirmLabel = "Void item",
+            onDismiss = { voidingAddon = null },
+            onConfirm = { reason ->
+                voidingAddon = null
+                vm.voidSessionAddon(request.session, request.addon, reason)
+            },
+        )
+    }
+
+    reviewingRejectedAddon?.takeIf { access.canManageSessions }?.let { action ->
+        val isVoid = action.actionType == GamingSessionAddonActionType.VOID
+        GamingAddonReasonDialog(
+            title = if (isVoid) "Review refused item void" else "Review refused item Add",
+            detail = buildString {
+                append(action.lastError ?: "The server definitively refused this saved action.")
+                if (isVoid) {
+                    append(" Acknowledging does not void the item; it remains billable. Retry Void afterwards if it should still be removed.")
+                } else {
+                    append(" The server did not add this item. Acknowledging releases the rejected local attempt without replaying it.")
+                }
+            },
+            confirmLabel = if (isVoid) "Keep item & acknowledge" else "Acknowledge refusal",
+            onDismiss = { reviewingRejectedAddon = null },
+            onConfirm = { reason ->
+                reviewingRejectedAddon = null
+                vm.discardRejectedSessionAddonAction(action.actionId, reason)
+            },
+        )
+    }
+
     stopping?.takeIf { access.canManageSessions }?.let { request ->
         StopSessionDialog(
             request = request,
@@ -549,6 +645,7 @@ fun GamingScreen(
     sending?.takeIf { access.canManageSessions }?.let { session ->
         val stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
             ?: "Gaming session"
+        val pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(session)
         AlertDialog(
             containerColor = Brand.SurfaceOverlay,
             shape = Radius.shapeLg,
@@ -557,12 +654,13 @@ fun GamingScreen(
             text = {
                 Text(
                     "$stationName · ${session.billableMinutes ?: 0} minutes · " +
-                        "${(session.amountMinor ?: 0L).asRupees()}. POS will receive a separate unpaid order " +
+                        "estimated combined bill ${pendingBillSnapshotMinor.asRupees()}. " +
+                        "POS will confirm the final total and receive a separate unpaid order " +
                         "for the cashier to review and collect. " +
                         if (activeTerminal?.purpose == TerminalPurpose.GAMING) {
-                            "You will choose the receiving Cafe POS shift next."
+                            "You will choose the receiving POS shift next."
                         } else {
-                            "It will stay on this terminal's open shift."
+                            "It will stay on the current open shift."
                         },
                     color = Brand.ForegroundMuted,
                 )
@@ -583,6 +681,7 @@ fun GamingScreen(
             selection = selection,
             stationName = state.stations.firstOrNull { it.id == selection.session.stationId }?.name
                 ?: "Gaming session",
+            pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(selection.session),
             busy = state.busyStationId == selection.session.stationId,
             onDismiss = vm::dismissPosTargetSelection,
             onConfirm = vm::handoffToPos,
@@ -636,7 +735,7 @@ fun GamingScreen(
         ReconcileSessionDialog(
             stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
                 ?: "Gaming session",
-            amountMinor = session.amountMinor ?: 0L,
+            pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(session),
             onDismiss = { reconciling = null },
             onConfirm = { reason ->
                 reconciling = null
@@ -699,6 +798,7 @@ fun GamingScreen(
             sessions = state.readyForPos,
             stations = state.stations,
             activeShiftId = state.activeShiftId,
+            pendingBillSnapshotMinor = state::pendingBillSnapshotMinor,
             actionLabel = { session ->
                 when {
                     session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT -> "Send"
@@ -707,8 +807,18 @@ fun GamingScreen(
                 }
             },
             actionEnabled = { session ->
-                session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
-                    (access.canReconcileLegacySessions && state.activeShiftId != null)
+                state.unresolvedAddonsFor(session).isEmpty() &&
+                    (
+                        session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
+                            (access.canReconcileLegacySessions && state.activeShiftId != null)
+                    )
+            },
+            actionDisabledReason = { session ->
+                if (state.unresolvedAddonsFor(session).isNotEmpty()) {
+                    "Saved Gaming item actions must finish syncing or be reviewed before POS handoff."
+                } else {
+                    null
+                }
             },
             actionIntent = ActionIntent.Primary,
             busyStationId = state.busyStationId,
@@ -731,10 +841,23 @@ fun GamingScreen(
             sessions = state.needsCancellation,
             stations = state.stations,
             activeShiftId = state.activeShiftId,
+            pendingBillSnapshotMinor = { it.amountMinor ?: 0L },
             actionLabel = { "Review" },
             actionEnabled = { session ->
-                session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
-                    access.canReconcileLegacySessions
+                sessionCancellationAddonBlockMessage(state.addonsFor(session)) == null &&
+                    state.unresolvedAddonsFor(session).isEmpty() &&
+                    (
+                        session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
+                            access.canReconcileLegacySessions
+                    )
+            },
+            actionDisabledReason = { session ->
+                sessionCancellationAddonBlockMessage(state.addonsFor(session))
+                    ?: if (state.unresolvedAddonsFor(session).isNotEmpty()) {
+                        "Saved Gaming item actions must finish syncing or be reviewed before session cancellation."
+                    } else {
+                        null
+                    }
             },
             actionIntent = ActionIntent.Destructive,
             busyStationId = state.busyStationId,
@@ -762,6 +885,7 @@ fun GamingScreen(
 private fun PosTargetShiftDialog(
     selection: PosTargetSelectionUi,
     stationName: String,
+    pendingBillSnapshotMinor: Long,
     busy: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
@@ -778,8 +902,9 @@ private fun PosTargetShiftDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    "$stationName · ${(selection.session.amountMinor ?: 0L).asRupees()}. " +
-                        "The Gaming shift keeps the session history; the selected Cafe POS shift " +
+                    "$stationName · estimated combined bill ${pendingBillSnapshotMinor.asRupees()}. " +
+                        "POS confirms the final total. " +
+                        "The Gaming shift keeps the session history; the selected POS shift " +
                         "receives the unpaid order.",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.bodyMedium,
@@ -835,7 +960,7 @@ private fun PosTargetShiftDialog(
                     }
                 }
                 Text(
-                    "If the Cafe POS shift is not listed, keep the bill pending and ask its cashier to open a shift.",
+                    "If the receiving POS shift is not listed, keep the bill pending and ask its cashier to open a shift.",
                     color = Brand.ForegroundFaint,
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -925,7 +1050,7 @@ private fun GamingMetrics(state: GamingUiState) {
     }
     val available = state.stations.count { it.isActive && state.activeFor(it.id) == null }
     val disabled = state.stations.count { !it.isActive }
-    val awaitingTotal = state.readyForPos.sumOf { it.amountMinor ?: 0L }
+    val awaitingTotal = state.readyForPos.sumOf(state::pendingBillSnapshotMinor)
     val cards: List<@Composable (Modifier) -> Unit> = listOf(
         { modifier ->
             MetricCard(
@@ -961,7 +1086,7 @@ private fun GamingMetrics(state: GamingUiState) {
             MetricCard(
                 title = "Awaiting payment",
                 value = state.readyForPos.size.toString(),
-                detail = awaitingTotal.asRupees(),
+                detail = "Est. ${awaitingTotal.asRupees()} combined",
                 icon = Icons.Filled.Payments,
                 tone = if (state.readyForPos.isEmpty()) UiTone.Neutral else UiTone.Warning,
                 modifier = modifier,
@@ -1029,6 +1154,7 @@ internal fun GamingStationCard(
     station: Station,
     session: GameSession?,
     packageExtensionAction: PackageExtensionActionUi?,
+    sessionAddons: List<GamingSessionAddonUi> = emptyList(),
     wallClock: State<Long>,
     actionInProgress: Boolean,
     busyHere: Boolean,
@@ -1052,6 +1178,9 @@ internal fun GamingStationCard(
     onRepairBilling: (GameSession) -> Unit,
     onResolveLegacyStart: (GameSession) -> Unit,
     onDiscardPackageExtension: (PackageExtensionActionUi) -> Unit,
+    onAddItems: (GameSession) -> Unit = {},
+    onVoidAddon: (GameSession, GamingSessionAddonUi) -> Unit = { _, _ -> },
+    onReviewRejectedAddon: (String) -> Unit = {},
 ) {
     // A paused session must look paused. Without an authoritative paused-at
     // field, freezing the local display is safer than inventing elapsed time.
@@ -1063,7 +1192,15 @@ internal fun GamingStationCard(
     val frozenMillis = remember(session?.id, session?.status) { System.currentTimeMillis() }
     val nowMillis = if (shouldTick) wallClock.value else frozenMillis
 
-    val presentation = stationPresentation(station, session, nowMillis)
+    val hasActiveSessionAddons = sessionAddons.any {
+        !it.voided && !it.isRejectedLocalAdd()
+    }
+    val presentation = stationPresentation(
+        station,
+        session,
+        nowMillis,
+        hasActiveAddons = hasActiveSessionAddons,
+    )
     // Available cards contain one short action and should not consume the same
     // height as active/payment cards with timers, billing and recovery copy.
     // Keep the operational states roomy while fitting more ready stations on
@@ -1088,6 +1225,15 @@ internal fun GamingStationCard(
         !session.hasLockedPackageExtensionSnapshot()
     val matchingPackageExtensionUnavailable = session?.isPackageBilling() == true &&
         !packageBillingSnapshotMissing && matchingExtensions.isEmpty()
+    val unresolvedAddonActions = sessionAddons.filter {
+        it.localState !in setOf(null, GamingSessionAddonActionState.CONFIRMED)
+    }
+    val cancellationAddonBlock = sessionCancellationAddonBlockMessage(sessionAddons)
+        ?: if (unresolvedAddonActions.isNotEmpty()) {
+            "Saved Gaming item actions must finish syncing or be reviewed before voiding the whole session."
+        } else {
+            null
+        }
 
     val rateDescription = when {
         session == null -> "${station.ratePerHourMinor.asRupees()} per hour"
@@ -1164,13 +1310,29 @@ internal fun GamingStationCard(
                 StationBody(
                     presentation,
                     station,
-                    session,
-                    nowMillis,
-                    activeShiftId,
-                    activeShiftServerConfirmed,
-                    online,
+                        session,
+                        nowMillis,
+                        activeShiftId,
+                        activeShiftServerConfirmed,
+                        online,
+                        combinedBillSnapshotMinor = session?.let {
+                            Math.addExact(
+                                it.amountMinor ?: 0L,
+                                gamingSessionAddonBillableTotalMinor(sessionAddons),
+                            )
+                        },
                 )
             }
+        }
+
+        if (session != null && sessionAddons.isNotEmpty()) {
+            GamingSessionAddonSummary(
+                session = session,
+                addons = sessionAddons,
+                actionsEnabled = actionsEnabled && ownsSession,
+                onVoid = { onVoidAddon(session, it) },
+                onReviewRejected = onReviewRejectedAddon,
+            )
         }
 
         HorizontalDivider(color = Brand.BorderSubtle)
@@ -1225,6 +1387,15 @@ internal fun GamingStationCard(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
+                ErpButton(
+                    text = "Add drinks & snacks",
+                    onClick = { session?.let(onAddItems) },
+                    enabled = session != null && actionsEnabled && ownsSession &&
+                        session.orderId == null && session.status in setOf("active", "paused"),
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = Icons.Filled.RestaurantMenu,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     ErpButton(
                         text = if (session?.isPackageBilling() == true) "Extend" else "+30 min",
@@ -1296,41 +1467,64 @@ internal fun GamingStationCard(
 
             StationVisualState.PaymentDue,
             StationVisualState.SendRejected,
-            -> Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                OutlinedButton(
-                    onClick = { session?.let(onCancelUnbilled) },
-                    enabled = actionsEnabled && session != null &&
-                        (ownsSession || canReconcileLegacy),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Brand.Danger),
-                    contentPadding = PaddingValues(horizontal = Spacing.sm),
-                    modifier = Modifier.weight(0.8f).heightIn(min = 48.dp),
-                ) { Text("Void", maxLines = 1) }
-                ErpButton(
-                    text = when {
-                        ownsSession && presentation.state == StationVisualState.SendRejected -> "Retry send"
-                        ownsSession -> "Send to POS"
-                        canReconcileLegacy && activeShiftId != null -> "Reconcile to POS"
-                        else -> "Other terminal"
-                    },
-                    onClick = {
-                        session?.let { if (ownsSession) onSend(it) else onReconcile(it) }
-                    },
-                    enabled = actionsEnabled && session != null &&
-                        (ownsSession || (canReconcileLegacy && activeShiftId != null)),
-                    busy = busyHere,
-                    modifier = Modifier.weight(1.7f),
-                )
+            -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                cancellationAddonBlock?.let { reason ->
+                    Text(
+                        reason,
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    OutlinedButton(
+                        onClick = { session?.let(onCancelUnbilled) },
+                        enabled = actionsEnabled && session != null &&
+                            cancellationAddonBlock == null &&
+                            (ownsSession || canReconcileLegacy),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Brand.Danger),
+                        contentPadding = PaddingValues(horizontal = Spacing.sm),
+                        modifier = Modifier.weight(0.8f).heightIn(min = 48.dp),
+                    ) { Text("Void", maxLines = 1) }
+                    ErpButton(
+                        text = when {
+                            ownsSession && presentation.state == StationVisualState.SendRejected -> "Retry send"
+                            ownsSession -> "Send to POS"
+                            canReconcileLegacy && activeShiftId != null -> "Reconcile to POS"
+                            else -> "Other terminal"
+                        },
+                        onClick = {
+                            session?.let { if (ownsSession) onSend(it) else onReconcile(it) }
+                        },
+                        enabled = actionsEnabled && session != null &&
+                            unresolvedAddonActions.isEmpty() &&
+                            (ownsSession || (canReconcileLegacy && activeShiftId != null)),
+                        busy = busyHere,
+                        modifier = Modifier.weight(1.7f),
+                    )
+                }
             }
 
-            StationVisualState.CancellationRequired -> ErpButton(
-                text = "Cancel with reason",
-                onClick = { session?.let(onCancelUnbilled) },
-                enabled = actionsEnabled && session != null &&
-                    (ownsSession || canReconcileLegacy),
-                busy = busyHere,
-                intent = ActionIntent.Destructive,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            StationVisualState.CancellationRequired -> Column(
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                cancellationAddonBlock?.let { reason ->
+                    Text(
+                        reason,
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                ErpButton(
+                    text = "Cancel with reason",
+                    onClick = { session?.let(onCancelUnbilled) },
+                    enabled = actionsEnabled && session != null &&
+                        cancellationAddonBlock == null &&
+                        (ownsSession || canReconcileLegacy),
+                    busy = busyHere,
+                    intent = ActionIntent.Destructive,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
 
             StationVisualState.BillingMissing -> {
                 if (canReconcileLegacy) {
@@ -1346,15 +1540,25 @@ internal fun GamingStationCard(
                 }
             }
 
-            StationVisualState.Starting -> ErpButton(
-                text = "Stop & save end",
-                onClick = { session?.let(onStop) },
-                enabled = actionsEnabled && canStopSession && session?.canRequestStop() == true,
-                busy = busyHere,
-                intent = ActionIntent.Destructive,
-                leadingIcon = Icons.Filled.StopCircle,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            StationVisualState.Starting -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton(
+                    text = "Add drinks & snacks",
+                    onClick = { session?.let(onAddItems) },
+                    enabled = actionsEnabled && ownsSession && session?.orderId == null,
+                    intent = ActionIntent.Secondary,
+                    leadingIcon = Icons.Filled.RestaurantMenu,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                ErpButton(
+                    text = "Stop & save end",
+                    onClick = { session?.let(onStop) },
+                    enabled = actionsEnabled && canStopSession && session?.canRequestStop() == true,
+                    busy = busyHere,
+                    intent = ActionIntent.Destructive,
+                    leadingIcon = Icons.Filled.StopCircle,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
 
             StationVisualState.Stopping,
             StationVisualState.SendPending,
@@ -1475,6 +1679,7 @@ private fun StationBody(
     activeShiftId: String?,
     activeShiftServerConfirmed: Boolean,
     online: Boolean,
+    combinedBillSnapshotMinor: Long?,
 ) {
     when (presentation.state) {
         StationVisualState.Available -> {
@@ -1649,12 +1854,16 @@ private fun StationBody(
         StationVisualState.CancellationRequired,
         -> {
             NumericValue(
-                value = (session?.amountMinor ?: 0L).asRupees(),
+                value = (combinedBillSnapshotMinor ?: session?.amountMinor ?: 0L).asRupees(),
                 color = if (presentation.state == StationVisualState.CancellationRequired) Brand.Danger else Brand.Foreground,
                 style = MaterialTheme.typography.headlineMedium,
             )
             Text(
-                "Stopped · ${session?.billableMinutes ?: 0} min",
+                if (presentation.state == StationVisualState.CancellationRequired) {
+                    "Stopped · ${session?.billableMinutes ?: 0} min"
+                } else {
+                    "Estimated combined bill · stopped ${session?.billableMinutes ?: 0} min"
+                },
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.labelMedium,
             )
@@ -1711,7 +1920,12 @@ private fun StationBody(
     }
 }
 
-internal fun stationPresentation(station: Station, session: GameSession?, nowMillis: Long): StationPresentation {
+internal fun stationPresentation(
+    station: Station,
+    session: GameSession?,
+    nowMillis: Long,
+    hasActiveAddons: Boolean = false,
+): StationPresentation {
     if (session == null) {
         return if (station.isActive) {
             StationPresentation(StationVisualState.Available, "Available", UiTone.Success, Icons.Filled.CheckCircle)
@@ -1743,7 +1957,7 @@ internal fun stationPresentation(station: Station, session: GameSession?, nowMil
                 Icons.Filled.Error,
             )
         }
-        if (session.amountMinor <= 0L) {
+        if (session.amountMinor <= 0L && !hasActiveAddons) {
             return StationPresentation(
                 StationVisualState.CancellationRequired,
                 "Needs review",
@@ -1818,8 +2032,10 @@ private fun GamingQueueDialog(
     sessions: List<GameSession>,
     stations: List<Station>,
     activeShiftId: String?,
+    pendingBillSnapshotMinor: (GameSession) -> Long,
     actionLabel: (GameSession) -> String,
     actionEnabled: (GameSession) -> Boolean,
+    actionDisabledReason: (GameSession) -> String? = { null },
     actionIntent: ActionIntent,
     busyStationId: String?,
     onDismiss: () -> Unit,
@@ -1857,7 +2073,8 @@ private fun GamingQueueDialog(
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                                 Text(
-                                    "${session.billableMinutes ?: 0} min · ${(session.amountMinor ?: 0L).asRupees()}",
+                                    "${session.billableMinutes ?: 0} min · " +
+                                        "${pendingBillSnapshotMinor(session).asRupees()} estimated combined",
                                     color = Brand.ForegroundMuted,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
@@ -1877,6 +2094,15 @@ private fun GamingQueueDialog(
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                 }
+                                if (!actionEnabled(session)) {
+                                    actionDisabledReason(session)?.let { reason ->
+                                        Text(
+                                            reason,
+                                            color = Brand.Warning,
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                }
                             }
                             ErpButton(
                                 text = actionLabel(session),
@@ -1893,6 +2119,180 @@ private fun GamingQueueDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
+}
+
+@Composable
+private fun GamingAddonPickerDialog(
+    items: List<MenuItemEntity>,
+    onDismiss: () -> Unit,
+    onSelect: (MenuItemEntity) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = { Text("Add session items") },
+        text = {
+            if (items.isEmpty()) {
+                DesignedEmptyState(
+                    title = "No available items",
+                    body = "Refresh the menu or ask a manager to enable a drink or snack product.",
+                    icon = Icons.Filled.RestaurantMenu,
+                )
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxWidth().heightIn(max = 440.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    items(items, key = MenuItemEntity::id) { item ->
+                        Row(
+                            Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                                .background(Brand.Surface)
+                                .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                                .padding(Spacing.sm),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "${item.type.replaceFirstChar { it.titlecase(Locale.ROOT) }} · ${item.basePriceMinor.asRupees()}",
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            ErpButton(
+                                text = "Choose",
+                                onClick = { onSelect(item) },
+                                intent = ActionIntent.Secondary,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun GamingAddonReasonDialog(
+    title: String,
+    detail: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var selectedReasonId by rememberSaveable(title) { mutableStateOf<String?>(null) }
+    var customReason by rememberSaveable(title) { mutableStateOf("") }
+    val reason = resolvedVoidReason(selectedReasonId, customReason)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f)
+            .statusBarsPadding().navigationBarsPadding().imePadding(),
+        properties = gamingImeAwareDialogProperties,
+        title = { Text(title) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Text(detail, color = Brand.ForegroundMuted)
+                VoidReasonInput(
+                    selectedId = selectedReasonId,
+                    customReason = customReason,
+                    onPresetSelected = { selectedReasonId = it },
+                    onCustomReasonChange = { customReason = it },
+                )
+            }
+        },
+        confirmButton = {
+            ErpButton(
+                text = confirmLabel,
+                onClick = { onConfirm(reason) },
+                enabled = reason.length in 3..500,
+                intent = ActionIntent.Destructive,
+            )
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+@Composable
+private fun GamingSessionAddonSummary(
+    session: GameSession,
+    addons: List<GamingSessionAddonUi>,
+    actionsEnabled: Boolean,
+    onVoid: (GamingSessionAddonUi) -> Unit,
+    onReviewRejected: (String) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(Brand.SurfaceRaised)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd).padding(Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
+        val activeTotal = gamingSessionAddonBillableTotalMinor(addons)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Session items", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+            Text(activeTotal.asRupees(), color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+        }
+        addons.forEach { addon ->
+            val status = when {
+                addon.voided -> "VOIDED"
+                addon.localState == GamingSessionAddonActionState.REJECTED -> "REVIEW"
+                addon.localState == GamingSessionAddonActionState.AMBIGUOUS -> "CHECKING"
+                addon.localActionType == GamingSessionAddonActionType.VOID -> "VOID PENDING"
+                addon.localState == GamingSessionAddonActionState.PENDING -> "SYNCING"
+                else -> "SAVED"
+            }
+            val tone = when (status) {
+                "VOIDED" -> UiTone.Neutral
+                "REVIEW" -> UiTone.Danger
+                "CHECKING", "VOID PENDING", "SYNCING" -> UiTone.Warning
+                else -> UiTone.Success
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "${addon.menuItemName} ×${addon.qty}",
+                        color = if (addon.voided) Brand.ForegroundMuted else Brand.Foreground,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        if (addon.isRejectedLocalAdd()) {
+                            "Not billable · ${addon.lineTotalMinor.asRupees()} requested"
+                        } else {
+                            addon.lineTotalMinor.asRupees()
+                        },
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                OperationalStatusBadge(label = status, tone = tone)
+                when {
+                    addon.localState == GamingSessionAddonActionState.REJECTED && addon.actionId != null ->
+                        TextButton(
+                            onClick = { onReviewRejected(addon.actionId) },
+                            enabled = actionsEnabled,
+                        ) { Text("Review") }
+                    !addon.voided && addon.localActionType != GamingSessionAddonActionType.VOID &&
+                        session.orderId == null &&
+                        session.status in setOf("starting", "active", "paused", "stopping", "ended") ->
+                        TextButton(onClick = { onVoid(addon) }, enabled = actionsEnabled) { Text("Void") }
+                }
+            }
+            addon.lastError?.takeIf(String::isNotBlank)?.let {
+                Text(it, color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
 }
 
 @Composable
@@ -2565,7 +2965,7 @@ private fun DiscardRejectedExtensionDialog(
 @Composable
 private fun ReconcileSessionDialog(
     stationName: String,
-    amountMinor: Long,
+    pendingBillSnapshotMinor: Long,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -2586,7 +2986,8 @@ private fun ReconcileSessionDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    "$stationName · ${amountMinor.asRupees()}. The original closed shift remains unchanged; " +
+                    "$stationName · estimated combined bill ${pendingBillSnapshotMinor.asRupees()}. " +
+                        "POS confirms the final total. The original closed shift remains unchanged; " +
                         "a traceable unpaid POS order is created on the current shift.",
                     color = Brand.ForegroundMuted,
                 )
@@ -2950,7 +3351,7 @@ internal fun sessionAuthorityMessage(
 ): String? =
     when (session.authority(activeShiftId)) {
         GamingSessionAuthority.CURRENT_SHIFT -> null
-        GamingSessionAuthority.NO_OPEN_SHIFT -> "Open this terminal's POS shift to manage this session."
+        GamingSessionAuthority.NO_OPEN_SHIFT -> "Open a shift to manage this session."
         GamingSessionAuthority.OTHER_SHIFT -> "Managed by the POS shift or terminal that started it."
         GamingSessionAuthority.UNKNOWN -> if (
             session.resolvedStopShiftId(activeShiftId, activeShiftServerConfirmed, online) != null

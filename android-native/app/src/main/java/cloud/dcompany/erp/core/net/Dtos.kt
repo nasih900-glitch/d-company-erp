@@ -80,6 +80,11 @@ data class ClientCompatibilityResponse(
     @SerialName("latest_version_code") val latestVersionCode: Int,
     val status: String,
     @SerialName("update_url") val updateUrl: String? = null,
+    @SerialName("latest_version_name") val latestVersionName: String? = null,
+    @SerialName("release_notes") val releaseNotes: String? = null,
+    @SerialName("apk_sha256") val apkSha256: String? = null,
+    @SerialName("apk_size_bytes") val apkSizeBytes: Long? = null,
+    @SerialName("apk_signing_cert_sha256") val apkSigningCertSha256: String? = null,
     val message: String,
     @SerialName("checked_at") val checkedAt: String,
 )
@@ -112,4 +117,9 @@ data class ClientCompatibilityErrorDetails(
     @SerialName("minimum_supported_version_code") val minimumSupportedVersionCode: Int? = null,
     @SerialName("latest_version_code") val latestVersionCode: Int? = null,
     @SerialName("update_url") val updateUrl: String? = null,
+    @SerialName("latest_version_name") val latestVersionName: String? = null,
+    @SerialName("release_notes") val releaseNotes: String? = null,
+    @SerialName("apk_sha256") val apkSha256: String? = null,
+    @SerialName("apk_size_bytes") val apkSizeBytes: Long? = null,
+    @SerialName("apk_signing_cert_sha256") val apkSigningCertSha256: String? = null,
 )

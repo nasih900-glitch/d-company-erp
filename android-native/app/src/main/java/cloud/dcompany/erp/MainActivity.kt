@@ -2,7 +2,9 @@ package cloud.dcompany.erp
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,6 +51,7 @@ import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.allowedDestinations
 import cloud.dcompany.erp.ui.canManageSystemSettings
+import cloud.dcompany.erp.ui.resolveWorkspaceDestination
 import cloud.dcompany.erp.ui.workspaceLocationLabel
 import cloud.dcompany.erp.ui.usesAdvancedTerminalWorkflow
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
@@ -64,6 +69,8 @@ import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
 import cloud.dcompany.erp.ui.screens.reservations.ReservationsScreen
 import cloud.dcompany.erp.ui.screens.tables.TablesScreen
 import cloud.dcompany.erp.ui.screens.settings.SettingsScreen
+import cloud.dcompany.erp.ui.screens.settings.HelpScreen
+import cloud.dcompany.erp.ui.screens.settings.SupportInboxScreen
 import cloud.dcompany.erp.ui.screens.settings.BugReportDialog
 import cloud.dcompany.erp.ui.screens.settings.BugReportLaunchContext
 import cloud.dcompany.erp.ui.screens.settings.BugReportOwnerScope
@@ -83,6 +90,11 @@ import cloud.dcompany.erp.core.net.ClientCompatibilityState
 import cloud.dcompany.erp.core.net.ClientUpdateNotice
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.safeHttpsUpdateUrl
+import cloud.dcompany.erp.core.update.AppUpdateUiState
+import cloud.dcompany.erp.core.update.AppUpdateViewModel
+import cloud.dcompany.erp.core.update.DirectUpdateMetadataResult
+import cloud.dcompany.erp.core.update.matchesDescriptor
+import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.alarm.OperationalNotificationDestination
@@ -91,7 +103,9 @@ import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
 import cloud.dcompany.erp.core.sync.summarizeOutboxWork
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -101,7 +115,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             DCompanyTheme {
                 Surface(Modifier.fillMaxSize(), color = Brand.Background) {
-                    AppRoot(onOpenUpdate = ::openSecureUpdate)
+                    AppRoot(
+                        onOpenUpdateLink = ::openSecureUpdate,
+                        onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
+                    )
                 }
             }
         }
@@ -126,16 +143,80 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Could not open the update link. Ask an owner for the current app.", Toast.LENGTH_LONG).show()
         }
     }
+
+    /**
+     * Direct-distribution builds may hand a fully verified private APK to the
+     * system installer. Android still owns the final confirmation. The Play
+     * build has neither this capability nor the corresponding manifest entry.
+     */
+    private fun requestVerifiedUpdateInstall(file: File) {
+        if (!BuildConfig.DIRECT_UPDATES_ENABLED) {
+            Toast.makeText(this, "This app build uses the normal update link.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val updateDirectory = File(cacheDir, "verified-updates").canonicalFile
+        val candidate = runCatching { file.canonicalFile }.getOrNull()
+        if (candidate == null || candidate.parentFile != updateDirectory || !candidate.isFile) {
+            Toast.makeText(this, "The verified update file is no longer available. Download it again.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            val settingsIntent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName"),
+            )
+            runCatching { startActivity(settingsIntent) }.onSuccess {
+                Toast.makeText(
+                    this,
+                    "Allow installs for D Company ERP, return here, then tap Install update again.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }.onFailure {
+                Toast.makeText(
+                    this,
+                    "Android could not open the install permission. Ask the device owner for help.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
+
+        val contentUri = runCatching {
+            FileProvider.getUriForFile(this, "$packageName.updates", candidate)
+        }.getOrElse {
+            Toast.makeText(this, "The verified update could not be handed to Android.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            setDataAndType(contentUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+        }
+        runCatching { startActivity(installIntent) }.onFailure {
+            Toast.makeText(
+                this,
+                "Android Package Installer could not open. The app was not changed.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppRoot(
-    onOpenUpdate: (String) -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstallVerifiedUpdate: (File) -> Unit,
     session: SessionViewModel = viewModel(),
+    appUpdate: AppUpdateViewModel = viewModel(),
 ) {
     val compatibility = DCompanyApp.instance.clientCompatibility
     val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
+    val appUpdateState by appUpdate.state.collectAsStateWithLifecycle()
     val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsStateWithLifecycle()
     val effectiveOnline by DCompanyApp.instance.connectivity.online.collectAsStateWithLifecycle()
     val backendReachability by ApiClient.backendReachability.state.collectAsStateWithLifecycle()
@@ -161,7 +242,17 @@ private fun AppRoot(
 
     when (val update = compatibilityState) {
         is ClientCompatibilityState.UpdateRequired -> {
-            RequiredUpdateScreen(update.notice, onOpenUpdate)
+            RequiredUpdateScreen(
+                notice = update.notice,
+                updateState = appUpdateState,
+                outboxWorkStatus = outboxWorkStatus,
+                onDownload = { appUpdate.download(update.notice) },
+                onCancelDownload = appUpdate::cancel,
+                onOpenUpdateLink = onOpenUpdateLink,
+                onInstall = {
+                    appUpdate.verifiedFile(update.notice)?.let(onInstallVerifiedUpdate)
+                },
+            )
             return
         }
 
@@ -355,7 +446,7 @@ private fun AppRoot(
                 val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
                 var confirmSignOut by remember(s.me.userId) { mutableStateOf(false) }
                 var currentDestination by rememberSaveable(s.me.userId) {
-                    mutableStateOf(destinations.firstOrNull() ?: Destination.Settings)
+                    mutableStateOf(resolveWorkspaceDestination(null, destinations))
                 }
                 var operationalFocus by remember(s.me.userId) {
                     mutableStateOf<OperationalNotificationTarget?>(null)
@@ -407,9 +498,7 @@ private fun AppRoot(
                         }
                     }
                 }
-                val visibleDestination = currentDestination.takeIf { it in destinations }
-                    ?: destinations.firstOrNull()
-                    ?: Destination.Settings
+                val visibleDestination = resolveWorkspaceDestination(currentDestination, destinations)
                 val requiresTill = permissions.has(ErpPermission.PosRead)
                 val locationLabel = workspaceLocationLabel(
                     branchId = s.me.branchId,
@@ -448,6 +537,7 @@ private fun AppRoot(
                     onChangeTill = session::requestTerminalReassignment,
                     onSignOut = { confirmSignOut = true },
                     onDestinationChanged = {
+                        if (it !in destinations) return@WorkspaceScaffold
                         currentDestination = it
                         val focusDestination = when (operationalFocus?.destination) {
                             OperationalNotificationDestination.POS -> Destination.Pos
@@ -458,6 +548,7 @@ private fun AppRoot(
                     },
                 ) { destination, navigateTo ->
                     when (destination) {
+                            Destination.Dashboard -> AnalyticsScreen()
                             Destination.Pos -> {
                                 // Constructing a feature ViewModel starts its
                                 // initial API pulls. Keep it inside its allowed
@@ -570,6 +661,15 @@ private fun AppRoot(
                                 canManageSystem = canManageSystemSettings(s.me),
                                 onPasswordChanged = session::expireAfterPasswordChange,
                                 onReportProblem = ::openSupport,
+                            )
+                            Destination.SupportInbox -> SupportInboxScreen()
+                            Destination.Help -> HelpScreen(
+                                pendingRequestCount = bugReportState.pendingCount,
+                                onReportProblem = ::openSupport,
+                                onOpenMyRequests = {
+                                    openSupport()
+                                    bugReportVm.showHistory()
+                                },
                             )
                     }
                 }
@@ -723,8 +823,18 @@ private fun AppRoot(
         val notice = (compatibilityState as ClientCompatibilityState.UpdateAvailable).notice
         OptionalUpdateBanner(
             notice = notice,
-            onDismiss = compatibility::dismissOptionalUpdate,
-            onOpenUpdate = onOpenUpdate,
+            updateState = appUpdateState,
+            outboxWorkStatus = outboxWorkStatus,
+            onDismiss = {
+                appUpdate.discard()
+                compatibility.dismissOptionalUpdate()
+            },
+            onDownload = { appUpdate.download(notice) },
+            onCancelDownload = appUpdate::cancel,
+            onOpenUpdateLink = onOpenUpdateLink,
+            onInstall = {
+                appUpdate.verifiedFile(notice)?.let(onInstallVerifiedUpdate)
+            },
         )
     }
 }
@@ -818,31 +928,47 @@ private fun SessionViewModelScope(
 @Composable
 private fun OptionalUpdateBanner(
     notice: ClientUpdateNotice,
+    updateState: AppUpdateUiState,
+    outboxWorkStatus: OutboxWorkStatus,
     onDismiss: () -> Unit,
-    onOpenUpdate: (String) -> Unit,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstall: () -> Unit,
 ) {
-    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
     Box(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
         Surface(color = Brand.SurfaceRaised, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(Modifier.weight(1f)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
                     Text("App update available", color = Brand.Foreground, style = MaterialTheme.typography.titleSmall)
                     Text(notice.message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+                        UpdateVersionAndNotes(notice, compact = true)
+                    }
+                    TextButton(onClick = onDismiss) { Text("Later") }
                 }
-                if (safeUrl != null) {
-                    TextButton(onClick = {
+                UpdateActionArea(
+                    notice = notice,
+                    state = updateState,
+                    outboxWorkStatus = outboxWorkStatus,
+                    onDownload = onDownload,
+                    onCancelDownload = onCancelDownload,
+                    onOpenUpdateLink = {
                         onDismiss()
-                        onOpenUpdate(safeUrl)
-                    }) { Text("Update securely") }
-                }
-                TextButton(onClick = onDismiss) { Text(if (safeUrl == null) "OK" else "Later") }
+                        onOpenUpdateLink(it)
+                    },
+                    onInstall = onInstall,
+                    compact = true,
+                )
             }
         }
     }
@@ -851,36 +977,196 @@ private fun OptionalUpdateBanner(
 @Composable
 private fun RequiredUpdateScreen(
     notice: ClientUpdateNotice,
-    onOpenUpdate: (String) -> Unit,
+    updateState: AppUpdateUiState,
+    outboxWorkStatus: OutboxWorkStatus,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstall: () -> Unit,
 ) {
-    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
     Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+        Surface(
+            color = Brand.SurfaceRaised,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         ) {
-            Text("App update required", style = MaterialTheme.typography.headlineSmall, color = Brand.Foreground)
-            Text(notice.message, color = Brand.ForegroundMuted)
-            if (notice.minimumSupportedVersionCode != null) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("App update required", style = MaterialTheme.typography.headlineSmall, color = Brand.Foreground)
+                Text(notice.message, color = Brand.ForegroundMuted)
+                if (notice.minimumSupportedVersionCode != null) {
+                    Text(
+                        "Installed build ${notice.currentVersionCode ?: BuildConfig.VERSION_CODE} · " +
+                            "minimum supported ${notice.minimumSupportedVersionCode}",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                UpdateVersionAndNotes(notice, compact = false)
                 Text(
-                    "Installed build ${notice.currentVersionCode ?: BuildConfig.VERSION_CODE} · " +
-                        "minimum supported ${notice.minimumSupportedVersionCode}",
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelMedium,
+                    "This is an in-place update. Your signed-in account, local database, and saved offline work stay on this device. Never uninstall or clear app data to update.",
+                    color = Brand.Foreground,
+                )
+                UpdateActionArea(
+                    notice = notice,
+                    state = updateState,
+                    outboxWorkStatus = outboxWorkStatus,
+                    onDownload = onDownload,
+                    onCancelDownload = onCancelDownload,
+                    onOpenUpdateLink = onOpenUpdateLink,
+                    onInstall = onInstall,
+                    compact = false,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun UpdateVersionAndNotes(notice: ClientUpdateNotice, compact: Boolean) {
+    val version = notice.latestVersionName?.trim()?.take(80)?.takeIf(String::isNotEmpty)
+    val notes = notice.releaseNotes?.trim()?.take(2_000)?.takeIf(String::isNotEmpty)
+    if (version != null) {
+        Text(
+            "Release $version · build ${notice.latestVersionCode ?: "unknown"}",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+    if (notes != null) {
+        Text(
+            if (compact) notes.lineSequence().first().take(180) else "What's new\n$notes",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun UpdateActionArea(
+    notice: ClientUpdateNotice,
+    state: AppUpdateUiState,
+    outboxWorkStatus: OutboxWorkStatus,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstall: () -> Unit,
+    compact: Boolean,
+) {
+    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
+    val directMetadata = validateDirectUpdateMetadata(notice)
+    val directDescriptor = (directMetadata as? DirectUpdateMetadataResult.Valid)?.descriptor
+    val directAvailable = BuildConfig.DIRECT_UPDATES_ENABLED &&
+        directDescriptor != null
+    val noticeVersion = notice.latestVersionCode
+    val stateForNotice = when (state) {
+        is AppUpdateUiState.Downloading,
+        is AppUpdateUiState.Verifying,
+        is AppUpdateUiState.Ready ->
+            directDescriptor?.let { state.takeIf { current -> current.matchesDescriptor(it) } }
+        is AppUpdateUiState.Failed -> state.takeIf {
+            if (it.descriptor != null) {
+                it.descriptor == directDescriptor
+            } else {
+                it.versionCode == null || it.versionCode == noticeVersion
+            }
+        }
+        AppUpdateUiState.Idle -> state
+    } ?: AppUpdateUiState.Idle
+
+    if (!outboxWorkStatus.isClear) {
+        Surface(
+            color = Brand.WarningMuted,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeSm,
+        ) {
             Text(
-                "Saved offline work and your signed-in account remain on this device.",
-                color = Brand.Foreground,
+                "Keep this app installed: ${outboxWorkStatus.totalCount} saved or pending " +
+                    "item${if (outboxWorkStatus.totalCount == 1) "" else "s"} will be preserved and resumed after the in-place update.",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                color = Brand.Warning,
+                style = MaterialTheme.typography.bodySmall,
             )
-            if (safeUrl != null) {
-                Button(onClick = { onOpenUpdate(safeUrl) }) { Text("Update securely") }
+        }
+    }
+
+    when (stateForNotice) {
+        AppUpdateUiState.Idle -> {
+            if (directAvailable) {
+                Button(onClick = onDownload) { Text("Download verified update") }
+                Text(
+                    "The APK will be checked for exact size, checksum, package, version and signing lineage before Android can open it.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (safeUrl != null) {
+                if (BuildConfig.DIRECT_UPDATES_ENABLED) {
+                    Text(
+                        "Verified in-app download details are not available for this release. Use the HTTPS update link.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(onClick = { onOpenUpdateLink(safeUrl) }) { Text("Open update link") }
             } else {
                 Text(
-                    "No verified HTTPS download link was supplied. Ask an owner to install the current D Company ERP app.",
+                    "No safe HTTPS update link was supplied. Ask an owner for the current D Company ERP release.",
                     color = Brand.Danger,
                 )
             }
         }
+        is AppUpdateUiState.Downloading -> {
+            val progress = if (stateForNotice.totalBytes > 0) {
+                stateForNotice.downloadedBytes.toFloat() / stateForNotice.totalBytes.toFloat()
+            } else 0f
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = Brand.Information,
+                trackColor = Brand.Surface,
+            )
+            Text(
+                "Downloading ${(progress * 100).toInt()}% · do not close the app",
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = onCancelDownload) { Text("Cancel download") }
+        }
+        is AppUpdateUiState.Verifying -> Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(color = Brand.Gold, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Text("Verifying package, version and signature…", color = Brand.Foreground)
+        }
+        is AppUpdateUiState.Ready -> {
+            Text(
+                "Verified. Android Package Installer will show the app identity and require your confirmation.",
+                color = Brand.Good,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onInstall) { Text("Install update") }
+            Text(
+                "If Android asks for install permission, allow it, return here, and tap Install update again.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        is AppUpdateUiState.Failed -> {
+            Text(stateForNotice.message, color = Brand.Danger, style = MaterialTheme.typography.bodySmall)
+            if (directAvailable) Button(onClick = onDownload) { Text("Try download again") }
+            if (safeUrl != null) {
+                TextButton(onClick = { onOpenUpdateLink(safeUrl) }) { Text("Open HTTPS update link") }
+            }
+        }
+    }
+
+    if (!compact && !BuildConfig.DIRECT_UPDATES_ENABLED && safeUrl != null) {
+        Text(
+            "Android will handle the download/install flow and ask for confirmation. This app does not install updates silently.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }

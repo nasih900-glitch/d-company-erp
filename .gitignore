@@ -73,6 +73,8 @@ D_Company_Legal_Documents_Checklist*.docx
 *.log
 *.pid
 *.zip
+releases/android/*
+!releases/android/README.md
 preview-app/
 frontend/demo-dist*/
 frontend/live-dist/

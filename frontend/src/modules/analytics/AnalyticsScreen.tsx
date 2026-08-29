@@ -18,6 +18,7 @@ import {
 
 import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
+import { isProfileRouteEnabled, profileMembershipMoneyLabel } from '@/lib/product-profile';
 import { analytics, type DashboardKPIsDTO } from '@/lib/erp-api';
 import { useAuth } from '@/modules/auth/AuthContext';
 
@@ -47,6 +48,9 @@ export default function AnalyticsScreen() {
   // Gates the Audit quick-action below — admin.audit.read specifically, not
   // the broader protected_access (co_owner has that but not audit access).
   const canSeeProtected = Boolean(demo || me?.audit_access);
+  const membershipRevenueLabel = data
+    ? profileMembershipMoneyLabel('revenue', data.revenue_memberships_minor)
+    : null;
 
   return (
     <div>
@@ -122,8 +126,8 @@ export default function AnalyticsScreen() {
                     ? [{ name: 'Hookah', value: data.revenue_hookah_minor / 100 }]
                     : []),
                   { name: 'Events', value: data.revenue_events_minor / 100 },
-                  ...(data.revenue_memberships_minor > 0
-                    ? [{ name: 'Memberships', value: data.revenue_memberships_minor / 100 }]
+                  ...(membershipRevenueLabel
+                    ? [{ name: membershipRevenueLabel, value: data.revenue_memberships_minor / 100 }]
                     : []),
                   ...(data.revenue_manual_collections_minor > 0
                     ? [{ name: 'Manual', value: data.revenue_manual_collections_minor / 100 }]
@@ -179,17 +183,19 @@ function OwnerCommandCenter({
   ] as const;
 
   const actions = [
+    { to: '/gaming', label: 'Gaming', icon: <Gamepad2 size={15}/> },
     { to: '/pos', label: 'POS', icon: <Utensils size={15}/> },
     { to: '/reports', label: 'P&L', icon: <FileText size={15}/> },
+    { to: '/finance', label: 'Finance', icon: <Wallet size={15}/> },
     { to: '/customers', label: 'Customers', icon: <Users size={15}/> },
     { to: '/insights', label: 'Insights', icon: <Activity size={15}/> },
-    { to: '/inventory', label: 'Inventory', icon: <Boxes size={15}/> },
+    { to: '/inventory', label: 'Stock', icon: <Boxes size={15}/> },
     ...(canSeeProtected
       ? [
           { to: '/audit', label: 'Audit', icon: <ShieldCheck size={15}/> },
         ]
       : []),
-  ];
+  ].filter((action) => isProfileRouteEnabled(action.to));
 
   return (
     <section className="card mb-6">

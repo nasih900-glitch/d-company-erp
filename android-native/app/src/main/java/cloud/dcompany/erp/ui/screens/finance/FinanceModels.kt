@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -335,6 +337,67 @@ data class BusinessMetrics(
     /** Loss amount for the period; zero means break-even or profitable. */
     @SerialName("burn_rate_minor") val burnRateMinor: Long,
 )
+
+internal data class PresentedBusinessMetric(
+    val label: String,
+    val value: String,
+    val detail: String,
+)
+
+internal fun BusinessMetrics.presentedMetrics(
+    presentation: WorkspacePresentationPolicy,
+): List<PresentedBusinessMetric> {
+    if (presentation.showsMemberships || presentation.showsCustomers) {
+        return listOf(
+            PresentedBusinessMetric(
+                "Avg order value (this period)",
+                aovMinor.asRupees(),
+                "${countLabel(ordersCount, "order")} this period",
+            ),
+            PresentedBusinessMetric(
+                "Active memberships",
+                activeMembersCount.toString(),
+                "unexpired, non-revoked terms active right now",
+            ),
+            PresentedBusinessMetric(
+                "Customer LTV (all-time)",
+                ltvMinor.asRupees(),
+                "avg across ${countLabel(customersCount, "customer")}, all-time",
+            ),
+            PresentedBusinessMetric(
+                "CAC",
+                cacMinor?.asRupees() ?: "—",
+                if (cacMinor == null) {
+                    "no new customers this period"
+                } else {
+                    "${marketingSpendMinor.asRupees()} marketing ÷ $newCustomersCount new"
+                },
+            ),
+        )
+    }
+    return listOf(
+        PresentedBusinessMetric(
+            "Average paid bill",
+            aovMinor.asRupees(),
+            countLabel(ordersCount, "paid bill"),
+        ),
+        PresentedBusinessMetric(
+            "Paid bills",
+            ordersCount.toString(),
+            "completed POS and gaming bills this period",
+        ),
+        PresentedBusinessMetric(
+            "Marketing spend",
+            marketingSpendMinor.asRupees(),
+            "recorded marketing cost this period",
+        ),
+        PresentedBusinessMetric(
+            "Operating loss burn",
+            burnRateMinor.asRupees(),
+            if (burnRateMinor > 0L) "loss recorded this period" else "no operating loss this period",
+        ),
+    )
+}
 
 // ---------------------------------------------------------------- formatting
 

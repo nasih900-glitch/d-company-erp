@@ -11,13 +11,17 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     UniqueConstraint,
     event,
     func,
+    inspect,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -193,6 +197,216 @@ def _guard_gaming_session_extension_update(_mapper, _connection, _row) -> None:
 @event.listens_for(GamingSessionExtension, "before_delete")
 def _guard_gaming_session_extension_delete(_mapper, _connection, _row) -> None:
     raise ValueError("gaming session extension ledger rows cannot be deleted")
+
+
+class GamingSessionAddon(Base, TenantMixin):
+    """Immutable menu-price snapshot attached to a live gaming session.
+
+    The row is financial intent, not inventory movement.  It is copied into the
+    session's single held POS order after Stop; normal POS finalization remains
+    the only path that deducts stock and posts revenue.  Corrections are a
+    one-way, reasoned soft void so an accidental drink/snack never disappears
+    from the audit trail.
+    """
+
+    __tablename__ = "gaming_session_addons"
+    __table_args__ = (
+        CheckConstraint("qty > 0", name="ck_gaming_session_addon_qty_positive"),
+        CheckConstraint(
+            "catalog_unit_price_minor >= 0 AND unit_price_minor >= 0 "
+            "AND line_total_minor >= 0 AND discount_minor >= 0 "
+            "AND taxable_value_minor >= 0 AND cgst_minor >= 0 "
+            "AND sgst_minor >= 0 AND igst_minor >= 0 AND cess_minor >= 0",
+            name="ck_gaming_session_addon_amounts_non_negative",
+        ),
+        CheckConstraint(
+            "line_total_minor = taxable_value_minor + cgst_minor + sgst_minor "
+            "+ igst_minor + cess_minor",
+            name="ck_gaming_session_addon_total_matches_tax_parts",
+        ),
+        CheckConstraint(
+            "variant_snapshot IS NULL OR jsonb_typeof(variant_snapshot) = 'object'",
+            name="ck_gaming_session_addon_variant_snapshot_object",
+        ),
+        CheckConstraint(
+            "modifiers IS NULL OR jsonb_typeof(modifiers) = 'array'",
+            name="ck_gaming_session_addon_modifiers_array",
+        ),
+        CheckConstraint(
+            "length(trim(menu_item_name_snapshot)) >= 1 "
+            "AND menu_item_type_snapshot IN ('food', 'drink', 'dessert')",
+            name="ck_gaming_session_addon_reporting_snapshot",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 "
+            "AND request_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_gaming_session_addon_create_receipt",
+        ),
+        CheckConstraint(
+            "void_request_hash IS NULL OR void_request_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_gaming_session_addon_void_hash",
+        ),
+        CheckConstraint(
+            "(voided_at IS NULL AND voided_by IS NULL AND void_reason IS NULL "
+            "AND void_idempotency_key IS NULL AND void_request_hash IS NULL "
+            "AND voided_terminal_id IS NULL) OR "
+            "(voided_at IS NOT NULL AND voided_by IS NOT NULL "
+            "AND length(trim(void_reason)) >= 3 "
+            "AND length(trim(void_idempotency_key)) > 0 "
+            "AND void_request_hash ~ '^[0-9a-f]{64}$' "
+            "AND voided_terminal_id IS NOT NULL)",
+            name="ck_gaming_session_addon_void_state",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "idempotency_key",
+            name="uq_gaming_session_addon_company_idempotency",
+        ),
+        UniqueConstraint(
+            "gaming_session_id",
+            "client_line_id",
+            name="uq_gaming_session_addon_session_client_line",
+        ),
+        Index(
+            "uq_gaming_session_addon_company_void_idempotency",
+            "company_id",
+            "void_idempotency_key",
+            unique=True,
+            postgresql_where=text("void_idempotency_key IS NOT NULL"),
+        ),
+        Index(
+            "ix_gaming_session_addon_session_active",
+            "gaming_session_id",
+            "voided_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gaming_sessions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    client_line_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    menu_item_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("menu_items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    menu_item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    menu_item_type_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    variant_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("menu_variants.id", ondelete="RESTRICT")
+    )
+    variant_snapshot: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    modifiers: Mapped[list[dict] | None] = mapped_column(JSONB(none_as_null=True))
+    qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    catalog_unit_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    unit_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_total_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    discount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    hsn_or_sac: Mapped[str | None] = mapped_column(String(8))
+    tax_rate: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
+    taxable_value_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cgst_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sgst_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    igst_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cess_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    note: Mapped[str | None] = mapped_column(String(500))
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_terminal_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    voided_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    void_reason: Mapped[str | None] = mapped_column(String(500))
+    void_idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    void_request_hash: Mapped[str | None] = mapped_column(String(64))
+    voided_terminal_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT")
+    )
+
+
+@event.listens_for(GamingSessionAddon, "before_update")
+def _guard_gaming_session_addon_update(_mapper, _connection, row) -> None:
+    """Only the first complete soft-void transition may mutate an add-on."""
+
+    state = inspect(row)
+    immutable_fields = {
+        "company_id",
+        "gaming_session_id",
+        "client_line_id",
+        "menu_item_id",
+        "menu_item_name_snapshot",
+        "menu_item_type_snapshot",
+        "variant_id",
+        "variant_snapshot",
+        "modifiers",
+        "qty",
+        "catalog_unit_price_minor",
+        "unit_price_minor",
+        "line_total_minor",
+        "discount_minor",
+        "hsn_or_sac",
+        "tax_rate",
+        "taxable_value_minor",
+        "cgst_minor",
+        "sgst_minor",
+        "igst_minor",
+        "cess_minor",
+        "note",
+        "idempotency_key",
+        "request_hash",
+        "created_by",
+        "created_terminal_id",
+        "created_at",
+    }
+    changed = sorted(
+        field for field in immutable_fields if state.attrs[field].history.has_changes()
+    )
+    if changed:
+        raise ValueError(
+            "gaming session add-on financial/provenance fields are immutable: "
+            + ", ".join(changed)
+        )
+
+    void_fields = (
+        "voided_at",
+        "voided_by",
+        "void_reason",
+        "void_idempotency_key",
+        "void_request_hash",
+        "voided_terminal_id",
+    )
+    for field in void_fields:
+        history = state.attrs[field].history
+        if history.has_changes() and history.deleted and history.deleted[0] is not None:
+            raise ValueError("a gaming session add-on void cannot be changed or reversed")
+    if any(state.attrs[field].history.has_changes() for field in void_fields) and (
+        row.voided_at is None
+        or row.voided_by is None
+        or row.void_reason is None
+        or len(row.void_reason.strip()) < 3
+        or not row.void_idempotency_key
+        or not row.void_request_hash
+        or row.voided_terminal_id is None
+    ):
+        raise ValueError("a gaming session add-on void must be populated atomically")
+
+
+@event.listens_for(GamingSessionAddon, "before_delete")
+def _guard_gaming_session_addon_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming session add-ons are immutable; void the add-on instead")
 
 
 class GamingPackage(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):

@@ -104,6 +104,7 @@ enum class Destination(
     val description: String,
     val icon: ImageVector,
 ) {
+    Dashboard("Dashboard", "See today's Gaming Centre overview", Icons.Filled.Analytics),
     Pos("POS", "Take orders and payments", Icons.Filled.PointOfSale),
     Gaming("Gaming", "Manage stations and sessions", Icons.Filled.SportsEsports),
     Tables("Tables", "Open and manage table orders", Icons.Filled.TableRestaurant),
@@ -111,7 +112,7 @@ enum class Destination(
     Kitchen("Kitchen", "Prepare and complete kitchen tickets", Icons.Filled.Restaurant),
     Shift("Shift", "Open, review and close today's shift", Icons.Filled.Schedule),
     Customers("Customers", "Find customers and loyalty history", Icons.Filled.People),
-    Menu("Menu", "Manage categories, items and pricing", Icons.Filled.Keyboard),
+    Menu("Products", "Manage products, categories and pricing", Icons.Filled.Keyboard),
     Staff("Staff", "Manage employees and attendance", Icons.Filled.Groups),
     Inventory("Stock", "Receive, count and adjust stock", Icons.Filled.Inventory2),
     Reports("Reports", "Review operational reports", Icons.Filled.Assessment),
@@ -123,6 +124,8 @@ enum class Destination(
     AuditLog("Audit Log", "Review protected activity history", Icons.Filled.History),
     AccessControl("Access Control", "Manage roles and permissions", Icons.Filled.AdminPanelSettings),
     Settings("Settings", "Account, branch and device settings", Icons.Filled.Settings),
+    SupportInbox("Support Inbox", "Review staff help requests", Icons.AutoMirrored.Filled.HelpOutline),
+    Help("Help", "Report a problem or ask what to do next", Icons.AutoMirrored.Filled.HelpOutline),
 }
 
 /**
@@ -147,9 +150,7 @@ fun WorkspaceScaffold(
     onDestinationChanged: (Destination) -> Unit = {},
     content: @Composable (Destination, navigateTo: (Destination) -> Unit) -> Unit,
 ) {
-    val current = currentDestination.takeIf { it in destinations }
-        ?: destinations.firstOrNull()
-        ?: Destination.Settings
+    val current = resolveWorkspaceDestination(currentDestination, destinations)
     LaunchedEffect(currentDestination, current) {
         if (currentDestination != current) onDestinationChanged(current)
     }

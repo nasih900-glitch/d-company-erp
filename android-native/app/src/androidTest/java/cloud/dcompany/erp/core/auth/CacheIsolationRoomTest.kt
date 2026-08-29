@@ -163,6 +163,7 @@ class CacheIsolationRoomTest {
         "local_shifts" -> "closed"
         "local_gaming_sessions" -> "sent"
         "local_gaming_package_extensions" -> "confirmed"
+        "local_gaming_session_addon_actions" -> "confirmed"
         "local_refunds" -> "settled"
         else -> "synced"
     }

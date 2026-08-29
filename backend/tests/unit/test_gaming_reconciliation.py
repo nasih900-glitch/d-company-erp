@@ -40,6 +40,9 @@ class _Result:
     def scalar_one_or_none(self):
         return self.scalar
 
+    def scalar_one(self):
+        return self.scalar
+
     def scalars(self):
         return self
 
@@ -290,6 +293,7 @@ async def test_open_source_session_handoff_preserves_source_and_targets_pos_draw
     session = _Session(
         _Result(gaming_session),
         _Result(rows=[source_shift, target_shift]),
+        _Result(rows=[]),
         entities={
             (Station, station.id): station,
             (Shift, source_shift.id): source_shift,
@@ -652,6 +656,7 @@ async def test_closed_shift_session_is_moved_to_target_without_rewriting_source(
     session = _Session(
         _Result(gaming_session),
         _Result(target_shift),
+        _Result(rows=[]),
         entities={
             (Station, station.id): station,
             (Shift, source_shift.id): source_shift,
@@ -835,6 +840,7 @@ async def test_send_cancel_and_reconcile_fail_closed_for_missing_ended_amount() 
             _Session(
                 _Result(gaming_session),
                 _Result(open_shift),
+                _Result(0),
                 entities={(Station, station.id): station},
             ),
             tenant,

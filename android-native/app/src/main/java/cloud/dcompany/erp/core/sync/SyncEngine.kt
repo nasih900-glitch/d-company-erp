@@ -50,6 +50,9 @@ import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
 import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
 import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
+import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingPackageCacheEntity
 import cloud.dcompany.erp.core.db.BatchCacheEntity
@@ -60,6 +63,7 @@ import cloud.dcompany.erp.core.db.KitchenOrderCacheEntity
 import cloud.dcompany.erp.core.db.LocalAdjustmentEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
 import cloud.dcompany.erp.core.db.LocalGrnEntity
 import cloud.dcompany.erp.core.db.LocalGrnLineEntity
 import cloud.dcompany.erp.core.db.LocalIngredientEntity
@@ -128,8 +132,11 @@ import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
+import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStopBody
+import cloud.dcompany.erp.ui.screens.gaming.sessionAddonReceiptError
+import cloud.dcompany.erp.ui.screens.gaming.toSessionAddonCreateBody
 import cloud.dcompany.erp.ui.screens.gaming.toPackageExtendBody
 import cloud.dcompany.erp.ui.screens.gaming.toCacheEntity
 import cloud.dcompany.erp.ui.screens.inventory.AdjustmentBody
@@ -744,6 +751,37 @@ internal enum class GamingStopReplayMode { CAPTURED_TIMESTAMP_BODY, LEGACY_BODYL
 internal fun gamingStopReplayMode(endAtMillis: Long?): GamingStopReplayMode =
     if (endAtMillis == null) GamingStopReplayMode.LEGACY_BODYLESS
     else GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY
+
+internal enum class GamingSessionPushPhase { STARTS, STOPS, SENDS }
+
+internal fun gamingAddonFailureMessage(failure: Exception): String = when (failure) {
+    is ApiException -> if (failure.mustPreserveOutbox) {
+        "Gaming item confirmation is pending. The exact saved request will retry without duplicating the item."
+    } else {
+        failure.message ?: "The server refused the saved Gaming item action."
+    }
+    else ->
+        "Gaming item confirmation is pending because the connection ended without a response."
+}
+
+/**
+ * The Gaming board renders one blocking lifecycle per station. Do not turn a
+ * refresh into history-wide add-on fan-out if a server ever returns duplicate
+ * or already-billed rows despite `unbilled_only=true`.
+ */
+internal fun gamingAddonSessionIdsForPull(
+    sessions: List<cloud.dcompany.erp.ui.screens.gaming.GameSession>,
+): List<String> {
+    val byStation = linkedMapOf<String, String>()
+    sessions.forEach { session ->
+        val visible = session.status in setOf("active", "paused") ||
+            (session.status == "ended" && session.orderId == null)
+        if (visible && session.stationId.isNotBlank() && session.id.isNotBlank()) {
+            byStation.putIfAbsent(session.stationId, session.id)
+        }
+    }
+    return byStation.values.toList()
+}
 
 enum class RejectedShiftOpenVerificationStatus {
     CLEARED,
@@ -1991,8 +2029,16 @@ class SyncEngine(
             // screen/realtime pulls replace. Share the resource locks so an
             // older in-flight GET cannot land after a newer confirmed write.
             withSessionResourceSerialisations(sessionLease, "gaming", "orders") {
-                val changedHeldQueue = pushGamingSessions()
+                // Dependency order is financial correctness, not presentation:
+                // Start must exist before an Add; every captured Add must reach
+                // the still-running session before Stop; Voids are one-way and
+                // may land before/after Stop; POS handoff is last.
+                pushGamingSessions(GamingSessionPushPhase.STARTS)
+                pushGamingSessionAddonActions(GamingSessionAddonActionType.ADD)
                 pushGamingPackageExtensions()
+                pushGamingSessions(GamingSessionPushPhase.STOPS)
+                pushGamingSessionAddonActions(GamingSessionAddonActionType.VOID)
+                val changedHeldQueue = pushGamingSessions(GamingSessionPushPhase.SENDS)
                 if (changedHeldQueue && resourceAccess.canPull("orders")) {
                     pullHeldOrdersBestEffort()
                 }
@@ -2536,7 +2582,7 @@ class SyncEngine(
      * Returns true only when a confirmed send-to-POS response changed the held
      * queue; the caller then refreshes orders before releasing either lock.
      */
-    private suspend fun pushGamingSessions(): Boolean {
+    private suspend fun pushGamingSessions(phase: GamingSessionPushPhase): Boolean {
         val dao = db.gamingDao()
         // A restored database can already carry the current Room version yet
         // still contain a pre-v17 generic rejection. Recover it before reading
@@ -2555,9 +2601,19 @@ class SyncEngine(
             // Only a still-unsynced start leg has a shift to wait on — a
             // stop-only row (serverId already set) or a genuinely shiftless
             // row is always ready.
-            if (row.serverId != null || row.shiftId == null) return@filter true
-            val localShift = shiftDao.byLocalId(row.shiftId)
-            localShift == null || localShift.serverShiftId != null
+            val dependencyReady = if (row.serverId != null || row.shiftId == null) {
+                true
+            } else {
+                val localShift = shiftDao.byLocalId(row.shiftId)
+                localShift == null || localShift.serverShiftId != null
+            }
+            dependencyReady && when (phase) {
+                GamingSessionPushPhase.STARTS -> row.serverId == null
+                GamingSessionPushPhase.STOPS ->
+                    row.serverId != null && row.state == GamingSessionState.STOP_PENDING
+                GamingSessionPushPhase.SENDS ->
+                    row.serverId != null && row.state == GamingSessionState.SEND_PENDING
+            }
         }
         var changedHeldQueue = false
         drainOutbox(
@@ -2572,7 +2628,7 @@ class SyncEngine(
                 dao.markSessionRejected(row.localId, rejectedState, msg)
             },
             push = { row ->
-                if (pushGamingSessionOne(row)) changedHeldQueue = true
+                if (pushGamingSessionOne(row, phase)) changedHeldQueue = true
             },
         )
         return changedHeldQueue
@@ -2584,10 +2640,13 @@ class SyncEngine(
      * synced is already `state = stop_pending` on this row, so the check
      * below just finds it waiting once a real serverId exists.
      */
-    private suspend fun pushGamingSessionOne(row: LocalGamingSessionEntity): Boolean {
+    private suspend fun pushGamingSessionOne(
+        row: LocalGamingSessionEntity,
+        phase: GamingSessionPushPhase,
+    ): Boolean {
         val dao = db.gamingDao()
         var serverId = row.serverId
-        if (serverId == null) {
+        if (phase == GamingSessionPushPhase.STARTS && serverId == null) {
             // Guaranteed non-null here by GamingViewModel.start() — the only
             // call site that ever inserts a start_pending row. A violation
             // surfaces as a caught, rejected "app error" via drainOutbox
@@ -2658,14 +2717,23 @@ class SyncEngine(
                 fromState = GamingSessionState.START_PENDING,
                 toState = GamingSessionState.START_SYNCED,
             )
+            // Resolve only the dependency identifier. Every add-on selection,
+            // actor, workspace, price snapshot and key stays immutable.
+            dao.resolveSessionAddonServerId(row.localId, serverId)
+            return false
         }
         val current = dao.localSessionById(row.localId) ?: return false
-        if (current.state == GamingSessionState.STOP_PENDING) {
+        val resolvedServerId = serverId ?: return false
+        if (phase == GamingSessionPushPhase.STOPS && current.state == GamingSessionState.STOP_PENDING) {
+            // Backend intentionally refuses new Add commands after Stop. Keep
+            // the captured Stop timestamp intact, but do not transmit it until
+            // every earlier Add is either confirmed or explicitly discarded.
+            if (dao.unresolvedSessionAddCount(current.localId, current.serverId) > 0) return false
             val stopKey = "gaming-session-stop:${row.localId}"
             val provenance = outboxProvenanceHeaders(current.endAtMillis, stopKey)
             val stopped = when (gamingStopReplayMode(current.endAtMillis)) {
                 GamingStopReplayMode.CAPTURED_TIMESTAMP_BODY -> gamingApi.stop(
-                    id = serverId,
+                    id = resolvedServerId,
                     body = SessionStopBody(
                         Instant.ofEpochMilli(requireNotNull(current.endAtMillis)).toString(),
                     ),
@@ -2673,12 +2741,12 @@ class SyncEngine(
                     provenance = provenance,
                 )
                 GamingStopReplayMode.LEGACY_BODYLESS -> gamingApi.stopLegacy(
-                    id = serverId,
+                    id = resolvedServerId,
                     key = stopKey,
                     provenance = provenance,
                 )
             }
-            require(stopped.id == serverId) {
+            require(stopped.id == resolvedServerId) {
                 "Server Stop response did not match the saved gaming session."
             }
             // A protected legacy recovery may have linked an already-paid POS
@@ -2710,9 +2778,14 @@ class SyncEngine(
             }
             return false
         }
-        if (current.state == GamingSessionState.SEND_PENDING) {
+        if (phase == GamingSessionPushPhase.SENDS && current.state == GamingSessionState.SEND_PENDING) {
+            // The held POS order copies exactly the server-confirmed active
+            // add-ons. Any unresolved Add/Void would create a partial bill.
+            if (dao.unresolvedSessionAddonActionCount(current.localId, current.serverId) > 0) {
+                return false
+            }
             val sent = gamingApi.sendToPos(
-                serverId,
+                resolvedServerId,
                 outboxProvenanceHeaders(null, "gaming-session-send:${row.localId}"),
             )
             // The server has committed the financial handoff. Persist both
@@ -2721,7 +2794,7 @@ class SyncEngine(
             // Payment Due or misclassify this as a failed Stop.
             db.withTransaction {
                 dao.markSessionSent(row.localId, sent.orderId, sent.amountMinor)
-                dao.markCachedSessionSent(serverId, sent.orderId, sent.amountMinor)
+                dao.markCachedSessionSent(resolvedServerId, sent.orderId, sent.amountMinor)
             }
             // The successful handoff changes both shared views. Both resource
             // locks are already held, so these raw pulls do not re-enter the
@@ -2740,6 +2813,134 @@ class SyncEngine(
             return true
         }
         return false
+    }
+
+    /**
+     * Replay immutable Gaming item actions under the exact employee/workspace
+     * that captured them. The caller invokes ADD and VOID as separate ordered
+     * phases around Stop, because the backend accepts new items only while the
+     * session is active/paused but deliberately permits reason-void after Stop.
+     */
+    private suspend fun pushGamingSessionAddonActions(actionType: String) {
+        val initialLease = cacheIsolation.currentLease() ?: return
+        val scope = initialLease.scope
+        val branchId = scope.branchId ?: return
+        val terminalId = scope.terminalId ?: return
+        val dao = db.gamingDao()
+        val actions = dao.sessionAddonActionsForSync(
+            companyId = scope.companyId,
+            userId = scope.userId,
+            branchId = branchId,
+            terminalId = terminalId,
+        ).filter { it.actionType == actionType }
+
+        for (captured in actions) {
+            val lease = cacheIsolation.currentLease() ?: return
+            if (lease.scope != scope) return
+            var action = captured
+            try {
+                if (action.serverSessionId == null) {
+                    val localId = action.localSessionId ?: continue
+                    val resolved = dao.localSessionById(localId)?.serverId ?: continue
+                    if (!commitToCurrentScope(lease) {
+                            dao.resolveSessionAddonServerId(localId, resolved)
+                        }
+                    ) return
+                    action = dao.sessionAddonAction(action.actionId) ?: continue
+                }
+                val serverSessionId = action.serverSessionId ?: continue
+
+                if (action.actionType == GamingSessionAddonActionType.VOID) {
+                    // A pending Add owns the target id dependency. It must
+                    // confirm first; an authoritative refusal makes this Void
+                    // a review item instead of a request against guessed data.
+                    val addAction = dao.sessionAddonAddActionForLine(
+                        action.localSessionId,
+                        serverSessionId,
+                        action.clientLineId,
+                    )
+                    if (
+                        addAction != null && addAction.serverAddonId == null &&
+                        addAction.state in setOf(
+                            GamingSessionAddonActionState.REJECTED,
+                            GamingSessionAddonActionState.DISCARDED,
+                        )
+                    ) {
+                        commitToCurrentScope(lease) {
+                            dao.markSessionAddonActionRejected(
+                                action.actionId,
+                                "The saved Add was refused, so there is no server item to void. Review both retained actions.",
+                            )
+                        }
+                        continue
+                    }
+                    if (dao.unresolvedSessionAddCount(action.localSessionId, serverSessionId) > 0) {
+                        continue
+                    }
+                    if (action.serverAddonId == null) {
+                        val targetId = dao.sessionAddonCacheByClientLine(
+                            serverSessionId,
+                            action.clientLineId,
+                        )?.id ?: addAction?.serverAddonId ?: continue
+                        if (!commitToCurrentScope(lease) {
+                                dao.resolveSessionAddonVoidTarget(action.actionId, targetId)
+                            }
+                        ) return
+                        action = dao.sessionAddonAction(action.actionId) ?: continue
+                    }
+                }
+
+                val receipt = when (action.actionType) {
+                    GamingSessionAddonActionType.ADD -> gamingApi.addSessionAddon(
+                        id = serverSessionId,
+                        body = action.toSessionAddonCreateBody(),
+                        key = action.actionId,
+                        provenance = outboxProvenanceHeaders(action.createdAtMillis, action.actionId),
+                    )
+                    GamingSessionAddonActionType.VOID -> gamingApi.voidSessionAddon(
+                        sessionId = serverSessionId,
+                        addonId = requireNotNull(action.serverAddonId),
+                        body = SessionAddonVoidBody(requireNotNull(action.voidReason)),
+                        key = action.actionId,
+                        provenance = outboxProvenanceHeaders(action.createdAtMillis, action.actionId),
+                    )
+                    else -> error("Unsupported Gaming add-on action type")
+                }
+                sessionAddonReceiptError(action, receipt)?.let { error(it) }
+                if (!commitToCurrentScope(lease) {
+                        db.withTransaction {
+                            dao.upsertSessionAddonCache(listOf(receipt.toCacheEntity()))
+                            check(
+                                dao.markSessionAddonActionConfirmed(
+                                    actionId = action.actionId,
+                                    actionType = action.actionType,
+                                    serverAddonId = receipt.id,
+                                    resolvedAtMillis = System.currentTimeMillis(),
+                                ) == 1,
+                            ) { "The Gaming item action changed before its receipt could be committed." }
+                        }
+                    }
+                ) return
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val message = gamingAddonFailureMessage(failure)
+                val preserve = failure !is ApiException || failure.mustPreserveOutbox
+                if (preserve) {
+                    commitToCurrentScope(lease) {
+                        dao.markSessionAddonActionAmbiguous(action.actionId, message)
+                    }
+                    sessionAwareLastError = message
+                    passHadAmbiguousFailure = true
+                    if (failure is ApiException && failure.status == 426) throw failure
+                    return
+                }
+                commitToCurrentScope(lease) {
+                    dao.markSessionAddonActionRejected(action.actionId, message)
+                }
+                sessionAwareLastError = message
+            }
+        }
     }
 
     /**
@@ -2801,6 +3002,19 @@ class SyncEngine(
         val stations = gamingApi.stations()
         val packages = gamingApi.packages()
         val sessions = gamingApi.sessions()
+        // Fetch the complete staged-item ledger for the bounded Gaming board
+        // projection before replacing anything. Billed/history sessions are
+        // deliberately absent so each refresh cannot become an N+1 history
+        // scan; immutable local action evidence remains in its outbox table.
+        // A partial failure leaves the previous cache intact instead of making
+        // an add-on disappear between session and item requests.
+        val sessionAddons = gamingAddonSessionIdsForPull(sessions).flatMap { sessionId ->
+            gamingApi.sessionAddons(sessionId).also { rows ->
+                check(rows.all { it.gamingSessionId == sessionId }) {
+                    "Gaming add-on response contained a different session."
+                }
+            }
+        }
         commitToCurrentScope(lease) {
             db.withTransaction {
                 db.gamingDao().replaceStations(
@@ -2859,6 +3073,9 @@ class SyncEngine(
                             orderId = it.orderId,
                         )
                     },
+                )
+                db.gamingDao().replaceSessionAddonCache(
+                    sessionAddons.map { it.toCacheEntity() },
                 )
                 db.syncMetaDao().put(SyncMetaEntity("gaming", System.currentTimeMillis()))
             }

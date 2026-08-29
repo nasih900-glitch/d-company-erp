@@ -1,11 +1,25 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
+import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
+import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
+import cloud.dcompany.erp.core.db.encodeModifierSelections
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import java.time.Instant
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -121,6 +135,223 @@ data class SessionPackageExtendBody(
     @SerialName("expected_timer_minutes") val expectedTimerMinutes: Int,
     @SerialName("expected_amount_minor") val expectedAmountMinor: Long,
 )
+
+@Serializable
+data class SessionAddonModifierBody(
+    @SerialName("modifier_id") val modifierId: String,
+    val qty: Int,
+)
+
+@Serializable
+data class SessionAddonCreateBody(
+    @SerialName("client_line_id") val clientLineId: String,
+    @SerialName("menu_item_id") val menuItemId: String,
+    @SerialName("variant_id") val variantId: String? = null,
+    val modifiers: List<SessionAddonModifierBody> = emptyList(),
+    val qty: Int,
+    @SerialName("expected_unit_price_minor") val expectedUnitPriceMinor: Long,
+    val note: String? = null,
+)
+
+@Serializable
+data class SessionAddonVoidBody(val reason: String)
+
+@Serializable
+data class SessionAddon(
+    val id: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("client_line_id") val clientLineId: String,
+    @SerialName("menu_item_id") val menuItemId: String,
+    @SerialName("menu_item_name") val menuItemName: String,
+    @SerialName("menu_item_type") val menuItemType: String,
+    @SerialName("variant_id") val variantId: String? = null,
+    @SerialName("variant_snapshot") val variantSnapshot: JsonElement? = null,
+    val modifiers: JsonElement,
+    val qty: Int,
+    @SerialName("catalog_unit_price_minor") val catalogUnitPriceMinor: Long,
+    @SerialName("unit_price_minor") val unitPriceMinor: Long,
+    @SerialName("line_total_minor") val lineTotalMinor: Long,
+    @SerialName("discount_minor") val discountMinor: Long,
+    @SerialName("hsn_or_sac") val hsnOrSac: String? = null,
+    @SerialName("tax_rate") val taxRate: Double,
+    @SerialName("taxable_value_minor") val taxableValueMinor: Long,
+    @SerialName("cgst_minor") val cgstMinor: Long,
+    @SerialName("sgst_minor") val sgstMinor: Long,
+    @SerialName("igst_minor") val igstMinor: Long,
+    @SerialName("cess_minor") val cessMinor: Long,
+    val note: String? = null,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("created_terminal_id") val createdTerminalId: String,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+)
+
+internal fun LocalGamingSessionAddonActionEntity.toSessionAddonCreateBody() =
+    SessionAddonCreateBody(
+        clientLineId = clientLineId,
+        menuItemId = menuItemId,
+        variantId = variantId,
+        modifiers = requireLocalModifierSelections(modifierSelectionsJson).map {
+            SessionAddonModifierBody(modifierId = it.modifierId, qty = it.qty)
+        },
+        qty = qty,
+        expectedUnitPriceMinor = expectedUnitPriceMinor,
+        note = note,
+    )
+
+internal fun SessionAddon.toCacheEntity() = GamingSessionAddonCacheEntity(
+    id = id,
+    gamingSessionId = gamingSessionId,
+    clientLineId = clientLineId,
+    menuItemId = menuItemId,
+    menuItemName = menuItemName,
+    menuItemType = menuItemType,
+    variantId = variantId,
+    variantSnapshotJson = variantSnapshot?.toString(),
+    // The server receipt uses snake_case and contains richer pricing fields,
+    // while the durable Android command uses LocalModifierSelectionSnapshot's
+    // camelCase schema. Normalise exactly once at the network/cache boundary so
+    // a later reason-Void can recreate and validate the immutable item identity
+    // instead of silently decoding a valid server receipt as an empty list.
+    modifiersJson = canonicalLocalModifierSelectionsJson(),
+    qty = qty,
+    catalogUnitPriceMinor = catalogUnitPriceMinor,
+    unitPriceMinor = unitPriceMinor,
+    lineTotalMinor = lineTotalMinor,
+    discountMinor = discountMinor,
+    hsnOrSac = hsnOrSac,
+    taxRate = taxRate,
+    taxableValueMinor = taxableValueMinor,
+    cgstMinor = cgstMinor,
+    sgstMinor = sgstMinor,
+    igstMinor = igstMinor,
+    cessMinor = cessMinor,
+    note = note,
+    createdBy = createdBy,
+    createdTerminalId = createdTerminalId,
+    createdAtMillis = Instant.parse(createdAt).toEpochMilli(),
+    voidedAtMillis = voidedAt?.let { Instant.parse(it).toEpochMilli() },
+    voidedBy = voidedBy,
+    voidReason = voidReason,
+)
+
+private const val MAX_SESSION_ADDON_MODIFIERS = 50
+private val gamingAddonSnapshotJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * Convert the backend's immutable modifier receipt into Android's immutable
+ * local-command snapshot. Any missing identity/quantity/price evidence fails
+ * before the cache or outbox can be resolved; malformed financial receipts are
+ * never treated as an item without modifiers.
+ */
+private fun SessionAddon.canonicalLocalModifierSelectionsJson(): String {
+    val rows = modifiers as? JsonArray
+        ?: throw IllegalArgumentException("The server add-on receipt had invalid modifier evidence.")
+    require(rows.size <= MAX_SESSION_ADDON_MODIFIERS) {
+        "The server add-on receipt had too many modifier rows."
+    }
+    val snapshots = rows.map { element ->
+        val row = element as? JsonObject
+            ?: throw IllegalArgumentException("The server add-on receipt had an invalid modifier row.")
+        val modifierId = row.requiredNonBlankString("modifier_id")
+        val modifierGroupId = row.requiredNonBlankString("modifier_group_id")
+        val name = row.requiredNonBlankString("name")
+        val priceDeltaMinor = row["price_delta_minor"]?.jsonPrimitive?.longOrNull
+            ?: throw IllegalArgumentException("The server add-on receipt omitted a modifier price.")
+        val qty = row["qty"]?.jsonPrimitive?.intOrNull
+            ?.takeIf { it in 1..100 }
+            ?: throw IllegalArgumentException("The server add-on receipt had an invalid modifier quantity.")
+        LocalModifierSelectionSnapshot(
+            modifierId = modifierId,
+            modifierGroupId = modifierGroupId,
+            name = name,
+            priceDeltaMinor = priceDeltaMinor,
+            qty = qty,
+        )
+    }
+    require(snapshots.map(LocalModifierSelectionSnapshot::modifierId).distinct().size == snapshots.size) {
+        "The server add-on receipt repeated a modifier identity."
+    }
+    return encodeModifierSelections(snapshots)
+}
+
+private fun JsonObject.requiredNonBlankString(field: String): String =
+    this[field]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
+        ?: throw IllegalArgumentException("The server add-on receipt omitted $field.")
+
+/** Strict counterpart to the legacy POS decoder, which intentionally defaults malformed old drafts to empty. */
+private fun requireLocalModifierSelections(raw: String): List<LocalModifierSelectionSnapshot> {
+    val decoded = runCatching {
+        gamingAddonSnapshotJson.decodeFromString<List<LocalModifierSelectionSnapshot>>(raw)
+    }.getOrElse {
+        throw IllegalArgumentException(
+            "The saved Gaming item has invalid modifier evidence and will not be replayed.",
+            it,
+        )
+    }
+    require(decoded.size <= MAX_SESSION_ADDON_MODIFIERS) {
+        "The saved Gaming item has too many modifier rows."
+    }
+    require(decoded.all {
+        it.modifierId.isNotBlank() && !it.modifierGroupId.isNullOrBlank() &&
+            it.name.isNotBlank() && it.qty in 1..100
+    }) { "The saved Gaming item has incomplete modifier evidence and will not be replayed." }
+    require(decoded.map(LocalModifierSelectionSnapshot::modifierId).distinct().size == decoded.size) {
+        "The saved Gaming item repeats a modifier identity and will not be replayed."
+    }
+    return decoded
+}
+
+/** Reject a response before it can resolve or overwrite another local command. */
+private fun SessionAddon.modifierIdentity(): List<Pair<String, Int>>? {
+    val rows = modifiers as? JsonArray ?: return null
+    return rows.map { element ->
+        val row = element as? JsonObject ?: return null
+        val id = row["modifier_id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val qty = row["qty"]?.jsonPrimitive?.intOrNull ?: return null
+        id to qty
+    }.sortedWith(compareBy<Pair<String, Int>> { it.first }.thenBy { it.second })
+}
+
+internal fun sessionAddonReceiptError(
+    action: LocalGamingSessionAddonActionEntity,
+    receipt: SessionAddon,
+): String? {
+    val expectedModifiers = runCatching {
+        requireLocalModifierSelections(action.modifierSelectionsJson)
+    }.getOrElse {
+        return "The saved Gaming item has invalid modifier evidence and cannot be confirmed."
+    }
+        .map { it.modifierId to it.qty }
+        .sortedWith(compareBy<Pair<String, Int>> { it.first }.thenBy { it.second })
+    return when {
+    receipt.id.isBlank() || receipt.gamingSessionId != action.serverSessionId ->
+        "The server add-on receipt did not match the saved Gaming session."
+    receipt.clientLineId != action.clientLineId || receipt.menuItemId != action.menuItemId ->
+        "The server add-on receipt did not match the saved item identity."
+    receipt.menuItemName.isBlank() || receipt.menuItemName.length > 200 ||
+        receipt.menuItemType !in setOf("food", "drink", "dessert") ->
+        "The server add-on receipt had invalid item display metadata."
+    receipt.qty != action.qty || receipt.variantId != action.variantId ||
+        receipt.note != action.note || receipt.modifierIdentity() != expectedModifiers ->
+        "The server add-on receipt did not match the saved item snapshot."
+    action.actionType == GamingSessionAddonActionType.ADD &&
+        receipt.catalogUnitPriceMinor != action.expectedUnitPriceMinor ->
+        "The server add-on receipt did not match the saved catalogue price."
+    action.actionType == GamingSessionAddonActionType.ADD &&
+        (receipt.createdBy != action.ownerUserId || receipt.createdTerminalId != action.terminalId) ->
+        "The server add-on receipt belonged to a different employee or terminal."
+    action.actionType == GamingSessionAddonActionType.ADD && receipt.voidedAt != null ->
+        "The server returned a voided item for a saved Add action."
+    action.actionType == GamingSessionAddonActionType.VOID &&
+        (receipt.id != action.serverAddonId || receipt.voidedAt == null ||
+            receipt.voidedBy != action.ownerUserId || receipt.voidReason != action.voidReason) ->
+        "The server void receipt did not match the saved employee, reason, or item."
+    else -> null
+    }
+}
 
 /** One canonical mapping prevents UI recovery and background replay from diverging. */
 internal fun LocalGamingPackageExtensionEntity.toPackageExtendBody() = SessionPackageExtendBody(
@@ -292,6 +523,26 @@ interface GamingApi {
         @Header("Idempotency-Key") key: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): GameSession
+
+    @GET("gaming/sessions/{id}/addons")
+    suspend fun sessionAddons(@Path("id") id: String): List<SessionAddon>
+
+    @POST("gaming/sessions/{id}/addons")
+    suspend fun addSessionAddon(
+        @Path("id") id: String,
+        @Body body: SessionAddonCreateBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): SessionAddon
+
+    @POST("gaming/sessions/{sessionId}/addons/{addonId}/void")
+    suspend fun voidSessionAddon(
+        @Path("sessionId") sessionId: String,
+        @Path("addonId") addonId: String,
+        @Body body: SessionAddonVoidBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): SessionAddon
 
     /** Protected-owner recovery for an ended legacy row whose computed amount is absent. */
     @POST("gaming/sessions/{id}/repair-billing")

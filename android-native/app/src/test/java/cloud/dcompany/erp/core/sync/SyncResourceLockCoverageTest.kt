@@ -125,7 +125,7 @@ class SyncResourceLockCoverageTest {
         )
         assertLockedPass(pass, "settings", "pushCompanyEdit()", "pushBranches()", "pushTerminals()")
         assertLockedPass(pass, "menu", "pushMenuCategories()", "pushMenuItems()", "pullMenu()")
-        assertMultiLockedPass(pass, listOf("gaming", "orders"), "pushGamingSessions()")
+        assertMultiLockedPass(pass, listOf("gaming", "orders"), "pushGamingSessions(GamingSessionPushPhase.STARTS)")
         assertMultiLockedPass(pass, listOf("tables", "orders"), "pushCafeActions()")
 
         assertLockingWrapper(source, "pullBatchesFor", "inventory", "pullBatchesForAlreadyLocked")

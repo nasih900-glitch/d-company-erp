@@ -9,7 +9,14 @@ from typing import Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
@@ -37,10 +44,14 @@ from app.models import (
     GamingBooking,
     GamingPackage,
     GamingSession,
+    GamingSessionAddon,
     GamingSessionExtension,
     IdempotencyKey,
     MenuCategory,
     MenuItem,
+    MenuModifier,
+    MenuModifierGroup,
+    MenuVariant,
     Order,
     OrderLine,
     Payment,
@@ -57,7 +68,12 @@ from app.services.gaming.billing_mode import (
     resolved_billing_mode,
 )
 from app.services.pos.order_validation import require_operational_order
-from app.services.pos.pricing import OrderPricingService, _round_to_rupee
+from app.services.pos.pricing import (
+    LineRequest,
+    ModifierSelection,
+    OrderPricingService,
+    _round_to_rupee,
+)
 from app.services.pos.shift_validation import (
     require_open_operational_shift,
     require_operational_shift_scope,
@@ -293,6 +309,81 @@ class SessionCancel(BaseModel):
         return value
 
 
+class SessionAddonModifierSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    modifier_id: UUID
+    qty: int = Field(default=1, ge=1, le=100)
+
+
+class SessionAddonCreate(BaseModel):
+    """One catalog item consumed during a live Gaming session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_line_id: UUID
+    menu_item_id: UUID
+    variant_id: UUID | None = None
+    modifiers: list[SessionAddonModifierSelection] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+    qty: int = Field(ge=1, le=100)
+    expected_unit_price_minor: int = Field(ge=0, le=9_999_999_999)
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        return normalized or None
+
+
+class SessionAddonVoid(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("void reason must be at least 3 characters")
+        return normalized
+
+
+class SessionAddonRead(BaseModel):
+    id: UUID
+    gaming_session_id: UUID
+    client_line_id: UUID
+    menu_item_id: UUID
+    menu_item_name: str
+    menu_item_type: Literal["food", "drink", "dessert"]
+    variant_id: UUID | None
+    variant_snapshot: dict | None
+    modifiers: list[dict]
+    qty: int
+    catalog_unit_price_minor: int
+    unit_price_minor: int
+    line_total_minor: int
+    discount_minor: int
+    hsn_or_sac: str | None
+    tax_rate: float
+    taxable_value_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+    note: str | None
+    created_by: UUID
+    created_terminal_id: UUID
+    created_at: datetime
+    voided_at: datetime | None
+    voided_by: UUID | None
+    void_reason: str | None
+
+
 class SessionBillingRepair(BaseModel):
     # Required compare-and-swap snapshot. The normal repair case is explicit
     # JSON null, proving the owner reviewed a row with a missing billed amount.
@@ -517,6 +608,39 @@ def session_read(gs: GamingSession) -> SessionRead:
     )
 
 
+def session_addon_read(addon: GamingSessionAddon) -> SessionAddonRead:
+    return SessionAddonRead(
+        id=addon.id,
+        gaming_session_id=addon.gaming_session_id,
+        client_line_id=addon.client_line_id,
+        menu_item_id=addon.menu_item_id,
+        menu_item_name=addon.menu_item_name_snapshot,
+        menu_item_type=addon.menu_item_type_snapshot,
+        variant_id=addon.variant_id,
+        variant_snapshot=addon.variant_snapshot,
+        modifiers=list(addon.modifiers or []),
+        qty=int(addon.qty),
+        catalog_unit_price_minor=int(addon.catalog_unit_price_minor),
+        unit_price_minor=int(addon.unit_price_minor),
+        line_total_minor=int(addon.line_total_minor),
+        discount_minor=int(addon.discount_minor),
+        hsn_or_sac=addon.hsn_or_sac,
+        tax_rate=float(addon.tax_rate),
+        taxable_value_minor=int(addon.taxable_value_minor),
+        cgst_minor=int(addon.cgst_minor),
+        sgst_minor=int(addon.sgst_minor),
+        igst_minor=int(addon.igst_minor),
+        cess_minor=int(addon.cess_minor),
+        note=addon.note,
+        created_by=addon.created_by,
+        created_terminal_id=addon.created_terminal_id,
+        created_at=addon.created_at,
+        voided_at=addon.voided_at,
+        voided_by=addon.voided_by,
+        void_reason=addon.void_reason,
+    )
+
+
 def _extension_not_applied(
     gaming_session: GamingSession,
     *,
@@ -677,6 +801,44 @@ def _require_repaired_ended_amount(gs: GamingSession) -> int:
             "it can be sent to POS or cancelled."
         )
     return int(gs.amount_minor)
+
+
+async def _require_session_pos_eligible(
+    session,
+    *,
+    gaming_session: GamingSession,
+) -> None:
+    """Require either a charge for play or an active staged POS line.
+
+    Complimentary play is valid, and a staged item may itself legitimately
+    round the final order to zero. Such an item must still reach POS so its
+    stock movement, receipt, and audit lifecycle can complete through the
+    existing zero-total finalization path. Only a zero-value session with no
+    active item belongs on the reasoned session-cancellation path.
+    """
+    gaming_amount_minor = _require_repaired_ended_amount(gaming_session)
+    # The overwhelmingly common paid-session path needs no add-on lookup.
+    # Besides avoiding an unnecessary query on every handoff, this preserves
+    # compatibility with callers/tests whose lightweight session adapter only
+    # implements the reads required for an ordinary positive play charge.
+    if gaming_amount_minor > 0:
+        return
+    active_addon_count = int(
+        (
+            await session.execute(
+                select(func.count(GamingSessionAddon.id)).where(
+                    GamingSessionAddon.company_id == gaming_session.company_id,
+                    GamingSessionAddon.gaming_session_id == gaming_session.id,
+                    GamingSessionAddon.voided_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if active_addon_count == 0:
+        raise BusinessRuleError(
+            "The session has no play charge or saved items. Cancel it with a reason instead."
+        )
 
 
 def _validated_offline_action_time(
@@ -2835,6 +2997,511 @@ async def stop_session(
     return response
 
 
+async def _addon_receipt_for_key(
+    session,
+    *,
+    company_id: UUID,
+    idempotency_key: str,
+) -> GamingSessionAddon | None:
+    """Find a durable add or void receipt after generic-key retention expires."""
+    return (
+        await session.execute(
+            select(GamingSessionAddon)
+            .where(
+                GamingSessionAddon.company_id == company_id,
+                or_(
+                    GamingSessionAddon.idempotency_key == idempotency_key,
+                    GamingSessionAddon.void_idempotency_key == idempotency_key,
+                ),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+
+async def _lock_session_addon_catalog(
+    session,
+    *,
+    company_id: UUID,
+    payload: SessionAddonCreate,
+) -> MenuItem:
+    """Lock every mutable catalog row used by one immutable price snapshot."""
+    item = (
+        await session.execute(
+            select(MenuItem)
+            .where(
+                MenuItem.id == payload.menu_item_id,
+                MenuItem.company_id == company_id,
+                MenuItem.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        raise NotFoundError("menu item not found")
+    if not item.is_available:
+        raise BusinessRuleError("menu item is not available")
+    if item.type not in {"food", "drink", "dessert"}:
+        raise BusinessRuleError(
+            "Only food, drink, or dessert catalog items may be added to a Gaming session."
+        )
+
+    if payload.variant_id is not None:
+        # The pricing service performs the semantic item/active checks. This
+        # lock prevents a concurrent catalog edit between validation and the
+        # immutable snapshot insert.
+        await session.execute(
+            select(MenuVariant)
+            .where(
+                MenuVariant.company_id == company_id,
+                MenuVariant.id == payload.variant_id,
+            )
+            .with_for_update()
+        )
+    await session.execute(
+        select(MenuModifierGroup)
+        .where(
+            MenuModifierGroup.company_id == company_id,
+            MenuModifierGroup.menu_item_id == payload.menu_item_id,
+        )
+        .order_by(MenuModifierGroup.id)
+        .with_for_update()
+    )
+    modifier_ids = sorted(
+        {selection.modifier_id for selection in payload.modifiers},
+        key=str,
+    )
+    if modifier_ids:
+        await session.execute(
+            select(MenuModifier)
+            .where(
+                MenuModifier.company_id == company_id,
+                MenuModifier.id.in_(modifier_ids),
+            )
+            .order_by(MenuModifier.id)
+            .with_for_update()
+        )
+    return item
+
+
+@router.get(
+    "/sessions/{session_id}/addons",
+    response_model=list[SessionAddonRead],
+)
+async def list_session_addons(
+    session_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.read")),
+) -> list[SessionAddonRead]:
+    """Return active and voided staged items so clients can recover after restart."""
+    gs = (
+        await session.execute(
+            select(GamingSession).where(
+                GamingSession.id == session_id,
+                GamingSession.company_id == tenant.company_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if gs is None:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if station is None or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if tenant.branch_id is None or station.branch_id != tenant.branch_id:
+        raise NotFoundError("session not found")
+
+    addons = (
+        await session.execute(
+            select(GamingSessionAddon)
+            .where(
+                GamingSessionAddon.company_id == tenant.company_id,
+                GamingSessionAddon.gaming_session_id == gs.id,
+            )
+            .order_by(GamingSessionAddon.created_at, GamingSessionAddon.id)
+        )
+    ).scalars().all()
+    return [session_addon_read(addon) for addon in addons]
+
+
+@router.post(
+    "/sessions/{session_id}/addons",
+    response_model=SessionAddonRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_session_addon(
+    session_id: UUID,
+    payload: SessionAddonCreate,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionAddonRead:
+    """Stage one server-priced snack/drink without moving stock yet."""
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return SessionAddonRead.model_validate(existing_response["body"])
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required for Gaming add-ons")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("token has no branch_id")
+
+    durable_receipt = await _addon_receipt_for_key(
+        session,
+        company_id=tenant.company_id,
+        idempotency_key=idempotency_key,
+    )
+    if durable_receipt is not None:
+        if (
+            durable_receipt.idempotency_key != idempotency_key
+            or durable_receipt.request_hash != request_hash
+            or durable_receipt.gaming_session_id != session_id
+            or durable_receipt.created_by != tenant.user_id
+            or durable_receipt.created_terminal_id != tenant.terminal_id
+        ):
+            raise ConflictError(
+                "Idempotency-Key already belongs to a different Gaming add-on action."
+            )
+        response = session_addon_read(durable_receipt)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+        )
+        return response
+
+    gs = (
+        await session.execute(
+            select(GamingSession)
+            .where(
+                GamingSession.id == session_id,
+                GamingSession.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if gs is None:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if station is None or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if station.branch_id != tenant.branch_id:
+        raise NotFoundError("session not found")
+    if gs.order_id is not None:
+        raise BusinessRuleError("This session was already sent to POS.")
+    if gs.status not in {"active", "paused"}:
+        raise BusinessRuleError(
+            "New Gaming add-ons require an active or paused session."
+        )
+    await _require_terminal_purpose(
+        session,
+        tenant=tenant,
+        allowed=_GAMING_SOURCE_TERMINAL_PURPOSES,
+        invalid_message=(
+            "This terminal is not configured to host Gaming sessions. "
+            "Select the Gaming Area terminal."
+        ),
+    )
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="adding an item to this Gaming session",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+
+    duplicate_line = (
+        await session.execute(
+            select(GamingSessionAddon.id).where(
+                GamingSessionAddon.gaming_session_id == gs.id,
+                GamingSessionAddon.client_line_id == payload.client_line_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if duplicate_line is not None:
+        raise ConflictError(
+            "client_line_id already belongs to another saved item on this session.",
+            details={"addon_id": str(duplicate_line)},
+        )
+
+    item = await _lock_session_addon_catalog(
+        session,
+        company_id=tenant.company_id,
+        payload=payload,
+    )
+    priced_order = await OrderPricingService(session).price_order(
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        line_requests=[
+            LineRequest(
+                menu_item_id=payload.menu_item_id,
+                qty=payload.qty,
+                variant_id=payload.variant_id,
+                modifiers=tuple(
+                    ModifierSelection(
+                        modifier_id=selection.modifier_id,
+                        quantity=selection.qty,
+                    )
+                    for selection in payload.modifiers
+                ),
+            )
+        ],
+        customer_phone=gs.customer_phone,
+    )
+    priced_line = priced_order.lines[0]
+    catalog_unit_price_minor = int(
+        priced_line.base_unit_price_minor
+        + priced_line.customization_unit_delta_minor
+    )
+    if catalog_unit_price_minor != payload.expected_unit_price_minor:
+        raise ConflictError(
+            "Menu pricing changed after this item was selected. Refresh Gaming and try again.",
+            details={
+                "expected_unit_price_minor": payload.expected_unit_price_minor,
+                "current_unit_price_minor": catalog_unit_price_minor,
+            },
+        )
+
+    addon = GamingSessionAddon(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        gaming_session_id=gs.id,
+        client_line_id=payload.client_line_id,
+        menu_item_id=item.id,
+        menu_item_name_snapshot=priced_line.name,
+        menu_item_type_snapshot=priced_line.item_type,
+        variant_id=(
+            priced_line.variant_snapshot.id
+            if priced_line.variant_snapshot is not None
+            else None
+        ),
+        variant_snapshot=(
+            priced_line.variant_snapshot.as_dict()
+            if priced_line.variant_snapshot is not None
+            else None
+        ),
+        modifiers=[snapshot.as_dict() for snapshot in priced_line.modifier_snapshots],
+        qty=priced_line.qty,
+        catalog_unit_price_minor=catalog_unit_price_minor,
+        unit_price_minor=priced_line.unit_inclusive_minor,
+        line_total_minor=priced_line.line_inclusive_minor,
+        discount_minor=priced_line.discount_minor,
+        hsn_or_sac=priced_line.hsn_or_sac or None,
+        tax_rate=priced_line.tax_rate,
+        taxable_value_minor=priced_line.taxable_value_minor,
+        cgst_minor=priced_line.cgst_minor,
+        sgst_minor=priced_line.sgst_minor,
+        igst_minor=priced_line.igst_minor,
+        cess_minor=priced_line.cess_minor,
+        note=payload.note,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        created_by=tenant.user_id,
+        created_terminal_id=tenant.terminal_id,
+    )
+    session.add(addon)
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="gaming_session_addon_added",
+            entity_type="GamingSessionAddon",
+            entity_id=str(addon.id),
+            before=None,
+            after={
+                "gaming_session_id": str(gs.id),
+                "client_line_id": str(payload.client_line_id),
+                "menu_item_id": str(item.id),
+                "menu_item_name": priced_line.name,
+                "menu_item_type": priced_line.item_type,
+                "qty": priced_line.qty,
+                "line_total_minor": priced_line.line_inclusive_minor,
+                "idempotency_key": idempotency_key,
+            },
+            terminal_id=tenant.terminal_id,
+            reason="Item consumed during Gaming session; staged for combined POS bill",
+        )
+    )
+    await session.flush()
+    response = session_addon_read(addon)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_201_CREATED,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@router.post(
+    "/sessions/{session_id}/addons/{addon_id}/void",
+    response_model=SessionAddonRead,
+)
+async def void_session_addon(
+    session_id: UUID,
+    addon_id: UUID,
+    payload: SessionAddonVoid,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("gaming.write")),
+) -> SessionAddonRead:
+    """Reason-soft-void one staged item before POS handoff."""
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return SessionAddonRead.model_validate(existing_response["body"])
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required for Gaming add-on voids")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("token has no branch_id")
+
+    durable_receipt = await _addon_receipt_for_key(
+        session,
+        company_id=tenant.company_id,
+        idempotency_key=idempotency_key,
+    )
+    if durable_receipt is not None:
+        if (
+            durable_receipt.id != addon_id
+            or durable_receipt.gaming_session_id != session_id
+            or durable_receipt.void_idempotency_key != idempotency_key
+            or durable_receipt.void_request_hash != request_hash
+            or durable_receipt.voided_by != tenant.user_id
+            or durable_receipt.voided_terminal_id != tenant.terminal_id
+        ):
+            raise ConflictError(
+                "Idempotency-Key already belongs to a different Gaming add-on action."
+            )
+        response = session_addon_read(durable_receipt)
+        await store_response(
+            session,
+            key=idempotency_key,
+            status_code=status.HTTP_200_OK,
+            body=response.model_dump(mode="json"),
+        )
+        return response
+
+    gs = (
+        await session.execute(
+            select(GamingSession)
+            .where(
+                GamingSession.id == session_id,
+                GamingSession.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if gs is None:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if station is None or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if station.branch_id != tenant.branch_id:
+        raise NotFoundError("session not found")
+    if gs.order_id is not None:
+        raise BusinessRuleError("An item cannot be voided after POS handoff.")
+    if gs.status not in {"active", "paused", "ended"}:
+        raise BusinessRuleError(
+            "A Gaming add-on can only be voided before handoff from an active, "
+            "paused, or stopped session."
+        )
+    await _require_terminal_purpose(
+        session,
+        tenant=tenant,
+        allowed=_GAMING_SOURCE_TERMINAL_PURPOSES,
+        invalid_message=(
+            "This terminal is not configured to host Gaming sessions. "
+            "Select the Gaming Area terminal."
+        ),
+    )
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == gs.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="voiding an item on this Gaming session",
+        resource_branch_id=station.branch_id,
+        resource_name="gaming station",
+    )
+
+    addon = (
+        await session.execute(
+            select(GamingSessionAddon)
+            .where(
+                GamingSessionAddon.id == addon_id,
+                GamingSessionAddon.company_id == tenant.company_id,
+                GamingSessionAddon.gaming_session_id == gs.id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if addon is None:
+        raise NotFoundError("Gaming session add-on not found")
+    if addon.voided_at is not None:
+        raise ConflictError(
+            "This Gaming add-on was already voided by another action. Refresh Gaming."
+        )
+
+    now = datetime.now(timezone.utc)
+    addon.voided_at = now
+    addon.voided_by = tenant.user_id
+    addon.void_reason = payload.reason
+    addon.void_idempotency_key = idempotency_key
+    addon.void_request_hash = request_hash
+    addon.voided_terminal_id = tenant.terminal_id
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="gaming_session_addon_voided",
+            entity_type="GamingSessionAddon",
+            entity_id=str(addon.id),
+            before={"voided_at": None},
+            after={
+                "gaming_session_id": str(gs.id),
+                "voided_at": now.isoformat(),
+                "void_reason": payload.reason,
+                "void_idempotency_key": idempotency_key,
+            },
+            terminal_id=tenant.terminal_id,
+            reason=payload.reason,
+        )
+    )
+    await session.flush()
+    response = session_addon_read(addon)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
 @router.post("/sessions/{session_id}/cancel", response_model=SessionRead)
 async def cancel_session(
     session_id: UUID,
@@ -2880,6 +3547,23 @@ async def cancel_session(
         raise BusinessRuleError("cannot cancel a session that was already sent to POS")
     if gs.status not in ("active", "paused", "ended"):
         raise BusinessRuleError(f"cannot cancel a session in status={gs.status}")
+    active_addon_count = int(
+        (
+            await session.execute(
+                select(func.count(GamingSessionAddon.id)).where(
+                    GamingSessionAddon.company_id == tenant.company_id,
+                    GamingSessionAddon.gaming_session_id == gs.id,
+                    GamingSessionAddon.voided_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if active_addon_count:
+        raise BusinessRuleError(
+            "Void every active Gaming add-on before cancelling this session; "
+            "consumed items must not disappear from the bill."
+        )
     if gs.status == "ended":
         _require_repaired_ended_amount(gs)
     if shift.status != "open" and not tenant.protected_access:
@@ -3839,38 +4523,113 @@ async def _create_session_pos_order(
     session.add(order)
     await session.flush()
 
-    session.add(
-        OrderLine(
-            id=uuid4(),
-            order_id=order.id,
-            menu_item_id=item.id,
-            menu_item_name_snapshot=item.name,
-            menu_item_type_snapshot=item.type,
-            qty=1,
-            unit_price_minor=priced.total_minor,
-            line_total_minor=priced.total_minor,
-            discount_minor=priced.discount_minor,
-            hsn_or_sac=(
-                gaming_session.sac_code or station.sac_code or item.hsn_code or ""
-            ),
-            tax_rate=float(tax_rate),
-            taxable_value_minor=priced.taxable_minor,
-            cgst_minor=priced.cgst_minor,
-            sgst_minor=priced.sgst_minor,
-            igst_minor=priced.igst_minor,
-            cess_minor=0,
-            note=note,
-        )
-    )
+    # Link the source row before any staged OrderLine insert. Migration 0055's
+    # snapshot trigger resolves an add-on through GamingSession.order_id; both
+    # the link and every copied line remain atomic with this transaction.
     gaming_session.order_id = order.id
     await session.flush()
+
+    gaming_line = OrderLine(
+        id=uuid4(),
+        order_id=order.id,
+        menu_item_id=item.id,
+        menu_item_name_snapshot=item.name,
+        menu_item_type_snapshot=item.type,
+        qty=1,
+        unit_price_minor=priced.total_minor,
+        line_total_minor=priced.total_minor,
+        discount_minor=priced.discount_minor,
+        hsn_or_sac=(
+            gaming_session.sac_code or station.sac_code or item.hsn_code or ""
+        ),
+        tax_rate=float(tax_rate),
+        taxable_value_minor=priced.taxable_minor,
+        cgst_minor=priced.cgst_minor,
+        sgst_minor=priced.sgst_minor,
+        igst_minor=priced.igst_minor,
+        cess_minor=0,
+        note=note,
+    )
+    session.add(gaming_line)
+
+    active_addons = (
+        await session.execute(
+            select(GamingSessionAddon)
+            .where(
+                GamingSessionAddon.company_id == company_id,
+                GamingSessionAddon.gaming_session_id == gaming_session.id,
+                GamingSessionAddon.voided_at.is_(None),
+            )
+            .order_by(GamingSessionAddon.created_at, GamingSessionAddon.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    copied_addons: list[tuple[GamingSessionAddon, OrderLine]] = []
+    for addon in active_addons:
+        copied_line = OrderLine(
+            id=uuid4(),
+            order_id=order.id,
+            client_line_id=addon.client_line_id,
+            menu_item_id=addon.menu_item_id,
+            menu_item_name_snapshot=addon.menu_item_name_snapshot,
+            menu_item_type_snapshot=addon.menu_item_type_snapshot,
+            variant_id=addon.variant_id,
+            variant_snapshot=addon.variant_snapshot,
+            modifiers=addon.modifiers,
+            qty=addon.qty,
+            unit_price_minor=addon.unit_price_minor,
+            line_total_minor=addon.line_total_minor,
+            discount_minor=addon.discount_minor,
+            hsn_or_sac=addon.hsn_or_sac,
+            tax_rate=addon.tax_rate,
+            taxable_value_minor=addon.taxable_value_minor,
+            cgst_minor=addon.cgst_minor,
+            sgst_minor=addon.sgst_minor,
+            igst_minor=addon.igst_minor,
+            cess_minor=addon.cess_minor,
+            note=addon.note,
+            # Gaming-centre snacks are handed directly to the customer. They
+            # remain real POS/inventory lines but must never become live KDS
+            # work when the combined bill is paid later.
+            kitchen_status="served",
+            kitchen_released_at=addon.created_at,
+            kitchen_round_no=1,
+            kitchen_served_at=addon.created_at,
+            created_at=addon.created_at,
+        )
+        session.add(copied_line)
+        copied_addons.append((addon, copied_line))
+    await session.flush()
+
     if order.customer_phone:
         await _reprice_session_order_for_customer(
             session,
             order=order,
             company_id=company_id,
         )
-        await session.flush()
+        # Membership allowance reservation is owned by the normal POS bridge,
+        # but an add-on's add-time server price is immutable financial intent.
+        # Restore those exact staged line amounts if membership state changed
+        # between consumption and handoff.
+        for addon, copied_line in copied_addons:
+            copied_line.unit_price_minor = addon.unit_price_minor
+            copied_line.line_total_minor = addon.line_total_minor
+            copied_line.discount_minor = addon.discount_minor
+            copied_line.taxable_value_minor = addon.taxable_value_minor
+            copied_line.cgst_minor = addon.cgst_minor
+            copied_line.sgst_minor = addon.sgst_minor
+            copied_line.igst_minor = addon.igst_minor
+            copied_line.cess_minor = addon.cess_minor
+
+    if copied_addons:
+        from app.api.v1.pos.router import _reaggregate_active_order_lines
+
+        await _reaggregate_active_order_lines(
+            session,
+            order=order,
+            company_id=company_id,
+        )
+    await session.flush()
     return order
 
 
@@ -3908,10 +4667,7 @@ async def list_session_pos_target_shifts(
         raise BusinessRuleError("This session was already sent to POS.")
     if gs.status != "ended":
         raise BusinessRuleError("Stop the session before choosing a POS till.")
-    if _require_repaired_ended_amount(gs) <= 0:
-        raise BusinessRuleError(
-            "The session has no billable amount. Cancel it with a reason instead."
-        )
+    await _require_session_pos_eligible(session, gaming_session=gs)
 
     source_shift = await session.get(Shift, gs.shift_id)
     source_shift = require_open_operational_shift(
@@ -4040,11 +4796,7 @@ async def handoff_session_to_pos(
 
     if gs.status != "ended":
         raise BusinessRuleError("Stop the session before sending it to POS.")
-    amount_minor = _require_repaired_ended_amount(gs)
-    if amount_minor <= 0:
-        raise BusinessRuleError(
-            "The session has no billable amount. Cancel it with a reason instead."
-        )
+    await _require_session_pos_eligible(session, gaming_session=gs)
     await _require_terminal_purpose(
         session,
         tenant=tenant,
@@ -4199,11 +4951,7 @@ async def send_session_to_pos(
         }
     if gs.status != "ended":
         raise BusinessRuleError("stop the session before sending it to POS")
-    amount_minor = _require_repaired_ended_amount(gs)
-    if amount_minor <= 0:
-        raise BusinessRuleError(
-            "session has no billable amount; cancel it with a reason instead of sending it to POS"
-        )
+    await _require_session_pos_eligible(session, gaming_session=gs)
 
     shift = (
         await session.execute(
@@ -4318,11 +5066,7 @@ async def reconcile_session_to_pos(
         raise BusinessRuleError(
             "Only an ended session can be reconciled. Stop the session first."
         )
-    amount_minor = _require_repaired_ended_amount(gs)
-    if amount_minor <= 0:
-        raise BusinessRuleError(
-            "The session has no billable amount. Cancel it with a reason instead."
-        )
+    await _require_session_pos_eligible(session, gaming_session=gs)
 
     source_shift = await session.get(Shift, gs.shift_id)
     if not source_shift or source_shift.company_id != tenant.company_id:

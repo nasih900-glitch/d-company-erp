@@ -81,6 +81,36 @@ export interface MenuItemDTO {
   price_includes_tax: boolean;
   is_available: boolean;
   description?: string | null;
+  variants?: MenuVariantDTO[];
+  modifier_groups?: MenuModifierGroupDTO[];
+}
+
+export interface MenuVariantDTO {
+  id: string;
+  name: string;
+  price_delta_minor: number;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface MenuModifierOptionDTO {
+  id: string;
+  modifier_group_id: string;
+  name: string;
+  price_delta_minor: number;
+  max_quantity: number;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface MenuModifierGroupDTO {
+  id: string;
+  name: string;
+  min_select: number;
+  max_select: number;
+  sort_order: number;
+  is_active: boolean;
+  options: MenuModifierOptionDTO[];
 }
 
 export interface MenuCategoryDTO {
@@ -2502,6 +2532,52 @@ export interface GamingPosHandoffDTO {
   already_linked: boolean;
 }
 
+export interface GamingSessionAddonModifierSelectionDTO {
+  modifier_id: string;
+  qty: number;
+}
+
+export interface GamingSessionAddonCreateDTO {
+  client_line_id: string;
+  menu_item_id: string;
+  variant_id?: string | null;
+  modifiers: GamingSessionAddonModifierSelectionDTO[];
+  qty: number;
+  expected_unit_price_minor: number;
+  note?: string | null;
+}
+
+export interface GamingSessionAddonDTO {
+  id: string;
+  gaming_session_id: string;
+  client_line_id: string;
+  menu_item_id: string;
+  menu_item_name: string;
+  menu_item_type: 'food' | 'drink' | 'dessert';
+  variant_id: string | null;
+  variant_snapshot: Record<string, unknown> | null;
+  modifiers: Array<Record<string, unknown>>;
+  qty: number;
+  catalog_unit_price_minor: number;
+  unit_price_minor: number;
+  line_total_minor: number;
+  discount_minor: number;
+  hsn_or_sac: string | null;
+  tax_rate: number;
+  taxable_value_minor: number;
+  cgst_minor: number;
+  sgst_minor: number;
+  igst_minor: number;
+  cess_minor: number;
+  note: string | null;
+  created_by: string;
+  created_terminal_id: string;
+  created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
+}
+
 export const gaming = {
   listStations: () => api.get<StationDTO[]>('/gaming/stations').then((r) => r.data),
   createStation: (body: {
@@ -2528,6 +2604,26 @@ export const gaming = {
     api.get<GamingPackageDTO[]>('/gaming/packages', {
       params: station_type ? { station_type } : {},
     }).then((r) => r.data),
+  listSessionAddons: (id: string) =>
+    api.get<GamingSessionAddonDTO[]>(`/gaming/sessions/${id}/addons`)
+      .then((r) => r.data),
+  addSessionAddon: (
+    id: string,
+    body: GamingSessionAddonCreateDTO,
+    idempotencyKey: string,
+  ) => api.post<GamingSessionAddonDTO>(`/gaming/sessions/${id}/addons`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
+  voidSessionAddon: (
+    id: string,
+    addonId: string,
+    reason: string,
+    idempotencyKey: string,
+  ) => api.post<GamingSessionAddonDTO>(
+    `/gaming/sessions/${id}/addons/${addonId}/void`,
+    { reason },
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  ).then((r) => r.data),
   startSession: (body: {
     station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
     timer_minutes?: number; package_id?: string; extra_controllers?: number;

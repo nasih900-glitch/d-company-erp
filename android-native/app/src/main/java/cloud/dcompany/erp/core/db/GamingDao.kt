@@ -77,6 +77,256 @@ interface GamingDao {
         reconcileLocalSessions(listOf(row))
     }
 
+    // -------------------------------------------------------- session add-ons
+
+    @Query("SELECT * FROM gaming_session_addon_cache ORDER BY createdAtMillis, id")
+    fun observeSessionAddonCache(): Flow<List<GamingSessionAddonCacheEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSessionAddonCache(rows: List<GamingSessionAddonCacheEntity>)
+
+    @Query("DELETE FROM gaming_session_addon_cache WHERE id NOT IN (:keepIds)")
+    suspend fun deleteSessionAddonCacheNotIn(keepIds: List<String>)
+
+    /**
+     * This is intentionally a bounded board projection, not add-on history:
+     * SyncEngine supplies only grid-visible active/paused and ended-unbilled
+     * session ledgers (one session per station). Durable local actions live in
+     * their separate outbox table and therefore survive this wholesale refresh.
+     */
+    @Transaction
+    suspend fun replaceSessionAddonCache(rows: List<GamingSessionAddonCacheEntity>) {
+        upsertSessionAddonCache(rows)
+        deleteSessionAddonCacheNotIn(rows.map { it.id }.ifEmpty { listOf("") })
+    }
+
+    @Query("SELECT * FROM gaming_session_addon_cache WHERE id = :id LIMIT 1")
+    suspend fun sessionAddonCacheById(id: String): GamingSessionAddonCacheEntity?
+
+    @Query(
+        "SELECT * FROM gaming_session_addon_cache " +
+            "WHERE gamingSessionId = :serverSessionId AND clientLineId = :clientLineId LIMIT 1",
+    )
+    suspend fun sessionAddonCacheByClientLine(
+        serverSessionId: String,
+        clientLineId: String,
+    ): GamingSessionAddonCacheEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertSessionAddonAction(action: LocalGamingSessionAddonActionEntity)
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_session_addon_actions " +
+            "WHERE actionType = 'add' AND clientLineId = :clientLineId " +
+            "AND ((:localSessionId IS NOT NULL AND localSessionId = :localSessionId) " +
+            "OR (:serverSessionId IS NOT NULL AND serverSessionId = :serverSessionId))",
+    )
+    suspend fun addActionCountForLine(
+        localSessionId: String?,
+        serverSessionId: String?,
+        clientLineId: String,
+    ): Int
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_session_addon_actions " +
+            "WHERE actionType = 'void' AND clientLineId = :clientLineId " +
+            "AND state NOT IN ('confirmed', 'discarded') " +
+            "AND ((:localSessionId IS NOT NULL AND localSessionId = :localSessionId) " +
+            "OR (:serverSessionId IS NOT NULL AND serverSessionId = :serverSessionId))",
+    )
+    suspend fun unresolvedVoidActionCountForLine(
+        localSessionId: String?,
+        serverSessionId: String?,
+        clientLineId: String,
+    ): Int
+
+    /** Capture the exact immutable command only while its complete owner scope is known. */
+    @Transaction
+    suspend fun captureSessionAddonAction(action: LocalGamingSessionAddonActionEntity): Boolean {
+        require(action.state == GamingSessionAddonActionState.PENDING)
+        require(runCatching { UUID.fromString(action.actionId) }.isSuccess)
+        require(runCatching { UUID.fromString(action.clientLineId) }.isSuccess)
+        require(action.ownerCompanyId.isNotBlank() && action.ownerUserId.isNotBlank())
+        require(action.branchId.isNotBlank() && action.terminalId.isNotBlank())
+        require(action.shiftId.isNotBlank())
+        require(!action.localSessionId.isNullOrBlank() || !action.serverSessionId.isNullOrBlank())
+        require(action.menuItemId.isNotBlank() && action.menuItemName.isNotBlank())
+        require(action.menuItemType in setOf("food", "drink", "dessert"))
+        require(action.qty in 1..100)
+        require(action.expectedUnitPriceMinor in 0L..9_999_999_999L)
+        require(action.createdAtMillis > 0L)
+        require(action.lastError == null && action.resolvedAtMillis == null && action.resolutionReason == null)
+        require(action.note == action.note?.trim()?.takeIf(String::isNotEmpty))
+        val localSession = action.localSessionId?.let { localSessionById(it) }
+        require(action.localSessionId == null || localSession != null) {
+            "The local Gaming session no longer exists."
+        }
+        require(localSession == null || localSession.shiftId == action.shiftId) {
+            "The Gaming item action no longer belongs to the session's captured shift."
+        }
+        require(
+            localSession == null || action.serverSessionId == null ||
+                localSession.serverId == action.serverSessionId,
+        ) { "The Gaming item action no longer matches the confirmed server session." }
+        when (action.actionType) {
+            GamingSessionAddonActionType.ADD -> {
+                require(action.serverAddonId == null)
+                require(action.voidReason == null)
+                require(
+                    localSession == null || localSession.state in setOf(
+                        GamingSessionState.START_PENDING,
+                        GamingSessionState.START_SYNCED,
+                    ),
+                ) { "The Gaming session already captured Stop or POS handoff." }
+                if (
+                    addActionCountForLine(
+                        action.localSessionId,
+                        action.serverSessionId,
+                        action.clientLineId,
+                    ) > 0
+                ) return false
+            }
+            GamingSessionAddonActionType.VOID -> {
+                require(!action.voidReason.isNullOrBlank() && action.voidReason.length in 3..500)
+                action.serverAddonId?.let { serverAddonId ->
+                    val target = sessionAddonCacheById(serverAddonId)
+                    require(
+                        target != null && target.clientLineId == action.clientLineId &&
+                            target.gamingSessionId == action.serverSessionId,
+                    ) { "The selected Gaming item no longer matches this session." }
+                }
+                require(
+                    localSession == null || localSession.state !in setOf(
+                        GamingSessionState.SEND_PENDING,
+                        GamingSessionState.SENT,
+                        GamingSessionState.CANCELLED,
+                    ),
+                ) { "The Gaming session already captured POS handoff or cancellation." }
+                if (
+                    unresolvedVoidActionCountForLine(
+                        action.localSessionId,
+                        action.serverSessionId,
+                        action.clientLineId,
+                    ) > 0
+                ) return false
+            }
+            else -> error("Unsupported Gaming add-on action type")
+        }
+        insertSessionAddonAction(action)
+        return true
+    }
+
+    @Query("SELECT * FROM local_gaming_session_addon_actions WHERE actionId = :actionId LIMIT 1")
+    suspend fun sessionAddonAction(actionId: String): LocalGamingSessionAddonActionEntity?
+
+    @Query(
+        "SELECT * FROM local_gaming_session_addon_actions " +
+            "WHERE actionType = 'add' AND clientLineId = :clientLineId " +
+            "AND ((:localSessionId IS NOT NULL AND localSessionId = :localSessionId) OR " +
+            "(:serverSessionId IS NOT NULL AND serverSessionId = :serverSessionId)) " +
+            "ORDER BY createdAtMillis LIMIT 1",
+    )
+    suspend fun sessionAddonAddActionForLine(
+        localSessionId: String?,
+        serverSessionId: String?,
+        clientLineId: String,
+    ): LocalGamingSessionAddonActionEntity?
+
+    @Query(
+        "SELECT * FROM local_gaming_session_addon_actions " +
+            "WHERE ownerCompanyId = :companyId AND ownerUserId = :userId " +
+            "AND branchId = :branchId AND terminalId = :terminalId " +
+            "AND state IN ('pending', 'ambiguous') " +
+            "ORDER BY createdAtMillis, CASE actionType WHEN 'add' THEN 0 ELSE 1 END, actionId",
+    )
+    suspend fun sessionAddonActionsForSync(
+        companyId: String,
+        userId: String,
+        branchId: String,
+        terminalId: String,
+    ): List<LocalGamingSessionAddonActionEntity>
+
+    @Query(
+        "SELECT * FROM local_gaming_session_addon_actions " +
+            "WHERE state NOT IN ('confirmed', 'discarded') ORDER BY createdAtMillis, actionId",
+    )
+    fun observeUnresolvedSessionAddonActions(): Flow<List<LocalGamingSessionAddonActionEntity>>
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_session_addon_actions " +
+            "WHERE state NOT IN ('confirmed', 'discarded') AND " +
+            "((:localSessionId IS NOT NULL AND localSessionId = :localSessionId) OR " +
+            "(:serverSessionId IS NOT NULL AND serverSessionId = :serverSessionId))",
+    )
+    suspend fun unresolvedSessionAddonActionCount(
+        localSessionId: String?,
+        serverSessionId: String?,
+    ): Int
+
+    @Query(
+        "SELECT COUNT(*) FROM local_gaming_session_addon_actions " +
+            "WHERE actionType = 'add' AND state NOT IN ('confirmed', 'discarded') AND " +
+            "((:localSessionId IS NOT NULL AND localSessionId = :localSessionId) OR " +
+            "(:serverSessionId IS NOT NULL AND serverSessionId = :serverSessionId))",
+    )
+    suspend fun unresolvedSessionAddCount(
+        localSessionId: String?,
+        serverSessionId: String?,
+    ): Int
+
+    /** Start acceptance resolves only the missing dependency; the payload remains immutable. */
+    @Query(
+        "UPDATE local_gaming_session_addon_actions SET serverSessionId = :serverSessionId " +
+            "WHERE localSessionId = :localSessionId AND serverSessionId IS NULL " +
+            "AND state IN ('pending', 'ambiguous', 'rejected')",
+    )
+    suspend fun resolveSessionAddonServerId(localSessionId: String, serverSessionId: String): Int
+
+    /** Resolve an offline Void's target only from its confirmed Add/server cache receipt. */
+    @Query(
+        "UPDATE local_gaming_session_addon_actions SET serverAddonId = :serverAddonId " +
+            "WHERE actionId = :actionId AND actionType = 'void' AND serverAddonId IS NULL " +
+            "AND state IN ('pending', 'ambiguous', 'rejected')",
+    )
+    suspend fun resolveSessionAddonVoidTarget(actionId: String, serverAddonId: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_addon_actions SET serverAddonId = :serverAddonId, " +
+            "state = 'confirmed', lastError = NULL, resolvedAtMillis = :resolvedAtMillis " +
+            "WHERE actionId = :actionId AND actionType = :actionType " +
+            "AND state IN ('pending', 'ambiguous', 'rejected')",
+    )
+    suspend fun markSessionAddonActionConfirmed(
+        actionId: String,
+        actionType: String,
+        serverAddonId: String,
+        resolvedAtMillis: Long,
+    ): Int
+
+    @Query(
+        "UPDATE local_gaming_session_addon_actions SET state = 'ambiguous', lastError = :error " +
+            "WHERE actionId = :actionId AND state IN ('pending', 'ambiguous', 'rejected')",
+    )
+    suspend fun markSessionAddonActionAmbiguous(actionId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_addon_actions SET state = 'rejected', lastError = :error " +
+            "WHERE actionId = :actionId AND state IN ('pending', 'ambiguous')",
+    )
+    suspend fun markSessionAddonActionRejected(actionId: String, error: String): Int
+
+    @Query(
+        "UPDATE local_gaming_session_addon_actions SET state = 'discarded', " +
+            "resolvedAtMillis = :resolvedAtMillis, resolutionReason = trim(:reason) " +
+            "WHERE actionId = :actionId AND state = 'rejected' " +
+            "AND :resolvedAtMillis > 0 AND length(trim(:reason)) BETWEEN 3 AND 500",
+    )
+    suspend fun discardRejectedSessionAddonAction(
+        actionId: String,
+        reason: String,
+        resolvedAtMillis: Long,
+    ): Int
+
     // --------------------------------------------------------- local sessions
     @Insert
     suspend fun insertLocalSession(session: LocalGamingSessionEntity)

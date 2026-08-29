@@ -12,47 +12,147 @@ D Company ERP already separates release delivery from compatibility policy:
 The ERP backend must never build, re-sign, or modify an APK. Keep the signing
 key outside the VPS and use the existing release workflow.
 
+The release workflow also requires the out-of-band repository Actions variable
+`ANDROID_EXPECTED_SIGNER_SHA256`. Set it from a previously trusted installed
+direct APK or the preserved release certificate, not from the candidate built
+in that same run. Release APKs and the Play AAB must all match this fingerprint
+before they can be packaged. Emulator automation and the Gradle build run
+without signing secrets. Their unsigned artifacts are handed to a fresh signing
+runner, where no Gradle process or third-party action is allowed to run after
+the release keystore is decoded. The signer uses the explicitly pinned Android
+35.0.0 `zipalign` and `apksigner` binaries instead of whichever SDK happens to
+be newest on the hosted runner.
+
+## One-time bootstrap boundary
+
+Version `3.1.0` (code `11`) is the first build containing the verified in-app
+direct updater. An already-installed `3.0.9` or older app cannot acquire new
+installer code from the server. Install the signed `3.1.0` APK once through
+Android's normal package installer and prove that its local database/outbox is
+preserved. Server-delivered verified APK updates are available only for later
+versions installed over that `3.1.0` baseline.
+
+The repository and Compose defaults deliberately keep
+`ANDROID_LATEST_VERSION_CODE=8`. Building a newer APK is not authority to
+advertise it. The operator raises `ANDROID_LATEST_VERSION_CODE` only after the
+exact APK is published and the complete manifest metadata has been checked.
+
+## Release manifest to backend configuration
+
+The workflow-generated `release-manifest.json` is the verified handoff record,
+not a backend configuration file to import wholesale. Copy only these fields
+into the production compatibility settings after publishing the exact APK:
+
+| Release manifest | Backend environment variable |
+| --- | --- |
+| `version_code` | `ANDROID_LATEST_VERSION_CODE` |
+| `version_name` | `ANDROID_LATEST_VERSION_NAME` |
+| `apk_download_url` | `ANDROID_UPDATE_URL` |
+| `apk_sha256` | `ANDROID_UPDATE_APK_SHA256` |
+| `apk_size_bytes` | `ANDROID_UPDATE_APK_SIZE_BYTES` |
+| `signing_certificate_sha256` | `ANDROID_UPDATE_SIGNING_CERT_SHA256` |
+
+`ANDROID_MIN_SUPPORTED_VERSION_CODE` is a rollout decision and is deliberately
+not generated from the artifact. `ANDROID_UPDATE_RELEASE_NOTES` is maintained
+separately. Keep the minimum at the oldest compatible deployed client until
+every active tablet has drained its offline queue and upgraded successfully.
+
+The manifest generator rejects APKs above 512 MiB, matching the Android
+downloader's hard limit. This prevents the server from advertising metadata for
+an artifact the client is required to reject.
+
+For a direct `.apk` URL, the backend fails startup if version name, SHA-256,
+byte size, or signer fingerprint is absent. A partial direct-update contract is
+an operational lockout risk, so it is not downgraded to an unverified link.
+Play/managed-store links may omit APK integrity fields because the app does not
+download those bytes through the direct updater.
+
+Production and staging also refuse to advertise or require a build newer than
+the code-`8` compatibility floor without an HTTPS update URL. This prevents an
+operator typo from persisting a required-update screen that gives staff no
+installation path.
+
 ## Safe rollout
 
 Assume the currently installed production build has version code `8`; a test
 tablet may instead hold the earlier schema-37 code-`9` candidate. The new signed
-release has version code `10`.
+release has version code `11`.
 
-1. Produce and verify the signed version-code-10 APK before changing the server.
+1. Produce and verify the signed version-code-11 APK before changing the server.
 2. Publish the APK on the controlled HTTPS release channel.
 3. Confirm its signing-certificate fingerprint matches the installed app.
 4. Configure the backend initially as:
 
    ```dotenv
    ANDROID_MIN_SUPPORTED_VERSION_CODE=8
-   ANDROID_LATEST_VERSION_CODE=10
-   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.0.9.apk
+   ANDROID_LATEST_VERSION_CODE=11
+   ANDROID_LATEST_VERSION_NAME=3.1.0
+   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.0.apk
+   ANDROID_UPDATE_APK_SHA256=<64-hex APK digest from release-manifest.json>
+   ANDROID_UPDATE_APK_SIZE_BYTES=<exact byte size from release-manifest.json>
+   ANDROID_UPDATE_SIGNING_CERT_SHA256=<64-hex signer digest from release-manifest.json>
+   ANDROID_UPDATE_RELEASE_NOTES=Gaming Centre reliability update
    ```
 
-   Version 8 remains operational and sees an optional update. Version 10 is
+   Version 8 remains operational and sees an optional update. Version 11 is
    current.
 
 5. Let every tablet sync its offline queue, install the update, sign in and
    complete the smoke test.
-6. Only when every active tablet is on version 10 may the minimum be raised:
+6. Only when every active tablet is on version 11 may the minimum be raised:
 
    ```dotenv
-   ANDROID_MIN_SUPPORTED_VERSION_CODE=10
-   ANDROID_LATEST_VERSION_CODE=10
+   ANDROID_MIN_SUPPORTED_VERSION_CODE=11
+   ANDROID_LATEST_VERSION_CODE=11
    ```
 
 ## What the employee experiences
 
 For an optional update, the employee can keep working and install later. For a
 required update, financial writes are blocked, but the local database and
-signed-in account are preserved. The employee taps **Update securely**, obtains
-the signed APK from the configured HTTPS channel and approves installation in
-Android.
+signed-in account are preserved. In the controlled direct-distribution build,
+the employee taps **Download verified update**. The app verifies the exact
+advertised byte size, SHA-256, package, version, expected signer, and signing
+lineage before enabling **Install update**. Android then requires the employee
+to approve installation.
+
+If any integrity field is missing or invalid, the app refuses the direct path
+and offers only the legacy HTTPS link. The ordinary Play build never requests
+Android's package-install permission and therefore always uses its store/link
+channel.
+
+Once this installed build receives an authoritative required-update decision,
+that block is stored locally and survives process death, an offline restart,
+and later supported/optional responses for the same version code. A successful
+in-place update changes the installed version code and clears the stale block
+at the next startup. Do not tell staff to clear app data to escape the screen;
+that would also endanger locally queued work.
 
 Normal Android installations cannot be updated silently. Silent installation
 requires either Google Play managed updates or a tablet enrolled as an Android
 Enterprise device owner. For the current partner pilot, Play Internal Testing
 is the lowest-maintenance choice; direct signed APK delivery remains supported.
+
+GitHub release assets and Caddy URLs are immutable. The workflow refuses to
+replace an existing release tag, and the operator must never overwrite a file
+already served under a versioned URL. A corrected binary requires a higher
+version code, a new tag, and a new filename.
+
+## Do not mix Play and direct delivery on one active fleet
+
+The current compatibility contract has one Android `update_url`. It cannot
+simultaneously advertise a Play listing to Play-installed clients and the
+controlled APK to direct-installed clients. Choose one rollout channel for the
+active tablet fleet until a channel-specific compatibility contract is added.
+
+Google Play App Signing can also make the certificate on the APK delivered by
+Play different from the certificate on the locally signed direct APK. The CI
+signer fingerprint describes the direct APK/upload artifact; it does not prove
+the certificate on a Play-delivered split APK. Android will safely reject a
+cross-channel update whose signing lineage does not match, but raising the
+server minimum first would leave that tablet blocked. Verify an in-place update
+on an installation obtained through the exact chosen channel before changing
+`ANDROID_MIN_SUPPORTED_VERSION_CODE`.
 
 ## Rollback
 

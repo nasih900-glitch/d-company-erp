@@ -213,6 +213,19 @@ class GamingStationPresentationTest {
     }
 
     @Test
+    fun `zero value ended session with an active item remains payable through POS`() {
+        val result = stationPresentation(
+            station,
+            session(status = "ended", amountMinor = 0),
+            now,
+            hasActiveAddons = true,
+        )
+
+        assertEquals(StationVisualState.PaymentDue, result.state)
+        assertEquals("Payment due", result.statusLabel)
+    }
+
+    @Test
     fun `missing ended amount fails closed instead of becoming a zero value cancellation`() {
         val result = stationPresentation(
             station,

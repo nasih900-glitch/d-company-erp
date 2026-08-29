@@ -107,7 +107,7 @@ internal fun shiftHistoryStatusMessage(
             "Could not refresh shift history — showing saved history updated ${age ?: "earlier"}. $historyError"
         historyError != null -> "Could not download shift history. $historyError"
         !online && lastSyncMillis == null ->
-            "Offline — shift history has never been downloaded for this account and terminal."
+            "Offline — shift history has never been downloaded for this account and device."
         !online -> "Offline — showing saved shift history updated ${age ?: "earlier"}."
         lastSyncMillis == null -> "Shift history has not been downloaded yet."
         else -> "Shift history updated $age."

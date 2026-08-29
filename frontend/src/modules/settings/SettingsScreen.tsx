@@ -19,6 +19,7 @@ import SheetsTab from './tabs/SheetsTab';
 import MembershipsTab from './tabs/MembershipsTab';
 import PricingTab from './tabs/PricingTab';
 import AccessControlTab from './tabs/AccessControlTab';
+import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
 
 type Tab = 'account' | 'company' | 'branches' | 'pricing' | 'sheets' | 'memberships' | 'access';
 
@@ -33,7 +34,8 @@ export default function SettingsScreen() {
     demo || me?.protected_access || effectivePermissions.has('settings.manage'),
   );
   const canManageMemberships = Boolean(
-    demo || me?.protected_access || effectivePermissions.has('memberships.manage'),
+    GAMING_CENTRE_FEATURES.memberships
+    && (demo || me?.protected_access || effectivePermissions.has('memberships.manage')),
   );
   const [tab, setTab] = useState<Tab>('account');
 

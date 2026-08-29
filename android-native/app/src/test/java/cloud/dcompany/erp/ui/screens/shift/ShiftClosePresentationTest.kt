@@ -5,6 +5,9 @@ import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftSource
 import cloud.dcompany.erp.core.db.ShiftState
+import cloud.dcompany.erp.core.db.ShiftAccountingBreakdown
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.presentationPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -12,6 +15,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShiftClosePresentationTest {
+
+    @Test
+    fun `gaming centre hides zero legacy rows but preserves nonzero legacy money`() {
+        val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
+        val zero = accounting()
+        val nonzero = accounting(membershipCollectionsMinor = 4_500, membershipRefundsMinor = 600)
+
+        assertTrue(shiftLegacyMoneyRows(zero, presentation).isEmpty())
+        val rows = shiftLegacyMoneyRows(nonzero, presentation)
+        assertEquals(5_100L, rows.sumOf { it.amountMinor })
+        assertTrue(rows.all { !it.label.contains("membership", ignoreCase = true) })
+        assertTrue(nonzero.hasLegacyPrepaidMoney())
+    }
 
     @Test
     fun `denomination columns preserve editable stepper width on compact screens`() {
@@ -163,4 +179,21 @@ class ShiftClosePresentationTest {
             openedByName = "Rafi",
             openedByEmail = "rafi@example.test",
         )
+
+    private fun accounting(
+        membershipCollectionsMinor: Long = 0,
+        membershipRefundsMinor: Long = 0,
+    ) = ShiftAccountingBreakdown(
+        posCollectionsMinor = 10_000,
+        membershipCollectionsMinor = membershipCollectionsMinor,
+        grossCollectionsMinor = 10_000 + membershipCollectionsMinor,
+        cashCollectionsMinor = 10_000,
+        cardCollectionsMinor = 0,
+        upiCollectionsMinor = membershipCollectionsMinor,
+        otherCollectionsMinor = 0,
+        settledPosRefundsMinor = 0,
+        settledMembershipRefundsMinor = membershipRefundsMinor,
+        totalRefundsMinor = membershipRefundsMinor,
+        netCollectionsMinor = 10_000 + membershipCollectionsMinor - membershipRefundsMinor,
+    )
 }

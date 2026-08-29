@@ -90,6 +90,69 @@ describe('gaming paid-extension API contract', () => {
     );
   });
 
+  it('loads active and voided add-ons for one Gaming session', async () => {
+    const response = [{
+      id: 'addon-1',
+      gaming_session_id: 'session-1',
+      client_line_id: 'line-1',
+      menu_item_id: 'drink-1',
+      menu_item_name: 'Cold can',
+      menu_item_type: 'drink',
+      qty: 1,
+      line_total_minor: 1_249,
+      voided_at: null,
+    }];
+    vi.mocked(api.get).mockResolvedValue({ data: response });
+
+    await expect(gaming.listSessionAddons('session-1')).resolves.toEqual(response);
+    expect(api.get).toHaveBeenCalledWith('/gaming/sessions/session-1/addons');
+  });
+
+  it('adds a server-priced item with caller-retained line and idempotency identities', async () => {
+    const body = {
+      client_line_id: '11111111-1111-4111-8111-111111111111',
+      menu_item_id: 'drink-1',
+      variant_id: null,
+      modifiers: [{ modifier_id: 'ice-1', qty: 1 }],
+      qty: 2,
+      expected_unit_price_minor: 1_249,
+      note: 'Hand to customer',
+    };
+    const response = { id: 'addon-1', gaming_session_id: 'session-1', ...body };
+    vi.mocked(api.post).mockResolvedValue({ data: response });
+
+    await expect(
+      gaming.addSessionAddon('session-1', body, 'gaming-addon-add:attempt-1'),
+    ).resolves.toEqual(response);
+    expect(api.post).toHaveBeenCalledWith(
+      '/gaming/sessions/session-1/addons',
+      body,
+      { headers: { 'Idempotency-Key': 'gaming-addon-add:attempt-1' } },
+    );
+  });
+
+  it('soft-voids an add-on with an audit reason and caller-retained key', async () => {
+    const response = {
+      id: 'addon-1',
+      gaming_session_id: 'session-1',
+      voided_at: '2026-08-29T10:00:00Z',
+      void_reason: 'Wrong can selected',
+    };
+    vi.mocked(api.post).mockResolvedValue({ data: response });
+
+    await expect(gaming.voidSessionAddon(
+      'session-1',
+      'addon-1',
+      'Wrong can selected',
+      'gaming-addon-void:attempt-1',
+    )).resolves.toEqual(response);
+    expect(api.post).toHaveBeenCalledWith(
+      '/gaming/sessions/session-1/addons/addon-1/void',
+      { reason: 'Wrong can selected' },
+      { headers: { 'Idempotency-Key': 'gaming-addon-void:attempt-1' } },
+    );
+  });
+
   it('sends an explicit null timer snapshot for conflict-safe relative extension', async () => {
     const response = {
       id: 'session-1',

@@ -150,7 +150,12 @@ def validate_production_defaults(
     compose_file: Path,
     version: AndroidVersion,
 ) -> None:
-    """Keep production's advertised latest Android build aligned with the APK."""
+    """Validate safe production policy defaults without auto-advertising the APK.
+
+    The signed build version and the server rollout decision are intentionally
+    separate. A release tag may be built before its APK is copied to the HTTPS
+    channel, so production defaults may remain on an older compatible build.
+    """
     env_latest = _production_version_value(
         production_env_file,
         re.compile(r"^ANDROID_LATEST_VERSION_CODE=([1-9][0-9]*)$", re.MULTILINE),
@@ -165,10 +170,10 @@ def validate_production_defaults(
         ),
         "ANDROID_LATEST_VERSION_CODE fallback",
     )
-    if env_latest != version.code or compose_latest != version.code:
+    if env_latest != compose_latest:
         raise ReleaseVersionError(
-            "production Android latest-version defaults do not match versionCode: "
-            f"source={version.code}, env={env_latest}, compose={compose_latest}"
+            "production Android latest-version defaults disagree: "
+            f"env={env_latest}, compose={compose_latest}"
         )
 
     env_minimum = _production_version_value(
@@ -196,6 +201,12 @@ def validate_production_defaults(
             "Gaming contract: "
             f"required>={_SNAPSHOT_SAFE_MIN_VERSION_CODE}, "
             f"configured={env_minimum}, latest={version.code}"
+        )
+    if not env_minimum <= env_latest <= version.code:
+        raise ReleaseVersionError(
+            "production Android latest-version default must be between the "
+            "minimum supported build and the signed source build: "
+            f"minimum={env_minimum}, configured={env_latest}, source={version.code}"
         )
 
     env_requires_headers = _production_boolean_value(

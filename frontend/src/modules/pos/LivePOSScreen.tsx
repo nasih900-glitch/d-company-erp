@@ -42,6 +42,12 @@ import {
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
 import {
+  GAMING_CENTRE_FEATURES,
+  profileMembershipMoneyLabel,
+  profilePosCheckoutSource,
+  profilePosOrderType,
+} from '@/lib/product-profile';
+import {
   applyCanonicalCheckoutBalance,
   buildCheckoutPaymentSubmission,
   buildCheckoutZeroFinalization,
@@ -63,6 +69,15 @@ import { useAuth } from '@/modules/auth/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
 import { subscribeRealtime } from '@/lib/realtime';
+
+const MEMBERSHIP_UI_ENABLED = GAMING_CENTRE_FEATURES.memberships;
+const RESTAURANT_ORDER_TYPES_UI_ENABLED = GAMING_CENTRE_FEATURES.restaurantOrderTypes;
+const TAX_COMPLIANCE_UI_ENABLED = GAMING_CENTRE_FEATURES.taxCompliance;
+const DEFAULT_POS_ORDER_TYPE = profilePosOrderType();
+const PREPAID_DISCOUNT_LABEL = profileMembershipMoneyLabel('discount', 1)
+  ?? 'Prepaid programme discount';
+const PREPAID_ALLOWANCE_LABEL = profileMembershipMoneyLabel('allowance', 1)
+  ?? 'Prepaid allowance';
 
 import LiveReceipt from './LiveReceipt';
 import {
@@ -155,7 +170,7 @@ export default function LivePOSScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [orderType, setOrderType] = useState<OrderType>('dine_in');
+  const [orderType, setOrderType] = useState<OrderType>(DEFAULT_POS_ORDER_TYPE);
   const [deliveryVia, setDeliveryVia] = useState<DeliveryVia>('inhouse');
   const [deliveryStateCode, setDeliveryStateCode] = useState('32');
   const [query, setQuery] = useState('');
@@ -260,7 +275,7 @@ export default function LivePOSScreen() {
     setResumingOrder(null);
     setHeldOrders([]);
     setHeldError(null);
-    setOrderType('dine_in');
+    setOrderType(DEFAULT_POS_ORDER_TYPE);
     setDeliveryVia('inhouse');
     setDeliveryStateCode('32');
     setCustomerPhone('');
@@ -287,10 +302,10 @@ export default function LivePOSScreen() {
           throw new Error('This account has no branch assigned. Assign a branch before using POS.');
         }
         if (!terminalReady || !terminalId) {
-          throw new Error('Select the POS terminal used by this device before opening a shift.');
+          throw new Error('This device is not ready for POS. Refresh it; if the problem remains, ask an owner to check the device setup.');
         }
         if (!draftKey) {
-          throw new Error('The POS recovery scope could not be established for this user and terminal.');
+          throw new Error('The POS recovery context could not be verified. Refresh before starting a bill.');
         }
         const activeDraftKey = draftKey;
         const [menuResult, shiftResult] = await Promise.allSettled([
@@ -341,7 +356,11 @@ export default function LivePOSScreen() {
             })
             .filter((l): l is CartLine => l !== null);
           setCart(restoredCart);
-          setOrderType(storedDraft.orderType);
+          setOrderType(profilePosOrderType({
+            orderType: storedDraft.orderType,
+            hasCheckoutRetry: Boolean(storedDraft.retry),
+            resumingOrderId: storedDraft.retry?.resumingOrderId ?? storedDraft.resumingOrderId,
+          }));
           setDeliveryVia(storedDraft.deliveryVia);
           setDeliveryStateCode(storedDraft.deliveryStateCode);
           setCustomerName(storedDraft.customerName);
@@ -602,7 +621,7 @@ export default function LivePOSScreen() {
       setMembershipTier(null);
       setCustomerLookupState('idle');
       setCustomerMessage(nextCustomerPhone
-        ? 'Customer loaded from this order. Lookup previews membership; the server verifies it when preparing the bill.'
+        ? 'Customer loaded from this order. Use Find to refresh the customer profile before billing.'
         : null);
       if (draftKey) {
         saveDraft<PosRetryDraft>(draftKey, {
@@ -686,7 +705,7 @@ export default function LivePOSScreen() {
   function add(item: MenuItemDTO) {
     if (resumingOrder) {
       setError(
-        'Items are locked after Send to POS. Change only the customer or authorised benefits here; edit items from Tables before sending the bill.',
+        'Items are locked after Send to POS. Change only the customer or authorised adjustments here; edit items in the source workflow before sending the bill.',
       );
       return;
     }
@@ -908,6 +927,11 @@ export default function LivePOSScreen() {
       }
       setCustomer(found);
       if (!customerName.trim() && found.name) setCustomerName(found.name);
+      if (!MEMBERSHIP_UI_ENABLED) {
+        setCustomerLookupState('found');
+        setCustomerMessage(`${found.name || found.phone} found.`);
+        return;
+      }
       const sub = await memberships.getCustomerSubscription(found.id);
       setSubscription(sub);
       if (sub) {
@@ -944,7 +968,7 @@ export default function LivePOSScreen() {
   async function prepareCheckout(method: PayMethod) {
     if ((!shiftId && !checkoutRetry) || !receiptBusiness || receiptSettingsError) {
       if (receiptSettingsError) setError(receiptSettingsError);
-      else if (!shiftId && !checkoutRetry) setError(shiftError || 'No validated shift is available for this terminal.');
+      else if (!shiftId && !checkoutRetry) setError(shiftError || 'No validated shift is available. Open or refresh the shift before continuing.');
       else if (!receiptBusiness) setError('Receipt configuration is still loading. Wait a moment and try again.');
       return;
     }
@@ -988,11 +1012,15 @@ export default function LivePOSScreen() {
           return;
         }
       } else {
-        if (retry.resumingOrderId) {
-          order = await pos.getOrder(retry.resumingOrderId);
+        const checkoutSource = profilePosCheckoutSource(
+          retry.resumingOrderId,
+          retry.snapshot.orderType,
+        );
+        if (checkoutSource.kind === 'incoming') {
+          order = await pos.getOrder(checkoutSource.orderId);
           if (retry.snapshot.cart.length) {
             throw new Error(
-              'This sent bill has locked items. Clear the locally added items and edit the original table bill before sending it to POS again.',
+              'This sent bill has locked items. Clear the locally added items and edit the original source bill before sending it to POS again.',
             );
           }
           const desiredCustomerName = retry.snapshot.customerName.trim();
@@ -1002,7 +1030,7 @@ export default function LivePOSScreen() {
             || (order.customer_phone ?? '') !== desiredCustomerPhone
           ) {
             order = await pos.attachCustomer(
-              retry.resumingOrderId,
+              checkoutSource.orderId,
               {
                 customer_name: desiredCustomerName || undefined,
                 customer_phone: desiredCustomerPhone || undefined,
@@ -1014,7 +1042,7 @@ export default function LivePOSScreen() {
         } else {
           order = await pos.createOrder(
             {
-              type: retry.snapshot.orderType,
+              type: checkoutSource.orderType,
               shift_id: retry.snapshot.shiftId,
               lines: retry.snapshot.cart.map((line) => ({ menu_item_id: line.itemId, qty: line.qty })),
               delivery_via: retry.snapshot.orderType === 'delivery'
@@ -1227,7 +1255,7 @@ export default function LivePOSScreen() {
       if (settlement.order_status !== 'paid' || !settlement.invoice_no) {
         throw new Error(
           zero
-            ? 'The membership benefit did not finalize an invoice.'
+            ? `The ${PREPAID_ALLOWANCE_LABEL.toLocaleLowerCase('en-IN')} did not finalize an invoice.`
             : 'The payment attempt did not finalize an invoice. Do not collect payment again.',
         );
       }
@@ -1239,7 +1267,7 @@ export default function LivePOSScreen() {
       ) {
         throw new Error(
           zero
-            ? 'The membership benefit was accepted, but the final invoice could not be loaded. Resume this same recovery.'
+            ? `The ${PREPAID_ALLOWANCE_LABEL.toLocaleLowerCase('en-IN')} was accepted, but the final invoice could not be loaded. Resume this same recovery.`
             : 'Payment was accepted, but the final invoice could not be loaded. Resume this same recovery; do not charge again.',
         );
       }
@@ -1314,7 +1342,7 @@ export default function LivePOSScreen() {
 
       persistCheckoutRetry(activeRetry);
       setError(zeroFinalization
-        ? `${(error as Error).message} The no-payment membership settlement remains locked to the same key. Resume it; do not collect money.`
+        ? `${(error as Error).message} The no-payment ${PREPAID_ALLOWANCE_LABEL.toLocaleLowerCase('en-IN')} settlement remains locked to the same key. Resume it; do not collect money.`
         : `${(error as Error).message} The payment attempt remains locked to the same key. `
           + 'Do not collect money again; resume or ask a protected owner to reconcile it.');
     } finally {
@@ -1629,6 +1657,12 @@ export default function LivePOSScreen() {
       </div>
     );
   }
+  const shiftPrepaidRevenueLabel = shiftCollections
+    ? profileMembershipMoneyLabel('revenue', shiftCollections.membershipMinor)
+    : null;
+  const recoveringLegacyOrderMode = Boolean(
+    checkoutRetry && checkoutRetry.snapshot.orderType !== DEFAULT_POS_ORDER_TYPE,
+  );
 
   return (
     <div className="min-h-full pb-32 xl:grid xl:grid-cols-[minmax(0,1fr)_440px] xl:gap-6 xl:pb-0">
@@ -1649,11 +1683,14 @@ export default function LivePOSScreen() {
                 Gross collections:
                 <span className="font-bold font-mono">{inr(shiftCollections.grossMinor)}</span>
                 <span className="text-fg-muted">
-                  POS {inr(shiftCollections.posMinor)} · Memberships {inr(shiftCollections.membershipMinor)}
+                  POS {inr(shiftCollections.posMinor)}
+                  {shiftPrepaidRevenueLabel && (
+                    <> · {shiftPrepaidRevenueLabel} {inr(shiftCollections.membershipMinor)}</>
+                  )}
                 </span>
               </div>
             )}
-            <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }} title="Orders sent here from Tables and Gaming">
+            <button className="btn btn-ghost relative" onClick={() => { setShowHeldPicker(true); loadHeldOrders(); }} title="Bills sent here from Gaming">
               <Inbox size={14}/> Incoming orders
               {heldOrders.length > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-bg text-[10px] font-bold flex items-center justify-center">
@@ -1661,7 +1698,7 @@ export default function LivePOSScreen() {
                 </span>
               )}
             </button>
-            {!resumingOrder && (
+            {!resumingOrder && (RESTAURANT_ORDER_TYPES_UI_ENABLED ? (
               <div className="scroll-strip flex max-w-full gap-1 rounded-xl border border-bg-border bg-bg-surface p-1">
                 {(['dine_in', 'takeaway', 'delivery'] as OrderType[]).map((t) => (
                   <button key={t}
@@ -1672,7 +1709,14 @@ export default function LivePOSScreen() {
                   >{t.replace('_', ' ')}</button>
                 ))}
               </div>
-            )}
+            ) : (
+              <div
+                className="chip text-xs !py-1.5"
+                title={recoveringLegacyOrderMode ? 'Existing checkout recovery' : 'Manual drinks and snacks sale'}
+              >
+                {recoveringLegacyOrderMode ? 'Recovering saved bill' : 'Counter sale'}
+              </div>
+            ))}
           </div>
         </header>
 
@@ -1688,7 +1732,7 @@ export default function LivePOSScreen() {
           </div>
         )}
 
-        {!resumingOrder && orderType === 'delivery' && (
+        {RESTAURANT_ORDER_TYPES_UI_ENABLED && !resumingOrder && orderType === 'delivery' && (
           <section className="card !p-3 mb-4 max-w-3xl">
             <div className="grid grid-cols-1 md:grid-cols-[1fr_140px] gap-2">
               <select
@@ -1873,12 +1917,14 @@ export default function LivePOSScreen() {
               onClick={() => add(item)}
               disabled={!!resumingOrder}
               className="card text-left hover:border-accent transition group p-3 sm:p-4 disabled:cursor-not-allowed disabled:opacity-50"
-              title={resumingOrder ? 'Sent order items are locked; edit them from Tables.' : undefined}
+              title={resumingOrder ? 'Sent bill items are locked; edit them in the source workflow.' : undefined}
             >
               <div className="break-words text-sm font-semibold">{item.name}</div>
               <div className="text-fg-muted text-xs mt-1 flex items-center justify-between">
                 <span>{inr(item.base_price_minor)}</span>
-                <span className="chip !py-0 !px-2 !text-[10px]">{(item.tax_rate * 100).toFixed(0)}%</span>
+                {TAX_COMPLIANCE_UI_ENABLED && (
+                  <span className="chip !py-0 !px-2 !text-[10px]">{(item.tax_rate * 100).toFixed(0)}%</span>
+                )}
               </div>
             </button>
           ))}
@@ -1955,7 +2001,7 @@ export default function LivePOSScreen() {
         <div className="mt-3 pt-3 border-t border-bg-border text-sm">
           {estimatedMembershipDiscount > 0 && (
             <div className="flex justify-between text-accent-good mb-1">
-              <span>Membership discount (est.)</span><span>-{inr(estimatedMembershipDiscount)}</span>
+              <span>{PREPAID_DISCOUNT_LABEL} (est.)</span><span>-{inr(estimatedMembershipDiscount)}</span>
             </div>
           )}
           {pendingCartDiscountMinor > 0 && (
@@ -1981,7 +2027,11 @@ export default function LivePOSScreen() {
           <div className="flex justify-between text-lg font-bold">
             <span>Total (est.)</span><span>{inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}</span>
           </div>
-          <p className="text-xs text-fg-muted mt-1">Final GST split &amp; round-off computed by backend on charge.</p>
+          <p className="text-xs text-fg-muted mt-1">
+            {TAX_COMPLIANCE_UI_ENABLED
+              ? 'Final GST split and round-off are computed by the server on charge.'
+              : 'Final total and round-off are confirmed by the server on charge.'}
+          </p>
         </div>
 
         <div className="mt-3 space-y-2 rounded-xl border border-bg-border px-3 py-2">
@@ -2073,7 +2123,7 @@ export default function LivePOSScreen() {
           <div className="mt-4 border-t border-bg-border pt-3 text-sm">
             {estimatedMembershipDiscount > 0 && (
               <div className="mb-1 flex justify-between gap-3 text-accent-good">
-                <span>Membership discount (est.)</span>
+                <span>{PREPAID_DISCOUNT_LABEL} (est.)</span>
                 <span>-{inr(estimatedMembershipDiscount)}</span>
               </div>
             )}
@@ -2105,7 +2155,11 @@ export default function LivePOSScreen() {
               <span>Total (est.)</span>
               <span>{inr(Math.max(0, estimatedPayable - pendingCartDiscountMinor - pendingCartPointsMinor))}</span>
             </div>
-            <p className="mt-1 text-xs text-fg-muted">Final GST split and round-off are computed by the backend.</p>
+            <p className="mt-1 text-xs text-fg-muted">
+              {TAX_COMPLIANCE_UI_ENABLED
+                ? 'Final GST split and round-off are computed by the server.'
+                : 'Final total and round-off are confirmed by the server.'}
+            </p>
           </div>
 
           <div className="mt-3 space-y-2 rounded-xl border border-border-base px-3 py-2">
@@ -2150,7 +2204,7 @@ export default function LivePOSScreen() {
         <Modal title="Choose payment method" onClose={() => { if (!paying) setShowPay(false); }}>
           {estimatedMembershipDiscount > 0 && (
             <div className="mb-3 rounded-xl border border-accent-good/30 bg-accent-good/10 px-3 py-2 text-xs text-accent-good">
-              Estimated membership discount: {inr(estimatedMembershipDiscount)}.
+              Estimated {PREPAID_DISCOUNT_LABEL.toLocaleLowerCase('en-IN')}: {inr(estimatedMembershipDiscount)}.
             </div>
           )}
           <p className="mb-3 text-xs text-fg-muted">
@@ -2203,7 +2257,7 @@ export default function LivePOSScreen() {
               ? buildUpiPayLink(receiptBusiness, amount + tipMinor, receiptBusiness.brandName)
               : null;
             const methodLabel = benefitCoveredZero
-              ? 'Membership benefit · no payment'
+              ? `${PREPAID_ALLOWANCE_LABEL} · no payment`
               : {
                 cash: 'Cash',
                 upi: 'UPI',
@@ -2219,12 +2273,12 @@ export default function LivePOSScreen() {
                       ? 'This shared bill lock expired or is unavailable. Do not collect money; refresh the exact bill lock first.'
                     : checkoutRetry.phase === 'awaiting_payment'
                       ? benefitCoveredZero
-                        ? 'The member allowance covers this exact server bill. Collect no money; complete the allowance to issue the final invoice.'
+                        ? `The ${PREPAID_ALLOWANCE_LABEL.toLocaleLowerCase('en-IN')} covers this exact server bill. Collect no money; complete the allowance to issue the final invoice.`
                         : isGenuineRestore
                           ? 'This is the exact server balance, restored after this screen was reopened. Verify payment was not already received before asking the customer to pay again.'
                           : 'This is the exact server balance. Collect payment from the customer now.'
                       : checkoutRetry.phase === 'finalizing_zero'
-                        ? 'The no-payment membership settlement is unresolved. Resume only this same key; do not collect money.'
+                        ? `The no-payment ${PREPAID_ALLOWANCE_LABEL.toLocaleLowerCase('en-IN')} settlement is unresolved. Resume only this same key; do not collect money.`
                         : 'Payment was confirmed and the response is unresolved. Replay only this same payment key; never collect money again.'}
                 </div>
                 <div className="text-center text-sm text-fg-muted">
@@ -2449,14 +2503,14 @@ export default function LivePOSScreen() {
       )}
 
       {showHeldPicker && (
-        <Modal title="Incoming orders (sent from Tables & Gaming)" onClose={() => setShowHeldPicker(false)} wide>
+        <Modal title="Incoming bills from Gaming" onClose={() => setShowHeldPicker(false)} wide>
           <div className="relative mb-3">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"/>
             <input
               className="input !pl-9 !min-h-[42px] !py-2"
               value={heldSearch}
               onChange={(e) => setHeldSearch(e.target.value)}
-              placeholder="Search table or station"
+              placeholder="Search station or bill"
               autoFocus
             />
           </div>
@@ -2507,7 +2561,7 @@ export default function LivePOSScreen() {
                 })}
               {!heldOrders.length && (
                 <p className="text-fg-muted text-sm text-center py-6">
-                  Nothing waiting — Tables/Gaming sends and recoverable direct POS bills appear here.
+                  Nothing waiting — Gaming sends and recoverable direct POS bills appear here.
                 </p>
               )}
             </div>
@@ -2528,7 +2582,7 @@ export default function LivePOSScreen() {
         <ConfirmModal
           title="Cancel prepared bill"
           message={abandonConfirmVariant === 'benefit_covered'
-            ? 'Cancel this prepared membership-covered bill? No money is due and the allowance has not been consumed yet.'
+            ? `Cancel this bill covered by the ${PREPAID_ALLOWANCE_LABEL.toLocaleLowerCase('en-IN')}? No money is due and the allowance has not been consumed yet.`
             : 'Confirm that NO cash, UPI, QR, or card payment was received for this bill.'}
           confirmLabel="Cancel bill"
           danger
@@ -2625,7 +2679,11 @@ function CustomerAttachPanel({
 
       {message && (
         <div className={`mt-3 rounded-xl border px-3 py-2 text-xs flex items-start gap-2 ${tone}`}>
-          {lookupState === 'error' ? <AlertCircle size={13} className="mt-0.5 shrink-0"/> : <Crown size={13} className="mt-0.5 shrink-0"/>}
+          {lookupState === 'error'
+            ? <AlertCircle size={13} className="mt-0.5 shrink-0"/>
+            : MEMBERSHIP_UI_ENABLED && subscription
+              ? <Crown size={13} className="mt-0.5 shrink-0"/>
+              : <UserRound size={13} className="mt-0.5 shrink-0"/>}
           <div>
             <div>{message}</div>
             {customer && (
@@ -2634,7 +2692,7 @@ function CustomerAttachPanel({
                 {customer.next_gaming_rank && ` (${customer.points_to_next_gaming_rank} pts to ${customer.next_gaming_rank})`}
               </div>
             )}
-            {tier && (
+            {MEMBERSHIP_UI_ENABLED && tier && (
               <div className="mt-1 opacity-90">
                 Food {(tier.food_discount_pct * 100).toFixed(0)}% · Gaming {(tier.gaming_discount_pct * 100).toFixed(0)}%
               </div>

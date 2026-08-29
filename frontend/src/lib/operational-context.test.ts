@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ShiftDTO, TerminalDTO } from './erp-api';
-import { resolveOpenShift, resolveRequiredOpenShift, resolveTerminal } from './operational-context';
+import {
+  resolveOpenShift,
+  resolveRequiredOpenShift,
+  resolveTerminal,
+  shiftResolutionMessage,
+} from './operational-context';
 
 const branchA = 'branch-a';
 const branchB = 'branch-b';
@@ -142,7 +147,19 @@ describe('required open shift resolution', () => {
     await expect(resolveRequiredOpenShift({
       scope: { companyId: 'company-a', branchId: branchA, terminalId: terminalA },
       listOpenShifts: async () => [],
-    })).rejects.toThrow('Open a shift from the Shifts tab');
+    })).rejects.toThrow('Open a shift from the Shift tab');
+  });
+
+  it('keeps the ordinary no-shift message simple but names a real device conflict', () => {
+    const noShift = shiftResolutionMessage({ kind: 'no_open_shift' });
+    const duplicate = shiftResolutionMessage({
+      kind: 'ambiguous_open_shifts',
+      shifts: [shift({ id: 'one' }), shift({ id: 'two' })],
+    });
+
+    expect(noShift).toContain('No shift is open.');
+    expect(noShift.toLowerCase()).not.toContain('terminal');
+    expect(duplicate).toContain('this terminal');
   });
 
   it('rejects when duplicate exact-scope shifts already exist', async () => {

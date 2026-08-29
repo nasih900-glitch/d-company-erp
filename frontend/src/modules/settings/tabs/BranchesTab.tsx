@@ -9,7 +9,7 @@ import Modal from '@/components/ui/Modal';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 const TERMINAL_PURPOSE_LABELS: Record<TerminalDTO['purpose'], string> = {
-  cafe_pos: 'Cafe POS',
+  cafe_pos: 'POS',
   gaming: 'Gaming Area',
   hybrid: 'Combined workspace',
 };
@@ -344,8 +344,8 @@ function TerminalForm({
             value={purpose}
             onChange={(event) => setPurpose(event.target.value as TerminalDTO['purpose'])}
           >
-            <option value="cafe_pos">Cafe POS — takes orders and collects payments</option>
-            <option value="gaming">Gaming Area — starts sessions and sends bills to Cafe POS</option>
+            <option value="cafe_pos">POS — handles counter sales and collects payments</option>
+            <option value="gaming">Gaming Area — starts sessions and sends bills to POS</option>
             <option value="hybrid">Combined — Gaming, POS and shifts together</option>
           </select>
         </Field>

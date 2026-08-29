@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -33,6 +34,85 @@ data class ReportRevenue(
     @SerialName("round_off_minor") val roundOffMinor: Long = 0,
     @SerialName("total_minor") val totalMinor: Long = 0,
 )
+
+internal data class PresentedRevenueSource(
+    val label: String,
+    val amountMinor: Long,
+    val detail: String? = null,
+)
+
+/**
+ * Groups dormant restaurant/event/membership revenue without changing the
+ * underlying report or its totals.  A focused Gaming Centre must not advertise
+ * those workflows, but historical money remains visible and reconcilable.
+ */
+internal fun ReportRevenue.presentedSources(
+    presentation: WorkspacePresentationPolicy,
+): List<PresentedRevenueSource> {
+    if (presentation.showsRestaurantOperations && presentation.showsMemberships &&
+        presentation.showsEvents
+    ) {
+        return buildList {
+            add(PresentedRevenueSource("Food / drinks / desserts", foodMinor))
+            add(PresentedRevenueSource("Gaming", gamingMinor))
+            if (hookahMinor > 0L) add(PresentedRevenueSource("Hookah", hookahMinor))
+            add(PresentedRevenueSource("Event tickets", eventTicketsMinor))
+            if (membershipsMinor > 0L) add(PresentedRevenueSource("Memberships", membershipsMinor))
+            add(
+                PresentedRevenueSource(
+                    "Delivery (Zomato/Swiggy §9(5))",
+                    deliveryAggregatorMinor,
+                    "aggregator pays the GST",
+                ),
+            )
+            if (manualCollectionsMinor > 0L) {
+                add(
+                    PresentedRevenueSource(
+                        "Manual collections (unitemized)",
+                        manualCollectionsMinor,
+                        "off-POS / legacy daily totals",
+                    ),
+                )
+            }
+            if (otherMinor > 0L) add(PresentedRevenueSource("Other", otherMinor))
+        }
+    }
+
+    val hiddenLegacyMinor = eventTicketsMinor + membershipsMinor + deliveryAggregatorMinor + otherMinor
+    return buildList {
+        add(PresentedRevenueSource("Products / snacks / drinks", foodMinor))
+        add(PresentedRevenueSource("Gaming", gamingMinor))
+        if (hookahMinor > 0L) add(PresentedRevenueSource("Shisha", hookahMinor))
+        if (manualCollectionsMinor > 0L) {
+            add(
+                PresentedRevenueSource(
+                    "Manual collections (unitemized)",
+                    manualCollectionsMinor,
+                    "off-POS / legacy daily totals",
+                ),
+            )
+        }
+        if (hiddenLegacyMinor > 0L) {
+            add(
+                PresentedRevenueSource(
+                    "Legacy/other revenue",
+                    hiddenLegacyMinor,
+                    "historical hidden-module sources retained for owner reconciliation",
+                ),
+            )
+        }
+    }
+}
+
+internal fun ReportRevenue.hiddenLegacySourceMinor(
+    presentation: WorkspacePresentationPolicy,
+): Long = if (
+    presentation.showsRestaurantOperations && presentation.showsMemberships && presentation.showsEvents
+) {
+    0L
+} else {
+    eventTicketsMinor + membershipsMinor + deliveryAggregatorMinor + otherMinor
+}
 
 @Serializable
 data class ReportTax(

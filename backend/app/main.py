@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 from sqlalchemy import text
 
+from app import __version__
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.db import async_engine
@@ -59,7 +60,7 @@ def create_app() -> FastAPI:
     """
     app = FastAPI(
         title="D Company ERP",
-        version="1.0.0",
+        version=__version__,
         description="Production-grade café + gaming lounge ERP.",
         docs_url="/docs" if settings.expose_docs else None,
         redoc_url="/redoc" if settings.expose_docs else None,
@@ -81,6 +82,11 @@ def create_app() -> FastAPI:
         android_update_url=(
             str(settings.android_update_url) if settings.android_update_url else None
         ),
+        android_latest_version_name=settings.android_latest_version_name,
+        android_release_notes=settings.android_update_release_notes,
+        android_apk_sha256=settings.android_update_apk_sha256,
+        android_apk_size_bytes=settings.android_update_apk_size_bytes,
+        android_apk_signing_cert_sha256=settings.android_update_signing_cert_sha256,
         ios_minimum=settings.ios_min_supported_version_code,
         ios_latest=settings.ios_latest_version_code,
         ios_update_url=str(settings.ios_update_url) if settings.ios_update_url else None,

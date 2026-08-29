@@ -66,6 +66,9 @@ import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.CostingCoverage
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.DecimalField
@@ -92,15 +95,23 @@ import kotlin.math.abs
  * capital movements. Existing evidence is never edited optimistically.
  */
 @Composable
-fun FinanceScreen(access: FinanceAccess = FinanceAccess()) {
+fun FinanceScreen(
+    access: FinanceAccess = FinanceAccess(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
     val vm: FinanceViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
-    FinanceContent(state, vm, access)
+    FinanceContent(state, vm, access, presentation)
 }
 
 @Composable
-private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: FinanceAccess) {
+private fun FinanceContent(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    access: FinanceAccess,
+    presentation: WorkspacePresentationPolicy,
+) {
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Expenses", "Collections", "Tip payouts", "Assets", "Partners")
 
@@ -161,22 +172,24 @@ private fun FinanceContent(state: FinanceUiState, vm: FinanceViewModel, access: 
                     }
                 }
                 when (tab) {
-                    0 -> OverviewTab(state)
+                    0 -> OverviewTab(state, presentation)
                     1 -> ExpensesTab(state, vm, access.canRecordExpenses)
-                    2 -> ManualCollectionsTab(state, vm, access.canRecordExpenses)
+                    2 -> ManualCollectionsTab(state, vm, access.canRecordExpenses, presentation)
                     3 -> TipPayoutsTab(state, vm, access.canRecordExpenses)
-                    4 -> AssetsTab(state, vm, access.canManageAssets)
+                    4 -> AssetsTab(state, vm, access.canManageAssets, presentation)
                     else -> PartnersTab(state, vm, access.canRecordPartnerCapital)
                 }
 
                 when (val dialog = state.dialog) {
                     FinanceDialog.ExpenseForm -> if (access.canRecordExpenses) ExpenseCreateDialog(state, vm)
-                    FinanceDialog.AssetForm -> if (access.canManageAssets) AssetCreateDialog(state, vm)
+                    FinanceDialog.AssetForm -> if (access.canManageAssets) {
+                        AssetCreateDialog(state, vm, presentation)
+                    }
                     is FinanceDialog.CapitalEntryForm -> if (access.canRecordPartnerCapital) {
                         CapitalEntryCreateDialog(dialog.partner, state, vm)
                     }
                     FinanceDialog.ManualCollectionForm -> if (access.canRecordExpenses) {
-                        ManualCollectionCreateDialog(state, vm)
+                        ManualCollectionCreateDialog(state, vm, presentation)
                     }
                     FinanceDialog.TipPayoutForm -> if (access.canRecordExpenses) {
                         TipPayoutCreateDialog(state, vm)
@@ -242,7 +255,7 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
 // OVERVIEW
 // ============================================================================
 @Composable
-private fun OverviewTab(state: FinanceUiState) {
+private fun OverviewTab(state: FinanceUiState, presentation: WorkspacePresentationPolicy) {
     val pl = state.pl ?: return
     val metrics = state.metrics
     val distributable = state.distributable
@@ -320,7 +333,11 @@ private fun OverviewTab(state: FinanceUiState) {
                 },
                 metrics?.let {
                     StatSpec(
-                        "Average order value · this period",
+                        if (presentation.showsRestaurantOperations) {
+                            "Average order value · this period"
+                        } else {
+                            "Average paid bill · this period"
+                        },
                         it.aovMinor.asRupees(),
                         countLabel(it.ordersCount, "paid order"),
                     )
@@ -331,18 +348,25 @@ private fun OverviewTab(state: FinanceUiState) {
         Panel {
             SectionTitle("Profit and loss")
             Spacer(Modifier.height(6.dp))
-            PlRow("Net revenue (after GST)", pl.revenueMinor)
+            PlRow(
+                if (presentation.showsRestaurantOperations) "Net revenue (after GST)" else "Net revenue",
+                pl.revenueMinor,
+            )
             if (pl.membershipsMinor > 0) {
                 PlRow(
-                    "Included: membership receipts",
+                    presentation.includedPrepaidRevenueLabel,
                     pl.membershipsMinor,
-                    sub = "prepaid terms already included in net revenue above",
+                    sub = presentation.prepaidRevenueDetail,
                 )
             }
             PlRow(
                 "Less: cost of goods sold",
                 pl.cogsMinor,
-                sub = "what the food/drinks/items you sold actually cost you",
+                sub = if (presentation.showsRestaurantOperations) {
+                    "what the food/drinks/items you sold actually cost you"
+                } else {
+                    "what the products and services you sold actually cost you"
+                },
                 less = true,
             )
             PlRow("Gross profit", pl.grossProfitMinor, bold = true)
@@ -369,39 +393,20 @@ private fun OverviewTab(state: FinanceUiState) {
             SectionTitle(
                 "Business metrics · ${metrics.periodStart.asDayShort()} – ${metrics.periodEnd.asDayShort()}",
             )
-            StatGrid(
-                listOf(
-                    StatSpec(
-                        "Avg order value (this period)",
-                        metrics.aovMinor.asRupees(),
-                        "${countLabel(metrics.ordersCount, "order")} this period",
-                    ),
-                    StatSpec(
-                        "Active memberships",
-                        metrics.activeMembersCount.toString(),
-                        "unexpired, non-revoked terms active right now",
-                    ),
-                    StatSpec(
-                        "Customer LTV (all-time)",
-                        metrics.ltvMinor.asRupees(),
-                        "avg across ${countLabel(metrics.customersCount, "customer")}, all-time",
-                    ),
-                    StatSpec(
-                        "CAC",
-                        metrics.cacMinor?.asRupees() ?: "—",
-                        if (metrics.cacMinor == null) {
-                            "no new customers this period"
-                        } else {
-                            "${metrics.marketingSpendMinor.asRupees()} marketing ÷ " +
-                                "${metrics.newCustomersCount} new"
-                        },
-                    ),
-                ),
-            )
-            Note(
-                "Memberships are prepaid manual terms, not recurring subscriptions. " +
-                    "MRR/ARR stay hidden until recurring billing is operating.",
-            )
+            StatGrid(metrics.presentedMetrics(presentation).map {
+                StatSpec(it.label, it.value, it.detail)
+            })
+            if (presentation.showsMemberships) {
+                Note(
+                    "Memberships are prepaid manual terms, not recurring subscriptions. " +
+                        "MRR/ARR stay hidden until recurring billing is operating.",
+                )
+            } else if (pl.membershipsMinor > 0) {
+                Note(
+                    "Historical hidden-module prepaid revenue remains included in net revenue. " +
+                        "Owners should reconcile it against the protected audit history; it has not been removed.",
+                )
+            }
         }
     }
 }
@@ -544,6 +549,7 @@ private fun ManualCollectionsTab(
     state: FinanceUiState,
     vm: FinanceViewModel,
     canWrite: Boolean,
+    presentation: WorkspacePresentationPolicy,
 ) {
     val totals = state.collectionTotals
     LazyColumn(
@@ -624,7 +630,11 @@ private fun ManualCollectionsTab(
                     SectionTitle("No manual collections recorded")
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Normal sales should continue through Tables, Gaming or Shisha into POS. Use Add collection only when no itemized order exists.",
+                        if (presentation.showsRestaurantOperations) {
+                            "Normal sales should continue through Tables, Gaming or Shisha into POS. Use Add collection only when no itemized order exists."
+                        } else {
+                            "Normal sales should continue through Gaming or direct counter POS. Use Add collection only when no itemized bill exists."
+                        },
                         color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -862,8 +872,29 @@ private fun TipPayoutRow(
 // ============================================================================
 // ASSETS
 // ============================================================================
+internal fun assetCategoryLabel(
+    type: String,
+    presentation: WorkspacePresentationPolicy,
+): String = when (type) {
+    "kitchen_equipment" -> if (presentation.showsRestaurantOperations) {
+        "Kitchen equipment"
+    } else {
+        "Legacy equipment"
+    }
+    "gaming" -> "Gaming"
+    "furniture" -> "Furniture"
+    "electronics" -> "Electronics"
+    "other" -> "Other"
+    else -> type.replace('_', ' ').replaceFirstChar(Char::titlecase)
+}
+
 @Composable
-private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boolean) {
+private fun AssetsTab(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    canWrite: Boolean,
+    presentation: WorkspacePresentationPolicy,
+) {
     if (state.assets.isEmpty()) {
         Column(
             Modifier.fillMaxSize().padding(16.dp),
@@ -876,7 +907,11 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boo
             EmptyBlock(
                 title = "No assets registered yet",
                 body = if (canWrite) {
-                    "Register PS5s, TVs, projectors, kitchen equipment or other fixed assets. Straight-line depreciation is server-calculated."
+                    if (presentation.showsRestaurantOperations) {
+                        "Register PS5s, TVs, projectors, kitchen equipment or other fixed assets. Straight-line depreciation is server-calculated."
+                    } else {
+                        "Register PS5s, TVs, controllers, VR or simulator equipment and other fixed assets. Straight-line depreciation is server-calculated."
+                    }
                 } else {
                     "No fixed assets are available for this account and branch."
                 },
@@ -899,7 +934,7 @@ private fun AssetsTab(state: FinanceUiState, vm: FinanceViewModel, canWrite: Boo
         item {
             AssetActionBar(state, canWrite, vm::openAssetForm)
         }
-        items(state.assets, key = { it.id }) { asset -> AssetRow(asset) }
+        items(state.assets, key = { it.id }) { asset -> AssetRow(asset, presentation) }
         item {
             Note("Straight-line depreciation is recomputed by the server as of each successful load.")
         }
@@ -938,7 +973,7 @@ private fun AssetActionBar(state: FinanceUiState, canWrite: Boolean, onCreate: (
 }
 
 @Composable
-private fun AssetRow(asset: Asset) {
+private fun AssetRow(asset: Asset, presentation: WorkspacePresentationPolicy) {
     Panel {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
@@ -951,7 +986,7 @@ private fun AssetRow(asset: Asset) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${asset.type} · Bought ${asset.purchaseDate.asDay()}",
+                    "${assetCategoryLabel(asset.type, presentation)} · Bought ${asset.purchaseDate.asDay()}",
                     style = MaterialTheme.typography.labelSmall,
                     color = Brand.ForegroundMuted,
                 )
@@ -1608,7 +1643,11 @@ private fun PendingOnlineFinanceWriteBanner(
 // CREATE DIALOGS
 // ============================================================================
 @Composable
-private fun ManualCollectionCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+private fun ManualCollectionCreateDialog(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
     var businessDate by remember { mutableStateOf(financeBusinessToday().toString()) }
     var method by remember { mutableStateOf("cash") }
@@ -1664,8 +1703,11 @@ private fun ManualCollectionCreateDialog(state: FinanceUiState, vm: FinanceViewM
     ) {
         OperationalBanner(
             title = "Unitemized revenue only",
-            detail =
-                "This will not create an order, receipt, table ticket, gaming session, tax split or automatic COGS. It is sent live and never queued offline.",
+            detail = if (presentation.showsRestaurantOperations) {
+                "This will not create an order, receipt, table ticket, gaming session, tax split or automatic COGS. It is sent live and never queued offline."
+            } else {
+                "This will not create an itemized bill, gaming session, item mix or automatic COGS. It is sent live and never queued offline."
+            },
             tone = UiTone.Warning,
             icon = Icons.Default.Payments,
         )
@@ -1976,10 +2018,16 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
 }
 
 @Composable
-private fun AssetCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
+private fun AssetCreateDialog(
+    state: FinanceUiState,
+    vm: FinanceViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var branchId by remember { mutableStateOf(state.branches.firstOrNull()?.id ?: "") }
     var name by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf("kitchen_equipment") }
+    var type by remember {
+        mutableStateOf(if (presentation.showsRestaurantOperations) "kitchen_equipment" else "gaming")
+    }
     var purchaseRupees by remember { mutableStateOf("") }
     var usefulLifeMonths by remember { mutableStateOf("60") }
     var salvageRupees by remember { mutableStateOf("0") }
@@ -2028,11 +2076,16 @@ private fun AssetCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         ) { branchId = it }
         PickerField(
             "Category",
-            type,
-            listOf(
-                "kitchen_equipment" to "Kitchen equipment", "gaming" to "Gaming",
-                "furniture" to "Furniture", "electronics" to "Electronics", "other" to "Other",
-            ),
+            assetCategoryLabel(type, presentation),
+            buildList {
+                if (presentation.showsRestaurantOperations) {
+                    add("kitchen_equipment" to "Kitchen equipment")
+                }
+                add("gaming" to "Gaming")
+                add("furniture" to "Furniture")
+                add("electronics" to "Electronics")
+                add("other" to "Other")
+            },
         ) { type = it }
         DecimalField(purchaseRupees, { purchaseRupees = it }, "Purchase cost (₹)")
         OutlinedTextField(

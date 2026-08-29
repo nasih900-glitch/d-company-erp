@@ -62,6 +62,9 @@ import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -72,6 +75,7 @@ fun SettingsScreen(
     onPasswordChanged: () -> Unit = {},
     onReportProblem: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(state.passwordChanged) {
@@ -115,9 +119,9 @@ fun SettingsScreen(
         ) {
             when (activeTab) {
                 SettingsTab.Account -> AccountTab(state, vm, onReportProblem)
-                SettingsTab.Company -> CompanyTab(state, vm)
-                SettingsTab.Branches -> BranchesTab(state, vm)
-                SettingsTab.Terminals -> TerminalsTab(state, vm)
+                SettingsTab.Company -> CompanyTab(state, vm, presentation)
+                SettingsTab.Branches -> BranchesTab(state, vm, presentation)
+                SettingsTab.Terminals -> TerminalsTab(state, vm, presentation)
             }
         }
     }
@@ -296,7 +300,11 @@ private fun AccountTab(
 }
 
 @Composable
-private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
+private fun CompanyTab(
+    state: SettingsUiState,
+    vm: SettingsViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var confirmDiscard by remember { mutableStateOf(false) }
     when (
         settingsReadPresentation(
@@ -348,26 +356,38 @@ private fun CompanyTab(state: SettingsUiState, vm: SettingsViewModel) {
                 Field("Legal name", f.legalName) { value -> vm.editCompany { it.copy(legalName = value) } }
             }
             SectionCard(
-                title = "Tax and payments",
-                subtitle = "Registration details and the UPI address used for payment QR codes.",
+                title = if (presentation.showsRestaurantOperations) {
+                    "Tax and payments"
+                } else {
+                    "Payments and company identity"
+                },
+                subtitle = if (presentation.showsRestaurantOperations) {
+                    "Registration details and the UPI address used for payment QR codes."
+                } else {
+                    "Company identity and the UPI address used for payment QR codes."
+                },
                 icon = Icons.Default.PointOfSale,
             ) {
-                Field("GSTIN", f.gstin) { v -> vm.editCompany { it.copy(gstin = v.uppercase()) } }
+                if (presentation.showsRestaurantOperations) {
+                    Field("GSTIN", f.gstin) { v -> vm.editCompany { it.copy(gstin = v.uppercase()) } }
+                }
                 Field("PAN", f.pan) { v -> vm.editCompany { it.copy(pan = v.uppercase()) } }
                 Field("UPI VPA (for payment QR)", f.upiVpa) { v -> vm.editCompany { it.copy(upiVpa = v) } }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = f.isComposition,
-                        onCheckedChange = { v -> vm.editCompany { it.copy(isComposition = v) } },
-                    )
-                    Spacer(Modifier.width(Spacing.sm))
-                    Column {
-                        Text("Composition scheme", color = Brand.Foreground)
-                        Text(
-                            "Use the business's configured tax registration scheme.",
-                            color = Brand.ForegroundMuted,
-                            style = MaterialTheme.typography.labelSmall,
+                if (presentation.showsRestaurantOperations) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = f.isComposition,
+                            onCheckedChange = { v -> vm.editCompany { it.copy(isComposition = v) } },
                         )
+                        Spacer(Modifier.width(Spacing.sm))
+                        Column {
+                            Text("Composition scheme", color = Brand.Foreground)
+                            Text(
+                                "Use the business's configured tax registration scheme.",
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
                     }
                 }
             }
@@ -486,7 +506,11 @@ private fun PendingBanner(
 }
 
 @Composable
-private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
+private fun BranchesTab(
+    state: SettingsUiState,
+    vm: SettingsViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     val hasBranchData = state.branches.isNotEmpty() || state.pendingBranches.isNotEmpty()
     when (
         settingsReadPresentation(
@@ -528,7 +552,11 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
                 if (state.branches.isEmpty() && state.pendingBranches.isEmpty()) {
                     DesignedEmptyState(
                         title = "No shop is configured yet",
-                        body = "Add the shop before configuring Cafe POS and Gaming Area.",
+                        body = if (presentation.showsRestaurantOperations) {
+                            "Add the shop before configuring Cafe POS and Gaming Area."
+                        } else {
+                            "Add the shop before configuring its Gaming + POS till."
+                        },
                         icon = Icons.Default.Store,
                         primaryLabel = "Add shop",
                         onPrimary = vm::newBranch,
@@ -590,12 +618,17 @@ private fun BranchesTab(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
-    state.branchForm?.let { BranchFormDialog(it, state, vm) }
+    state.branchForm?.let { BranchFormDialog(it, state, vm, presentation) }
     Feedback(state.branchNotice, vm::dismissBranchNotice)
 }
 
 @Composable
-private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: SettingsViewModel) {
+private fun BranchFormDialog(
+    form: BranchForm,
+    state: SettingsUiState,
+    vm: SettingsViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var confirmDiscard by remember(form.id, form.isNew) { mutableStateOf(false) }
     val requestDismiss = {
         if (state.branchFormDirty) confirmDiscard = true else vm.closeBranchForm()
@@ -655,14 +688,22 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
                         Field("Closes (HH:MM)", form.closesAt) { v -> vm.updateBranchForm { it.copy(closesAt = v) } }
                     }
                 }
-                Field("GST state code", form.stateCode) { v -> vm.updateBranchForm { it.copy(stateCode = v) } }
-                Field("FSSAI licence (14 digits)", form.fssaiLicenseNo) { v ->
-                    vm.updateBranchForm { it.copy(fssaiLicenseNo = v) }
+                if (presentation.showsRestaurantOperations) {
+                    Field("GST state code", form.stateCode) { v ->
+                        vm.updateBranchForm { it.copy(stateCode = v) }
+                    }
+                    Field("FSSAI licence (14 digits)", form.fssaiLicenseNo) { v ->
+                        vm.updateBranchForm { it.copy(fssaiLicenseNo = v) }
+                    }
                 }
                 Field("Trade licence no.", form.tradeLicenseNo) { v ->
                     vm.updateBranchForm { it.copy(tradeLicenseNo = v) }
                 }
-                Field("Shop GSTIN", form.branchGstin) { v -> vm.updateBranchForm { it.copy(branchGstin = v.uppercase()) } }
+                if (presentation.showsRestaurantOperations) {
+                    Field("Shop GSTIN", form.branchGstin) { v ->
+                        vm.updateBranchForm { it.copy(branchGstin = v.uppercase()) }
+                    }
+                }
                 state.branchFormError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
@@ -699,7 +740,11 @@ private fun BranchFormDialog(form: BranchForm, state: SettingsUiState, vm: Setti
 }
 
 @Composable
-private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
+private fun TerminalsTab(
+    state: SettingsUiState,
+    vm: SettingsViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var terminalToDelete by remember { mutableStateOf<TerminalDto?>(null) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
@@ -711,7 +756,11 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             icon = Icons.Default.PointOfSale,
         ) {
             Text(
-                "Cafe POS and Gaming Area are separate work terminals inside this one shop. Each keeps its own accountable shift.",
+                if (presentation.showsRestaurantOperations) {
+                    "Cafe POS and Gaming Area are separate work terminals inside this one shop. Each keeps its own accountable shift."
+                } else {
+                    "Use one Gaming + POS till for this shop unless a separate payment counter is genuinely required. Each configured till keeps its own accountable shift."
+                },
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -775,10 +824,10 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                         pendingForBranch.forEach { row ->
                             PendingBanner(
                                 text = if (row.rejected) {
-                                    "\"${row.name}\" (${terminalPurposeLabel(row.purpose)}) could not sync: " +
+                                    "\"${row.name}\" (${terminalPurposeLabel(row.purpose, presentation)}) could not sync: " +
                                         (row.error ?: "unknown error")
                                 } else {
-                                    "\"${row.name}\" (${terminalPurposeLabel(row.purpose)}) queued — not synced yet."
+                                    "\"${row.name}\" (${terminalPurposeLabel(row.purpose, presentation)}) queued — not synced yet."
                                 },
                                 rejected = row.rejected,
                                 onRetry = { vm.retryTerminal(row.localId) },
@@ -798,7 +847,11 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                     if (state.terminals.isEmpty() && pendingForBranch.isEmpty()) {
                         DesignedEmptyState(
                             title = "No terminals for this shop",
-                            body = "Add Cafe POS first, then Gaming Area. A device ID is optional until a tablet is assigned.",
+                            body = if (presentation.showsRestaurantOperations) {
+                                "Add Cafe POS first, then Gaming Area. A device ID is optional until a tablet is assigned."
+                            } else {
+                                "Add one Gaming + POS till. A device ID is optional until a tablet is assigned."
+                            },
                             icon = Icons.Default.PointOfSale,
                         )
                     } else {
@@ -811,7 +864,7 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                                         style = MaterialTheme.typography.titleMedium,
                                     )
                                     Text(
-                                        terminalPurposeLabel(terminal.purpose),
+                                        terminalPurposeLabel(terminal.purpose, presentation),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = Brand.Gold,
                                     )
@@ -846,13 +899,18 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 }
                 SectionCard(
                     title = "Add a terminal",
-                    subtitle = "Add Cafe POS or Gaming Area without creating another shop.",
+                    subtitle = if (presentation.showsRestaurantOperations) {
+                        "Add Cafe POS or Gaming Area without creating another shop."
+                    } else {
+                        "Add another till only when this shop genuinely needs one."
+                    },
                     icon = Icons.Default.Add,
                 ) {
                     Field("Name", state.terminalName, onChange = vm::setTerminalName)
                     TerminalPurposeSelector(
                         selected = state.terminalPurpose,
                         onSelect = vm::setTerminalPurpose,
+                        presentation = presentation,
                     )
                     Field("Tablet device ID (optional)", state.terminalDeviceId, onChange = vm::setTerminalDeviceId)
                     Text(
@@ -897,6 +955,7 @@ private fun TerminalsTab(state: SettingsUiState, vm: SettingsViewModel) {
             onDeviceIdChange = vm::setTerminalEditDeviceId,
             onSave = vm::saveTerminalEdit,
             onDismiss = vm::closeTerminalEdit,
+            presentation = presentation,
         )
     }
     Feedback(state.terminalNotice, vm::dismissTerminalFeedback)
@@ -912,6 +971,7 @@ private fun TerminalEditDialog(
     onDeviceIdChange: (String) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -928,6 +988,7 @@ private fun TerminalEditDialog(
                     selected = form.purpose,
                     enabled = !busy,
                     onSelect = onPurposeChange,
+                    presentation = presentation,
                 )
                 if (form.purpose != form.originalPurpose) {
                     Text(
@@ -966,7 +1027,9 @@ private fun TerminalPurposeSelector(
     selected: String?,
     onSelect: (String) -> Unit,
     enabled: Boolean = true,
+    presentation: WorkspacePresentationPolicy,
 ) {
+    val options = terminalPurposeOptions(presentation)
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(
             "Operational purpose",
@@ -974,12 +1037,12 @@ private fun TerminalPurposeSelector(
             style = MaterialTheme.typography.labelLarge,
         )
         PremiumTabBar(
-            options = terminalPurposeOptions.map { TabOption(it.id, it.label) },
+            options = options.map { TabOption(it.id, it.label) },
             selectedId = selected.orEmpty(),
             onSelect = { if (enabled) onSelect(it) },
         )
         Text(
-            terminalPurposeOptions.firstOrNull { it.id == selected }?.description
+            options.firstOrNull { it.id == selected }?.description
                 ?: "Choose deliberately. This controls where Gaming bills are allowed to go.",
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,

@@ -1,6 +1,9 @@
 package cloud.dcompany.erp.ui.screens.settings
 
 import cloud.dcompany.erp.core.auth.TerminalPurpose
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.ZoneId
@@ -20,7 +23,7 @@ internal data class SettingsConfirmation(
 internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsConfirmation = when (action) {
     DestructiveSettingsAction.DiscardCompanyEdits -> SettingsConfirmation(
         title = "Discard company changes?",
-        body = "Your unsaved company, tax, timezone and payment-QR edits will be lost.",
+        body = "Your unsaved company identity, timezone and payment-QR edits will be lost.",
         confirmLabel = "Discard changes",
     )
     is DestructiveSettingsAction.DiscardBranchForm -> SettingsConfirmation(
@@ -28,7 +31,7 @@ internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsCo
         body = if (action.isNew) {
             "The unsaved shop setup for ${action.branchName.ifBlank { "this shop" }} will be lost."
         } else {
-            "Unsaved hours, licence, tax and address edits for " +
+            "Unsaved hours, licence and address edits for " +
                 "${action.branchName.ifBlank { "this shop" }} will be lost."
         },
         confirmLabel = "Discard edits",
@@ -199,26 +202,41 @@ internal data class TerminalPurposeOption(
     val description: String,
 )
 
-internal val terminalPurposeOptions = listOf(
+internal fun terminalPurposeOptions(
+    presentation: WorkspacePresentationPolicy,
+): List<TerminalPurposeOption> = listOf(
     TerminalPurposeOption(
         id = TerminalPurpose.CAFE_POS,
-        label = "Cafe POS",
-        description = "Takes food payments and receives bills from Gaming Area.",
+        label = presentation.posOnlyTerminalLabel,
+        description = if (presentation.showsRestaurantOperations) {
+            "Takes food payments and receives bills from Gaming Area."
+        } else {
+            "Legacy POS-only till. Use only when a separate payment counter is genuinely required."
+        },
     ),
     TerminalPurposeOption(
         id = TerminalPurpose.GAMING,
-        label = "Gaming Area",
-        description = "Starts gaming sessions and must hand completed bills to an open Cafe POS shift.",
+        label = presentation.gamingTerminalLabel,
+        description = if (presentation.showsRestaurantOperations) {
+            "Starts gaming sessions and must hand completed bills to an open Cafe POS shift."
+        } else {
+            "Starts gaming sessions; completed bills require an open receiving POS shift."
+        },
     ),
     TerminalPurposeOption(
         id = TerminalPurpose.HYBRID,
-        label = "Hybrid",
+        label = presentation.hybridTerminalLabel,
         description = "Runs both Gaming and POS locally on this same terminal.",
     ),
 )
 
-internal fun terminalPurposeLabel(purpose: String): String =
-    terminalPurposeOptions.firstOrNull { it.id == purpose }?.label ?: "Unknown purpose"
+internal val terminalPurposeOptions: List<TerminalPurposeOption> =
+    terminalPurposeOptions(WorkspaceFeatureProfiles.FullHospitality.presentationPolicy())
+
+internal fun terminalPurposeLabel(
+    purpose: String,
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.FullHospitality.presentationPolicy(),
+): String = terminalPurposeOptions(presentation).firstOrNull { it.id == purpose }?.label ?: "Unknown purpose"
 
 @Serializable
 data class OtpChallengeDto(

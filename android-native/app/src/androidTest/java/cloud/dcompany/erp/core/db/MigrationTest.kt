@@ -2221,4 +2221,71 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate38To39CreatesDurableGamingAddonLedgerAndShiftGuard() {
+        helper.createDatabase(dbName, 38).apply {
+            execSQL(
+                "INSERT INTO local_shifts " +
+                    "(localId, serverShiftId, terminalId, branchId, openingFloatMinor, " +
+                    "openedAtMillis, openedByUserId, state, closeResultPending) VALUES " +
+                    "('shift-open', 'server-shift-open', 'terminal-1', 'branch-1', 0, 1000, " +
+                    "'user-1', 'open_synced', 0), " +
+                    "('shift-closing', 'server-shift-closing', 'terminal-1', 'branch-1', 0, 1000, " +
+                    "'user-1', 'close_pending', 1)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 39, true, MIGRATION_38_39)
+        migrated.execSQL(
+            "INSERT INTO gaming_session_addon_cache " +
+                "(id, gamingSessionId, clientLineId, menuItemId, menuItemName, menuItemType, " +
+                "modifiersJson, qty, catalogUnitPriceMinor, unitPriceMinor, lineTotalMinor, " +
+                "discountMinor, taxRate, taxableValueMinor, cgstMinor, sgstMinor, igstMinor, " +
+                "cessMinor, createdBy, createdTerminalId, createdAtMillis) VALUES " +
+                "('addon-1', 'session-1', 'line-1', 'item-1', 'Cola', 'drink', '[]', 2, " +
+                "10000, 10000, 20000, 0, 0.0, 20000, 0, 0, 0, 0, 'user-1', 'terminal-1', 1001)",
+        )
+        migrated.execSQL(
+            "INSERT INTO local_gaming_session_addon_actions " +
+                "(actionId, actionType, ownerCompanyId, ownerUserId, branchId, terminalId, " +
+                "serverSessionId, shiftId, clientLineId, menuItemId, menuItemName, menuItemType, " +
+                "modifierSelectionsJson, qty, expectedUnitPriceMinor, createdAtMillis, state) VALUES " +
+                "('11111111-1111-1111-1111-111111111111', 'add', 'company-1', 'user-1', " +
+                "'branch-1', 'terminal-1', 'session-1', 'server-shift-open', " +
+                "'22222222-2222-2222-2222-222222222222', 'item-1', 'Cola', 'drink', " +
+                "'[]', 2, 10000, 1002, 'pending')",
+        )
+        migrated.query(
+            "SELECT ownerCompanyId, ownerUserId, terminalId, shiftId, clientLineId, state " +
+                "FROM local_gaming_session_addon_actions",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("company-1", cursor.getString(0))
+            assertEquals("user-1", cursor.getString(1))
+            assertEquals("terminal-1", cursor.getString(2))
+            assertEquals("server-shift-open", cursor.getString(3))
+            assertEquals("22222222-2222-2222-2222-222222222222", cursor.getString(4))
+            assertEquals(GamingSessionAddonActionState.PENDING, cursor.getString(5))
+        }
+
+        var closingGuarded = false
+        try {
+            migrated.execSQL(
+                "INSERT INTO local_gaming_session_addon_actions " +
+                    "(actionId, actionType, ownerCompanyId, ownerUserId, branchId, terminalId, " +
+                    "serverSessionId, shiftId, clientLineId, menuItemId, menuItemName, menuItemType, " +
+                    "modifierSelectionsJson, qty, expectedUnitPriceMinor, createdAtMillis, state) VALUES " +
+                    "('33333333-3333-3333-3333-333333333333', 'add', 'company-1', 'user-1', " +
+                    "'branch-1', 'terminal-1', 'session-2', 'server-shift-closing', " +
+                    "'44444444-4444-4444-4444-444444444444', 'item-1', 'Cola', 'drink', " +
+                    "'[]', 1, 10000, 1003, 'pending')",
+            )
+        } catch (failure: SQLiteConstraintException) {
+            closingGuarded = failure.message.orEmpty().contains(SHIFT_CLOSING_WRITE_GUARD)
+        }
+        assertTrue("A closing shift must reject a newly queued Gaming item", closingGuarded)
+        migrated.close()
+    }
 }

@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.ui.screens.settings
 
 import cloud.dcompany.erp.core.auth.TerminalPurpose
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.presentationPolicy
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -14,6 +16,44 @@ import retrofit2.http.PATCH
 class SettingsPresentationPolicyTest {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    @Test
+    fun `gaming centre terminal choices use neutral one-shop language`() {
+        val presentation = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
+        val options = terminalPurposeOptions(presentation)
+        val copy = options.joinToString(" ") { "${it.label} ${it.description}" }
+
+        assertEquals(
+            listOf("POS only (legacy)", "Gaming", "Gaming + POS"),
+            options.map { it.label },
+        )
+        assertFalse(copy.contains("Cafe", ignoreCase = true))
+        assertEquals("Gaming + POS", terminalPurposeLabel(TerminalPurpose.HYBRID, presentation))
+    }
+
+    @Test
+    fun `hidden legacy registration values survive focused profile edits`() {
+        val company = CompanyForm(
+            name = "D Company",
+            timezone = "Asia/Kolkata",
+            gstin = "32ABCDE1234F1Z5",
+            gstRegistrationType = "composition",
+            isComposition = true,
+        ).toBody()
+        val branch = BranchForm(
+            name = "Main Shop",
+            invoiceSeriesCode = "MN",
+            stateCode = "32",
+            fssaiLicenseNo = "12345678901234",
+            branchGstin = "32ABCDE1234F1Z5",
+        ).toBody()
+
+        assertEquals("32ABCDE1234F1Z5", company.gstin)
+        assertEquals(true, company.isComposition)
+        assertEquals("32", branch.stateCode)
+        assertEquals("12345678901234", branch.fssaiLicenseNo)
+        assertEquals("32ABCDE1234F1Z5", branch.branchGstin)
+    }
 
     @Test
     fun `terminal device id matches the backend length contract`() {
