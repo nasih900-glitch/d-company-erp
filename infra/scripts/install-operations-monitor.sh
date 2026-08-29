@@ -51,6 +51,14 @@ if systemctl is-active --quiet dcompany-backup.service 2>/dev/null; then
   exit 1
 fi
 
+# Remember a failed run before daemon-reload/reset-failed clears that evidence.
+# A failed run may have left a local dump before the B2 upload failed, so merely
+# finding a .dump file is not sufficient proof that the repaired path works.
+backup_service_was_failed=0
+if systemctl is-failed --quiet dcompany-backup.service 2>/dev/null; then
+  backup_service_was_failed=1
+fi
+
 install -d -o root -g root -m 0700 \
   "$STATE_ROOT" "$BACKUP_RUNTIME" "$STATE_ROOT/backups" "$BACKUP_DIR"
 
@@ -64,6 +72,11 @@ fi
 find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.dump' -exec chmod 0600 '{}' +
 find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.dump' \
   -exec chown root:root '{}' +
+
+has_usable_backup() {
+  find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.dump' -size +0c \
+    -print -quit | grep -q .
+}
 
 requirements_sha=$(sha256sum "$BACKUP_REQUIREMENTS" | awk '{print $1}')
 runtime_version="$BACKUP_RUNTIME/venv-$requirements_sha"
@@ -136,12 +149,30 @@ install -m 0644 \
   /etc/logrotate.d/dcompany-erp-alerts
 
 systemctl daemon-reload
-systemctl reset-failed dcompany-backup.service >/dev/null 2>&1 || true
+
+# The monitor deliberately fails when no usable local restore point exists.
+# Seed one synchronously before enabling monitoring on a new installation. A
+# previously failed service is also retried even if pg_dump left a local file,
+# because only a successful service exit proves the B2 upload path completed.
+# The scheduler is still stopped and an active service was rejected above, so
+# this cannot overlap another backup. Existing healthy restore points are left
+# untouched and do not trigger an extra run.
+if ! has_usable_backup || [ "$backup_service_was_failed" -eq 1 ]; then
+  echo "Verifying the repaired backup path before enabling monitoring..."
+  systemctl reset-failed dcompany-backup.service >/dev/null 2>&1 || true
+  systemctl start dcompany-backup.service
+  if ! has_usable_backup; then
+    echo "Backup service completed without a usable local restore point." >&2
+    exit 1
+  fi
+else
+  systemctl reset-failed dcompany-backup.service >/dev/null 2>&1 || true
+fi
+
 systemctl enable --now dcompany-backup.timer
-# The runtime monitor treats a missing or stale backup as a real failure. Make
-# the repaired backup scheduler authoritative before asking the monitor to
-# evaluate that state, otherwise the warning could abort this installer while
-# leaving the old broken scheduler in place.
+# The runtime monitor treats a missing or stale backup as a real failure. Only
+# enable it after the persistent runtime, scheduler and first restore point are
+# healthy; otherwise the first repair would fail with backup_missing.
 backup_timer_was_active=0
 trap - EXIT HUP INT TERM
 systemctl enable --now dcompany-runtime-monitor.timer

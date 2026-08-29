@@ -133,10 +133,13 @@ The installer creates a pinned, hash-verified boto3 environment under
 `/var/lib/dcompany-erp/backup-runtime/`, outside the replaceable application
 snapshot. It also copies any legacy `.dump` files from
 `/opt/d-company-erp/backups/auto/` into the persistent backup directory without
-deleting or overwriting the originals. The installer does not directly start
-`dcompany-backup.service`; because the timer is persistent, systemd may
-immediately catch up a genuinely missed 22:00 UTC run when the timer is
-re-enabled.
+deleting or overwriting the originals. If no non-empty persistent restore point
+exists, or the previous backup unit failed, the installer runs
+`dcompany-backup.service` synchronously before it enables monitoring. This
+fails the repair visibly when either `pg_dump` or the B2 upload is still broken,
+while an existing healthy restore point is preserved without an extra backup.
+Because the timer is persistent, systemd may still immediately catch up a
+genuinely missed 22:00 UTC run when the timer is re-enabled.
 
 Verify the timer and the most recent run with:
 

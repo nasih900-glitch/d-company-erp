@@ -230,6 +230,27 @@ class BackupServiceInstallationTest(unittest.TestCase):
             installer.index("systemctl start dcompany-runtime-monitor.service"),
         )
 
+    def test_installer_seeds_only_missing_or_previously_failed_backup(self) -> None:
+        installer = (
+            self.repo / "infra/scripts/install-operations-monitor.sh"
+        ).read_text()
+
+        self.assertIn("has_usable_backup()", installer)
+        self.assertIn("-name '*.dump' -size +0c", installer)
+        self.assertIn(
+            'if ! has_usable_backup || [ "$backup_service_was_failed" -eq 1 ]; then',
+            installer,
+        )
+        self.assertEqual(1, installer.count("systemctl start dcompany-backup.service"))
+        self.assertLess(
+            installer.index("systemctl start dcompany-backup.service"),
+            installer.index("systemctl enable --now dcompany-backup.timer"),
+        )
+        self.assertLess(
+            installer.index("systemctl start dcompany-backup.service"),
+            installer.index("systemctl start dcompany-runtime-monitor.service"),
+        )
+
     def test_backup_dependency_graph_is_fully_pinned_and_hashed(self) -> None:
         requirements = (
             (self.repo / "ops/backup-requirements.lock").read_text().splitlines()
