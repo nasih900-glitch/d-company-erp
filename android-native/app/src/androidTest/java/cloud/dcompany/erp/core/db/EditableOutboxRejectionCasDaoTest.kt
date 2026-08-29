@@ -80,6 +80,25 @@ class EditableOutboxRejectionCasDaoTest {
     }
 
     @Test
+    fun revokedStaffAuthorityDiscardUsesVersionCas() = runBlocking {
+        val dao = db.staffDao()
+        val sent = LocalStaffEntity(
+            localId = "staff-revoked",
+            serverId = "server-staff",
+            name = "Sent name",
+            createdAtMillis = 1_000,
+            version = 3,
+        )
+        dao.upsertLocal(sent)
+        dao.upsertLocal(sent.copy(name = "Newer name", version = 4))
+
+        assertEquals(0, dao.deleteIfVersion(sent.localId, sent.version))
+        assertEquals("Newer name", dao.getLocal(sent.localId)?.name)
+        assertEquals(1, dao.deleteIfVersion(sent.localId, 4))
+        assertNull(dao.getLocal(sent.localId))
+    }
+
+    @Test
     fun staleIngredientRefusalCannotRejectEditSavedDuringFlight() = runBlocking {
         val dao = db.inventoryDao()
         val sent = LocalIngredientEntity(

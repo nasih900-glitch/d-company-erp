@@ -7,13 +7,17 @@ import cloud.dcompany.erp.core.auth.CustomersAccess
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.CustomerOrderHistoryEntity
 import cloud.dcompany.erp.core.db.CustomerWriteState
 import cloud.dcompany.erp.core.db.LocalCustomerEntity
+import cloud.dcompany.erp.core.net.ApiClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -67,6 +71,10 @@ data class CustomersUiState(
     val saving: Boolean = false,
     val saveError: String? = null,
     val notice: String? = null,
+    val historyCustomerId: String? = null,
+    val history: List<CustomerOrderHistory> = emptyList(),
+    val historyLoading: Boolean = false,
+    val historyError: String? = null,
 ) {
     val selected: Customer? get() = rows.firstOrNull { it.id == selectedId }
 
@@ -114,6 +122,11 @@ class CustomersViewModel : ViewModel() {
     private val saving = MutableStateFlow(false)
     private val saveError = MutableStateFlow<String?>(null)
     private val notice = MutableStateFlow<String?>(null)
+    private val historyCustomerId = MutableStateFlow<String?>(null)
+    private val historyRows = MutableStateFlow<List<CustomerOrderHistory>>(emptyList())
+    private val historyLoading = MutableStateFlow(false)
+    private val historyError = MutableStateFlow<String?>(null)
+    private val customersApi by lazy { ApiClient.create<CustomersApi>() }
 
     /**
      * Deliberately separate from [cloud.dcompany.erp.core.sync.SyncEngine.syncing]:
@@ -132,7 +145,13 @@ class CustomersViewModel : ViewModel() {
         combine(db.syncMetaDao().observe("customers"), pullingCustomers, ::Pair),
         combine(query, selectedPhone, editor, ::Triple),
         combine(saving, saveError, notice, ::Triple),
-    ) { cacheAndLocal, metaAndSyncing, uiA, uiB ->
+        combine(
+            historyCustomerId,
+            historyRows,
+            combine(historyLoading, historyError, ::Pair),
+            ::Triple,
+        ),
+    ) { cacheAndLocal, metaAndSyncing, uiA, uiB, historyState ->
         val (cache, local) = cacheAndLocal
         val (meta, isSyncing) = metaAndSyncing
         val (q, selPhone, ed) = uiA
@@ -148,8 +167,13 @@ class CustomersViewModel : ViewModel() {
             saving = isSaving,
             saveError = saveErr,
             notice = noticeText,
+            historyCustomerId = historyState.first,
+            history = historyState.second,
+            historyLoading = historyState.third.first,
+            historyError = historyState.third.second,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CustomersUiState())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CustomersUiState())
 
     init {
         retry()
@@ -189,6 +213,72 @@ class CustomersViewModel : ViewModel() {
 
     fun clearSelection() {
         selectedPhone.value = null
+    }
+
+    fun retryHistory() {
+        state.value.selected?.let(::loadHistory)
+    }
+
+    /** Called by the visible destination; server refresh remains selection scoped. */
+    fun refreshHistory(customer: Customer) {
+        if (selectedPhone.value == customer.phone) loadHistory(customer)
+    }
+
+    /** Cache-first purchase history; the stable customer id is the privacy boundary. */
+    private fun loadHistory(customer: Customer) {
+        if (historyCustomerId.value != customer.id) historyRows.value = emptyList()
+        historyCustomerId.value = customer.id
+        historyError.value = null
+        if (customer.id.startsWith(LOCAL_PREFIX)) {
+            historyRows.value = emptyList()
+            historyLoading.value = false
+            return
+        }
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        historyLoading.value = true
+        viewModelScope.launch {
+            try {
+                val cached = db.customerDao().history(customer.id).map { it.toWire() }
+                if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        if (historyCustomerId.value == customer.id) historyRows.value = cached
+                    }
+                ) return@launch
+
+                if (!appCtx.connectivity.online.value) {
+                    appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                        if (historyCustomerId.value == customer.id && cached.isEmpty()) {
+                            historyError.value = "Reconnect to load this customer's purchase history."
+                        }
+                    }
+                    return@launch
+                }
+
+                val server = customersApi.history(customer.id, limit = 50)
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.customerDao().replaceHistory(
+                        customer.id,
+                        server.map { it.toEntity(customer.id) },
+                    )
+                    if (historyCustomerId.value == customer.id) {
+                        historyRows.value = server
+                        historyError.value = null
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (historyCustomerId.value == customer.id) {
+                        historyError.value = error.message?.takeIf(String::isNotBlank)
+                            ?: "Could not refresh this customer's purchase history."
+                    }
+                }
+            } finally {
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (historyCustomerId.value == customer.id) historyLoading.value = false
+                }
+            }
+        }
     }
 
     fun dismissNotice() {
@@ -371,7 +461,14 @@ class CustomersViewModel : ViewModel() {
                 // does not have. The dialog's own static copy already sets
                 // that expectation, and the merge will show the real record
                 // (with its true history) the moment this syncs.
-                notice.value = "Saved — will sync when back online."
+                // The selected row already exposes its authoritative delivery
+                // state ("Waiting to sync", "Sync failed", or "Saved").  A
+                // permanent success banner that always said "will sync when
+                // back online" was both noisy and factually wrong after an
+                // online save had already reached the server. Keep this
+                // acknowledgement truthful in every connectivity state and
+                // let the row/detail status explain any remaining work.
+                notice.value = "Customer saved."
                 appCtx.sync.requestSync()
             } catch (e: CancellationException) {
                 throw e
@@ -466,4 +563,37 @@ private fun CustomerCacheEntity.toDisplay(): Customer = Customer(
     pointsToNextGamingRank = pointsToNextGamingRank,
     lastVisitAt = lastVisitAt,
     notes = notes,
+)
+
+private fun CustomerOrderHistory.toEntity(customerId: String) = CustomerOrderHistoryEntity(
+    id = id,
+    customerId = customerId,
+    invoiceNo = invoiceNo,
+    status = status,
+    type = type,
+    sourceLabel = sourceLabel,
+    totalMinor = totalMinor,
+    paidMinor = paidMinor,
+    refundedMinor = refundedMinor,
+    pointsRedeemedMinor = pointsRedeemedMinor,
+    itemsCount = itemsCount,
+    paymentMethods = paymentMethods.joinToString(","),
+    createdAt = createdAt,
+    invoiceIssuedAt = invoiceIssuedAt,
+)
+
+private fun CustomerOrderHistoryEntity.toWire() = CustomerOrderHistory(
+    id = id,
+    invoiceNo = invoiceNo,
+    status = status,
+    type = type,
+    sourceLabel = sourceLabel,
+    totalMinor = totalMinor,
+    paidMinor = paidMinor,
+    refundedMinor = refundedMinor,
+    pointsRedeemedMinor = pointsRedeemedMinor,
+    itemsCount = itemsCount,
+    paymentMethods = paymentMethods.split(',').filter(String::isNotBlank),
+    createdAt = createdAt,
+    invoiceIssuedAt = invoiceIssuedAt,
 )

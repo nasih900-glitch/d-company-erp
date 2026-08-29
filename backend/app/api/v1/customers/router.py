@@ -4,6 +4,7 @@ Endpoints:
   GET    /customers                     — list (filterable by phone substring)
   GET    /customers/by-phone/{phone}    — lookup by exact phone (POS quick-attach)
   GET    /customers/{id}                — detail
+  GET    /customers/{id}/history        — stable customer-linked purchase history
   POST   /customers                     — upsert by phone (create or fetch)
   PATCH  /customers/{id}                — edit name/phone/email/birthday/notes
   DELETE /customers/{id}                — soft-delete + anonymise
@@ -16,14 +17,14 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import requires
 from app.core.tenant import TenantContext
-from app.models import Customer
+from app.models import Customer, GamingSession, Order, OrderLine, Payment, Refund, Station, Table
 from app.services.pos.points import gaming_rank, rank_progress, rewards_available_to
 
 router = APIRouter()
@@ -73,6 +74,30 @@ class CustomerUpdate(BaseModel):
     email: str | None = Field(default=None, max_length=254)
     birthday: datetime | None = None
     notes: str | None = Field(default=None, max_length=500)
+
+
+class CustomerOrderHistoryRead(BaseModel):
+    """A compact, financially truthful customer purchase-history row.
+
+    The stable ``Order.customer_id`` relationship is deliberately used rather
+    than matching phone snapshots. Phone numbers can be corrected or reused;
+    treating an old phone string as identity would expose one customer's
+    purchases to another and corrupt lifetime-value review.
+    """
+
+    id: UUID
+    invoice_no: str | None
+    status: str
+    type: str
+    source_label: str | None
+    total_minor: int
+    paid_minor: int
+    refunded_minor: int
+    points_redeemed_minor: int
+    items_count: int
+    payment_methods: list[str]
+    created_at: datetime
+    invoice_issued_at: datetime | None
 
 
 # ---------------------------------------------------------------- helpers
@@ -173,6 +198,124 @@ async def get_customer(
     if not c or c.company_id != tenant.company_id or c.deleted_at:
         raise NotFoundError("customer not found")
     return _to_read(c)
+
+
+@router.get("/{customer_id}/history", response_model=list[CustomerOrderHistoryRead])
+async def get_customer_purchase_history(
+    customer_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),
+    limit: int = 50,
+) -> list[CustomerOrderHistoryRead]:
+    """Return recent purchases linked to this exact customer record.
+
+    This is company-scoped rather than terminal-scoped: a returning customer
+    should see their own history even when a different till handled the sale.
+    Only the stable customer foreign key is accepted. Historical orders that
+    pre-date that linkage remain outside this view until an owner explicitly
+    reconciles them; guessing by a mutable phone snapshot is unsafe.
+    """
+
+    customer = await session.get(Customer, customer_id)
+    if (
+        not customer
+        or customer.company_id != tenant.company_id
+        or customer.deleted_at is not None
+    ):
+        raise NotFoundError("customer not found")
+
+    orders = (
+        await session.execute(
+            select(Order)
+            .where(
+                Order.company_id == tenant.company_id,
+                Order.customer_id == customer_id,
+            )
+            .order_by(Order.created_at.desc())
+            .limit(min(max(limit, 1), 100))
+        )
+    ).scalars().all()
+    if not orders:
+        return []
+
+    order_ids = [order.id for order in orders]
+    item_counts = dict(
+        (
+            await session.execute(
+                select(OrderLine.order_id, func.count())
+                .where(
+                    OrderLine.order_id.in_(order_ids),
+                    OrderLine.voided_at.is_(None),
+                )
+                .group_by(OrderLine.order_id)
+            )
+        ).all()
+    )
+    payment_rows = (
+        await session.execute(
+            select(Payment.order_id, Payment.method, Payment.amount_minor)
+            .where(Payment.order_id.in_(order_ids))
+            .order_by(Payment.paid_at)
+        )
+    ).all()
+    paid_by_order: dict[UUID, int] = {}
+    methods_by_order: dict[UUID, list[str]] = {}
+    for order_id, method, amount_minor in payment_rows:
+        paid_by_order[order_id] = paid_by_order.get(order_id, 0) + int(amount_minor)
+        methods = methods_by_order.setdefault(order_id, [])
+        if method not in methods:
+            methods.append(method)
+
+    refunded_by_order = dict(
+        (
+            await session.execute(
+                select(Refund.order_id, func.coalesce(func.sum(Refund.amount_minor), 0))
+                .where(Refund.order_id.in_(order_ids))
+                .group_by(Refund.order_id)
+            )
+        ).all()
+    )
+    table_ids = [order.table_id for order in orders if order.table_id is not None]
+    table_codes = dict(
+        (
+            await session.execute(
+                select(Table.id, Table.code).where(Table.id.in_(table_ids))
+            )
+        ).all()
+    ) if table_ids else {}
+    station_names = dict(
+        (
+            await session.execute(
+                select(GamingSession.order_id, Station.name)
+                .join(Station, Station.id == GamingSession.station_id)
+                .where(GamingSession.order_id.in_(order_ids))
+            )
+        ).all()
+    )
+
+    result: list[CustomerOrderHistoryRead] = []
+    for order in orders:
+        source_label = station_names.get(order.id)
+        if source_label is None and order.table_id in table_codes:
+            source_label = f"Table {table_codes[order.table_id]}"
+        result.append(
+            CustomerOrderHistoryRead(
+                id=order.id,
+                invoice_no=order.invoice_no,
+                status=order.status,
+                type=order.type,
+                source_label=source_label,
+                total_minor=int(order.total_minor or 0),
+                paid_minor=int(paid_by_order.get(order.id, 0)),
+                refunded_minor=int(refunded_by_order.get(order.id, 0)),
+                points_redeemed_minor=int(order.points_redeemed_minor or 0),
+                items_count=int(item_counts.get(order.id, 0)),
+                payment_methods=methods_by_order.get(order.id, []),
+                created_at=order.created_at,
+                invoice_issued_at=order.invoice_issued_at,
+            )
+        )
+    return result
 
 
 @router.post("", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)

@@ -1,5 +1,8 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
@@ -31,6 +34,67 @@ data class Expense(
     @SerialName("vendor_name") val vendorName: String? = null,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     val note: String? = null,
+)
+
+@Serializable
+data class ManualCollection(
+    val id: String,
+    @SerialName("company_id") val companyId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("business_date") val businessDate: String,
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("source_kind") val sourceKind: String,
+    @SerialName("source_ref") val sourceRef: String,
+    val note: String? = null,
+    @SerialName("idempotency_key") val idempotencyKey: String,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("created_by_name") val createdByName: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("voided_by_name") val voidedByName: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("is_voided") val isVoided: Boolean = false,
+)
+
+@Serializable
+data class TipPayout(
+    val id: String,
+    @SerialName("company_id") val companyId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    val method: String,
+    @SerialName("paid_at") val paidAt: String,
+    val note: String,
+    @SerialName("idempotency_key") val idempotencyKey: String,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("created_by_name") val createdByName: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("voided_by_name") val voidedByName: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("is_voided") val isVoided: Boolean = false,
+)
+
+@Serializable
+data class TrialBalanceLine(
+    @SerialName("account_code") val accountCode: String,
+    @SerialName("account_name") val accountName: String,
+    @SerialName("account_type") val accountType: String,
+    @SerialName("debit_minor") val debitMinor: Long,
+    @SerialName("credit_minor") val creditMinor: Long,
+    @SerialName("balance_minor") val balanceMinor: Long,
+)
+
+@Serializable
+data class TrialBalance(
+    @SerialName("as_of") val asOf: String,
+    val lines: List<TrialBalanceLine>,
+    @SerialName("total_debit_minor") val totalDebitMinor: Long,
+    @SerialName("total_credit_minor") val totalCreditMinor: Long,
+    @SerialName("is_balanced") val isBalanced: Boolean,
 )
 
 @Serializable
@@ -111,6 +175,29 @@ data class ExpenseCreate(
 )
 
 @Serializable
+data class ManualCollectionCreate(
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("business_date") val businessDate: String,
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("source_kind") val sourceKind: String = "manual_daily",
+    @SerialName("source_ref") val sourceRef: String,
+    val note: String? = null,
+)
+
+@Serializable
+data class TipPayoutCreate(
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    val method: String,
+    @SerialName("paid_at") val paidAt: String,
+    val note: String,
+)
+
+@Serializable
+data class FinanceVoidRequest(val reason: String)
+
+@Serializable
 data class AssetCreate(
     @SerialName("branch_id") val branchId: String,
     val name: String,
@@ -163,6 +250,22 @@ data class DistributablePartnerShare(
 )
 
 @Serializable
+data class FinanceCashPosition(
+    @SerialName("cash_on_hand_minor") val cashOnHandMinor: Long,
+    @SerialName("bank_balance_minor") val bankBalanceMinor: Long,
+    @SerialName("spendable_cash_bank_minor") val spendableCashBankMinor: Long,
+    @SerialName("card_clearing_minor") val cardClearingMinor: Long,
+    @SerialName("upi_qr_clearing_minor") val upiQrClearingMinor: Long,
+    @SerialName("wallet_clearing_minor") val walletClearingMinor: Long,
+    @SerialName("pos_settlement_clearing_minor") val posSettlementClearingMinor: Long,
+    @SerialName("settlement_receivables_minor") val settlementReceivablesMinor: Long,
+    @SerialName("historical_funds_pending_reconciliation_minor")
+    val historicalFundsPendingReconciliationMinor: Long,
+    @SerialName("unreconciled_settlement_minor") val unreconciledSettlementMinor: Long,
+    @SerialName("reconciliation_only_minor") val reconciliationOnlyMinor: Long,
+)
+
+@Serializable
 data class DistributableProfit(
     @SerialName("as_of") val asOf: String,
     @SerialName("lifetime_net_profit_minor") val lifetimeNetProfitMinor: Long,
@@ -171,12 +274,50 @@ data class DistributableProfit(
     @SerialName("reserve_months") val reserveMonths: Int,
     @SerialName("avg_monthly_cost_minor") val avgMonthlyCostMinor: Long,
     @SerialName("reserve_minor") val reserveMinor: Long,
+    /** Deprecated backend compatibility total: cash + bank + UPI clearing. */
     @SerialName("liquid_cash_minor") val liquidCashMinor: Long,
+    /** Null while a cached response still comes from a pre-0050 backend. */
+    @SerialName("spendable_cash_bank_minor") val spendableCashBankMinor: Long? = null,
+    @SerialName("cash_position") val cashPosition: FinanceCashPosition? = null,
     @SerialName("profit_based_capacity_minor") val profitBasedCapacityMinor: Long,
     @SerialName("cash_based_capacity_minor") val cashBasedCapacityMinor: Long,
     @SerialName("safe_to_distribute_minor") val safeToDistributeMinor: Long,
     val partners: List<DistributablePartnerShare> = emptyList(),
 )
+
+/** Return value only when both new 0050 fields agree; never trust the legacy aggregate. */
+internal fun DistributableProfit.authoritativeSpendableCashMinor(): Long? =
+    spendableCashBankMinor?.takeIf { cashPosition?.spendableCashBankMinor == it }
+
+internal const val SPENDABLE_FUNDS_LABEL = "Spendable cash · till + bank"
+internal const val SPENDABLE_FUNDS_DETAIL =
+    "Only posted Cash and Bank balances. Card, UPI/QR, Wallet and POS settlement " +
+        "clearing remain receivables until the provider settles them to Bank."
+internal const val CASH_CONTRACT_UNAVAILABLE =
+    "Finance cash capacity is unverified. Refresh after the server is upgraded; do not " +
+        "use the older cash + bank + UPI aggregate for a partner withdrawal."
+
+/** Mirrors the backend's company-wide finance identity gate. Auth attaches a
+ * default branch to normal logins, so branchId cannot distinguish an owner
+ * from an operational manager. */
+internal fun MeResponse.canViewCompanyWidePartnerFinance(): Boolean =
+    protectedAccess || roles.any { it in setOf("owner", "partner", "auditor") }
+
+internal fun financeWriteQueuedMessage(subject: String, online: Boolean): String =
+    "$subject saved on this tablet. " + if (online) {
+        "Syncing with the server now; do not enter it again."
+    } else {
+        "It will sync automatically when the connection returns; do not enter it again."
+    }
+
+internal fun financeLoadFailureMessage(hasSavedFigures: Boolean, online: Boolean): String = when {
+    !online && hasSavedFigures ->
+        "Finance is offline. Saved figures remain visible and will refresh automatically after reconnection."
+    !online ->
+        "Finance has not loaded for this account yet. Reconnect, then refresh once to make saved figures available offline."
+    hasSavedFigures -> "Could not refresh Finance. Saved figures remain visible; try again."
+    else -> "Could not load Finance. Check access and the connection, then try again."
+}
 
 @Serializable
 data class BusinessMetrics(
@@ -193,9 +334,70 @@ data class BusinessMetrics(
     @SerialName("marketing_spend_minor") val marketingSpendMinor: Long,
     @SerialName("ltv_minor") val ltvMinor: Long,
     @SerialName("customers_count") val customersCount: Int,
-    /** Positive = money lost this period. Negative = profitable. */
+    /** Loss amount for the period; zero means break-even or profitable. */
     @SerialName("burn_rate_minor") val burnRateMinor: Long,
 )
+
+internal data class PresentedBusinessMetric(
+    val label: String,
+    val value: String,
+    val detail: String,
+)
+
+internal fun BusinessMetrics.presentedMetrics(
+    presentation: WorkspacePresentationPolicy,
+): List<PresentedBusinessMetric> {
+    if (presentation.showsMemberships || presentation.showsCustomers) {
+        return listOf(
+            PresentedBusinessMetric(
+                "Avg order value (this period)",
+                aovMinor.asRupees(),
+                "${countLabel(ordersCount, "order")} this period",
+            ),
+            PresentedBusinessMetric(
+                "Active memberships",
+                activeMembersCount.toString(),
+                "unexpired, non-revoked terms active right now",
+            ),
+            PresentedBusinessMetric(
+                "Customer LTV (all-time)",
+                ltvMinor.asRupees(),
+                "avg across ${countLabel(customersCount, "customer")}, all-time",
+            ),
+            PresentedBusinessMetric(
+                "CAC",
+                cacMinor?.asRupees() ?: "—",
+                if (cacMinor == null) {
+                    "no new customers this period"
+                } else {
+                    "${marketingSpendMinor.asRupees()} marketing ÷ $newCustomersCount new"
+                },
+            ),
+        )
+    }
+    return listOf(
+        PresentedBusinessMetric(
+            "Average paid bill",
+            aovMinor.asRupees(),
+            countLabel(ordersCount, "paid bill"),
+        ),
+        PresentedBusinessMetric(
+            "Paid bills",
+            ordersCount.toString(),
+            "completed POS and gaming bills this period",
+        ),
+        PresentedBusinessMetric(
+            "Marketing spend",
+            marketingSpendMinor.asRupees(),
+            "recorded marketing cost this period",
+        ),
+        PresentedBusinessMetric(
+            "Operating loss burn",
+            burnRateMinor.asRupees(),
+            if (burnRateMinor > 0L) "loss recorded this period" else "no operating loss this period",
+        ),
+    )
+}
 
 // ---------------------------------------------------------------- formatting
 
@@ -240,6 +442,53 @@ fun paidViaLabel(method: String): String = when (method.lowercase(Locale.UK)) {
     "bank" -> "Bank transfer"
     else -> method
 }
+
+internal const val TIPS_PAYABLE_ACCOUNT_CODE = "2400"
+internal val FINANCE_PAYMENT_METHODS = setOf("cash", "upi", "card", "bank")
+
+internal fun TrialBalance.tipsPayableMinor(): Long =
+    lines.firstOrNull { it.accountCode == TIPS_PAYABLE_ACCOUNT_CODE }?.balanceMinor ?: 0L
+
+data class ManualCollectionTotals(
+    val cashMinor: Long = 0,
+    val upiMinor: Long = 0,
+    val cardMinor: Long = 0,
+    val bankMinor: Long = 0,
+    val totalMinor: Long = 0,
+    val activeCount: Int = 0,
+    val voidedCount: Int = 0,
+)
+
+internal fun manualCollectionTotals(rows: List<ManualCollection>): ManualCollectionTotals {
+    var totals = ManualCollectionTotals()
+    rows.forEach { row ->
+        if (row.isVoided) {
+            totals = totals.copy(voidedCount = totals.voidedCount + 1)
+        } else {
+            totals = totals.copy(
+                cashMinor = totals.cashMinor + if (row.method == "cash") row.amountMinor else 0,
+                upiMinor = totals.upiMinor + if (row.method == "upi") row.amountMinor else 0,
+                cardMinor = totals.cardMinor + if (row.method == "card") row.amountMinor else 0,
+                bankMinor = totals.bankMinor + if (row.method == "bank") row.amountMinor else 0,
+                totalMinor = totals.totalMinor + row.amountMinor,
+                activeCount = totals.activeCount + 1,
+            )
+        }
+    }
+    return totals
+}
+
+internal fun tipPayoutTotal(rows: List<TipPayout>): Long =
+    rows.filterNot(TipPayout::isVoided).sumOf(TipPayout::amountMinor)
+
+internal fun defaultManualCollectionReference(businessDate: String, method: String): String =
+    "Daily collection $businessDate ${paidViaLabel(method)}"
+
+private val FINANCE_BUSINESS_ZONE: ZoneId = ZoneId.of("Asia/Kolkata")
+
+/** D Company currently operates one Kerala shop; accounting dates follow IST
+ * even if the tablet itself is set to another timezone. */
+internal fun financeBusinessToday(): LocalDate = LocalDate.now(FINANCE_BUSINESS_ZONE)
 
 fun countLabel(count: Int, singular: String, plural: String = singular + "s"): String =
     "$count ${if (count == 1) singular else plural}"

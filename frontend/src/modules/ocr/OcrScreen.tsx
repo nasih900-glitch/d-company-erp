@@ -14,7 +14,7 @@ import {
 
 import { inr } from '@/lib/inr';
 import {
-  ocr, settings, type OcrExtractionDTO, type BranchDTO,
+  ocr, type OcrExtractionDTO, type BranchReferenceDTO,
 } from '@/lib/erp-api';
 import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
@@ -34,7 +34,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function OcrScreen() {
   const notifications = useNotifications();
   const [rows, setRows] = useState<OcrExtractionDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [branchId, setBranchId] = useState('');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export default function OcrScreen() {
     try {
       const [q, b] = await Promise.all([
         ocr.listQueue(),
-        settings.listBranches().catch(() => []),
+        ocr.listBranches().catch(() => []),
       ]);
       setRows(q); setBranches(b);
       setBranchId((current) => current || b[0]?.id || '');
@@ -60,7 +60,7 @@ export default function OcrScreen() {
   async function handleFiles(files: FileList | null) {
     if (!files || !files.length) return;
     if (!branchId) {
-      notifications.warning('Add a branch in Settings → Branches before uploading a receipt.', {
+      notifications.warning('No shop is available for receipt upload. Ask the protected owner to check your shop access.', {
         title: 'Branch required',
       });
       return;

@@ -5,7 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    event,
+    inspect,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,7 +40,17 @@ class Ingredient(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
 
 class Recipe(Base, TimestampMixin):
     __tablename__ = "recipes"
-    __table_args__ = (UniqueConstraint("menu_item_id", "version", name="uq_recipe_version"),)
+    __table_args__ = (
+        UniqueConstraint("menu_item_id", "version", name="uq_recipe_version"),
+        CheckConstraint("yield_qty > 0", name="ck_recipe_positive_yield"),
+        Index(
+            "uq_recipe_one_active_per_menu_item",
+            "menu_item_id",
+            unique=True,
+            postgresql_where=text("is_active IS TRUE"),
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     menu_item_id: Mapped[UUID] = mapped_column(
@@ -146,6 +168,17 @@ class PurchaseOrderLine(Base, TimestampMixin):
 
 class GRN(Base, TimestampMixin):
     __tablename__ = "grns"
+    __table_args__ = (
+        CheckConstraint(
+            "(idempotency_key IS NULL AND request_hash IS NULL) OR "
+            "(idempotency_key IS NOT NULL AND request_hash IS NOT NULL "
+            "AND length(trim(idempotency_key)) BETWEEN 1 AND 160 "
+            "AND length(trim(request_hash)) = 64)",
+            name="ck_grn_idempotency_pair",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_grn_idempotency_key"),
+        UniqueConstraint("journal_entry_id", name="uq_grn_journal_entry"),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     purchase_order_id: Mapped[UUID] = mapped_column(
@@ -157,10 +190,105 @@ class GRN(Base, TimestampMixin):
     )
     supplier_invoice_no: Mapped[str | None] = mapped_column(String(100))
     supplier_invoice_amount_minor: Mapped[int | None] = mapped_column(BigInteger)
+    # Forward GRN writes retain their exact request identity even if the
+    # generic idempotency-response cache is later pruned. Historical rows
+    # remain NULL and are reconciled by their immutable GRN/journal linkage.
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    request_hash: Mapped[str | None] = mapped_column(String(64))
+    journal_entry_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("journal_entries.id", ondelete="RESTRICT"),
+        index=True,
+    )
     # E-way bill number — mandatory for goods movement > ₹50k. Supplier
     # generates it; D Company just records the 12-char EBN for audit trail.
     eway_bill_no: Mapped[str | None] = mapped_column(String(20))
     notes: Mapped[str | None] = mapped_column(String(500))
+
+
+_GRN_INITIAL_LINK_TRANSACTION = "_grn_initial_link_transaction"
+_GRN_IMMUTABLE_FIELDS = {
+    "purchase_order_id",
+    "received_at",
+    "received_by",
+    "supplier_invoice_no",
+    "supplier_invoice_amount_minor",
+    "idempotency_key",
+    "request_hash",
+    "journal_entry_id",
+    "eway_bill_no",
+    "notes",
+    "created_at",
+}
+
+
+@event.listens_for(GRN, "after_insert")
+def _mark_grn_initial_insert(_mapper, _connection, row: GRN) -> None:
+    """Remember the insert transaction so it may attach its receipt journal.
+
+    GRN creation is intentionally flushed before its batches and journal are
+    built.  The journal foreign key is therefore linked by a later flush in
+    the *same* transaction.  Retaining the transaction identity permits that
+    one construction step without making an unposted row editable after its
+    creation transaction commits.
+    """
+    state = inspect(row)
+    transaction = state.session.get_transaction() if state.session is not None else None
+    setattr(row, _GRN_INITIAL_LINK_TRANSACTION, transaction)
+
+
+def _is_initial_grn_journal_link(row: GRN) -> bool:
+    state = inspect(row)
+    history = state.attrs.journal_entry_id.history
+    marker_missing = object()
+    insert_transaction = getattr(row, _GRN_INITIAL_LINK_TRANSACTION, marker_missing)
+    current_transaction = (
+        state.session.get_transaction() if state.session is not None else None
+    )
+    return (
+        insert_transaction is not marker_missing
+        and insert_transaction is current_transaction
+        and history.has_changes()
+        and row.journal_entry_id is not None
+        and (not history.deleted or history.deleted[0] is None)
+    )
+
+
+@event.listens_for(GRN, "before_update")
+def _guard_grn_update(_mapper, _connection, row: GRN) -> None:
+    """Keep a posted stock receipt and its accounting provenance append-only."""
+    state = inspect(row)
+    changed = sorted(
+        field
+        for field in _GRN_IMMUTABLE_FIELDS
+        if state.attrs[field].history.has_changes()
+    )
+    journal_history = state.attrs.journal_entry_id.history
+    was_posted = row.journal_entry_id is not None or any(
+        previous is not None for previous in journal_history.deleted
+    )
+    if not was_posted:
+        return
+
+    if _is_initial_grn_journal_link(row):
+        changed = [field for field in changed if field != "journal_entry_id"]
+    if changed:
+        raise ValueError(
+            "posted GRN financial/provenance fields are immutable: "
+            + ", ".join(changed)
+        )
+
+
+@event.listens_for(GRN, "after_update")
+def _clear_grn_initial_insert_marker(_mapper, _connection, row: GRN) -> None:
+    """The construction-only journal-link exception may be consumed once."""
+    row.__dict__.pop(_GRN_INITIAL_LINK_TRANSACTION, None)
+
+
+@event.listens_for(GRN, "before_delete")
+def _guard_grn_delete(_mapper, _connection, row: GRN) -> None:
+    if row.journal_entry_id is not None:
+        raise ValueError("posted GRNs are immutable and cannot be deleted")
 
 
 class GRNLine(Base, TimestampMixin):
@@ -178,3 +306,13 @@ class GRNLine(Base, TimestampMixin):
     )
     qty_received: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
     cost_per_unit_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+@event.listens_for(GRNLine, "before_update")
+def _guard_grn_line_update(_mapper, _connection, _row: GRNLine) -> None:
+    raise ValueError("GRN lines are immutable after creation")
+
+
+@event.listens_for(GRNLine, "before_delete")
+def _guard_grn_line_delete(_mapper, _connection, _row: GRNLine) -> None:
+    raise ValueError("GRN lines are immutable and cannot be deleted")

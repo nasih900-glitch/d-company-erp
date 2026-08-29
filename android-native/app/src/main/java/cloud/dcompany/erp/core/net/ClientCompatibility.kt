@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 data class ClientUpdateNotice(
@@ -15,6 +17,11 @@ data class ClientUpdateNotice(
     val currentVersionCode: Int?,
     val minimumSupportedVersionCode: Int?,
     val latestVersionCode: Int?,
+    val latestVersionName: String? = null,
+    val releaseNotes: String? = null,
+    val apkSha256: String? = null,
+    val apkSizeBytes: Long? = null,
+    val apkSigningCertSha256: String? = null,
 )
 
 sealed interface ClientCompatibilityState {
@@ -30,21 +37,35 @@ sealed interface ClientCompatibilityState {
  * Startup uncertainty deliberately fails open after a short bound: a cafe
  * must still be able to use its saved offline state when the internet is down.
  * A server decision does the opposite — either an explicit update_required
- * response or any HTTP 426 remains blocking for the life of this process.
- * Nothing here mutates authentication, Room, or outbox state.
+ * response or any HTTP 426 remains blocking for this installed build. The app
+ * wires that decision to a small non-sensitive store so process death cannot
+ * reopen an obsolete offline workspace; an in-place upgrade clears it by
+ * changing BuildConfig.VERSION_CODE. Nothing here mutates authentication,
+ * Room, or outbox state.
  */
 class ClientCompatibilityGate(
     private val checkCompatibility: suspend () -> ClientCompatibilityResponse,
-    private val startupTimeoutMillis: Long = 8_000L,
+    // A slow compatibility endpoint must not hold the whole till behind the
+    // non-dismissible startup gate. Normal API calls still enforce HTTP 426,
+    // so three seconds preserves the fail-safe update path while letting an
+    // offline cafe reach its saved workspace promptly.
+    private val startupTimeoutMillis: Long = 3_000L,
+    initialRequiredNotice: ClientUpdateNotice? = null,
+    private val persistRequiredNotice: (ClientUpdateNotice) -> Unit = {},
 ) {
     init {
         require(startupTimeoutMillis > 0) { "Startup compatibility timeout must be positive" }
     }
 
-    private val _state = MutableStateFlow<ClientCompatibilityState>(ClientCompatibilityState.Checking)
+    private val _state = MutableStateFlow<ClientCompatibilityState>(
+        initialRequiredNotice?.let(ClientCompatibilityState::UpdateRequired)
+            ?: ClientCompatibilityState.Checking,
+    )
     val state: StateFlow<ClientCompatibilityState> = _state.asStateFlow()
+    private val checkMutex = Mutex()
+    private var dismissedOptionalVersionCode: Int? = null
 
-    suspend fun checkAtStartup() {
+    suspend fun checkAtStartup() = checkMutex.withLock {
         try {
             val response = withTimeoutOrNull(startupTimeoutMillis) { checkCompatibility() }
             if (response == null) {
@@ -81,13 +102,46 @@ class ClientCompatibilityGate(
         }
     }
 
+    /**
+     * Refresh update authority after the app returns to the foreground without
+     * putting a cached/offline workspace back behind the startup Checking UI.
+     * Timeout and transport uncertainty preserve the current decision; a
+     * definitive response or HTTP 426 is still applied immediately.
+     */
+    suspend fun recheckNonBlocking() = checkMutex.withLock {
+        try {
+            val response = withTimeoutOrNull(startupTimeoutMillis) { checkCompatibility() }
+                ?: return@withLock
+            apply(response)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: ApiException) {
+            if (failure.status == 426 && _state.value !is ClientCompatibilityState.UpdateRequired) {
+                requireUpdate(
+                    ClientUpdateNotice(
+                        message = failure.message ?: DEFAULT_REQUIRED_MESSAGE,
+                        updateUrl = null,
+                        currentVersionCode = BuildConfig.VERSION_CODE,
+                        minimumSupportedVersionCode = null,
+                        latestVersionCode = null,
+                    ),
+                )
+            }
+        } catch (_: Exception) {
+            // Optional foreground refreshes are advisory under uncertainty.
+            // The server still enforces a definitive 426 on normal requests.
+        }
+    }
+
     fun requireUpdate(notice: ClientUpdateNotice) {
+        runCatching { persistRequiredNotice(notice) }
         _state.value = ClientCompatibilityState.UpdateRequired(notice)
     }
 
     fun dismissOptionalUpdate() {
         _state.update { current ->
             if (current is ClientCompatibilityState.UpdateAvailable) {
+                dismissedOptionalVersionCode = current.notice.latestVersionCode
                 ClientCompatibilityState.Supported
             } else {
                 current
@@ -97,15 +151,40 @@ class ClientCompatibilityGate(
 
     private fun apply(response: ClientCompatibilityResponse) {
         val next = when (response.status) {
-            "update_required" -> ClientCompatibilityState.UpdateRequired(response.toNotice())
-            "update_available" -> ClientCompatibilityState.UpdateAvailable(response.toNotice())
+            "update_required" -> {
+                val notice = response.toNotice()
+                runCatching { persistRequiredNotice(notice) }
+                ClientCompatibilityState.UpdateRequired(notice)
+            }
+            "update_available" -> {
+                // A foreground compatibility refresh runs every fifteen
+                // minutes. Respect "Later" for this release for the lifetime
+                // of the process instead of repeatedly covering the operator's
+                // work with the same advisory banner. A newer version code is
+                // still shown immediately, and required updates always win.
+                if (response.latestVersionCode == dismissedOptionalVersionCode) {
+                    ClientCompatibilityState.Supported
+                } else {
+                    ClientCompatibilityState.UpdateAvailable(response.toNotice())
+                }
+            }
             else -> ClientCompatibilityState.Supported
         }
         _state.update { current ->
             // A definitive 426 may arrive from another request while the
-            // startup probe is in flight. Never let its later result reopen
-            // the app in that race.
-            if (current is ClientCompatibilityState.UpdateRequired) current else next
+            // startup probe is in flight. Never let a supported/optional
+            // result reopen the app in that race. A later authoritative
+            // required response may replace the notice, however, so corrected
+            // download metadata becomes usable without forcing staff to kill
+            // and restart an already-blocked app.
+            if (
+                current is ClientCompatibilityState.UpdateRequired &&
+                next !is ClientCompatibilityState.UpdateRequired
+            ) {
+                current
+            } else {
+                next
+            }
         }
     }
 
@@ -125,6 +204,11 @@ class ClientCompatibilityGate(
         currentVersionCode = currentVersionCode,
         minimumSupportedVersionCode = minimumSupportedVersionCode,
         latestVersionCode = latestVersionCode,
+        latestVersionName = latestVersionName,
+        releaseNotes = releaseNotes,
+        apkSha256 = apkSha256,
+        apkSizeBytes = apkSizeBytes,
+        apkSigningCertSha256 = apkSigningCertSha256,
     )
 
     private companion object {

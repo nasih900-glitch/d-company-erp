@@ -26,8 +26,9 @@ from app.models import User
 
 
 class _Result:
-    def __init__(self, *, rows: list | None = None) -> None:
+    def __init__(self, *, rows: list | None = None, scalar=None) -> None:
         self._rows = rows or []
+        self._scalar = scalar
 
     def scalars(self):
         return self
@@ -35,21 +36,21 @@ class _Result:
     def all(self):
         return self._rows
 
+    def scalar_one_or_none(self):
+        return self._scalar
+
 
 class _Session:
-    """Only what update_user touches: session.get for the target user, and
-    session.execute for _raw_roles_for_user's role-code SELECT (called twice
-    — once for the protected-owner check, once for the role-code diff)."""
+    """Only what update_user touches: its locked User lookup and role queries."""
 
     def __init__(self, user: User, *, current_role_codes: list[str]) -> None:
         self._user = user
         self._current_role_codes = current_role_codes
         self.flush_count = 0
 
-    async def get(self, _model, _id):
-        return self._user
-
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        if statement.column_descriptions[0].get("entity") is User:
+            return _Result(scalar=self._user)
         return _Result(rows=list(self._current_role_codes))
 
     async def flush(self) -> None:
@@ -120,3 +121,34 @@ async def test_actually_suspending_a_user_still_bumps_auth_version() -> None:
 
     assert u.auth_version == 4
     assert u.status == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_phone_can_be_cleared_without_conflating_omitted_field() -> None:
+    company_id = uuid4()
+    u = _user(company_id=company_id)
+    session = _Session(u, current_role_codes=["cashier"])
+    tenant = _tenant(company_id=company_id)
+
+    await staff_router.update_user(
+        u.id,
+        staff_router.UserUpdate(name="Only Name Changed"),
+        session,
+        tenant,
+    )
+    assert u.phone == "+911234567890"
+
+    await staff_router.update_user(
+        u.id,
+        staff_router.UserUpdate(phone="   "),
+        session,
+        tenant,
+    )
+    assert u.phone is None
+
+
+def test_explicit_null_phone_is_retained_as_a_clear_operation() -> None:
+    payload = staff_router.UserUpdate(phone=None)
+
+    assert "phone" in payload.model_fields_set
+    assert payload.phone is None

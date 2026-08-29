@@ -2,6 +2,8 @@ package cloud.dcompany.erp.core.db
 
 import androidx.room.Dao
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 /**
  * One row per unresolved outbox state, used by the account-safety gate.
@@ -47,6 +49,14 @@ interface OutboxSafetyDao {
                  'rejected'
              )
             UNION ALL
+            SELECT 'gaming_package_extensions', state
+              FROM local_gaming_package_extensions
+             WHERE state NOT IN ('confirmed', 'discarded')
+            UNION ALL
+            SELECT 'gaming_session_addons', state
+              FROM local_gaming_session_addon_actions
+             WHERE state NOT IN ('confirmed', 'discarded')
+            UNION ALL
             SELECT 'kitchen_advances', state
               FROM local_kitchen_advances WHERE state IN ('pending', 'rejected')
             UNION ALL
@@ -62,11 +72,15 @@ interface OutboxSafetyDao {
             SELECT 'refunds', state
               FROM local_refunds
              WHERE state IN (
-                 'request_pending', 'request_rejected', 'accepted_cash_due',
+                 'request_pending', 'request_rejected', 'accepted_cash_due', 'accepted_provider_due',
                  'cash_handoff_in_progress', 'cash_settle_pending', 'cash_settle_rejected',
+                 'cash_handed_over_pending_accounting', 'cash_finalize_rejected',
+                 'provider_payout_in_progress', 'provider_completion_pending',
+                 'provider_completion_rejected', 'provider_completed_pending_accounting',
+                 'provider_finalize_rejected',
                  'withdrawal_pending', 'withdrawal_rejected',
                  'legacy_reconciliation_required'
-             )
+             ) OR (state = 'withdrawn' AND payoutConflict = 1)
             UNION ALL
             SELECT 'customers', state
               FROM local_customers WHERE state != 'synced'
@@ -133,10 +147,40 @@ interface OutboxSafetyDao {
             UNION ALL
             SELECT 'held_order_payments', syncState
               FROM local_held_order_payments WHERE syncState != 'synced'
+            UNION ALL
+            -- One logical help request is one blocker even when both its
+            -- report and screenshot are waiting. This keeps sign-out copy
+            -- truthful while still covering an attachment whose report has
+            -- already reached the server.
+            SELECT 'support_requests',
+                   CASE
+                     WHEN report.state = 'action_required' OR EXISTS (
+                         SELECT 1 FROM local_bug_report_attachments attachment
+                          WHERE attachment.reportLocalId = report.localId
+                            AND attachment.ownerCompanyId = report.ownerCompanyId
+                            AND attachment.ownerUserId = report.ownerUserId
+                            AND attachment.state = 'action_required'
+                     ) THEN 'action_required'
+                     ELSE 'pending'
+                   END
+              FROM local_bug_reports report
+             WHERE report.state IN ('pending', 'action_required') OR EXISTS (
+                 SELECT 1 FROM local_bug_report_attachments attachment
+                  WHERE attachment.reportLocalId = report.localId
+                    AND attachment.ownerCompanyId = report.ownerCompanyId
+                    AND attachment.ownerUserId = report.ownerUserId
+                    AND attachment.state IN ('pending', 'action_required')
+             )
         ) unresolved
         GROUP BY resource, state
         ORDER BY resource, state
         """,
     )
-    suspend fun unresolvedGroups(): List<UnresolvedOutboxGroup>
+    fun observeUnresolvedGroups(): Flow<List<UnresolvedOutboxGroup>>
+
+    /** One-shot form for account gates and background workers. Keeping the
+     * SQL on the observable query also gives the app shell an exact, live
+     * summary without maintaining a second hand-written list of outboxes. */
+    suspend fun unresolvedGroups(): List<UnresolvedOutboxGroup> =
+        observeUnresolvedGroups().first()
 }

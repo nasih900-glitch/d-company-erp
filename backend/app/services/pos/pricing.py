@@ -40,8 +40,10 @@ from app.models import (
     InvoiceCounter,
     MembershipTier,
     MenuItem,
+    MenuModifier,
+    MenuModifierGroup,
+    MenuVariant,
 )
-
 
 _GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
 _STATE_CODE_RE = re.compile(r"^[0-9]{2}$")
@@ -89,15 +91,74 @@ def _billing_tax_mode(
 # Data classes — the engine's input and output
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
+class ModifierSelection:
+    modifier_id: UUID
+    quantity: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class LineRequest:
     menu_item_id: UUID
     qty: int  # whole qty for now; Numeric(10,3) supports decimals later
+    variant_id: UUID | None = None
+    modifiers: tuple[ModifierSelection, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PricedVariantSnapshot:
+    id: UUID
+    name: str
+    price_delta_minor: int
+    line_delta_minor: int
+
+    def as_dict(self) -> dict[str, str | int]:
+        return {
+            "variant_id": str(self.id),
+            "name": self.name,
+            "price_delta_minor": self.price_delta_minor,
+            "line_delta_minor": self.line_delta_minor,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PricedModifierSnapshot:
+    id: UUID
+    modifier_group_id: UUID
+    group_name: str
+    name: str
+    quantity_per_item: int
+    unit_price_delta_minor: int
+    per_item_delta_minor: int
+    line_delta_minor: int
+
+    def as_dict(self) -> dict[str, str | int]:
+        return {
+            "modifier_id": str(self.id),
+            "modifier_group_id": str(self.modifier_group_id),
+            "group_name": self.group_name,
+            "name": self.name,
+            # ``qty`` and ``price_delta_minor`` are the established Android
+            # receipt aliases. The richer totals make the same immutable row
+            # useful to web receipts and audit/reconciliation tools.
+            "qty": self.quantity_per_item,
+            "price_delta_minor": self.unit_price_delta_minor,
+            "per_item_delta_minor": self.per_item_delta_minor,
+            "line_delta_minor": self.line_delta_minor,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedLineCustomization:
+    variant: PricedVariantSnapshot | None
+    modifiers: tuple[PricedModifierSnapshot, ...]
+    unit_delta_minor: int
 
 
 @dataclass(frozen=True, slots=True)
 class PricedLine:
     menu_item_id: UUID
     name: str
+    item_type: str
     sku: str
     hsn_or_sac: str
     qty: int
@@ -110,6 +171,10 @@ class PricedLine:
     sgst_minor: int
     igst_minor: int
     cess_minor: int
+    base_unit_price_minor: int = 0
+    customization_unit_delta_minor: int = 0
+    variant_snapshot: PricedVariantSnapshot | None = None
+    modifier_snapshots: tuple[PricedModifierSnapshot, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +357,179 @@ def _unit_inclusive_minor(line_inclusive_minor: int, qty: int) -> int:
     ))
 
 
+async def resolve_menu_customizations(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    line_requests: list[LineRequest],
+) -> list[ResolvedLineCustomization]:
+    """Resolve client-selected IDs into immutable, server-priced snapshots.
+
+    The client never supplies names or price deltas. Active group bounds are
+    checked even when a request selects nothing, so an older client cannot
+    bypass a newly required choice. The returned list preserves request order
+    and can be written directly to the corresponding OrderLine snapshot.
+    """
+    if not line_requests:
+        return []
+
+    item_ids = list({line.menu_item_id for line in line_requests})
+    variant_ids = list(
+        {line.variant_id for line in line_requests if line.variant_id is not None}
+    )
+    modifier_ids = list(
+        {
+            selection.modifier_id
+            for line in line_requests
+            for selection in line.modifiers
+        }
+    )
+
+    variants: list[MenuVariant] = []
+    if variant_ids:
+        variants = list(
+            (
+                await session.execute(
+                    select(MenuVariant).where(
+                        MenuVariant.company_id == company_id,
+                        MenuVariant.id.in_(variant_ids),
+                        MenuVariant.is_active.is_(True),
+                    )
+                )
+            ).scalars().all()
+        )
+    groups = list(
+        (
+            await session.execute(
+                select(MenuModifierGroup).where(
+                    MenuModifierGroup.company_id == company_id,
+                    MenuModifierGroup.menu_item_id.in_(item_ids),
+                    MenuModifierGroup.is_active.is_(True),
+                )
+            )
+        ).scalars().all()
+    )
+    options: list[MenuModifier] = []
+    if modifier_ids:
+        options = list(
+            (
+                await session.execute(
+                    select(MenuModifier).where(
+                        MenuModifier.company_id == company_id,
+                        MenuModifier.id.in_(modifier_ids),
+                        MenuModifier.is_active.is_(True),
+                    )
+                )
+            ).scalars().all()
+        )
+
+    variants_by_id = {variant.id: variant for variant in variants}
+    groups_by_id = {group.id: group for group in groups}
+    groups_by_item: dict[UUID, list[MenuModifierGroup]] = {}
+    for group in groups:
+        groups_by_item.setdefault(group.menu_item_id, []).append(group)
+    options_by_id = {option.id: option for option in options}
+
+    resolved_lines: list[ResolvedLineCustomization] = []
+    for line in line_requests:
+        if line.qty <= 0:
+            # Keep the same public validation rule as price_order. Resolving a
+            # negative line first would create misleading snapshot totals.
+            raise BusinessRuleError("line quantity must be positive")
+
+        variant_snapshot = None
+        unit_delta_minor = 0
+        if line.variant_id is not None:
+            variant = variants_by_id.get(line.variant_id)
+            if variant is None or variant.menu_item_id != line.menu_item_id:
+                raise BusinessRuleError(
+                    "selected variant is not active for this menu item"
+                )
+            variant_snapshot = PricedVariantSnapshot(
+                id=variant.id,
+                name=variant.name,
+                price_delta_minor=variant.price_delta_minor,
+                line_delta_minor=variant.price_delta_minor * line.qty,
+            )
+            unit_delta_minor += variant.price_delta_minor
+
+        selection_ids: set[UUID] = set()
+        group_selection_counts: dict[UUID, int] = {}
+        modifier_snapshots: list[PricedModifierSnapshot] = []
+        for selection in line.modifiers:
+            if selection.modifier_id in selection_ids:
+                raise BusinessRuleError(
+                    "a modifier option may appear only once per order line"
+                )
+            selection_ids.add(selection.modifier_id)
+            if (
+                isinstance(selection.quantity, bool)
+                or not isinstance(selection.quantity, int)
+                or selection.quantity <= 0
+            ):
+                raise BusinessRuleError("modifier quantity must be a positive integer")
+
+            option = options_by_id.get(selection.modifier_id)
+            if option is None or option.menu_item_id != line.menu_item_id:
+                raise BusinessRuleError(
+                    "selected modifier is not active for this menu item"
+                )
+            selected_group = groups_by_id.get(option.modifier_group_id)
+            if (
+                selected_group is None
+                or selected_group.menu_item_id != line.menu_item_id
+            ):
+                raise BusinessRuleError(
+                    "selected modifier group is not active for this menu item"
+                )
+            if selection.quantity > option.max_quantity:
+                raise BusinessRuleError(
+                    f"modifier '{option.name}' allows at most {option.max_quantity} per item"
+                )
+
+            group_selection_counts[selected_group.id] = (
+                group_selection_counts.get(selected_group.id, 0) + selection.quantity
+            )
+            per_item_delta = option.price_delta_minor * selection.quantity
+            line_delta = per_item_delta * line.qty
+            unit_delta_minor += per_item_delta
+            modifier_snapshots.append(
+                PricedModifierSnapshot(
+                    id=option.id,
+                    modifier_group_id=selected_group.id,
+                    group_name=selected_group.name,
+                    name=option.name,
+                    quantity_per_item=selection.quantity,
+                    unit_price_delta_minor=option.price_delta_minor,
+                    per_item_delta_minor=per_item_delta,
+                    line_delta_minor=line_delta,
+                )
+            )
+
+        for group in groups_by_item.get(line.menu_item_id, []):
+            selected_count = group_selection_counts.get(group.id, 0)
+            if selected_count < group.min_select:
+                raise BusinessRuleError(
+                    f"modifier group '{group.name}' requires at least "
+                    f"{group.min_select} selection(s)"
+                )
+            if selected_count > group.max_select:
+                raise BusinessRuleError(
+                    f"modifier group '{group.name}' allows at most "
+                    f"{group.max_select} selection(s)"
+                )
+
+        resolved_lines.append(
+            ResolvedLineCustomization(
+                variant=variant_snapshot,
+                modifiers=tuple(modifier_snapshots),
+                unit_delta_minor=unit_delta_minor,
+            )
+        )
+
+    return resolved_lines
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -358,18 +596,32 @@ class OrderPricingService:
         for lr in line_requests:
             if lr.menu_item_id not in items_by_id:
                 raise NotFoundError(f"menu item {lr.menu_item_id} not found")
+        resolved_customizations = await resolve_menu_customizations(
+            self.session,
+            company_id=company_id,
+            line_requests=line_requests,
+        )
 
         priced_lines: list[PricedLine] = []
         sub_taxable = sub_cgst = sub_sgst = sub_igst = sub_cess = sub_inclusive = sub_discount = 0
 
-        for lr in line_requests:
+        for lr, customization in zip(
+            line_requests,
+            resolved_customizations,
+            strict=True,
+        ):
             item = items_by_id[lr.menu_item_id]
             if not item.is_available:
                 raise BusinessRuleError(f"menu item {item.sku} is not available")
             if lr.qty <= 0:
                 raise BusinessRuleError(f"qty must be positive for {item.sku}")
 
-            line_base = item.base_price_minor * lr.qty
+            unit_catalog_price = item.base_price_minor + customization.unit_delta_minor
+            if unit_catalog_price < 0:
+                raise BusinessRuleError(
+                    f"selected customizations make menu item {item.sku} negative"
+                )
+            line_base = unit_catalog_price * lr.qty
             line_discount = _discount_minor(
                 line_base,
                 _discount_for_item_type(item.type, membership_rates),
@@ -397,6 +649,7 @@ class OrderPricingService:
                 PricedLine(
                     menu_item_id=item.id,
                     name=item.name,
+                    item_type=item.type,
                     sku=item.sku,
                     hsn_or_sac=item.hsn_code or "",
                     qty=lr.qty,
@@ -409,6 +662,10 @@ class OrderPricingService:
                     sgst_minor=sgst,
                     igst_minor=igst,
                     cess_minor=0,
+                    base_unit_price_minor=item.base_price_minor,
+                    customization_unit_delta_minor=customization.unit_delta_minor,
+                    variant_snapshot=customization.variant,
+                    modifier_snapshots=customization.modifiers,
                 )
             )
             sub_taxable += taxable
@@ -599,14 +856,40 @@ class InvoiceNumberService:
     async def allocate(
         self,
         *,
+        company_id: UUID,
         branch_id: UUID,
-        branch_code: str,
         prefix: str = "D",
         series: str = "invoice",
         at: datetime | None = None,
         timezone_name: str = "Asia/Kolkata",
     ) -> tuple[str, str]:
         """Return (invoice_no, fiscal_year)."""
+        # Lock the branch identity before reading its explicit fiscal series.
+        # Settings takes the same lock before a series edit, closing the race
+        # where the first invoice and a configuration change could otherwise
+        # commit under different assumptions.
+        branch = (
+            await self.session.execute(
+                select(Branch)
+                .where(
+                    Branch.id == branch_id,
+                    Branch.company_id == company_id,
+                    Branch.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if branch is None:
+            raise BusinessRuleError(
+                "cannot issue a fiscal document because the branch identity is invalid"
+            )
+        invoice_series_code = (branch.invoice_series_code or "").strip().upper()
+        if re.fullmatch(r"[A-Z0-9]{2}", invoice_series_code) is None:
+            raise BusinessRuleError(
+                "branch invoice series is missing or invalid; set a unique two-character "
+                "invoice series in Settings before billing"
+            )
+
         now = at or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -636,7 +919,7 @@ class InvoiceNumberService:
 
         invoice_no = format_invoice_number(
             prefix=prefix,
-            branch_code=branch_code,
+            branch_code=invoice_series_code,
             fiscal_year=fy,
             sequence=seq,
         )

@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.core.auth
 
+import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.Terminal
+import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,6 +10,19 @@ import org.junit.Test
 import kotlinx.coroutines.runBlocking
 
 class TerminalResolutionTest {
+
+    @Test
+    fun `legacy terminal payload defaults to hybrid while unknown future purpose is preserved`() {
+        val legacy = ApiClient.json.decodeFromString<Terminal>(
+            """{"id":"till-1","name":"Main till","branch_id":"branch-1"}""",
+        )
+        val future = ApiClient.json.decodeFromString<Terminal>(
+            """{"id":"till-2","name":"Future till","branch_id":"branch-1","purpose":"future"}""",
+        )
+
+        assertEquals(TerminalPurpose.HYBRID, legacy.purpose)
+        assertEquals("future", future.purpose)
+    }
 
     @Test
     fun `non POS employee does not need a terminal`() {
@@ -35,6 +50,55 @@ class TerminalResolutionTest {
         val result = resolve(terminals = listOf(till("one", "Main till")))
 
         assertEquals(TerminalResolution.Resolved(till("one", "Main till"), true), result)
+    }
+
+    @Test
+    fun `gaming centre automatically uses its only hybrid workspace`() {
+        val hybrid = till("hybrid", "Main workspace", purpose = TerminalPurpose.HYBRID)
+        val result = resolve(
+            terminals = listOf(hybrid),
+            singleHybridOnly = true,
+        )
+
+        assertEquals(TerminalResolution.Resolved(hybrid, true), result)
+    }
+
+    @Test
+    fun `gaming centre blocks hybrid plus active gaming instead of hiding the conflict`() {
+        val result = resolve(
+            terminals = listOf(
+                till("hybrid", "Main workspace", purpose = TerminalPurpose.HYBRID),
+                till("gaming", "Gaming Area", purpose = TerminalPurpose.GAMING),
+            ),
+            singleHybridOnly = true,
+        )
+
+        assertTrue(result is TerminalResolution.Blocked)
+        assertTrue((result as TerminalResolution.Blocked).message.contains("more than one active workspace", true))
+    }
+
+    @Test
+    fun `gaming centre rejects a lone legacy purpose without showing a picker`() {
+        val result = resolve(
+            terminals = listOf(till("gaming", "Gaming Area", purpose = TerminalPurpose.GAMING)),
+            singleHybridOnly = true,
+        )
+
+        assertTrue(result is TerminalResolution.Blocked)
+        assertTrue((result as TerminalResolution.Blocked).message.contains("both Gaming and POS"))
+    }
+
+    @Test
+    fun `single hybrid topology keeps unresolved stale-scope work blocked`() {
+        val result = resolve(
+            terminals = listOf(till("hybrid", "Main workspace", purpose = TerminalPurpose.HYBRID)),
+            cached = "old-gaming-terminal",
+            unresolved = true,
+            singleHybridOnly = true,
+        )
+
+        assertTrue(result is TerminalResolution.Blocked)
+        assertTrue((result as TerminalResolution.Blocked).message.contains("saved work", true))
     }
 
     @Test
@@ -145,21 +209,43 @@ class TerminalResolutionTest {
         assertFalse(remembered)
     }
 
+    @Test
+    fun `confirmed write identity requires active and persisted terminal to agree`() {
+        val active = ValidatedTerminalDisplay(
+            terminalId = "hybrid",
+            terminalName = "Main workspace",
+            branchId = "branch-1",
+            purpose = TerminalPurpose.HYBRID,
+        )
+
+        assertEquals("hybrid", confirmedTerminalId("hybrid", active))
+        assertEquals(null, confirmedTerminalId("legacy", active))
+        assertEquals(null, confirmedTerminalId("hybrid", null))
+    }
+
     private fun resolve(
         terminals: List<Terminal>,
         cached: String? = null,
         unresolved: Boolean = false,
+        singleHybridOnly: Boolean = false,
     ): TerminalResolution = resolveTerminalAssignment(
         requiresPosTerminal = true,
         branchId = "branch-1",
         availableTerminals = terminals,
         cachedTerminalId = cached,
         hasUnresolvedLocalWork = unresolved,
+        singleHybridOnly = singleHybridOnly,
     )
 
-    private fun till(id: String, name: String, branchId: String = "branch-1") = Terminal(
+    private fun till(
+        id: String,
+        name: String,
+        branchId: String = "branch-1",
+        purpose: String = TerminalPurpose.HYBRID,
+    ) = Terminal(
         id = id,
         name = name,
         branchId = branchId,
+        purpose = purpose,
     )
 }

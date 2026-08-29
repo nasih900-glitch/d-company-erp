@@ -8,6 +8,7 @@ from app.services.pos.points import (
     gaming_rank,
     minor_to_points,
     points_to_minor,
+    proportional_cumulative_points,
     rank_meets,
     rank_progress,
     rank_up_bonus_points,
@@ -46,6 +47,35 @@ class TestRoundTrip:
     def test_points_to_minor_and_back_never_gains_value(self) -> None:
         for points in (0, 1, 9, 10, 11, 250, 9_999):
             assert minor_to_points(points_to_minor(points)) == points
+
+
+class TestRefundPointAllocation:
+    def test_two_partial_refunds_finish_at_exact_full_component(self) -> None:
+        first = proportional_cumulative_points(
+            points=7,
+            cumulative_refunded_minor=333,
+            order_paid_minor=1000,
+        )
+        second_target = proportional_cumulative_points(
+            points=7,
+            cumulative_refunded_minor=1000,
+            order_paid_minor=1000,
+        )
+        assert first == 2
+        assert second_target - first == 5
+        assert second_target == 7
+
+    def test_allocation_is_bounded_and_invalid_denominator_is_zero(self) -> None:
+        assert proportional_cumulative_points(
+            points=9,
+            cumulative_refunded_minor=1200,
+            order_paid_minor=1000,
+        ) == 9
+        assert proportional_cumulative_points(
+            points=9,
+            cumulative_refunded_minor=100,
+            order_paid_minor=0,
+        ) == 0
 
 
 class TestGamingRank:

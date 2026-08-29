@@ -175,10 +175,29 @@ class OutboxSafetyTest {
         )
 
         assertTrue(message.contains("2 ended gaming sessions"))
-        assertTrue(message.contains("1 cash refund still needs a safe handover decision"))
+        assertTrue(message.contains("1 refund still needs a safe payout or accounting decision"))
         assertTrue(message.contains("Open Refunds"))
         assertTrue(message.contains("do not pay twice"))
         assertTrue(message.contains("1 saved change is waiting for server confirmation"))
+    }
+
+    @Test
+    fun `support blockers direct staff to owned review and safe local removal`() {
+        val message = signOutBlockedMessage(
+            OutboxSnapshot(
+                listOf(
+                    UnresolvedOutboxGroup("support_requests", "pending", 1),
+                    UnresolvedOutboxGroup("support_requests", "action_required", 2),
+                ),
+            ),
+        )
+
+        assertTrue(message.contains("1 help request is waiting for server confirmation"))
+        assertTrue(message.contains("2 help requests need review"))
+        assertTrue(message.contains("Open Help"))
+        assertTrue(message.contains("owner's web inbox"))
+        assertTrue(message.contains("remove only the saved tablet copy"))
+        assertTrue(!message.contains("3 saved changes"))
     }
 
     private fun snapshot(resource: String, state: String, count: Int = 1) =

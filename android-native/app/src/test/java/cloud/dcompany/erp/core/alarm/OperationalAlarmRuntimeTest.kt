@@ -11,7 +11,7 @@ import org.junit.Test
 class OperationalAlarmRuntimeTest {
 
     @Test
-    fun `receiver scope requires token profile identity and exact POS terminal`() {
+    fun `receiver scope requires token profile identity and exact operational workspace`() {
         val profile = profile(effectivePermissions = listOf(ErpPermission.PosRead))
 
         assertEquals(
@@ -23,8 +23,19 @@ class OperationalAlarmRuntimeTest {
     }
 
     @Test
-    fun `non POS receiver scope never adopts a stale terminal`() {
+    fun `gaming receiver uses the same terminal scoped cache as foreground`() {
         val profile = profile(effectivePermissions = listOf(ErpPermission.GamingRead))
+
+        assertEquals(
+            CacheScope("employee-1", "company-1", "branch-1", "terminal-1"),
+            cachedOperationalAlarmScope(token(), profile, "terminal-1"),
+        )
+        assertNull(cachedOperationalAlarmScope(token(), profile, null))
+    }
+
+    @Test
+    fun `non operational receiver scope never adopts a stale terminal`() {
+        val profile = profile(effectivePermissions = listOf(ErpPermission.FinanceRead))
 
         assertEquals(
             CacheScope("employee-1", "company-1", "branch-1", null),

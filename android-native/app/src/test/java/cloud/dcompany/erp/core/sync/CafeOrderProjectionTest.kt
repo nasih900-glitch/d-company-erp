@@ -8,6 +8,7 @@ import cloud.dcompany.erp.core.db.CafeBillCacheEntity
 import cloud.dcompany.erp.core.db.CafeBillLineSnapshot
 import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,7 +28,25 @@ class CafeOrderProjectionTest {
                     kind = CafeActionKind.APPEND_ROUND,
                     payload = CafeActionPayload(
                         lines = listOf(
-                            CafeActionLine("client-b", "menu-b", "Fries", 2, "No salt", 250),
+                            CafeActionLine(
+                                clientLineId = "client-b",
+                                menuItemId = "menu-b",
+                                name = "Fries",
+                                qty = 2,
+                                note = "No salt",
+                                estimateUnitMinor = 400,
+                                variantId = "variant-large",
+                                variantName = "Large",
+                                variantPriceDeltaMinor = 100,
+                                modifiers = listOf(
+                                    LocalModifierSelectionSnapshot(
+                                        modifierId = "modifier-cheese",
+                                        name = "Cheese",
+                                        priceDeltaMinor = 50,
+                                        qty = 1,
+                                    ),
+                                ),
+                            ),
                         ),
                     ),
                     capturedVersion = 3,
@@ -47,13 +66,15 @@ class CafeOrderProjectionTest {
 
         assertEquals("sending_to_pos", projected.status)
         assertEquals(3, projected.pendingActionCount)
-        assertEquals(500L, projected.totalMinor)
+        assertEquals(800L, projected.totalMinor)
         assertEquals(1_000L, projected.confirmedTotalMinor)
         assertTrue(projected.amountPending)
         assertTrue(projected.lines.single { it.clientLineId == "client-a" }.voided)
         val newLine = projected.lines.single { it.clientLineId == "client-b" }
         assertEquals("No salt", newLine.note)
-        assertEquals(500L, newLine.lineTotalMinor)
+        assertEquals(800L, newLine.lineTotalMinor)
+        assertEquals("Large", newLine.variantSnapshot?.name)
+        assertEquals(listOf("Cheese"), newLine.modifiers.map { it.name })
         assertTrue(newLine.locallyPending)
     }
 
@@ -119,6 +140,57 @@ class CafeOrderProjectionTest {
         assertFalse(conflict.editable)
         assertEquals("conflict", conflict.blockedActionId)
         assertEquals("Another terminal changed this bill", conflict.blockedMessage)
+    }
+
+    @Test
+    fun `pending whole bill void shows zero without losing confirmed accounting truth`() {
+        val projected = projectCafeBills(
+            serverBills = listOf(serverBill().copy(taxMinor = 50, totalMinor = 1_050)),
+            localBills = listOf(localBill()),
+            actions = listOf(
+                action(
+                    id = "void-order",
+                    sequence = 1,
+                    kind = CafeActionKind.VOID_ORDER,
+                    payload = CafeActionPayload(reason = "Duplicate bill"),
+                    capturedVersion = 3,
+                ),
+            ),
+        ).single()
+
+        assertEquals("voiding", projected.status)
+        assertEquals(0L, projected.subtotalMinor)
+        assertEquals(0L, projected.taxMinor)
+        assertEquals(0L, projected.totalMinor)
+        assertEquals(1_050L, projected.confirmedTotalMinor)
+        assertTrue(projected.amountPending)
+        assertTrue(projected.lines.all { it.voided && it.voidReason == "Duplicate bill" })
+        assertFalse(projected.editable)
+    }
+
+    @Test
+    fun `rejected whole bill void keeps server lines and totals authoritative`() {
+        val projected = projectCafeBills(
+            serverBills = listOf(serverBill()),
+            localBills = listOf(localBill()),
+            actions = listOf(
+                action(
+                    id = "void-order",
+                    sequence = 1,
+                    kind = CafeActionKind.VOID_ORDER,
+                    payload = CafeActionPayload(reason = "Customer left"),
+                    state = CafeActionState.REJECTED,
+                    error = "Only the shift opener may void this order",
+                ),
+            ),
+        ).single()
+
+        assertEquals("open", projected.status)
+        assertEquals(1_000L, projected.totalMinor)
+        assertFalse(projected.amountPending)
+        assertFalse(projected.lines.single().voided)
+        assertEquals("void-order", projected.blockedActionId)
+        assertFalse(projected.editable)
     }
 
     private fun serverBill() = CafeBillCacheEntity(

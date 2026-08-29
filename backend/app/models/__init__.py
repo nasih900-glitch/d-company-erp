@@ -4,7 +4,18 @@ from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
-from app.models.customer import Customer, PointsRedemption
+from app.models.bug_report import (
+    BugReport,
+    BugReportAttachment,
+    BugReportInboxRead,
+    BugReportPublicReply,
+)
+from app.models.customer import (
+    Customer,
+    OrderLoyaltySettlement,
+    PointsRedemption,
+    RefundLoyaltyAdjustment,
+)
 from app.models.events import Event, EventTicket
 from app.models.finance import (
     Account,
@@ -16,9 +27,18 @@ from app.models.finance import (
     JournalLine,
     ManualCollection,
     Partner,
+    SupplierPayment,
     TipPayout,
 )
-from app.models.gaming import GamingBooking, GamingPackage, GamingSession, Station, Tournament
+from app.models.gaming import (
+    GamingBooking,
+    GamingPackage,
+    GamingSession,
+    GamingSessionAddon,
+    GamingSessionExtension,
+    Station,
+    Tournament,
+)
 from app.models.idempotency_key import IdempotencyKey
 from app.models.india import (
     GstRateSlab,
@@ -54,15 +74,21 @@ from app.models.membership import (
     MembershipPaymentRequestResolution,
     MembershipRefund,
     MembershipRefundAttemptRecovery,
+    MembershipRefundAttemptResolution,
     MembershipRefundCashHandoff,
     MembershipRefundCompletion,
-    MembershipRefundAttemptResolution,
     MembershipRefundProviderAction,
     MembershipRefundResolution,
     MembershipRefundSettlement,
     MembershipTier,
 )
-from app.models.menu import MenuCategory, MenuItem, MenuModifier, MenuVariant
+from app.models.menu import (
+    MenuCategory,
+    MenuItem,
+    MenuModifier,
+    MenuModifierGroup,
+    MenuVariant,
+)
 from app.models.ocr import OcrExtraction, OcrUpload, OcrVerification
 from app.models.pos import (
     CustomerSpendReconciliation,
@@ -93,6 +119,10 @@ __all__ = [
     "Base",
     "Batch",
     "Branch",
+    "BugReport",
+    "BugReportAttachment",
+    "BugReportInboxRead",
+    "BugReportPublicReply",
     "CapitalEntry",
     "Company",
     "Customer",
@@ -106,6 +136,8 @@ __all__ = [
     "GamingBooking",
     "GamingPackage",
     "GamingSession",
+    "GamingSessionAddon",
+    "GamingSessionExtension",
     "GRN",
     "GRNLine",
     "GstRateSlab",
@@ -139,12 +171,14 @@ __all__ = [
     "MenuCategory",
     "MenuItem",
     "MenuModifier",
+    "MenuModifierGroup",
     "MenuVariant",
     "OcrExtraction",
     "OcrUpload",
     "OcrVerification",
     "Order",
     "OrderCheckoutClaim",
+    "OrderLoyaltySettlement",
     "OrderLine",
     "Partner",
     "Payment",
@@ -162,6 +196,7 @@ __all__ = [
     "Recipe",
     "RecipeLine",
     "Refund",
+    "RefundLoyaltyAdjustment",
     "Reservation",
     "Role",
     "RolePermissionOverride",
@@ -172,6 +207,7 @@ __all__ = [
     "Station",
     "StockMovement",
     "Supplier",
+    "SupplierPayment",
     "Table",
     "TenantMixin",
     "Terminal",

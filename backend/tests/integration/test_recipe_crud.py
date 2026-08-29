@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 import app.services.inventory.deduction as deduction_service
 from app.api.v1.insights.router import costing_coverage
@@ -179,6 +180,81 @@ async def test_create_recipe_conflicts_with_existing_active_recipe(
 
     r2 = await client.post("/api/v1/inventory/recipes", json=body, headers=_auth(token))
     assert r2.status_code == 409, r2.text
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_a_second_active_recipe_outside_the_api(
+    session,
+    seed_owner,
+) -> None:
+    """The database guard must hold even for a script that bypasses API locks."""
+
+    item = await _menu_item(session, seed_owner["company"].id)
+    first = Recipe(
+        id=uuid4(),
+        menu_item_id=item.id,
+        name="Authoritative recipe",
+        version=1,
+        yield_qty=1,
+        is_active=True,
+    )
+    session.add(first)
+    await session.commit()
+
+    session.add(
+        Recipe(
+            id=uuid4(),
+            menu_item_id=item.id,
+            name="Conflicting recipe",
+            version=2,
+            yield_qty=1,
+            is_active=True,
+        )
+    )
+    with pytest.raises(IntegrityError, match="uq_recipe_one_active_per_menu_item"):
+        await session.flush()
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_nonpositive_recipe_yield(session, seed_owner) -> None:
+    item = await _menu_item(session, seed_owner["company"].id)
+    session.add(
+        Recipe(
+            id=uuid4(),
+            menu_item_id=item.id,
+            name="Invalid yield",
+            version=1,
+            yield_qty=0,
+            is_active=True,
+        )
+    )
+    with pytest.raises(IntegrityError, match="ck_recipe_positive_yield"):
+        await session.flush()
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_null_recipe_yield(session, seed_owner) -> None:
+    item = await _menu_item(session, seed_owner["company"].id)
+    with pytest.raises(IntegrityError, match="yield_qty"):
+        await session.execute(
+            text(
+                """
+                INSERT INTO recipes (
+                    id, menu_item_id, name, yield_qty, version, is_active
+                ) VALUES (
+                    :id, :menu_item_id, :name, NULL, 1, TRUE
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "menu_item_id": item.id,
+                "name": "Null yield",
+            },
+        )
+    await session.rollback()
 
 
 @pytest.mark.asyncio
@@ -351,6 +427,90 @@ async def test_recipe_line_add_update_delete(client, session, seed_owner) -> Non
 
 
 @pytest.mark.asyncio
+async def test_active_recipe_prevents_ingredient_soft_delete(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    company_id = seed_owner["company"].id
+    item = await _menu_item(session, company_id)
+    ingredient = await _ingredient(session, company_id, name="Protected recipe ingredient")
+    recipe = Recipe(
+        id=uuid4(),
+        menu_item_id=item.id,
+        name="Protected active recipe",
+        yield_qty=1,
+        is_active=True,
+    )
+    session.add(recipe)
+    await session.flush()
+    session.add(
+        RecipeLine(
+            id=uuid4(),
+            recipe_id=recipe.id,
+            ingredient_id=ingredient.id,
+            qty=1,
+            wastage_pct=0,
+        )
+    )
+    await session.commit()
+
+    token = await _login(client, seed_owner)
+    response = await client.delete(
+        f"/api/v1/inventory/ingredients/{ingredient.id}",
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 409, response.text
+    assert "active recipe" in response.json()["error"]["message"]
+    await session.refresh(ingredient)
+    assert ingredient.deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_batch_history_prevents_ingredient_delete_and_unit_rewrite(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    ingredient = await _ingredient(
+        session,
+        seed_owner["company"].id,
+        name="Historical unit ingredient",
+    )
+    batch = Batch(
+        id=uuid4(),
+        ingredient_id=ingredient.id,
+        branch_id=seed_owner["branch"].id,
+        received_at=datetime.now(UTC),
+        qty_initial=0,
+        qty_on_hand=0,
+        cost_per_unit_minor=25,
+    )
+    session.add(batch)
+    await session.commit()
+
+    token = await _login(client, seed_owner)
+    update = await client.patch(
+        f"/api/v1/inventory/ingredients/{ingredient.id}",
+        json={"base_unit": "unit"},
+        headers=_auth(token),
+    )
+    delete = await client.delete(
+        f"/api/v1/inventory/ingredients/{ingredient.id}",
+        headers=_auth(token),
+    )
+
+    assert update.status_code == 409, update.text
+    assert "base unit cannot be changed" in update.json()["error"]["message"]
+    assert delete.status_code == 409, delete.text
+    assert "stock history" in delete.json()["error"]["message"]
+    await session.refresh(ingredient)
+    assert ingredient.base_unit == "ml"
+    assert ingredient.deleted_at is None
+
+
+@pytest.mark.asyncio
 async def test_recipe_and_lines_are_tenant_isolated(client, session, seed_owner) -> None:
     """A recipe (and its lines) belonging to another company must be
     invisible/unwritable through this company's token — same guarantee as
@@ -433,6 +593,7 @@ async def test_recipe_created_via_api_is_consumed_by_deduction(client, session, 
         json={
             "menu_item_id": str(item.id),
             "name": "Cappuccino v1",
+            "yield_qty": 2,
             "lines": [{"ingredient_id": str(milk.id), "qty": 150, "wastage_pct": 0.1}],
         },
         headers=_auth(token),
@@ -452,8 +613,9 @@ async def test_recipe_created_via_api_is_consumed_by_deduction(client, session, 
     await session.commit()
 
     assert movements == 1
-    # 150ml * (1 + 0.1 wastage) * 2 units = 330ml
-    expected_deduction = 150 * 1.1 * 2
+    # The recipe quantity makes two menu units: 150ml * 1.1 wastage / 2 yield
+    # * 2 sold units = 165ml. Ignoring yield_qty would incorrectly take 330ml.
+    expected_deduction = 150 * 1.1 / 2 * 2
 
     refreshed_batch = (
         await session.execute(select(Batch).where(Batch.id == batch.id))
@@ -473,6 +635,78 @@ async def test_recipe_created_via_api_is_consumed_by_deduction(client, session, 
     assert movement.type == "sale"
     assert movement.ref_type == "order"
     assert float(movement.qty_delta) == pytest.approx(-expected_deduction)
+
+
+@pytest.mark.asyncio
+async def test_sale_skips_expired_fifo_batch_and_uses_next_saleable_batch(
+    session,
+    seed_owner,
+) -> None:
+    company_id = seed_owner["company"].id
+    branch_id = seed_owner["branch"].id
+    item = await _menu_item(session, company_id)
+    ingredient = await _ingredient(session, company_id, name="Expiry-safe milk")
+    ingredient.current_qty = 20
+    now = datetime.now(UTC)
+    expired = Batch(
+        id=uuid4(),
+        ingredient_id=ingredient.id,
+        branch_id=branch_id,
+        received_at=now - timedelta(days=2),
+        expires_at=now - timedelta(microseconds=1),
+        qty_initial=10,
+        qty_on_hand=10,
+        cost_per_unit_minor=40,
+        lot_code="EXPIRED",
+    )
+    saleable = Batch(
+        id=uuid4(),
+        ingredient_id=ingredient.id,
+        branch_id=branch_id,
+        received_at=now - timedelta(days=1),
+        expires_at=now + timedelta(days=1),
+        qty_initial=10,
+        qty_on_hand=10,
+        cost_per_unit_minor=60,
+        lot_code="SALEABLE",
+    )
+    recipe = Recipe(
+        id=uuid4(),
+        menu_item_id=item.id,
+        name="Expiry-safe recipe",
+        yield_qty=1,
+        is_active=True,
+    )
+    line = RecipeLine(
+        id=uuid4(),
+        recipe_id=recipe.id,
+        ingredient_id=ingredient.id,
+        qty=3,
+        wastage_pct=0,
+    )
+    session.add_all([expired, saleable, recipe, line])
+    await session.flush()
+
+    order_id = uuid4()
+    movements = await deduct_for_order(
+        session,
+        order_id=order_id,
+        order_lines=[SimpleNamespace(menu_item_id=item.id, qty=1)],
+        branch_id=branch_id,
+        created_by=seed_owner["owner"].id,
+    )
+    await session.flush()
+
+    assert movements == 1
+    assert float(expired.qty_on_hand) == pytest.approx(10)
+    assert float(saleable.qty_on_hand) == pytest.approx(7)
+    movement = (
+        await session.execute(
+            select(StockMovement).where(StockMovement.ref_id == order_id)
+        )
+    ).scalar_one()
+    assert movement.batch_id == saleable.id
+    assert int(movement.cost_per_unit_minor) == 60
 
 
 @pytest.mark.asyncio
@@ -751,7 +985,12 @@ async def test_costing_coverage_requires_branch_local_fifo_cost(
 ) -> None:
     company_id = seed_owner["company"].id
     main_branch = seed_owner["branch"]
-    kiosk = Branch(id=uuid4(), company_id=company_id, name="Kiosk")
+    kiosk = Branch(
+        id=uuid4(),
+        company_id=company_id,
+        name="Kiosk",
+        invoice_series_code="KS",
+    )
     session.add(kiosk)
     await session.flush()
     item = await _menu_item(session, company_id)
@@ -797,15 +1036,31 @@ async def test_costing_coverage_requires_branch_local_fifo_cost(
         terminal_id=seed_owner["terminal"].id,
         roles=("owner",),
     )
+    kiosk_tenant = TenantContext(
+        user_id=seed_owner["owner"].id,
+        company_id=company_id,
+        branch_id=kiosk.id,
+        terminal_id=None,
+        roles=("owner",),
+    )
 
-    incomplete = await costing_coverage(session, tenant)
+    # Authenticated report/insight endpoints are selected-branch views. A
+    # kiosk costing gap must not contaminate Main's figures, and Main's costed
+    # batch must not make the kiosk look complete.
+    main_complete = await costing_coverage(session, tenant)
+    assert main_complete.branch_id == main_branch.id
+    assert main_complete.is_complete is True
+    assert main_complete.fully_costed_item_count == 1
+
+    incomplete = await costing_coverage(session, kiosk_tenant)
+    assert incomplete.branch_id == kiosk.id
     assert incomplete.is_complete is False
     assert incomplete.incomplete_item_count == 1
     assert "Beans at Kiosk" in incomplete.issues[0].detail
 
     kiosk_uncosted.cost_per_unit_minor = 30
     await session.flush()
-    complete = await costing_coverage(session, tenant)
+    complete = await costing_coverage(session, kiosk_tenant)
     assert complete.is_complete is True
     assert complete.fully_costed_item_count == 1
 
@@ -826,7 +1081,7 @@ async def test_costing_coverage_requires_branch_local_fifo_cost(
         )
     )
     await session.flush()
-    unresolved = await costing_coverage(session, tenant)
+    unresolved = await costing_coverage(session, kiosk_tenant)
     assert unresolved.is_complete is False
     assert "Beans at Kiosk" in unresolved.issues[0].detail
 
@@ -846,5 +1101,5 @@ async def test_costing_coverage_requires_branch_local_fifo_cost(
         )
     )
     await session.flush()
-    resolved = await costing_coverage(session, tenant)
+    resolved = await costing_coverage(session, kiosk_tenant)
     assert resolved.is_complete is True

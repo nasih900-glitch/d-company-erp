@@ -5,6 +5,8 @@ import cloud.dcompany.erp.core.db.CafeActionState
 import cloud.dcompany.erp.core.db.CafeBillCacheEntity
 import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
+import cloud.dcompany.erp.core.net.OrderModifierSnapshot
+import cloud.dcompany.erp.core.net.OrderVariantSnapshot
 
 data class CafeBillLineProjection(
     val stableKey: String,
@@ -22,6 +24,8 @@ data class CafeBillLineProjection(
     val voided: Boolean,
     val voidReason: String?,
     val kitchenCancellationPending: Boolean,
+    val variantSnapshot: OrderVariantSnapshot? = null,
+    val modifiers: List<OrderModifierSnapshot> = emptyList(),
 )
 
 data class CafeBillProjection(
@@ -98,6 +102,8 @@ internal fun projectCafeBills(
                         voided = false,
                         voidReason = null,
                         kitchenCancellationPending = false,
+                        variantSnapshot = line.variantSnapshot,
+                        modifiers = line.modifiers,
                     ),
                 )
             }
@@ -120,6 +126,8 @@ internal fun projectCafeBills(
                         voidReason = line.voidReason,
                         kitchenCancellationPending = line.kitchenReleasedAt != null &&
                             line.kitchenVoidAcknowledgedAt == null,
+                        variantSnapshot = line.variantSnapshot,
+                        modifiers = line.modifiers,
                     ),
                 )
             }
@@ -150,6 +158,25 @@ internal fun projectCafeBills(
                             voided = false,
                             voidReason = null,
                             kitchenCancellationPending = false,
+                            variantSnapshot = line.variantId?.let { variantId ->
+                                OrderVariantSnapshot(
+                                    variantId = variantId,
+                                    name = line.variantName.orEmpty(),
+                                    priceDeltaMinor = line.variantPriceDeltaMinor,
+                                    lineDeltaMinor = line.variantPriceDeltaMinor * line.qty,
+                                )
+                            },
+                            modifiers = line.modifiers.map { modifier ->
+                                OrderModifierSnapshot(
+                                    modifierId = modifier.modifierId,
+                                    modifierGroupId = modifier.modifierGroupId,
+                                    name = modifier.name,
+                                    qty = modifier.qty,
+                                    priceDeltaMinor = modifier.priceDeltaMinor,
+                                    perItemDeltaMinor = modifier.priceDeltaMinor * modifier.qty,
+                                    lineDeltaMinor = modifier.priceDeltaMinor * modifier.qty * line.qty,
+                                )
+                            },
                         )
                     }
                 }
@@ -174,6 +201,8 @@ internal fun projectCafeBills(
                                 voided = false,
                                 voidReason = null,
                                 kitchenCancellationPending = false,
+                                variantSnapshot = null,
+                                modifiers = emptyList(),
                             )
                         }
                     }
@@ -195,6 +224,27 @@ internal fun projectCafeBills(
                     }
                 }
 
+                CafeActionKind.VOID_ORDER -> {
+                    // A definitive refusal must continue to show server truth,
+                    // not pretend that every line was cancelled. Pending work
+                    // is optimistic and remains visibly labelled as syncing.
+                    if (action.state == CafeActionState.PENDING) {
+                        status = "voiding"
+                        action.payload.reason?.let { reason ->
+                            projected.indices.forEach { index ->
+                                if (!projected[index].voided) {
+                                    projected[index] = projected[index].copy(
+                                        locallyPending = true,
+                                        voided = true,
+                                        voidReason = reason,
+                                        kitchenCancellationPending = projected[index].roundNo != null,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 CafeActionKind.SEND_TO_POS -> status = "sending_to_pos"
             }
         }
@@ -205,12 +255,16 @@ internal fun projectCafeBills(
         val projectedLineTotal = projected.filterNot { it.voided }.sumOf { it.lineTotalMinor }
         val pendingAmountDelta = projectedLineTotal - confirmedLineTotal
         val amountPending = localActions.any {
-            it.kind in setOf(
+            it.state == CafeActionState.PENDING && it.kind in setOf(
                 CafeActionKind.CREATE_ROUND,
                 CafeActionKind.APPEND_ROUND,
                 CafeActionKind.VOID_LINE,
+                CafeActionKind.VOID_ORDER,
                 CafeActionKind.LEGACY_CREATE_AND_SEND,
             )
+        }
+        val wholeBillVoidPending = localActions.any {
+            it.kind == CafeActionKind.VOID_ORDER && it.state == CafeActionState.PENDING
         }
         CafeBillProjection(
             localBillId = local?.localBillId,
@@ -219,11 +273,14 @@ internal fun projectCafeBills(
             tableCode = local?.tableCode,
             status = status,
             checkoutVersion = server?.checkoutVersion ?: local?.confirmedCheckoutVersion,
-            subtotalMinor = server?.subtotalMinor ?: projected.filterNot { it.voided }
-                .sumOf { it.lineTotalMinor },
-            taxMinor = server?.taxMinor ?: 0,
+            subtotalMinor = if (wholeBillVoidPending) 0 else {
+                server?.subtotalMinor ?: projected.filterNot { it.voided }.sumOf { it.lineTotalMinor }
+            },
+            taxMinor = if (wholeBillVoidPending) 0 else server?.taxMinor ?: 0,
             confirmedTotalMinor = server?.totalMinor,
-            totalMinor = ((server?.totalMinor ?: 0L) + pendingAmountDelta).coerceAtLeast(0L),
+            totalMinor = if (wholeBillVoidPending) 0 else {
+                ((server?.totalMinor ?: 0L) + pendingAmountDelta).coerceAtLeast(0L)
+            },
             amountPending = amountPending,
             lines = projected,
             pendingActionCount = localActions.count { it.state == CafeActionState.PENDING },

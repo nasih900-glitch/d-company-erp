@@ -2,7 +2,9 @@ package cloud.dcompany.erp
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,22 +15,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,8 +38,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.AuthState
@@ -48,8 +50,10 @@ import cloud.dcompany.erp.ui.TerminalChangeUiState
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.allowedDestinations
-import cloud.dcompany.erp.ui.canManageMemberships
+import cloud.dcompany.erp.ui.canManageSystemSettings
+import cloud.dcompany.erp.ui.resolveWorkspaceDestination
 import cloud.dcompany.erp.ui.workspaceLocationLabel
+import cloud.dcompany.erp.ui.usesAdvancedTerminalWorkflow
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
@@ -62,8 +66,17 @@ import cloud.dcompany.erp.ui.screens.kitchen.KitchenScreen
 import cloud.dcompany.erp.ui.screens.menu.MenuScreen
 import cloud.dcompany.erp.ui.screens.refunds.RefundsScreen
 import cloud.dcompany.erp.ui.screens.reports.ReportsScreen
+import cloud.dcompany.erp.ui.screens.reservations.ReservationsScreen
 import cloud.dcompany.erp.ui.screens.tables.TablesScreen
 import cloud.dcompany.erp.ui.screens.settings.SettingsScreen
+import cloud.dcompany.erp.ui.screens.settings.HelpScreen
+import cloud.dcompany.erp.ui.screens.settings.SupportInboxScreen
+import cloud.dcompany.erp.ui.screens.settings.BugReportDialog
+import cloud.dcompany.erp.ui.screens.settings.BugReportLaunchContext
+import cloud.dcompany.erp.ui.screens.settings.BugReportOwnerScope
+import cloud.dcompany.erp.ui.screens.settings.BugReportViewModel
+import cloud.dcompany.erp.ui.screens.settings.bugReportConnectivity
+import cloud.dcompany.erp.ui.screens.settings.currentAndroidBugReportContext
 import cloud.dcompany.erp.ui.screens.staff.StaffScreen
 import cloud.dcompany.erp.ui.screens.gaming.GamingScreen
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
@@ -77,15 +90,21 @@ import cloud.dcompany.erp.core.net.ClientCompatibilityState
 import cloud.dcompany.erp.core.net.ClientUpdateNotice
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.safeHttpsUpdateUrl
+import cloud.dcompany.erp.core.update.AppUpdateUiState
+import cloud.dcompany.erp.core.update.AppUpdateViewModel
+import cloud.dcompany.erp.core.update.DirectUpdateMetadataResult
+import cloud.dcompany.erp.core.update.matchesDescriptor
+import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
 import cloud.dcompany.erp.core.auth.EffectivePermissions
-import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.alarm.OperationalNotificationDestination
 import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
 import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
-import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
+import cloud.dcompany.erp.core.sync.summarizeOutboxWork
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,7 +114,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             DCompanyTheme {
                 Surface(Modifier.fillMaxSize(), color = Brand.Background) {
-                    AppRoot(onOpenUpdate = ::openSecureUpdate)
+                    AppRoot(
+                        onOpenUpdateLink = ::openSecureUpdate,
+                        onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
+                    )
                 }
             }
         }
@@ -120,50 +142,123 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Could not open the update link. Ask an owner for the current app.", Toast.LENGTH_LONG).show()
         }
     }
+
+    /**
+     * Direct-distribution builds may hand a fully verified private APK to the
+     * system installer. Android still owns the final confirmation. The Play
+     * build has neither this capability nor the corresponding manifest entry.
+     */
+    private fun requestVerifiedUpdateInstall(file: File) {
+        if (!BuildConfig.DIRECT_UPDATES_ENABLED) {
+            Toast.makeText(this, "This app build uses the normal update link.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val updateDirectory = File(cacheDir, "verified-updates").canonicalFile
+        val candidate = runCatching { file.canonicalFile }.getOrNull()
+        if (candidate == null || candidate.parentFile != updateDirectory || !candidate.isFile) {
+            Toast.makeText(this, "The verified update file is no longer available. Download it again.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            val settingsIntent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName"),
+            )
+            runCatching { startActivity(settingsIntent) }.onSuccess {
+                Toast.makeText(
+                    this,
+                    "Allow installs for D Company ERP, return here, then tap Install update again.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }.onFailure {
+                Toast.makeText(
+                    this,
+                    "Android could not open the install permission. Ask the device owner for help.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
+
+        val contentUri = runCatching {
+            FileProvider.getUriForFile(this, "$packageName.updates", candidate)
+        }.getOrElse {
+            Toast.makeText(this, "The verified update could not be handed to Android.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(contentUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+        }
+        runCatching { startActivity(installIntent) }.onFailure {
+            Toast.makeText(
+                this,
+                "Android Package Installer could not open. The app was not changed.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppRoot(
-    onOpenUpdate: (String) -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstallVerifiedUpdate: (File) -> Unit,
     session: SessionViewModel = viewModel(),
+    appUpdate: AppUpdateViewModel = viewModel(),
 ) {
     val compatibility = DCompanyApp.instance.clientCompatibility
-    val compatibilityState by compatibility.state.collectAsState()
-    val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsState()
-    val backendReachability by ApiClient.backendReachability.state.collectAsState()
+    val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
+    val appUpdateState by appUpdate.state.collectAsStateWithLifecycle()
+    val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsStateWithLifecycle()
+    val effectiveOnline by DCompanyApp.instance.connectivity.online.collectAsStateWithLifecycle()
+    val backendReachability by ApiClient.backendReachability.state.collectAsStateWithLifecycle()
     val syncAvailability = syncAvailabilityProblem(networkValidated, backendReachability)
-    val state by session.state.collectAsState()
-    val signingIn by session.signingIn.collectAsState()
-    val loginError by session.loginError.collectAsState()
-    val accountSafetyNotice by session.accountSafetyNotice.collectAsState()
-    val accessChangeNotice by session.accessChangeNotice.collectAsState()
-    val terminalChange by session.terminalChange.collectAsState()
-    val activeTerminal by DCompanyApp.instance.terminalStore.activeValidatedTerminal.collectAsState()
-    val pendingNotificationTarget by DCompanyApp.instance.notificationRoutes.pending.collectAsState()
+    val unresolvedOutboxGroups by DCompanyApp.instance.db.outboxSafetyDao()
+        .observeUnresolvedGroups()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val outboxWorkStatus = remember(unresolvedOutboxGroups) {
+        summarizeOutboxWork(unresolvedOutboxGroups)
+    }
+    val syncing by DCompanyApp.instance.sync.syncing.collectAsStateWithLifecycle()
+    val state by session.state.collectAsStateWithLifecycle()
+    val signingIn by session.signingIn.collectAsStateWithLifecycle()
+    val loginError by session.loginError.collectAsStateWithLifecycle()
+    val accountSafetyNotice by session.accountSafetyNotice.collectAsStateWithLifecycle()
+    val accessChangeNotice by session.accessChangeNotice.collectAsStateWithLifecycle()
+    val terminalChange by session.terminalChange.collectAsStateWithLifecycle()
+    val activeTerminal by DCompanyApp.instance.terminalStore.activeValidatedTerminal.collectAsStateWithLifecycle()
+    val pendingNotificationTarget by DCompanyApp.instance.notificationRoutes.pending.collectAsStateWithLifecycle()
     val rejectedNotificationOpenNotice by
-        DCompanyApp.instance.notificationRoutes.rejectedOpenNotice.collectAsState()
+        DCompanyApp.instance.notificationRoutes.rejectedOpenNotice.collectAsStateWithLifecycle()
     var notificationRouteNotice by rememberSaveable { mutableStateOf<String?>(null) }
 
     when (val update = compatibilityState) {
-        ClientCompatibilityState.Checking -> {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    CircularProgressIndicator(color = Brand.Gold)
-                    Text("Checking app compatibility…", color = Brand.ForegroundMuted)
-                }
-            }
-            return
-        }
-
         is ClientCompatibilityState.UpdateRequired -> {
-            RequiredUpdateScreen(update.notice, onOpenUpdate)
+            RequiredUpdateScreen(
+                notice = update.notice,
+                updateState = appUpdateState,
+                outboxWorkStatus = outboxWorkStatus,
+                onDownload = { appUpdate.download(update.notice) },
+                onCancelDownload = appUpdate::cancel,
+                onOpenUpdateLink = onOpenUpdateLink,
+                onInstall = {
+                    appUpdate.verifiedFile(update.notice)?.let(onInstallVerifiedUpdate)
+                },
+            )
             return
         }
 
+        // Keep the cached workspace usable while the bounded compatibility
+        // preflight runs. An authoritative HTTP 426/UpdateRequired result is
+        // still handled above as the only blocking update state.
+        ClientCompatibilityState.Checking,
         is ClientCompatibilityState.UpdateAvailable,
         ClientCompatibilityState.Supported -> Unit
     }
@@ -171,6 +266,51 @@ private fun AppRoot(
     when (val s = state) {
         is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             CircularProgressIndicator(color = Brand.Gold)
+        }
+
+        is AuthState.VerifyingCached -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(24.dp),
+            ) {
+                CircularProgressIndicator(color = Brand.Gold)
+                Text("Checking access", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Restoring ${s.me.name}'s workspace safely…",
+                    color = Brand.ForegroundMuted,
+                )
+                Text(
+                    "If the server is unavailable, the last verified offline workspace will open automatically.",
+                    color = Brand.ForegroundMuted,
+                )
+            }
+        }
+
+        is AuthState.SigningOut -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(color = Brand.Gold)
+                Text("Signing out safely…", color = Brand.ForegroundMuted)
+            }
+        }
+
+        is AuthState.SignOutFailed -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(24.dp),
+            ) {
+                Text("Couldn't finish sign-out", style = MaterialTheme.typography.titleLarge)
+                Text(s.message, color = Brand.ForegroundMuted)
+                Button(onClick = session::signOut) { Text("Retry sign-out") }
+                Text(
+                    "If retry still fails, keep this tablet with a manager and contact support.",
+                    color = Brand.ForegroundMuted,
+                )
+            }
         }
 
         is AuthState.SignedOut -> PreLoginViewModelScope {
@@ -186,17 +326,76 @@ private fun AppRoot(
             }
         }
 
-        is AuthState.SelectTerminal -> TerminalSelectionScreen(
-            employeeName = s.me.name,
-            terminals = s.terminals,
-            choosing = s.choosing,
-            error = s.error,
-            isReassignment = s.reassigning,
-            previousTerminalName = s.previousTerminalName,
-            onConfirm = session::selectTerminal,
-            onRefresh = session::refreshTerminalChoices,
-            onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
-        )
+        is AuthState.SelectTerminal -> SessionViewModelScope(s.me) {
+            val reportConnectivity = bugReportConnectivity(effectiveOnline, networkValidated)
+            val bugReportVm: BugReportViewModel = viewModel(
+                factory = BugReportViewModel.factory(
+                    app = DCompanyApp.instance,
+                    owner = BugReportOwnerScope(
+                        companyId = s.me.companyId,
+                        userId = s.me.userId,
+                    ),
+                ),
+            )
+            val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
+            fun openSetupSupport() {
+                bugReportVm.open(
+                    BugReportLaunchContext(
+                        currentScreen = "Workspace setup",
+                        lastAction = "Choosing a workspace",
+                        errorCode = s.error?.let { "workspace_selection_error" },
+                    ),
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                TerminalSelectionScreen(
+                    employeeName = s.me.name,
+                    terminals = s.terminals,
+                    choosing = s.choosing,
+                    error = s.error,
+                    isReassignment = s.reassigning,
+                    previousTerminalName = s.previousTerminalName,
+                    onConfirm = session::selectTerminal,
+                    onRefresh = session::refreshTerminalChoices,
+                    onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
+                )
+                TextButton(
+                    onClick = ::openSetupSupport,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                ) {
+                    Text("Help")
+                }
+            }
+            BugReportDialog(
+                state = bugReportState,
+                connectivity = reportConnectivity,
+                onReasonChange = bugReportVm::reasonChanged,
+                onContinuationChange = bugReportVm::continuationChanged,
+                onDescriptionChange = bugReportVm::descriptionChanged,
+                onAttachmentChange = bugReportVm::attachmentChanged,
+                onAttachmentRejected = bugReportVm::attachmentRejected,
+                onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                onSubmit = {
+                    bugReportVm.submit(
+                        currentAndroidBugReportContext(
+                            launchContext = bugReportState.launchContext,
+                            branchId = s.me.branchId,
+                            branchName = s.me.branchName,
+                            terminalId = null,
+                            terminalName = null,
+                            connectivity = reportConnectivity,
+                        ),
+                    )
+                },
+                onRetry = bugReportVm::retrySubmitted,
+                onOpenHistory = bugReportVm::showHistory,
+                onCloseHistory = bugReportVm::closeHistory,
+                onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                onDismiss = bugReportVm::dismiss,
+            )
+        }
 
         // Credentials are intact — this is a connectivity problem, so the fix
         // is a retry, never a login screen that makes staff re-enter a
@@ -234,9 +433,19 @@ private fun AppRoot(
             SessionViewModelScope(s.me) {
                 val permissions = remember(s.me) { EffectivePermissions.from(s.me) }
                 val destinations = remember(s.me) { allowedDestinations(s.me) }
+                val bugReportVm: BugReportViewModel = viewModel(
+                    factory = BugReportViewModel.factory(
+                        app = DCompanyApp.instance,
+                        owner = BugReportOwnerScope(
+                            companyId = s.me.companyId,
+                            userId = s.me.userId,
+                        ),
+                    ),
+                )
+                val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
                 var confirmSignOut by remember(s.me.userId) { mutableStateOf(false) }
                 var currentDestination by rememberSaveable(s.me.userId) {
-                    mutableStateOf(destinations.firstOrNull() ?: Destination.Settings)
+                    mutableStateOf(resolveWorkspaceDestination(null, destinations))
                 }
                 var operationalFocus by remember(s.me.userId) {
                     mutableStateOf<OperationalNotificationTarget?>(null)
@@ -288,72 +497,73 @@ private fun AppRoot(
                         }
                     }
                 }
-                val visibleDestination = currentDestination.takeIf { it in destinations }
-                    ?: destinations.firstOrNull()
-                    ?: Destination.Settings
-                val requiresTill = permissions.has(ErpPermission.PosRead)
+                val visibleDestination = resolveWorkspaceDestination(currentDestination, destinations)
+                val requiresTill = permissions.requiresOperationalWorkspace()
                 val locationLabel = workspaceLocationLabel(
                     branchId = s.me.branchId,
                     branchName = s.me.branchName,
                     requiresTill = requiresTill,
                     activeTerminal = activeTerminal,
                 )
-                Scaffold(
-                containerColor = Brand.Background,
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                Text(
-                                    "${visibleDestination.label} · ${s.me.name}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    locationLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Brand.ForegroundMuted,
-                                    maxLines = 1,
-                                )
-                            }
-                        },
-                        actions = {
-                            if (s.me.protectedAccess && requiresTill) {
-                                TextButton(onClick = session::requestTerminalReassignment) {
-                                    Text("Change till")
-                                }
-                            }
-                            TextButton(onClick = { confirmSignOut = true }) { Text("Sign out") }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = Brand.Surface,
-                            titleContentColor = Brand.Foreground,
+                val advancedTerminalWorkflow = usesAdvancedTerminalWorkflow(activeTerminal)
+                val reportConnectivity = bugReportConnectivity(effectiveOnline, networkValidated)
+                fun openSupport() {
+                    bugReportVm.open(
+                        BugReportLaunchContext(
+                            currentScreen = visibleDestination.label,
+                            lastAction = "Opened Help from ${visibleDestination.label}",
+                            errorCode = when (syncAvailability) {
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.NO_NETWORK ->
+                                    "network_offline"
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.SERVER_UNREACHABLE ->
+                                    "server_unreachable"
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.NONE -> null
+                            },
                         ),
                     )
-                },
-                ) { padding ->
-                    Box(Modifier.padding(padding)) {
-                        WorkspaceScaffold(
-                            header = { SyncAvailabilityBanner(syncAvailability) },
-                            destinations = destinations,
-                            currentDestination = visibleDestination,
-                            onDestinationChanged = {
-                                currentDestination = it
-                                val focusDestination = when (operationalFocus?.destination) {
-                                    OperationalNotificationDestination.POS -> Destination.Pos
-                                    OperationalNotificationDestination.GAMING -> Destination.Gaming
-                                    null -> null
-                                }
-                                if (focusDestination != it) operationalFocus = null
-                            },
-                        ) { destination, navigateTo ->
-                            when (destination) {
+                }
+                WorkspaceScaffold(
+                    destinations = destinations,
+                    currentDestination = visibleDestination,
+                    employeeName = s.me.name,
+                    locationLabel = locationLabel,
+                    connectivityProblem = syncAvailability,
+                    outboxWorkStatus = outboxWorkStatus,
+                    syncing = syncing,
+                    pendingSupportCount = bugReportState.pendingCount,
+                    canChangeTill = s.me.protectedAccess && requiresTill && advancedTerminalWorkflow,
+                    onOpenSupport = ::openSupport,
+                    onChangeTill = session::requestTerminalReassignment,
+                    onSignOut = { confirmSignOut = true },
+                    onDestinationChanged = {
+                        if (it !in destinations) return@WorkspaceScaffold
+                        currentDestination = it
+                        val focusDestination = when (operationalFocus?.destination) {
+                            OperationalNotificationDestination.POS -> Destination.Pos
+                            OperationalNotificationDestination.GAMING -> Destination.Gaming
+                            null -> null
+                        }
+                        if (focusDestination != it) operationalFocus = null
+                    },
+                ) { destination, navigateTo ->
+                    when (destination) {
+                            Destination.Dashboard -> AnalyticsScreen()
                             Destination.Pos -> {
                                 // Constructing a feature ViewModel starts its
                                 // initial API pulls. Keep it inside its allowed
                                 // destination so hidden tabs cannot generate
                                 // background 403s for low-privilege accounts.
                                 val pos: PosViewModel = viewModel()
-                                val posState by pos.state.collectAsState()
+                                val posState by pos.state.collectAsStateWithLifecycle()
+                                val recentPosReceipts by pos.recentReceipts.collectAsStateWithLifecycle()
+                                val canonicalPosReceipts by pos.canonicalReceipts.collectAsStateWithLifecycle()
+                                val receiptHistorySyncState by
+                                    pos.receiptHistorySyncState.collectAsStateWithLifecycle()
+                                val receiptHistoryLoading by
+                                    pos.receiptHistoryLoading.collectAsStateWithLifecycle()
+                                val receiptHistoryError by
+                                    pos.receiptHistoryError.collectAsStateWithLifecycle()
+                                val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
                                 val heldFocus = operationalFocus
                                     as? OperationalNotificationTarget.HeldOrder
                                 LaunchedEffect(heldFocus?.orderId) {
@@ -361,21 +571,40 @@ private fun AppRoot(
                                 }
                                 PosScreen(
                                     state = posState,
+                                    recentReceipts = recentPosReceipts,
+                                    canonicalReceipts = canonicalPosReceipts,
+                                    receiptHistoryHasMore = receiptHistorySyncState?.hasMore == true,
+                                    receiptHistoryLoading = receiptHistoryLoading,
+                                    receiptHistoryError = receiptHistoryError,
+                                    unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),
                                     onAccessChanged = pos::updateAccess,
                                     onAdd = pos::add,
+                                    onAddConfigured = pos::addConfigured,
                                     onRemove = pos::remove,
+                                    onIncrementLine = pos::incrementLine,
+                                    onDecrementLine = pos::decrementLine,
                                     onSelectCategory = pos::selectCategory,
                                     onClearCart = pos::clearCart,
+                                    onUpdateDraftDetails = pos::updateDraftDetails,
                                     onRefresh = pos::refresh,
+                                    onPrepareDirectCheckout = pos::prepareDirectCheckout,
+                                    onDismissDirectCheckout = pos::dismissDirectCheckout,
+                                    onConfirmDirectZero = pos::confirmDirectZero,
+                                    onRedeemDirectPoints = pos::redeemDirectPoints,
                                     onCapture = pos::captureSale,
                                     onRetryRejectedSale = pos::retryRejectedSale,
                                     onRetryHeldPayment = pos::retryRejectedHeldPayment,
                                     onPrepareHeldOrder = pos::prepareHeldOrderCheckout,
                                     onConfirmHeldOrder = pos::confirmHeldOrderPayment,
                                     onConfirmHeldOrderZero = pos::confirmHeldOrderZero,
+                                    onVoidOrder = pos::voidOrder,
                                     onDismissHeldOrder = pos::dismissHeldOrderCheckout,
                                     onDismissNotice = pos::dismissNotice,
+                                    onAcknowledgeReceipt = pos::acknowledgeReceipt,
+                                    onRefreshReceiptHistory = pos::refreshReceiptHistory,
+                                    onLoadMoreReceiptHistory = pos::loadMoreReceiptHistory,
+                                    onOpenCanonicalReceipt = pos::refreshReceiptHistoryDetail,
                                     onFocusOldestOverdue = pos::focusOldestOverdueOrder,
                                     onSnoozeOverdue = pos::snoozeOverdueBanner,
                                     onUnmuteOverdue = pos::unmuteOverdueBanner,
@@ -391,13 +620,22 @@ private fun AppRoot(
                                 val gamingFocus = operationalFocus
                                     as? OperationalNotificationTarget.GamingSession
                                 GamingScreen(
-                                    access = permissions.gamingAccess(),
+                                    access = permissions.gamingAccess().let { granted ->
+                                        granted.copy(
+                                            canReconcileLegacySessions =
+                                                granted.canReconcileLegacySessions &&
+                                                    s.me.protectedAccess && s.me.auditAccess,
+                                        )
+                                    },
                                     focusSessionId = gamingFocus?.sessionId,
                                     focusStationId = gamingFocus?.stationId,
                                     onDismissFocus = { operationalFocus = null },
                                 )
                             }
                             Destination.Tables -> TablesScreen(access = permissions.tablesAccess())
+                            Destination.Reservations -> ReservationsScreen(
+                                access = permissions.reservationsAccess(),
+                            )
                             Destination.Kitchen -> KitchenScreen(
                                 access = permissions.kitchenAccess(),
                                 onExit = {
@@ -427,18 +665,57 @@ private fun AppRoot(
                             Destination.Finance -> FinanceScreen(access = permissions.financeAccess())
                             Destination.Events -> EventsScreen(access = permissions.eventsAccess())
                             Destination.Memberships -> MembershipsScreen(
-                                canManage = canManageMemberships(s.me),
+                                access = permissions.membershipAccess(s.me),
                             )
                             Destination.Refunds -> RefundsScreen()
                             Destination.AuditLog -> AuditLogScreen()
                             Destination.AccessControl -> AccessControlScreen()
                             Destination.Settings -> SettingsScreen(
-                                canManageSystem = s.me.auditAccess,
+                                canManageSystem = canManageSystemSettings(s.me),
+                                onPasswordChanged = session::expireAfterPasswordChange,
+                                onReportProblem = ::openSupport,
                             )
-                            }
-                        }
+                            Destination.SupportInbox -> SupportInboxScreen()
+                            Destination.Help -> HelpScreen(
+                                pendingRequestCount = bugReportState.pendingCount,
+                                onReportProblem = ::openSupport,
+                                onOpenMyRequests = {
+                                    openSupport()
+                                    bugReportVm.showHistory()
+                                },
+                            )
                     }
                 }
+
+                BugReportDialog(
+                    state = bugReportState,
+                    connectivity = reportConnectivity,
+                    onReasonChange = bugReportVm::reasonChanged,
+                    onContinuationChange = bugReportVm::continuationChanged,
+                    onDescriptionChange = bugReportVm::descriptionChanged,
+                    onAttachmentChange = bugReportVm::attachmentChanged,
+                    onAttachmentRejected = bugReportVm::attachmentRejected,
+                    onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                    onSubmit = {
+                        bugReportVm.submit(
+                            currentAndroidBugReportContext(
+                                launchContext = bugReportState.launchContext,
+                                branchId = s.me.branchId,
+                                branchName = s.me.branchName,
+                                terminalId = activeTerminal?.terminalId,
+                                terminalName = activeTerminal?.terminalName,
+                                connectivity = reportConnectivity,
+                            ),
+                        )
+                    },
+                    onRetry = bugReportVm::retrySubmitted,
+                    onOpenHistory = bugReportVm::showHistory,
+                    onCloseHistory = bugReportVm::closeHistory,
+                    onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                    onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                    onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                    onDismiss = bugReportVm::dismiss,
+                )
 
                 if (confirmSignOut) {
                     AlertDialog(
@@ -514,6 +791,9 @@ private fun AppRoot(
         }
     }
 
+    if (compatibilityState is ClientCompatibilityState.Checking) {
+        CompatibilityCheckOverlay()
+    }
     if (accountSafetyNotice != null) {
         AlertDialog(
             onDismissRequest = session::dismissAccountSafetyNotice,
@@ -556,9 +836,50 @@ private fun AppRoot(
         val notice = (compatibilityState as ClientCompatibilityState.UpdateAvailable).notice
         OptionalUpdateBanner(
             notice = notice,
-            onDismiss = compatibility::dismissOptionalUpdate,
-            onOpenUpdate = onOpenUpdate,
+            updateState = appUpdateState,
+            outboxWorkStatus = outboxWorkStatus,
+            onDismiss = {
+                appUpdate.discard()
+                compatibility.dismissOptionalUpdate()
+            },
+            onDownload = { appUpdate.download(notice) },
+            onCancelDownload = appUpdate::cancel,
+            onOpenUpdateLink = onOpenUpdateLink,
+            onInstall = {
+                appUpdate.verifiedFile(notice)?.let(onInstallVerifiedUpdate)
+            },
         )
+    }
+}
+
+@Composable
+private fun CompatibilityCheckOverlay() {
+    Box(
+        Modifier.fillMaxWidth().padding(16.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Surface(
+            color = Brand.SurfaceRaised,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapePill,
+            shadowElevation = 4.dp,
+        ) {
+            Row(
+                Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    color = Brand.Gold,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    "Checking for app updates · cached work remains available",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 
@@ -620,31 +941,47 @@ private fun SessionViewModelScope(
 @Composable
 private fun OptionalUpdateBanner(
     notice: ClientUpdateNotice,
+    updateState: AppUpdateUiState,
+    outboxWorkStatus: OutboxWorkStatus,
     onDismiss: () -> Unit,
-    onOpenUpdate: (String) -> Unit,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstall: () -> Unit,
 ) {
-    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
     Box(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
         Surface(color = Brand.SurfaceRaised, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(Modifier.weight(1f)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
                     Text("App update available", color = Brand.Foreground, style = MaterialTheme.typography.titleSmall)
                     Text(notice.message, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodySmall)
+                        UpdateVersionAndNotes(notice, compact = true)
+                    }
+                    TextButton(onClick = onDismiss) { Text("Later") }
                 }
-                if (safeUrl != null) {
-                    TextButton(onClick = {
+                UpdateActionArea(
+                    notice = notice,
+                    state = updateState,
+                    outboxWorkStatus = outboxWorkStatus,
+                    onDownload = onDownload,
+                    onCancelDownload = onCancelDownload,
+                    onOpenUpdateLink = {
                         onDismiss()
-                        onOpenUpdate(safeUrl)
-                    }) { Text("Update securely") }
-                }
-                TextButton(onClick = onDismiss) { Text(if (safeUrl == null) "OK" else "Later") }
+                        onOpenUpdateLink(it)
+                    },
+                    onInstall = onInstall,
+                    compact = true,
+                )
             }
         }
     }
@@ -653,36 +990,196 @@ private fun OptionalUpdateBanner(
 @Composable
 private fun RequiredUpdateScreen(
     notice: ClientUpdateNotice,
-    onOpenUpdate: (String) -> Unit,
+    updateState: AppUpdateUiState,
+    outboxWorkStatus: OutboxWorkStatus,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstall: () -> Unit,
 ) {
-    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
     Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+        Surface(
+            color = Brand.SurfaceRaised,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
         ) {
-            Text("App update required", style = MaterialTheme.typography.headlineSmall, color = Brand.Foreground)
-            Text(notice.message, color = Brand.ForegroundMuted)
-            if (notice.minimumSupportedVersionCode != null) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("App update required", style = MaterialTheme.typography.headlineSmall, color = Brand.Foreground)
+                Text(notice.message, color = Brand.ForegroundMuted)
+                if (notice.minimumSupportedVersionCode != null) {
+                    Text(
+                        "Installed build ${notice.currentVersionCode ?: BuildConfig.VERSION_CODE} · " +
+                            "minimum supported ${notice.minimumSupportedVersionCode}",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                UpdateVersionAndNotes(notice, compact = false)
                 Text(
-                    "Installed build ${notice.currentVersionCode ?: BuildConfig.VERSION_CODE} · " +
-                        "minimum supported ${notice.minimumSupportedVersionCode}",
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelMedium,
+                    "This is an in-place update. Your signed-in account, local database, and saved offline work stay on this device. Never uninstall or clear app data to update.",
+                    color = Brand.Foreground,
+                )
+                UpdateActionArea(
+                    notice = notice,
+                    state = updateState,
+                    outboxWorkStatus = outboxWorkStatus,
+                    onDownload = onDownload,
+                    onCancelDownload = onCancelDownload,
+                    onOpenUpdateLink = onOpenUpdateLink,
+                    onInstall = onInstall,
+                    compact = false,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun UpdateVersionAndNotes(notice: ClientUpdateNotice, compact: Boolean) {
+    val version = notice.latestVersionName?.trim()?.take(80)?.takeIf(String::isNotEmpty)
+    val notes = notice.releaseNotes?.trim()?.take(2_000)?.takeIf(String::isNotEmpty)
+    if (version != null) {
+        Text(
+            "Release $version · build ${notice.latestVersionCode ?: "unknown"}",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+    if (notes != null) {
+        Text(
+            if (compact) notes.lineSequence().first().take(180) else "What's new\n$notes",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun UpdateActionArea(
+    notice: ClientUpdateNotice,
+    state: AppUpdateUiState,
+    outboxWorkStatus: OutboxWorkStatus,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenUpdateLink: (String) -> Unit,
+    onInstall: () -> Unit,
+    compact: Boolean,
+) {
+    val safeUrl = safeHttpsUpdateUrl(notice.updateUrl)
+    val directMetadata = validateDirectUpdateMetadata(notice)
+    val directDescriptor = (directMetadata as? DirectUpdateMetadataResult.Valid)?.descriptor
+    val directAvailable = BuildConfig.DIRECT_UPDATES_ENABLED &&
+        directDescriptor != null
+    val noticeVersion = notice.latestVersionCode
+    val stateForNotice = when (state) {
+        is AppUpdateUiState.Downloading,
+        is AppUpdateUiState.Verifying,
+        is AppUpdateUiState.Ready ->
+            directDescriptor?.let { state.takeIf { current -> current.matchesDescriptor(it) } }
+        is AppUpdateUiState.Failed -> state.takeIf {
+            if (it.descriptor != null) {
+                it.descriptor == directDescriptor
+            } else {
+                it.versionCode == null || it.versionCode == noticeVersion
+            }
+        }
+        AppUpdateUiState.Idle -> state
+    } ?: AppUpdateUiState.Idle
+
+    if (!outboxWorkStatus.isClear) {
+        Surface(
+            color = Brand.WarningMuted,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeSm,
+        ) {
             Text(
-                "Saved offline work and your signed-in account remain on this device.",
-                color = Brand.Foreground,
+                "Keep this app installed: ${outboxWorkStatus.totalCount} saved or pending " +
+                    "item${if (outboxWorkStatus.totalCount == 1) "" else "s"} will be preserved and resumed after the in-place update.",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                color = Brand.Warning,
+                style = MaterialTheme.typography.bodySmall,
             )
-            if (safeUrl != null) {
-                Button(onClick = { onOpenUpdate(safeUrl) }) { Text("Update securely") }
+        }
+    }
+
+    when (stateForNotice) {
+        AppUpdateUiState.Idle -> {
+            if (directAvailable) {
+                Button(onClick = onDownload) { Text("Download verified update") }
+                Text(
+                    "The APK will be checked for exact size, checksum, package, version and signing lineage before Android can open it.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (safeUrl != null) {
+                if (BuildConfig.DIRECT_UPDATES_ENABLED) {
+                    Text(
+                        "Verified in-app download details are not available for this release. Use the HTTPS update link.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(onClick = { onOpenUpdateLink(safeUrl) }) { Text("Open update link") }
             } else {
                 Text(
-                    "No verified HTTPS download link was supplied. Ask an owner to install the current D Company ERP app.",
+                    "No safe HTTPS update link was supplied. Ask an owner for the current D Company ERP release.",
                     color = Brand.Danger,
                 )
             }
         }
+        is AppUpdateUiState.Downloading -> {
+            val progress = if (stateForNotice.totalBytes > 0) {
+                stateForNotice.downloadedBytes.toFloat() / stateForNotice.totalBytes.toFloat()
+            } else 0f
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = Brand.Information,
+                trackColor = Brand.Surface,
+            )
+            Text(
+                "Downloading ${(progress * 100).toInt()}% · do not close the app",
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = onCancelDownload) { Text("Cancel download") }
+        }
+        is AppUpdateUiState.Verifying -> Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(color = Brand.Gold, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Text("Verifying package, version and signature…", color = Brand.Foreground)
+        }
+        is AppUpdateUiState.Ready -> {
+            Text(
+                "Verified. Android Package Installer will show the app identity and require your confirmation.",
+                color = Brand.Good,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onInstall) { Text("Install update") }
+            Text(
+                "If Android asks for install permission, allow it, return here, and tap Install update again.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        is AppUpdateUiState.Failed -> {
+            Text(stateForNotice.message, color = Brand.Danger, style = MaterialTheme.typography.bodySmall)
+            if (directAvailable) Button(onClick = onDownload) { Text("Try download again") }
+            if (safeUrl != null) {
+                TextButton(onClick = { onOpenUpdateLink(safeUrl) }) { Text("Open HTTPS update link") }
+            }
+        }
+    }
+
+    if (!compact && !BuildConfig.DIRECT_UPDATES_ENABLED && safeUrl != null) {
+        Text(
+            "Android will handle the download/install flow and ask for confirmation. This app does not install updates silently.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }

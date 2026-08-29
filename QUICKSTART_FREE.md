@@ -203,5 +203,5 @@ Reply with what you saw on screen. Common issues:
 ## When you outgrow free
 
 - Want `dcompany.in` instead of `dcompany.duckdns.org`? → ₹400/yr, 30 seconds to switch (see `docs/FREE_DEPLOY.md` end)
-- Want App Store listing? → ₹8,200/yr Apple + ₹2,100 Google + 2-4 weeks review. Capacitor scaffolding already ready in `frontend/capacitor.config.ts`.
+- Want Android distribution? → Use only the signed Kotlin app in `android-native`; the old Capacitor shells are archived and iOS is not currently supported.
 - Want thermal printer + cash drawer? → say the word, I wire ESC/POS to your Epson/TVS printer.

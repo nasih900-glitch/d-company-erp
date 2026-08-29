@@ -1,7 +1,10 @@
 package cloud.dcompany.erp.core.auth
 
+import cloud.dcompany.erp.ui.verifyRemoteBeforeCachedActivation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -52,6 +55,66 @@ class CacheScopeTest {
         assertThrows(CacheScopeException::class.java) {
             runBlocking { coordinator.activateCached(scopeA.copy(terminalId = "other-terminal")) }
         }
+        assertFalse(coordinator.isReady())
+    }
+
+    @Test
+    fun `cold restore keeps the real write lease inactive through profile and terminal verification`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val profileRequestStarted = CompletableDeferred<Unit>()
+        val releaseProfile = CompletableDeferred<Unit>()
+        val terminalRequestStarted = CompletableDeferred<Unit>()
+        val releaseTerminal = CompletableDeferred<Unit>()
+
+        val restore = launch {
+            verifyRemoteBeforeCachedActivation(
+                cached = scopeA,
+                validateCachedIdentity = { true },
+                publishVerifying = { },
+                refreshRemote = { verifiedCached ->
+                    assertEquals(scopeA, verifiedCached)
+                    profileRequestStarted.complete(Unit)
+                    releaseProfile.await()
+                    terminalRequestStarted.complete(Unit)
+                    releaseTerminal.await()
+                    coordinator.activateValidated(scopeA)
+                },
+            )
+        }
+
+        profileRequestStarted.await()
+        assertNull("cached writes must stay locked during /me", coordinator.currentLease())
+        releaseProfile.complete(Unit)
+        terminalRequestStarted.await()
+        assertNull("cached writes must stay locked during terminal verification", coordinator.currentLease())
+        releaseTerminal.complete(Unit)
+        restore.join()
+
+        assertEquals(scopeA, coordinator.currentLease()?.scope)
+    }
+
+    @Test
+    fun `cancelled cold restore never activates the cached write lease`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val remoteStarted = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val restore = launch {
+            verifyRemoteBeforeCachedActivation(
+                cached = scopeA,
+                validateCachedIdentity = { true },
+                publishVerifying = { },
+                refreshRemote = {
+                    remoteStarted.complete(Unit)
+                    neverRelease.await()
+                    coordinator.activateValidated(scopeA)
+                },
+            )
+        }
+
+        remoteStarted.await()
+        restore.cancelAndJoin()
+
+        assertNull(coordinator.currentLease())
         assertFalse(coordinator.isReady())
     }
 
@@ -275,12 +338,15 @@ class CacheScopeTest {
 
     @Test
     fun `cache inventory is exhaustive unique and all tables are scope bound`() {
-        assertEquals(34, SERVER_DERIVED_CACHE_TABLES.size)
-        assertEquals(33, LOCAL_DURABLE_TABLES.size)
+        assertEquals(42, SERVER_DERIVED_CACHE_TABLES.size)
+        assertEquals(38, LOCAL_DURABLE_TABLES.size)
         assertEquals(SERVER_DERIVED_CACHE_TABLES.size, SERVER_DERIVED_CACHE_TABLES.toSet().size)
         assertEquals(LOCAL_DURABLE_TABLES.size, LOCAL_DURABLE_TABLES.toSet().size)
-        assertEquals(67, ALL_SCOPE_TABLES.size)
+        assertEquals(80, ALL_SCOPE_TABLES.size)
         assertTrue(SERVER_DERIVED_CACHE_TABLES.toSet().intersect(LOCAL_DURABLE_TABLES).isEmpty())
+        assertTrue("menu_variants" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("menu_modifier_groups" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("menu_modifiers" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("report_snapshots" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("sync_meta" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("server_open_shift_cache" in SERVER_DERIVED_CACHE_TABLES)
@@ -289,6 +355,11 @@ class CacheScopeTest {
         assertTrue("membership_refund_task_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("membership_refund_attempt_cache" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("cafe_bill_cache" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("gaming_package_cache" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("gaming_session_addon_cache" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("customer_order_history_cache" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("canonical_pos_receipts" in SERVER_DERIVED_CACHE_TABLES)
+        assertTrue("canonical_receipt_sync_state" in SERVER_DERIVED_CACHE_TABLES)
         assertTrue("local_orders" in LOCAL_DURABLE_TABLES)
         assertTrue("local_shifts" in LOCAL_DURABLE_TABLES)
         assertTrue("local_held_order_payments" in LOCAL_DURABLE_TABLES)
@@ -297,6 +368,15 @@ class CacheScopeTest {
         assertTrue("local_cafe_bills" in LOCAL_DURABLE_TABLES)
         assertTrue("local_cafe_actions" in LOCAL_DURABLE_TABLES)
         assertTrue("local_kitchen_cancellation_acks" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_gaming_package_extensions" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_gaming_session_addon_actions" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_bug_reports" in LOCAL_DURABLE_TABLES)
+        assertTrue("local_bug_report_attachments" in LOCAL_DURABLE_TABLES)
+        assertTrue(
+            LOCAL_DURABLE_TABLES.indexOf("local_bug_report_attachments") <
+                LOCAL_DURABLE_TABLES.indexOf("local_bug_reports"),
+        )
+        assertTrue("pos_receipts" in LOCAL_DURABLE_TABLES)
     }
 
     private class FakePurger(

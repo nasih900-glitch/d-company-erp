@@ -49,7 +49,10 @@ class CacheIsolationRoomTest {
             SERVER_DERIVED_CACHE_TABLES.toSet() + LOCAL_DURABLE_TABLES,
             applicationTables,
         )
-        ALL_SCOPE_TABLES.forEach { table ->
+        val insertionOrder = ALL_SCOPE_TABLES
+            .filterNot { it == "local_bug_report_attachments" } +
+            "local_bug_report_attachments"
+        insertionOrder.forEach { table ->
             insertSyntheticRow(table)
         }
 
@@ -81,6 +84,32 @@ class CacheIsolationRoomTest {
     }
 
     @Test
+    fun unscopedRejectedGamingExtensionBlocksAccountPurgeUntilRetainedResolution() = runBlocking {
+        insertSyntheticRow(
+            "local_gaming_package_extensions",
+            unresolvedState = "rejected",
+        )
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE local_gaming_package_extensions SET shiftId = NULL, lastError = ?",
+            arrayOf("Legacy shift provenance is unavailable"),
+        )
+        val retained = dumpTable("local_gaming_package_extensions")
+        val purger = RoomScopeDataPurger(db)
+
+        assertTrue(purger.hasUnresolvedWork())
+        assertFalse(purger.purgeIfClean())
+        assertEquals(retained, dumpTable("local_gaming_package_extensions"))
+
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE local_gaming_package_extensions SET state = 'discarded', " +
+                "resolvedAtMillis = 12345, resolutionReason = 'Server proof retained'",
+        )
+        assertFalse(purger.hasUnresolvedWork())
+        assertTrue(purger.purgeIfClean())
+        assertTrue(dumpTable("local_gaming_package_extensions").isEmpty())
+    }
+
+    @Test
     fun scopeMarkerSurvivesComponentRecreationWithAllFourIdentityParts() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val scope = CacheScope("employee", "company", "branch", "terminal")
@@ -95,9 +124,10 @@ class CacheIsolationRoomTest {
         }
     }
 
-    /** Room has no foreign keys between these cache/outbox entities. Supplying
-     * one deterministic typed value for every column lets this test cover new
-     * tables without coupling itself to dozens of entity constructors. */
+    /** Supplying one deterministic typed value for every column lets this test
+     * cover new tables without coupling itself to dozens of entity constructors.
+     * Support attachments intentionally use their synthetic parent's composite
+     * identity so Room's ownership FK remains enforced during the purge test. */
     private fun insertSyntheticRow(table: String, unresolvedState: String? = null) {
         val sqlite = db.openHelper.writableDatabase
         val columns = mutableListOf<Pair<String, String>>()
@@ -113,6 +143,9 @@ class CacheIsolationRoomTest {
         val placeholders = columns.joinToString(",") { "?" }
         val values = columns.mapIndexed { index, (name, type) ->
             when {
+                table == "local_bug_report_attachments" && name == "reportLocalId" -> "value-0"
+                table == "local_bug_report_attachments" && name == "ownerCompanyId" -> "value-1"
+                table == "local_bug_report_attachments" && name == "ownerUserId" -> "value-2"
                 table.startsWith("local_") && name in setOf("state", "syncState") ->
                     unresolvedState ?: cleanLocalState(table)
                 type.contains("INT", ignoreCase = true) -> index + 1
@@ -129,6 +162,8 @@ class CacheIsolationRoomTest {
     private fun cleanLocalState(table: String): String = when (table) {
         "local_shifts" -> "closed"
         "local_gaming_sessions" -> "sent"
+        "local_gaming_package_extensions" -> "confirmed"
+        "local_gaming_session_addon_actions" -> "confirmed"
         "local_refunds" -> "settled"
         else -> "synced"
     }

@@ -33,6 +33,13 @@ import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,14 +49,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -66,16 +85,17 @@ import kotlin.math.abs
  * can act on it without asking anyone what a line means.
  */
 @Composable
-fun ReportsScreen() {
+fun ReportsScreen(
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
     val vm: ReportsViewModel = viewModel()
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
 
     Column(
         Modifier
             .fillMaxSize()
             .background(Brand.Background)
     ) {
-        Header()
         PeriodTabs(state.period, vm::selectPeriod)
         PeriodSelector(
             state = state,
@@ -85,6 +105,7 @@ fun ReportsScreen() {
             onPickQuarter = vm::setQuarter,
             onJumpToCurrent = vm::jumpToCurrent,
         )
+        CostingCoverageBanner(state)
 
         Box(Modifier.fillMaxSize()) {
             val report = state.report
@@ -96,12 +117,14 @@ fun ReportsScreen() {
                     report!!.label,
                     state.loading,
                     state.fetchedAtMillis,
+                    presentation,
                 )
                 ReportPresentation.FRESH_CONTENT -> ReportBody(
                     report!!,
                     state.period,
                     state.loading,
                     state.fetchedAtMillis,
+                    presentation,
                 )
                 ReportPresentation.STALE_EMPTY,
                 ReportPresentation.STALE_CONTENT -> Column(Modifier.fillMaxSize()) {
@@ -113,6 +136,7 @@ fun ReportsScreen() {
                                 report.label,
                                 state.loading,
                                 state.fetchedAtMillis,
+                                presentation,
                             )
                         } else {
                             ReportBody(
@@ -120,6 +144,7 @@ fun ReportsScreen() {
                                 state.period,
                                 state.loading,
                                 state.fetchedAtMillis,
+                                presentation,
                             )
                         }
                     }
@@ -130,40 +155,42 @@ fun ReportsScreen() {
 }
 
 @Composable
-private fun Header() {
-    Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 10.dp)) {
-        Text(
-            "Reports",
-            style = MaterialTheme.typography.headlineMedium,
-            color = Brand.Foreground,
+private fun CostingCoverageBanner(state: ReportsUiState) {
+    val coverage = state.costingCoverage
+    val error = state.costingError
+    when {
+        coverage != null && !coverage.isComplete -> OperationalBanner(
+            title = coverage.warningTitle,
+            detail = coverage.warningDetail,
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs),
         )
-        Text(
-            "Management P&L · operational receipt basis · not statutory accounts",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Brand.ForegroundMuted,
+        error != null -> OperationalBanner(
+            title = "Costing status unavailable",
+            detail = error,
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs),
+        )
+        coverage == null && state.report != null -> OperationalBanner(
+            title = "Checking inventory costing",
+            detail = "Profit figures remain provisional until recipe and ingredient-cost coverage is verified.",
+            tone = UiTone.Information,
+            icon = Icons.Default.Assessment,
+            modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs),
         )
     }
 }
 
 @Composable
 private fun PeriodTabs(selected: ReportPeriod, onSelect: (ReportPeriod) -> Unit) {
-    Row(
-        Modifier.padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        ReportPeriod.entries.forEach { period ->
-            FilterChip(
-                selected = selected == period,
-                onClick = { onSelect(period) },
-                label = { Text(period.tab) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Brand.Gold,
-                    selectedLabelColor = Brand.Background,
-                    labelColor = Brand.ForegroundMuted,
-                ),
-            )
-        }
-    }
+    PremiumTabBar(
+        options = ReportPeriod.entries.map { TabOption(it.name, it.tab) },
+        selectedId = selected.name,
+        onSelect = { id -> ReportPeriod.entries.firstOrNull { it.name == id }?.let(onSelect) },
+        modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+    )
 }
 
 // ---------------------------------------------------------------- selectors
@@ -180,65 +207,86 @@ private fun PeriodSelector(
     var showCalendar by remember { mutableStateOf(false) }
 
     SectionCard(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            StepButton("‹", enabled = true) { onStep(-1) }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 620.dp
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    StepButton("‹", enabled = true) { onStep(-1) }
 
-            // Tapping the label opens a calendar for the two periods where a
-            // calendar is the natural way to reach a distant date. Stepping is
-            // still there because "yesterday" is the query staff actually run.
-            val labelModifier = when (state.period) {
-                ReportPeriod.DAILY, ReportPeriod.MONTHLY ->
-                    Modifier.clickable { showCalendar = true }
-                else -> Modifier
-            }
-            Column(
-                Modifier
-                    .weight(1f)
-                    .then(labelModifier),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    selectorLabel(state),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Brand.Foreground,
-                    textAlign = TextAlign.Center,
-                )
-                if (state.period == ReportPeriod.DAILY || state.period == ReportPeriod.MONTHLY) {
-                    Text(
-                        "Tap to pick",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Brand.GoldMuted,
-                    )
+                    // Tapping the label opens a calendar for the two periods where a
+                    // calendar is the natural way to reach a distant date. Stepping is
+                    // still there because "yesterday" is the query staff actually run.
+                    val labelModifier = when (state.period) {
+                        ReportPeriod.DAILY, ReportPeriod.MONTHLY ->
+                            Modifier.clickable { showCalendar = true }
+                        else -> Modifier
+                    }
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .then(labelModifier),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            selectorLabel(state),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Brand.Foreground,
+                            textAlign = TextAlign.Center,
+                        )
+                        if (state.period == ReportPeriod.DAILY || state.period == ReportPeriod.MONTHLY) {
+                            Text(
+                                "Tap to pick",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Brand.ForegroundMuted,
+                            )
+                        }
+                    }
+
+                    StepButton("›", enabled = state.canStepForward) { onStep(1) }
+
+                    if (!compact && !isCurrentPeriod(state)) {
+                        OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
+                    }
                 }
-            }
 
-            StepButton("›", enabled = state.canStepForward) { onStep(1) }
+                if (compact && !isCurrentPeriod(state)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
+                    }
+                }
 
-            if (!isCurrentPeriod(state)) {
-                OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
-            }
-        }
-
-        if (state.period == ReportPeriod.QUARTERLY) {
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QUARTER_LABELS.forEachIndexed { index, label ->
-                    val q = index + 1
-                    FilterChip(
-                        selected = state.quarter == q,
-                        enabled = canSelectFiscalQuarter(state.fiscalYear, q),
-                        onClick = { onPickQuarter(q) },
-                        label = { Text(label) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Brand.Gold,
-                            selectedLabelColor = Brand.Background,
-                            labelColor = Brand.ForegroundMuted,
-                        ),
-                    )
+                if (state.period == ReportPeriod.QUARTERLY) {
+                    val entries = QUARTER_LABELS.withIndex().toList()
+                    val perRow = if (compact) 2 else 4
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        entries.chunked(perRow).forEach { quarterRow ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                quarterRow.forEach { (index, label) ->
+                                    val quarter = index + 1
+                                    FilterChip(
+                                        selected = state.quarter == quarter,
+                                        enabled = canSelectFiscalQuarter(state.fiscalYear, quarter),
+                                        onClick = { onPickQuarter(quarter) },
+                                        label = { Text(label, textAlign = TextAlign.Center) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = Brand.SurfaceHover,
+                                            selectedLabelColor = Brand.Foreground,
+                                            labelColor = Brand.ForegroundMuted,
+                                        ),
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                repeat(perRow - quarterRow.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -347,43 +395,39 @@ private fun Long.toLocalDateUtc(): LocalDate =
 
 @Composable
 private fun LoadingPanel() {
-    Column(
-        Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    SectionCard(
+        title = "Report result",
+        subtitle = "Computing operational totals from saved orders and journals",
+        icon = Icons.Filled.Assessment,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
     ) {
-        CircularProgressIndicator(color = Brand.Gold)
-        Spacer(Modifier.height(12.dp))
-        Text("Computing…", color = Brand.ForegroundMuted)
+        Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            CircularProgressIndicator(color = Brand.Gold)
+            Spacer(Modifier.height(Spacing.md))
+            Text("Computing report…", color = Brand.ForegroundMuted)
+        }
     }
 }
 
 @Composable
 private fun ErrorPanel(message: String, onRetry: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    SectionCard(
+        title = "Report result",
+        subtitle = "The selected period remains unchanged while you retry",
+        icon = Icons.Filled.Assessment,
+        modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
     ) {
-        Text(
-            "Could not load this report",
-            style = MaterialTheme.typography.titleLarge,
-            color = Brand.Foreground,
+        DesignedEmptyState(
+            title = "Could not load this report",
+            body = message,
+            icon = Icons.Filled.Assessment,
+            primaryLabel = "Try again",
+            onPrimary = onRetry,
         )
-        Spacer(Modifier.height(8.dp))
-        // The server's own words. "Report failed" would hide the difference
-        // between "your account cannot see money reports" and "the link
-        // dropped", which need completely different responses.
-        Text(
-            message,
-            color = Brand.ForegroundMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 460.dp),
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onRetry) { Text("Try again") }
     }
 }
 
@@ -413,38 +457,109 @@ private fun StaleReportBanner(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun EmptyPanel(period: ReportPeriod, label: String, refreshing: Boolean, fetchedAtMillis: Long?) {
+private fun EmptyPanel(
+    period: ReportPeriod,
+    label: String,
+    refreshing: Boolean,
+    fetchedAtMillis: Long?,
+    presentation: WorkspacePresentationPolicy,
+) {
     Column(
-        Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Text(
-            "Nothing recorded in this period",
-            style = MaterialTheme.typography.titleLarge,
-            color = Brand.Foreground,
+        val cards: List<@Composable (Modifier) -> Unit> = listOf(
+            { modifier ->
+                CompactStatCard(
+                    "Revenue", "₹0.00", modifier, "No recorded revenue",
+                    Icons.AutoMirrored.Filled.TrendingUp, UiTone.Neutral,
+                )
+            },
+            { modifier ->
+                CompactStatCard(
+                    "Orders", "0", modifier, "No completed receipts",
+                    Icons.AutoMirrored.Filled.ReceiptLong, UiTone.Neutral,
+                )
+            },
+            { modifier ->
+                CompactStatCard(
+                    if (presentation.showsEvents) "Average ticket" else "Average paid bill",
+                    "₹0.00", modifier, "No completed orders",
+                    Icons.Filled.Payments, UiTone.Neutral,
+                )
+            },
+            { modifier ->
+                CompactStatCard(
+                    "Net profit", "₹0.00", modifier, "No activity",
+                    Icons.Filled.Assessment, UiTone.Neutral,
+                )
+            },
         )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "No sales, tickets, payments or expenses fall inside " +
-                label.ifBlank { "this period" } + ". " +
-                "Use the arrows above to look at another ${unitWord(period)}, " +
-                "or leave this open — figures appear here as soon as billing starts.",
-            color = Brand.ForegroundMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 520.dp),
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val columns = if (maxWidth >= 720.dp) 4 else 2
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                cards.chunked(columns).forEach { rowCards ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    ) {
+                        rowCards.forEach { card -> card(Modifier.weight(1f)) }
+                        repeat(columns - rowCards.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+        SecondaryMetricGrid(
+            buildList {
+                if (presentation.showsEvents) {
+                    add(
+                        ReportSecondaryMetric(
+                            label = "Tickets",
+                            value = "0",
+                            detail = "No event tickets sold",
+                            icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                            tone = UiTone.Neutral,
+                        ),
+                    )
+                }
+                addAll(
+                    listOf(
+                ReportSecondaryMetric(
+                    label = "Profit margin",
+                    value = "0.0%",
+                    detail = "No revenue in this period",
+                    icon = Icons.AutoMirrored.Filled.TrendingUp,
+                    tone = UiTone.Neutral,
+                ),
+                ReportSecondaryMetric(
+                    label = "Cost ratio",
+                    value = "0.0%",
+                    detail = "No costs in this period",
+                    icon = Icons.Filled.Assessment,
+                    tone = UiTone.Neutral,
+                ),
+                    ),
+                )
+            },
         )
-        // Same reasoning as ReportHeading: an empty result is itself a cached
-        // fact that can go stale — a period that had nothing yesterday but
-        // has since been billed into must not still read as empty forever.
-        if (fetchedAtMillis != null) {
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+        SectionCard(
+            title = "Report result",
+            subtitle = fetchedAtMillis?.let {
+                "As of ${relativeAge(it)}" + if (refreshing) " · refreshing…" else ""
+            } ?: "No cached result timestamp",
+            icon = Icons.Filled.Assessment,
+        ) {
+            DesignedEmptyState(
+                title = "Nothing recorded in this period",
+                body = (if (presentation.showsEvents) {
+                    "No sales, tickets, payments or expenses fall inside "
+                } else {
+                    "No sales, payments or expenses fall inside "
+                }) +
+                    label.ifBlank { "this period" } + ". Use the controls above to inspect another ${unitWord(period)}.",
+                icon = Icons.Filled.Assessment,
+                modifier = Modifier.height(180.dp),
             )
         }
     }
@@ -465,6 +580,7 @@ private fun ReportBody(
     period: ReportPeriod,
     refreshing: Boolean,
     fetchedAtMillis: Long?,
+    presentation: WorkspacePresentationPolicy,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 720.dp
@@ -479,10 +595,22 @@ private fun ReportBody(
         ) {
             ReportHeading(report, period, refreshing, fetchedAtMillis)
 
-            KpiGrid(report, columns)
+            if (report.unissuedPaidOrdersCount > 0) {
+                OperationalBanner(
+                    title = "Invoice reconciliation required",
+                    detail = "${report.unissuedPaidOrdersCount} settled order(s) in this period " +
+                        "have no immutable invoice timestamp. They are included using their " +
+                        "recorded close time until an owner reconciles them.",
+                    tone = UiTone.Warning,
+                    icon = Icons.Filled.WarningAmber,
+                )
+            }
+
+            KpiGrid(report, columns, presentation)
+            SecondaryMetrics(report, presentation)
 
             if (report.manualCollectionsMinor > 0) {
-                ManualCollectionsNotice(report.manualCollectionsMinor)
+                ManualCollectionsNotice(report.manualCollectionsMinor, presentation)
             }
 
             if (wide) {
@@ -491,29 +619,41 @@ private fun ReportBody(
                         Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        RevenueCard(report)
-                        PaymentsCard(report)
+                        RevenueCard(report, presentation)
+                        PaymentsCard(report, presentation)
                     }
                     Column(
                         Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        GstCard(report)
+                        if (presentation.showsRestaurantOperations || report.taxCollected.totalMinor != 0L) {
+                            TaxCard(report, presentation)
+                        }
                         ExpensesCard(report)
                     }
                 }
             } else {
-                RevenueCard(report)
-                GstCard(report)
-                PaymentsCard(report)
+                RevenueCard(report, presentation)
+                if (presentation.showsRestaurantOperations || report.taxCollected.totalMinor != 0L) {
+                    TaxCard(report, presentation)
+                }
+                PaymentsCard(report, presentation)
                 ExpensesCard(report)
             }
 
             BottomLine(report)
 
             Text(
-                "Computed live from orders and journal entries. " +
-                    "Collected GST is shown for accountant review — input tax credit is not applied.",
+                if (presentation.showsMemberships || presentation.showsRestaurantOperations) {
+                    "Computed from paid orders, payment and refund evidence, manual collections, " +
+                        "memberships, expenses, depreciation and the FIFO inventory subledger. " +
+                        "Collected GST is shown for accountant review — input tax credit is not applied."
+                } else {
+                    "Computed from paid orders, gaming and product receipts, payment and refund " +
+                        "evidence, manual collections, legacy/other receipts, expenses, depreciation " +
+                        "and the FIFO inventory subledger. Historical hidden-module amounts remain " +
+                        "grouped under legacy/other for owner reconciliation."
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = Brand.ForegroundMuted,
                 textAlign = TextAlign.Center,
@@ -562,7 +702,7 @@ private fun ReportHeading(
             Text(
                 "As of ${relativeAge(fetchedAtMillis)}" + if (refreshing) " · refreshing…" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = Brand.GoldMuted,
+                color = Brand.ForegroundMuted,
             )
         }
     }
@@ -579,23 +719,19 @@ private fun relativeAge(fetchedAtMillis: Long): String {
 }
 
 @Composable
-private fun KpiGrid(report: ReportData, columns: Int) {
+private fun KpiGrid(
+    report: ReportData,
+    columns: Int,
+    presentation: WorkspacePresentationPolicy,
+) {
     val tiles = listOf(
-        KpiTile("Orders", report.ordersCount.toString(), null),
-        KpiTile("Tickets", report.ticketsCount.toString(), null),
-        KpiTile("Avg ticket", report.avgTicketMinor.asRupees(), null),
-        KpiTile("Net revenue", report.netRevenueMinor.asRupees(), null),
+        KpiTile("Revenue", report.netRevenueMinor.asRupees()),
+        KpiTile("Orders", report.ordersCount.toString()),
         KpiTile(
-            "Profit margin",
-            percent(report.netProfitMinor, report.netRevenueMinor),
-            report.netProfitMinor >= 0,
+            if (presentation.showsEvents) "Average ticket" else "Average paid bill",
+            report.avgTicketMinor.asRupees(),
         ),
-        KpiTile(
-            "Cost ratio",
-            percent(report.totalCostsMinor, report.netRevenueMinor),
-            report.totalCostsMinor <= report.netRevenueMinor,
-        ),
-        KpiTile("Net profit", report.netProfitMinor.asRupees(), report.netProfitMinor >= 0),
+        KpiTile("Net profit", report.netProfitMinor.asRupees(), negative = report.netProfitMinor < 0),
     )
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tiles.chunked(columns).forEach { row ->
@@ -611,7 +747,7 @@ private fun KpiGrid(report: ReportData, columns: Int) {
     }
 }
 
-private data class KpiTile(val label: String, val value: String, val good: Boolean?)
+private data class KpiTile(val label: String, val value: String, val negative: Boolean = false)
 
 @Composable
 private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
@@ -626,34 +762,130 @@ private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
             tile.value,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = when (tile.good) {
-                null -> Brand.Foreground
-                true -> Brand.Good
-                false -> Brand.Danger
-            },
+            color = if (tile.negative) Brand.Danger else Brand.Foreground,
         )
     }
 }
 
+internal data class ReportSecondaryMetric(
+    val label: String,
+    val value: String,
+    val detail: String,
+    val icon: ImageVector,
+    val tone: UiTone,
+)
+
+/**
+ * Secondary report context that was present before the visual refinement.
+ *
+ * Keeping this mapping outside the composable makes the accounting labels and
+ * ratios directly testable. All values come from the report response; this
+ * layer only formats them for display.
+ */
+internal fun reportSecondaryMetrics(
+    report: ReportData,
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.FullHospitality.presentationPolicy(),
+): List<ReportSecondaryMetric> = buildList {
+    if (presentation.showsEvents) {
+        add(
+            ReportSecondaryMetric(
+                label = "Tickets",
+                value = report.ticketsCount.toString(),
+                detail = "Event tickets sold",
+                icon = Icons.AutoMirrored.Filled.ReceiptLong,
+                tone = UiTone.Neutral,
+            ),
+        )
+    }
+    add(ReportSecondaryMetric(
+        label = "Profit margin",
+        value = percent(report.netProfitMinor, report.netRevenueMinor),
+        detail = "Net profit ÷ net revenue",
+        icon = Icons.AutoMirrored.Filled.TrendingUp,
+        tone = when {
+            report.netProfitMinor > 0 -> UiTone.Success
+            report.netProfitMinor < 0 -> UiTone.Danger
+            else -> UiTone.Neutral
+        },
+    ))
+    add(ReportSecondaryMetric(
+        label = "Cost ratio",
+        value = percent(report.totalCostsMinor, report.netRevenueMinor),
+        detail = "Total costs ÷ net revenue",
+        icon = Icons.Filled.Assessment,
+        tone = when {
+            report.netRevenueMinor <= 0 -> UiTone.Neutral
+            report.totalCostsMinor > report.netRevenueMinor -> UiTone.Danger
+            else -> UiTone.Success
+        },
+    ))
+}
+
 @Composable
-private fun ManualCollectionsNotice(amountMinor: Long) {
+private fun SecondaryMetrics(
+    report: ReportData,
+    presentation: WorkspacePresentationPolicy,
+) {
+    SecondaryMetricGrid(reportSecondaryMetrics(report, presentation))
+}
+
+@Composable
+private fun SecondaryMetricGrid(metrics: List<ReportSecondaryMetric>) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns = when {
+            maxWidth >= 720.dp -> 3
+            maxWidth >= 440.dp -> 2
+            else -> 1
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            metrics.chunked(columns).forEach { rowMetrics ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    rowMetrics.forEach { metric ->
+                        CompactStatCard(
+                            label = metric.label,
+                            value = metric.value,
+                            detail = metric.detail,
+                            icon = metric.icon,
+                            tone = metric.tone,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    repeat(columns - rowMetrics.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManualCollectionsNotice(
+    amountMinor: Long,
+    presentation: WorkspacePresentationPolicy,
+) {
     Column(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeLg)
             .background(Brand.SurfaceRaised)
-            .border(BorderStroke(1.dp, Brand.GoldMuted), Radius.shapeLg)
+            .border(BorderStroke(1.dp, Brand.Warning), Radius.shapeLg)
             .padding(16.dp),
     ) {
         Text(
             "${amountMinor.asRupees()} is unitemized manual collection.",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(4.dp))
         Text(
             "It is counted once in revenue and once in payment movement, but it has no POS " +
-                "order, tax invoice, item mix or automatic cost of goods. The source " +
+                if (presentation.showsRestaurantOperations) {
+                    "order, tax invoice, item mix or automatic cost of goods. The source "
+                } else {
+                    "order, itemized receipt, item mix or automatic cost of goods. The source "
+                } +
                 "references and void history live in Finance → Manual collections.",
             style = MaterialTheme.typography.bodyMedium,
             color = Brand.ForegroundMuted,
@@ -662,30 +894,33 @@ private fun ManualCollectionsNotice(amountMinor: Long) {
 }
 
 @Composable
-private fun RevenueCard(report: ReportData) {
+private fun RevenueCard(
+    report: ReportData,
+    presentation: WorkspacePresentationPolicy,
+) {
     val r = report.revenue
     SectionCard {
         CardTitle("Revenue")
-        MoneyRow("Food / drinks / desserts", r.foodMinor)
-        MoneyRow("Gaming", r.gamingMinor)
-        if (r.hookahMinor > 0) MoneyRow("Hookah", r.hookahMinor)
-        MoneyRow("Event tickets", r.eventTicketsMinor)
-        if (r.membershipsMinor > 0) MoneyRow("Memberships", r.membershipsMinor)
-        MoneyRow(
-            "Delivery (Zomato/Swiggy §9(5))",
-            r.deliveryAggregatorMinor,
-            sub = "aggregator pays the GST",
-        )
-        if (r.manualCollectionsMinor > 0) {
-            MoneyRow(
-                "Manual collections (unitemized)",
-                r.manualCollectionsMinor,
-                sub = "off-POS / legacy daily totals",
+        r.presentedSources(presentation).forEach { source ->
+            MoneyRow(source.label, source.amountMinor, sub = source.detail)
+        }
+        if (r.hiddenLegacySourceMinor(presentation) > 0L) {
+            Text(
+                "Legacy/other revenue remains included in every total. Review source invoices " +
+                    "and audit history before posting any correction.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Brand.ForegroundMuted,
             )
         }
-        if (r.otherMinor > 0) MoneyRow("Other", r.otherMinor)
         if (r.discountsAndPointsRedeemedMinor > 0) {
-            MoneyRow("Less: discounts & points redeemed", -r.discountsAndPointsRedeemedMinor)
+            MoneyRow(
+                if (presentation.showsCustomers || presentation.showsMemberships) {
+                    "Less: discounts & points redeemed"
+                } else {
+                    "Less: discounts & customer credits"
+                },
+                -r.discountsAndPointsRedeemedMinor,
+            )
         }
         if (r.roundingIncomeMinor > 0) {
             MoneyRow("Invoice round-up", r.roundingIncomeMinor)
@@ -707,17 +942,29 @@ private fun RevenueCard(report: ReportData) {
             MoneyRow(
                 "Add back: refunded tips",
                 report.refundedTipsMinor,
-                sub = "tips were a staff liability, not cafe revenue",
+                sub = "tips were a staff liability, not business revenue",
             )
         }
-        MoneyRow(
-            "Less: GST collected",
-            -report.taxCollected.totalMinor,
-            sub = "owed to the government, never was your money",
-        )
+        if (presentation.showsRestaurantOperations || report.taxCollected.totalMinor != 0L) {
+            MoneyRow(
+                if (presentation.showsRestaurantOperations) {
+                    "Less: GST collected"
+                } else {
+                    "Less: recorded indirect tax"
+                },
+                -report.taxCollected.totalMinor,
+                sub = "owed to the government, never was your money",
+            )
+        }
         Divider()
         MoneyRow(
-            "Net revenue (after GST)",
+            if (presentation.showsRestaurantOperations) {
+                "Net revenue (after GST)"
+            } else if (report.taxCollected.totalMinor != 0L) {
+                "Net revenue (after recorded tax)"
+            } else {
+                "Net revenue"
+            },
             report.netRevenueMinor,
             sub = "what's really yours before any costs",
             bold = true,
@@ -725,7 +972,7 @@ private fun RevenueCard(report: ReportData) {
         MoneyRow(
             "Less: cost of goods sold",
             -report.cogsMinor,
-            sub = "what the food/drinks/items you sold actually cost you",
+            sub = "what the products and services you sold actually cost you",
         )
         Divider()
         MoneyRow(
@@ -738,20 +985,33 @@ private fun RevenueCard(report: ReportData) {
 }
 
 @Composable
-private fun GstCard(report: ReportData) {
+private fun TaxCard(
+    report: ReportData,
+    presentation: WorkspacePresentationPolicy,
+) {
     val t = report.taxCollected
     SectionCard {
-        CardTitle("GST collected")
-        MoneyRow("CGST", t.cgstMinor)
-        MoneyRow("SGST", t.sgstMinor)
-        if (t.igstMinor > 0) MoneyRow("IGST (inter-state)", t.igstMinor)
+        CardTitle(if (presentation.showsRestaurantOperations) "GST collected" else "Legacy tax collected")
+        MoneyRow(if (presentation.showsRestaurantOperations) "CGST" else "Central component", t.cgstMinor)
+        MoneyRow(if (presentation.showsRestaurantOperations) "SGST" else "State component", t.sgstMinor)
+        if (t.igstMinor > 0) {
+            MoneyRow(
+                if (presentation.showsRestaurantOperations) "IGST (inter-state)" else "Inter-state component",
+                t.igstMinor,
+            )
+        }
         if (t.cessMinor > 0) MoneyRow("Cess", t.cessMinor)
         Divider()
-        MoneyRow("Total GST", t.totalMinor, bold = true)
+        MoneyRow(if (presentation.showsRestaurantOperations) "Total GST" else "Total legacy tax", t.totalMinor, bold = true)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Collected GST for accountant review and return preparation. " +
-                "Input tax credit is not applied by this report.",
+            if (presentation.showsRestaurantOperations) {
+                "Collected GST for accountant review and return preparation. " +
+                    "Input tax credit is not applied by this report."
+            } else {
+                "Historical tax remains visible for owner reconciliation. Filing and return " +
+                    "preparation are deferred and are not provided by this Gaming Centre profile."
+            },
             style = MaterialTheme.typography.labelSmall,
             color = Brand.ForegroundMuted,
         )
@@ -759,7 +1019,10 @@ private fun GstCard(report: ReportData) {
 }
 
 @Composable
-private fun PaymentsCard(report: ReportData) {
+private fun PaymentsCard(
+    report: ReportData,
+    presentation: WorkspacePresentationPolicy,
+) {
     val p = report.paymentsReceived
     SectionCard {
         CardTitle("Payment movement")
@@ -784,7 +1047,7 @@ private fun PaymentsCard(report: ReportData) {
                 "Less: cash/payment refunds",
                 -report.settledRefundsIssuedMinor,
                 sub = report.membershipRefundsIssuedMinor.takeIf { it > 0 }?.let {
-                    "includes ${it.asRupees()} in settled membership reversals"
+                    presentation.settledPrepaidReversalDetail(it.asRupees())
                 },
             )
         }
@@ -838,32 +1101,49 @@ private fun ExpensesCard(report: ReportData) {
 @Composable
 private fun BottomLine(report: ReportData) {
     SectionCard {
-        Row(Modifier.fillMaxWidth()) {
-            Summary(
-                Modifier.weight(1f),
-                "Net revenue",
-                report.netRevenueMinor.asRupees(),
-                "what's really yours before any costs",
-                Brand.Foreground,
-            )
-            Summary(
-                Modifier.weight(1f),
-                "Cost of goods + running costs",
-                report.totalCostsMinor.asRupees(),
-                if (report.depreciationMinor > 0) {
-                    "what you sold cost, what it took to run the place, and equipment wear"
-                } else {
-                    "what you sold cost, plus what it took to run the place"
-                },
-                Brand.Foreground,
-            )
-            Summary(
-                Modifier.weight(1f),
-                "Net profit",
-                report.netProfitMinor.asRupees(),
-                "your real bottom line",
-                if (report.netProfitMinor >= 0) Brand.Good else Brand.Danger,
-            )
+        val summaries: List<@Composable (Modifier) -> Unit> = listOf(
+            { modifier ->
+                Summary(
+                    modifier,
+                    "Net revenue",
+                    report.netRevenueMinor.asRupees(),
+                    "what's really yours before any costs",
+                    Brand.Foreground,
+                )
+            },
+            { modifier ->
+                Summary(
+                    modifier,
+                    "Cost of goods + running costs",
+                    report.totalCostsMinor.asRupees(),
+                    if (report.depreciationMinor > 0) {
+                        "what you sold cost, what it took to run the place, and equipment wear"
+                    } else {
+                        "what you sold cost, plus what it took to run the place"
+                    },
+                    Brand.Foreground,
+                )
+            },
+            { modifier ->
+                Summary(
+                    modifier,
+                    "Net profit",
+                    report.netProfitMinor.asRupees(),
+                    "your real bottom line",
+                    if (report.netProfitMinor < 0) Brand.Danger else Brand.Foreground,
+                )
+            },
+        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= 720.dp) {
+                Row(Modifier.fillMaxWidth()) {
+                    summaries.forEach { summary -> summary(Modifier.weight(1f)) }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    summaries.forEach { summary -> summary(Modifier.fillMaxWidth()) }
+                }
+            }
         }
     }
 }
@@ -904,22 +1184,6 @@ private fun Summary(
 }
 
 // ------------------------------------------------------------- small parts
-
-@Composable
-private fun SectionCard(
-    modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeLg)
-            .background(Brand.Surface)
-            .border(BorderStroke(1.dp, Brand.Border), Radius.shapeLg)
-            .padding(16.dp),
-        content = content,
-    )
-}
 
 @Composable
 private fun CardTitle(text: String) {
@@ -1000,7 +1264,7 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
         Text(
             glyph,
             style = MaterialTheme.typography.titleLarge,
-            color = if (enabled) Brand.Gold else Brand.Border,
+            color = if (enabled) Brand.Foreground else Brand.Border,
         )
     }
 }

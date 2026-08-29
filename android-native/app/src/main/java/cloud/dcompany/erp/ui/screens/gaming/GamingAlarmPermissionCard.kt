@@ -13,15 +13,8 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -29,13 +22,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
@@ -45,8 +33,10 @@ import cloud.dcompany.erp.core.alarm.NotificationPermissionRoute
 import cloud.dcompany.erp.core.alarm.NotificationPermissionStatus
 import cloud.dcompany.erp.core.alarm.notificationPermissionRoute
 import cloud.dcompany.erp.core.alarm.readNotificationPermissionStatus
-import cloud.dcompany.erp.ui.theme.Brand
-import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.UiTone
 import kotlinx.coroutines.launch
 
 private data class GamingAlarmPermissionState(
@@ -202,37 +192,23 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String) {
         shouldShowRationale = shouldShowNotificationRationale,
     )
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-            .background(Brand.Danger, Radius.shapeSm)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    OperationalBanner(
+        title = "$contextLabel alerts need attention",
+        detail = feedback ?: (
+            "Enable notifications and precise alarms so session-end alerts still arrive " +
+                "with the screen off. Billing remains protected by server time."
+            ),
+        tone = UiTone.Warning,
+        icon = Icons.Filled.NotificationsOff,
     ) {
-        Text(
-            "$contextLabel alerts need attention",
-            color = Brand.Background,
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
-            "Without notifications and Alarms & reminders access, Android may hide or delay " +
-                "a session-over alert while the screen is off. Billing still uses server time.",
-            color = Brand.Background,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        feedback?.let { message ->
-            Text(
-                message,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                color = Brand.Background,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             when (notificationRoute) {
                 NotificationPermissionRoute.REQUEST_SYSTEM_DIALOG -> {
-                    Button(
+                    ErpButton(
+                        text = if (shouldShowNotificationRationale) {
+                            "Try notifications again"
+                        } else {
+                            "Allow notifications"
+                        },
                         onClick = {
                             feedback = null
                             NotificationPermissionRequestStore.markRequested(context)
@@ -243,18 +219,12 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String) {
                                     "notification settings and turn on D Company ERP alerts."
                             }
                         },
-                    ) {
-                        Text(
-                            if (shouldShowNotificationRationale) {
-                                "Try notifications again"
-                            } else {
-                                "Allow notifications"
-                            },
-                        )
-                    }
+                        intent = ActionIntent.Secondary,
+                    )
                 }
                 NotificationPermissionRoute.OPEN_APP_SETTINGS -> {
-                    Button(
+                    ErpButton(
+                        text = "Notification settings",
                         onClick = {
                             launchSettings(
                                 target = AlarmSettingsTarget.NOTIFICATIONS,
@@ -278,14 +248,14 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String) {
                                     "Open Settings > Apps > D Company ERP > Notifications.",
                             )
                         },
-                    ) {
-                        Text("Open notification settings")
-                    }
+                        intent = ActionIntent.Secondary,
+                    )
                 }
                 NotificationPermissionRoute.NONE -> Unit
             }
             if (!permissionState.exactAlarmsAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                Button(
+                ErpButton(
+                    text = "Precise alarms",
                     onClick = {
                         launchSettings(
                             target = AlarmSettingsTarget.EXACT_ALARMS,
@@ -305,11 +275,9 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String) {
                                 "then enable D Company ERP.",
                         )
                     },
-                ) {
-                    Text("Allow precise alarms")
-                }
+                    intent = ActionIntent.Secondary,
+                )
             }
-        }
     }
 }
 

@@ -10,6 +10,7 @@ import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
+import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.ui.screens.tables.OrderLineBody
 import cloud.dcompany.erp.ui.screens.tables.OrderLinesAppendBody
 import cloud.dcompany.erp.ui.screens.tables.SendToPosBody
@@ -18,6 +19,7 @@ import cloud.dcompany.erp.ui.screens.tables.TableOrderCreateBody
 import cloud.dcompany.erp.ui.screens.tables.TableOrderLine
 import cloud.dcompany.erp.ui.screens.tables.TablesApi
 import cloud.dcompany.erp.ui.screens.tables.VoidOrderLineBody
+import cloud.dcompany.erp.ui.screens.tables.VoidOrderBody
 import kotlinx.coroutines.CancellationException
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -26,7 +28,14 @@ data class CafeOrderPushResult(
     val stoppedOnAmbiguousFailure: Boolean = false,
     val lastError: String? = null,
     val changedHeldQueue: Boolean = false,
+    /** A confirmed terminal void removed a bill and may have released its table. */
+    val changedActiveTableBills: Boolean = false,
 )
+
+private sealed interface CafeActionConfirmation {
+    data class BillSnapshot(val order: TableOrder) : CafeActionConfirmation
+    data class VoidedOrder(val serverOrderId: String) : CafeActionConfirmation
+}
 
 /**
  * Durable Tables mutation driver kept separate from the already-large global
@@ -45,6 +54,7 @@ class CafeOrderSyncCoordinator(
     suspend fun push(): CafeOrderPushResult {
         var lastError: String? = null
         var changedHeld = false
+        var changedActiveTableBills = false
         for (localBillId in dao.billIdsWithActions()) {
             while (true) {
                 val action = dao.firstAction(localBillId) ?: break
@@ -67,13 +77,25 @@ class CafeOrderSyncCoordinator(
                     if (localShift != null && localShift.serverShiftId == null) break
                 }
                 try {
-                    val response = pushOne(bill, action)
-                    changedHeld = changedHeld || response.status == "held"
-                    dao.confirmAction(
-                        localBillId = bill.localBillId,
-                        actionId = action.actionId,
-                        server = response.toCafeBillCache(),
-                    )
+                    when (val confirmation = pushOne(bill, action)) {
+                        is CafeActionConfirmation.BillSnapshot -> {
+                            changedHeld = changedHeld || confirmation.order.status == "held"
+                            dao.confirmAction(
+                                localBillId = bill.localBillId,
+                                actionId = action.actionId,
+                                server = confirmation.order.toCafeBillCache(),
+                            )
+                        }
+
+                        is CafeActionConfirmation.VoidedOrder -> {
+                            dao.confirmVoidOrderAction(
+                                localBillId = bill.localBillId,
+                                actionId = action.actionId,
+                                serverOrderId = confirmation.serverOrderId,
+                            )
+                            changedActiveTableBills = true
+                        }
+                    }
                     if (action.kind == CafeActionKind.LEGACY_CREATE_AND_SEND) {
                         dao.deleteLegacyOrder(action.actionId)
                     }
@@ -115,18 +137,24 @@ class CafeOrderSyncCoordinator(
                         stoppedOnAmbiguousFailure = true,
                         lastError = message,
                         changedHeldQueue = changedHeld,
+                        changedActiveTableBills = changedActiveTableBills,
                     )
                 }
             }
         }
-        return CafeOrderPushResult(lastError = lastError, changedHeldQueue = changedHeld)
+        return CafeOrderPushResult(
+            lastError = lastError,
+            changedHeldQueue = changedHeld,
+            changedActiveTableBills = changedActiveTableBills,
+        )
     }
 
     private suspend fun pushOne(
         bill: LocalCafeBillEntity,
         action: LocalCafeActionEntity,
-    ): TableOrder = when (action.kind) {
-        CafeActionKind.CREATE_ROUND -> {
+    ): CafeActionConfirmation = when (action.kind) {
+        CafeActionKind.CREATE_ROUND -> CafeActionConfirmation.BillSnapshot(
+            run {
             requireCafePreparation(
                 action.payload.lines.isNotEmpty(),
                 "Saved first round has no lines. Discard it after checking the table, then take the round again.",
@@ -143,15 +171,21 @@ class CafeOrderSyncCoordinator(
                             menuItemId = line.menuItemId,
                             qty = line.qty,
                             note = line.note,
+                            variantId = line.variantId,
+                            modifiers = line.modifiers.map {
+                                ModifierSelectionRequest(it.modifierId, it.qty)
+                            },
                         )
                     },
                 ),
                 key = "cafe-action:${action.actionId}",
                 provenance = action.provenance("cafe-create"),
             )
-        }
+            },
+        )
 
-        CafeActionKind.APPEND_ROUND -> {
+        CafeActionKind.APPEND_ROUND -> CafeActionConfirmation.BillSnapshot(
+            run {
             val orderId = requireServerOrderId(bill)
             val version = requireExpectedVersion(bill, action)
             requireCafePreparation(
@@ -168,15 +202,21 @@ class CafeOrderSyncCoordinator(
                             menuItemId = line.menuItemId,
                             qty = line.qty,
                             note = line.note,
+                            variantId = line.variantId,
+                            modifiers = line.modifiers.map {
+                                ModifierSelectionRequest(it.modifierId, it.qty)
+                            },
                         )
                     },
                 ),
                 key = "cafe-action:${action.actionId}",
                 provenance = action.provenance("cafe-append"),
             )
-        }
+            },
+        )
 
-        CafeActionKind.VOID_LINE -> {
+        CafeActionKind.VOID_LINE -> CafeActionConfirmation.BillSnapshot(
+            run {
             val orderId = requireServerOrderId(bill)
             val version = requireExpectedVersion(bill, action)
             val cache = dao.billCacheByOrderId(orderId) ?: api.order(orderId)
@@ -205,9 +245,31 @@ class CafeOrderSyncCoordinator(
                 key = "cafe-action:${action.actionId}",
                 provenance = action.provenance("cafe-void"),
             )
+            },
+        )
+
+        CafeActionKind.VOID_ORDER -> {
+            val orderId = requireServerOrderId(bill)
+            val reason = action.payload.reason?.trim().orEmpty()
+            requireCafePreparation(
+                reason.isNotEmpty(),
+                "This saved whole-bill void has no reason. Discard it after checking the bill, then void again with a reason.",
+            )
+            requireCafePreparation(
+                reason.length <= 500,
+                "This saved whole-bill void reason is longer than 500 characters. Discard it after checking the bill, then enter a shorter reason.",
+            )
+            api.voidOrder(
+                id = orderId,
+                body = VoidOrderBody(reason),
+                key = "cafe-action:${action.actionId}",
+                provenance = action.provenance("cafe-order-void"),
+            )
+            CafeActionConfirmation.VoidedOrder(orderId)
         }
 
-        CafeActionKind.SEND_TO_POS -> {
+        CafeActionKind.SEND_TO_POS -> CafeActionConfirmation.BillSnapshot(
+            run {
             val orderId = requireServerOrderId(bill)
             api.sendToPos(
                 id = orderId,
@@ -215,9 +277,12 @@ class CafeOrderSyncCoordinator(
                 key = "cafe-action:${action.actionId}",
                 provenance = action.provenance("cafe-send"),
             )
-        }
+            },
+        )
 
-        CafeActionKind.LEGACY_CREATE_AND_SEND -> pushLegacyCreateAndSend(bill, action)
+        CafeActionKind.LEGACY_CREATE_AND_SEND -> CafeActionConfirmation.BillSnapshot(
+            pushLegacyCreateAndSend(bill, action),
+        )
 
         else -> throw CafeActionPreparationException(
             "This saved table action was created by an unsupported app version. Update the app or ask support to recover it.",
@@ -352,4 +417,6 @@ private fun TableOrderLine.toCafeLineSnapshot(): CafeBillLineSnapshot = CafeBill
     voidedAt = voidedAt,
     voidReason = voidReason,
     kitchenVoidAcknowledgedAt = kitchenVoidAcknowledgedAt,
+    variantSnapshot = variantSnapshot,
+    modifiers = modifiers,
 )

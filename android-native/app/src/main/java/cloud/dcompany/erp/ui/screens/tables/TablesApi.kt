@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.HeaderMap
+import retrofit2.http.HTTP
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -44,6 +45,19 @@ interface TablesApi {
         @Header("Idempotency-Key") key: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): TableOrder
+
+    /**
+     * Retrofit's @DELETE annotation intentionally has no request-body support.
+     * The POS contract requires a reason in the DELETE body, so use @HTTP with
+     * hasBody=true instead of silently dropping the audit reason.
+     */
+    @HTTP(method = "DELETE", path = "pos/orders/{id}", hasBody = true)
+    suspend fun voidOrder(
+        @Path("id") id: String,
+        @Body body: VoidOrderBody,
+        @Header("Idempotency-Key") key: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    )
 
     @PATCH("pos/orders/{id}/send-to-pos")
     suspend fun sendToPos(

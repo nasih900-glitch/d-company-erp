@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -88,11 +89,11 @@ class TerminalReassignmentPolicyTest {
     }
 
     @Test
-    fun `workspace label uses verified branch name and exact terminal`() {
-        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a")
+    fun `hybrid workspace hides the internal terminal from staff`() {
+        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
-            "Main Cafe · Till Front",
+            "Main Cafe",
             workspaceLocationLabel(
                 branchId = "branch-a",
                 branchName = " Main Cafe ",
@@ -103,11 +104,11 @@ class TerminalReassignmentPolicyTest {
     }
 
     @Test
-    fun `legacy profile hides internal branch id but keeps exact terminal`() {
-        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a")
+    fun `hybrid legacy profile hides internal branch and terminal ids`() {
+        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
-            "Assigned branch · Till Front",
+            "Assigned branch",
             workspaceLocationLabel(
                 branchId = "branch-a",
                 branchName = null,
@@ -118,8 +119,42 @@ class TerminalReassignmentPolicyTest {
     }
 
     @Test
+    fun `non operational role shows branch without implying a till is required`() {
+        assertEquals(
+            "Main Cafe",
+            workspaceLocationLabel(
+                branchId = "branch-a",
+                branchName = "Main Cafe",
+                requiresTill = false,
+                activeTerminal = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `explicit multi-terminal workspace keeps exact terminal visible`() {
+        val display = ValidatedTerminalDisplay("till-1", "Gaming Area", "branch-a", TerminalPurpose.GAMING)
+
+        assertEquals(
+            "Main Cafe · Till Gaming Area",
+            workspaceLocationLabel(
+                branchId = "branch-a",
+                branchName = "Main Cafe",
+                requiresTill = true,
+                activeTerminal = display,
+            ),
+        )
+        assertTrue(usesAdvancedTerminalWorkflow(display))
+        assertFalse(
+            usesAdvancedTerminalWorkflow(
+                display.copy(purpose = TerminalPurpose.HYBRID),
+            ),
+        )
+    }
+
+    @Test
     fun `workspace label ignores detached name when branch is unassigned`() {
-        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a")
+        val display = ValidatedTerminalDisplay("till-1", "Front", "branch-a", TerminalPurpose.HYBRID)
 
         assertEquals(
             "Branch not assigned · Till name pending verification",
@@ -134,7 +169,7 @@ class TerminalReassignmentPolicyTest {
 
     @Test
     fun `workspace label never displays terminal metadata from another branch`() {
-        val display = ValidatedTerminalDisplay("till-1", "Other shop", "branch-b")
+        val display = ValidatedTerminalDisplay("till-1", "Other shop", "branch-b", TerminalPurpose.HYBRID)
 
         assertEquals(
             "Main Cafe · Till name pending verification",

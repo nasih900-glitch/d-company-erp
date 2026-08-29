@@ -20,6 +20,14 @@ class FinanceRefreshArchitectureTest {
             "ApiClient.create<FinanceApi>()" in source,
         )
         assertTrue("Finance snapshots are not Room-observed", "observeSnapshot<ProfitAndLoss>" in source)
+        assertTrue(
+            "Manual collections are not delivered through scoped Room snapshots",
+            "observeSnapshot<List<ManualCollection>>(FinanceSnapshotKeys.MANUAL_COLLECTIONS)" in source,
+        )
+        assertTrue(
+            "Tip payouts are not delivered through scoped Room snapshots",
+            "observeSnapshot<List<TipPayout>>(FinanceSnapshotKeys.TIP_PAYOUTS)" in source,
+        )
         assertTrue("Finance manual refresh bypasses SyncEngine", "appCtx.sync.refresh(\"finance\")" in source)
         assertTrue(
             "Finance realtime/manual failures are not visible in screen state",
@@ -37,6 +45,9 @@ class FinanceRefreshArchitectureTest {
             "Partial Finance reference failures are still reported as a refresh failure",
             "throw FinanceReferenceRefreshException(missingReferences)" in sync,
         )
+        assertTrue("Sync does not fetch manual collections", "financeApi.manualCollections()" in sync)
+        assertTrue("Sync does not fetch tip payouts", "financeApi.tipPayouts()" in sync)
+        assertTrue("Sync does not fetch Tips Payable", "financeApi.trialBalance()" in sync)
     }
 
     private fun mainSourceRoot(): Path {

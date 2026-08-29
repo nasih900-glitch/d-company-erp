@@ -81,7 +81,9 @@ In Cloudflare DNS, create:
 | `get.dcompany.cloud` | CNAME | `your-pages-site.pages.dev` | Download page |
 
 After DNS propagates (5-30 min), update:
-- `frontend/.env.example` → `VITE_API_URL=https://api.dcompany.cloud/api/v1`
+- `frontend/.env.example` currently targets the deployed production API at
+  `VITE_API_URL=https://dcompany.duckdns.org/api/v1`; change it only after the
+  replacement custom API domain is live and verified.
 - The CI release workflow's `API_URL` secret
 - `tauri.conf.json` → CSP `connect-src` allowlist already includes `*.dcompany.cloud`
 

@@ -14,6 +14,7 @@ import {
 } from '@/lib/api';
 import { DEMO_MODE, DEMO_USER } from '@/lib/demo';
 import type { TerminalDTO } from '@/lib/erp-api';
+import { GAMING_CENTRE_TERMINAL_POLICY } from '@/lib/product-profile';
 import {
   clearStoredTerminal,
   readStoredTerminalId,
@@ -24,7 +25,7 @@ import {
 import { connectRealtime, disconnectRealtime } from '@/lib/realtime';
 import { alarmPermission, requestAlarmPermission } from '@/lib/alarm';
 
-interface Me {
+export interface Me {
   user_id: string;
   email: string;
   name: string;
@@ -34,6 +35,7 @@ interface Me {
   company_id: string;
   branch_id: string | null;
   accessible_modules: string[];
+  effective_permissions?: string[];
 }
 
 const AUTH_BOOT_TIMEOUT_MS = 8000;
@@ -64,7 +66,12 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
       params: me.branch_id ? { branch_id: me.branch_id } : undefined,
       signal,
     });
-    const resolution = resolveTerminal(me.branch_id, readStoredTerminalId(), r.data);
+    const resolution = resolveTerminal(
+      me.branch_id,
+      readStoredTerminalId(),
+      r.data,
+      GAMING_CENTRE_TERMINAL_POLICY,
+    );
     if (resolution.kind === 'ready') {
       storeTerminalId(resolution.terminalId);
       return { terminalId: resolution.terminalId, options: r.data, issue: null };
@@ -72,7 +79,7 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
     clearStoredTerminal();
     return {
       terminalId: null,
-      options: resolution.kind === 'selection_required' ? resolution.terminals : [],
+      options: 'terminals' in resolution ? resolution.terminals : [],
       issue: terminalResolutionMessage(resolution),
     };
   } catch (error) {
@@ -104,7 +111,7 @@ interface AuthState {
   terminalOptions: TerminalDTO[];
   terminalIssue: string | null;
   selectTerminal: (terminalId: string) => void;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<Me>;
   logout: () => void;
 }
 
@@ -239,7 +246,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     if (DEMO_MODE) {
       setMe(DEMO_USER);
-      return;
+      return DEMO_USER;
     }
     clearStoredSession();
     const r = await api.post<{ access_token: string; refresh_token: string }>(
@@ -252,6 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const claim = await resolveTerminalClaim(meRes.data);
     applyTerminalClaim(claim);
     setMe(meRes.data);
+    return meRes.data;
   }
 
   function selectTerminal(nextTerminalId: string) {

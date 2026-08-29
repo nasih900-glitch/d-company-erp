@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.net
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -17,6 +18,37 @@ data class MenuCategory(
 )
 
 @Serializable
+data class MenuVariant(
+    val id: String,
+    val name: String,
+    @SerialName("price_delta_minor") val priceDeltaMinor: Long,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("is_active") val isActive: Boolean = true,
+)
+
+@Serializable
+data class MenuModifier(
+    val id: String,
+    @SerialName("modifier_group_id") val modifierGroupId: String,
+    val name: String,
+    @SerialName("price_delta_minor") val priceDeltaMinor: Long,
+    @SerialName("max_quantity") val maxQuantity: Int = 1,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("is_active") val isActive: Boolean = true,
+)
+
+@Serializable
+data class MenuModifierGroup(
+    val id: String,
+    val name: String,
+    @SerialName("min_select") val minSelect: Int = 0,
+    @SerialName("max_select") val maxSelect: Int = 1,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("is_active") val isActive: Boolean = true,
+    val options: List<MenuModifier> = emptyList(),
+)
+
+@Serializable
 data class MenuItem(
     val id: String,
     @SerialName("category_id") val categoryId: String,
@@ -29,6 +61,8 @@ data class MenuItem(
     @SerialName("price_includes_tax") val priceIncludesTax: Boolean = true,
     @SerialName("is_available") val isAvailable: Boolean = true,
     val description: String? = null,
+    val variants: List<MenuVariant> = emptyList(),
+    @SerialName("modifier_groups") val modifierGroups: List<MenuModifierGroup> = emptyList(),
 )
 
 @Serializable
@@ -36,12 +70,44 @@ data class Terminal(
     val id: String,
     val name: String,
     @SerialName("branch_id") val branchId: String,
+    /** Absent only on a pre-purpose server; migration-compatible local behavior is hybrid. */
+    val purpose: String = TerminalPurpose.HYBRID,
 )
 
 @Serializable
 data class OrderLineRequest(
+    @SerialName("client_line_id") val clientLineId: String? = null,
     @SerialName("menu_item_id") val menuItemId: String,
     val qty: Int,
+    @SerialName("variant_id") val variantId: String? = null,
+    val modifiers: List<ModifierSelectionRequest> = emptyList(),
+    val note: String? = null,
+)
+
+@Serializable
+data class ModifierSelectionRequest(
+    @SerialName("modifier_id") val modifierId: String,
+    val qty: Int = 1,
+)
+
+@Serializable
+data class OrderModifierSnapshot(
+    @SerialName("modifier_id") val modifierId: String,
+    @SerialName("modifier_group_id") val modifierGroupId: String? = null,
+    @SerialName("group_name") val groupName: String? = null,
+    val name: String = "",
+    val qty: Int = 1,
+    @SerialName("price_delta_minor") val priceDeltaMinor: Long = 0,
+    @SerialName("per_item_delta_minor") val perItemDeltaMinor: Long = 0,
+    @SerialName("line_delta_minor") val lineDeltaMinor: Long = 0,
+)
+
+@Serializable
+data class OrderVariantSnapshot(
+    @SerialName("variant_id") val variantId: String,
+    val name: String = "",
+    @SerialName("price_delta_minor") val priceDeltaMinor: Long = 0,
+    @SerialName("line_delta_minor") val lineDeltaMinor: Long = 0,
 )
 
 @Serializable
@@ -52,6 +118,7 @@ data class CreateOrderRequest(
     @SerialName("table_id") val tableId: String? = null,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
+    val notes: String? = null,
 )
 
 @Serializable
@@ -59,10 +126,34 @@ data class PaymentRequest(
     val method: String,
     @SerialName("amount_minor") val amountMinor: Long,
     @SerialName("tendered_minor") val tenderedMinor: Long? = null,
+    @SerialName("ref_external") val refExternal: String? = null,
     @SerialName("expected_order_total_minor") val expectedTotalMinor: Long,
     @SerialName("expected_due_minor") val expectedDueMinor: Long,
     @SerialName("tip_minor") val tipMinor: Long = 0,
 )
+
+@Serializable
+data class OrderCustomerUpdateRequest(
+    @SerialName("customer_name") val customerName: String? = null,
+    @SerialName("customer_phone") val customerPhone: String? = null,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
+data class OrderDiscountUpdateRequest(
+    @SerialName("manual_discount_minor") val manualDiscountMinor: Long,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
+data class OrderPointsRedemptionUpdateRequest(
+    /** Absolute spend, never a delta. The backend owns the conversion and balance check. */
+    val points: Int,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
+data class VoidOrderRequest(val reason: String)
 
 @Serializable
 data class CheckoutClaimResult(
@@ -88,12 +179,23 @@ data class CheckoutClaimResult(
  */
 @Serializable
 data class OrderLine(
+    val id: String? = null,
+    @SerialName("client_line_id") val clientLineId: String? = null,
     @SerialName("menu_item_id") val menuItemId: String? = null,
+    @SerialName("variant_id") val variantId: String? = null,
+    @SerialName("variant_snapshot") val variantSnapshot: OrderVariantSnapshot? = null,
+    val modifiers: List<OrderModifierSnapshot>? = null,
     val name: String = "",
     val sku: String? = null,
     val qty: Double = 0.0,
     @SerialName("unit_price_minor") val unitPriceMinor: Long = 0,
     @SerialName("line_total_minor") val lineTotalMinor: Long = 0,
+    @SerialName("taxable_value_minor") val taxableValueMinor: Long = 0,
+    @SerialName("discount_minor") val discountMinor: Long = 0,
+    @SerialName("cgst_minor") val cgstMinor: Long = 0,
+    @SerialName("sgst_minor") val sgstMinor: Long = 0,
+    @SerialName("igst_minor") val igstMinor: Long = 0,
+    val note: String? = null,
 )
 
 @Serializable
@@ -104,10 +206,12 @@ data class Order(
     // surface as a handled error, not kill the process mid-sale.
     val status: String = "",
     val type: String = "",
+    @SerialName("source_label") val sourceLabel: String? = null,
     @SerialName("subtotal_minor") val subtotalMinor: Long = 0,
     @SerialName("discount_minor") val discountMinor: Long = 0,
     @SerialName("manual_discount_minor") val manualDiscountMinor: Long = 0,
     @SerialName("points_redeemed_minor") val pointsRedeemedMinor: Long = 0,
+    @SerialName("points_redeemed") val pointsRedeemed: Int = 0,
     @SerialName("tax_minor") val taxMinor: Long = 0,
     @SerialName("round_off_minor") val roundOffMinor: Long = 0,
     @SerialName("tip_minor") val tipMinor: Long = 0,
@@ -120,7 +224,16 @@ data class Order(
     // Defaults to 0 for every other consumer of this shared model, which is
     // the safe failure mode (blocks a refund rather than risking an over-refund).
     @SerialName("refundable_minor") val refundableMinor: Long = 0,
+    // Authoritative server reservation and payment-rail evidence used by the
+    // Refunds screen. An empty paymentMethods list is intentionally treated as
+    // unavailable evidence; the client must not guess an original payout rail.
+    @SerialName("pending_refund_minor") val pendingRefundMinor: Long = 0,
+    @SerialName("payment_methods") val paymentMethods: List<String> = emptyList(),
     val lines: List<OrderLine> = emptyList(),
+    @SerialName("checkout_version") val checkoutVersion: Long = 1,
+    @SerialName("customer_name") val customerName: String? = null,
+    @SerialName("customer_phone") val customerPhone: String? = null,
+    val notes: String? = null,
 )
 
 /** Slim row from `GET /pos/orders` — the held-orders queue and Refunds' lookup both use this. */
@@ -182,8 +295,16 @@ fun Long.asRupees(): String {
 @Serializable
 data class PaymentResult(
     val id: String,
+    @SerialName("order_id") val orderId: String = "",
+    @SerialName("shift_id") val shiftId: String = "",
+    val method: String = "",
     @SerialName("amount_minor") val amountMinor: Long = 0,
+    @SerialName("bill_amount_minor") val billAmountMinor: Long = 0,
     @SerialName("tip_minor") val tipMinor: Long = 0,
+    @SerialName("tendered_minor") val tenderedMinor: Long? = null,
+    @SerialName("change_minor") val changeMinor: Long? = null,
+    @SerialName("ref_external") val refExternal: String? = null,
+    @SerialName("paid_at") val paidAt: String? = null,
     @SerialName("order_status") val orderStatus: String? = null,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     @SerialName("fiscal_year") val fiscalYear: String? = null,

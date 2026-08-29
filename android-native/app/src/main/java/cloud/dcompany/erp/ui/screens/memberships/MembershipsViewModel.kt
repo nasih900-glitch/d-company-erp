@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.EffectivePermissions
-import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.CustomerMembershipCacheEntity
 import cloud.dcompany.erp.core.db.CustomerMembershipHistoryCacheEntity
@@ -26,6 +25,8 @@ import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
 import cloud.dcompany.erp.core.db.MembershipWriteState
 import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.ShiftResolutionPolicy
+import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
+import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
@@ -117,17 +118,22 @@ data class MembershipsUiState(
     val notice: String? = null,
 )
 
-internal enum class MembershipMoneyOperation { SALE, REFUND }
+internal enum class MembershipMoneyOperation { PREPARE, SALE, REFUND }
 
-/** Paid membership initiation is intentionally online-only for this release.
- * Returning the exact recovery copy from a pure function keeps the policy
- * testable without constructing Android application state. */
+/** Only the zero-value preparation may start offline. Every operation that can
+ * move customer/provider/drawer value remains online-only. Returning the exact
+ * policy result from a pure function keeps this boundary testable without
+ * constructing Android application state. */
 internal fun membershipMoneyOfflineMessage(
     online: Boolean,
     operation: MembershipMoneyOperation,
 ): String? {
     if (online) return null
     return when (operation) {
+        // A preparation is a zero-value durable draft. The server still owns
+        // price, entitlement, shift and overlap validation after reconnect,
+        // and the UI never authorises money movement from this local row.
+        MembershipMoneyOperation.PREPARE -> null
         MembershipMoneyOperation.SALE ->
             "Membership payments require a live ERP connection. Do not collect cash or " +
                 "approve UPI/card while offline; reconnect and try again."
@@ -138,8 +144,15 @@ internal fun membershipMoneyOfflineMessage(
 }
 
 internal fun canManageMembershipMoney(profile: MeResponse?): Boolean =
-    profile?.protectedAccess == true &&
-        EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+    profile?.let { EffectivePermissions.from(it).membershipAccess(it).canManageMoney } == true
+
+internal fun canRecoverLegacyMembershipEvidence(profile: MeResponse?): Boolean =
+    profile?.let {
+        EffectivePermissions.from(it).membershipAccess(it).canRecoverLegacyEvidence
+    } == true
+
+internal const val MEMBERSHIP_AUDIT_CONTROL_MESSAGE =
+    "Older-app membership recovery is read only for this account. Ask the Audit Control owner to verify the original drawer/provider evidence; do not repeat any collection or payout."
 
 internal fun membershipPaymentStageMessage(status: String): String = when (status) {
     MembershipPaymentTaskStatus.ACCEPTED_PAYMENT_DUE ->
@@ -175,11 +188,13 @@ internal fun membershipRefundStageMessage(status: String): String = when (status
  * read-only cache (tier create/edit stays web-only, Settings → Memberships
  * already covers it). Subscribe (Shape D, mandatory idempotency) and
  * cancel (Shape C, targets an already-synced subscription only) are real
- * durable outbox resources. New paid membership acceptance is deliberately
- * online-only for this release: unlike a menu draft, a rejected cash/provider
- * row can leave physical money requiring owner reconciliation. The stable
- * local row still protects an in-flight request if connectivity drops after
- * submission, and shift close remains blocked until that exact action resolves.
+ * durable outbox resources. Zero-value payment preparation can be queued
+ * offline from a cached price snapshot; the server verifies that snapshot
+ * after reconnect. Starting collection and recording value movement remain
+ * online-only: unlike a menu draft, a rejected cash/provider row can leave
+ * physical money requiring owner reconciliation. The stable local row protects
+ * every in-flight stage if connectivity drops after submission, and shift close
+ * remains blocked until that exact action resolves.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MembershipsViewModel : ViewModel() {
@@ -452,6 +467,10 @@ class MembershipsViewModel : ViewModel() {
     }
 
     fun openLegacyRefundResolution(attempt: MembershipRefundAttemptCacheEntity) {
+        if (!canRecoverLegacyMembershipEvidence(appCtx.shiftCache.profile.value)) {
+            notice.value = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
+            return
+        }
         dialog.value = MembershipsDialog.ResolveLegacyRefund(attempt)
     }
 
@@ -474,7 +493,7 @@ class MembershipsViewModel : ViewModel() {
         viewModelScope.launch {
             membershipMoneyOfflineMessage(
                 appCtx.connectivity.online.value,
-                MembershipMoneyOperation.SALE,
+                MembershipMoneyOperation.PREPARE,
             )?.let { message ->
                 busy.value = false
                 formError.value = message
@@ -489,16 +508,21 @@ class MembershipsViewModel : ViewModel() {
             }
             // Preparing is zero-value: no staff/customer money may move until
             // the server accepts this snapshot and a second begin step succeeds.
-            val tier = try {
-                api.listTiers().firstOrNull { it.id == tierId }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                busy.value = false
-                formError.value =
-                    "Could not verify the live membership price. No membership was posted; " +
-                        "do not collect payment until the ERP reconnects."
-                return@launch
+            // A cached price is safe for an offline preparation because the
+            // backend rejects drift before it creates a server task.
+            val cachedTier = db.membershipDao().tierById(tierId)?.toTier()
+            var priceVerifiedLive = appCtx.connectivity.online.value
+            val tier = if (priceVerifiedLive) {
+                try {
+                    api.listTiers().firstOrNull { it.id == tierId }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    priceVerifiedLive = false
+                    cachedTier
+                }
+            } else {
+                cachedTier
             }
             val expectedAmount = when (billingCycle) {
                 "annual" -> tier?.annualPriceMinor ?: tier?.monthlyPriceMinor?.times(12)
@@ -566,6 +590,15 @@ class MembershipsViewModel : ViewModel() {
                     return@launch
                 }
                 val capturedActionId = requireNotNull(actionId)
+                if (!priceVerifiedLive) {
+                    busy.value = false
+                    dialog.value = null
+                    notice.value =
+                        "Payment preparation saved offline. No money is authorised yet. " +
+                            "After reconnect, wait for server confirmation and review the live price before collection."
+                    appCtx.sync.requestSync()
+                    return@launch
+                }
                 appCtx.sync.sync()
                 when (val saved = db.membershipPaymentDao().actionById(capturedActionId)) {
                     null -> formError.value =
@@ -838,11 +871,37 @@ class MembershipsViewModel : ViewModel() {
     fun retryPaymentAction(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            val action = db.membershipPaymentDao().actionById(actionId)
+            if (
+                action != null &&
+                membershipPaymentActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyMembershipEvidence(appCtx.shiftCache.profile.value)
+            ) {
+                notice.value = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
+                return@launch
+            }
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipPaymentDao().retryAction(actionId)
                 }
             ) return@launch
             appCtx.sync.requestSync()
+        }
+    }
+
+    fun discardRejectedPreparation(actionId: String) {
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            var discarded = false
+            if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    discarded =
+                        db.membershipPaymentDao().discardRejectedPreparation(actionId) == 1
+                }
+            ) return@launch
+            notice.value = if (discarded) {
+                "Rejected preparation discarded. No membership or payment had been created."
+            } else {
+                "This record cannot be discarded because its server or money state needs reconciliation."
+            }
         }
     }
 
@@ -1381,8 +1440,8 @@ class MembershipsViewModel : ViewModel() {
                 var captureError: String? = null
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) commit@{
                         val profile = appCtx.shiftCache.profile.value
-                        if (!canManageMembershipMoney(profile)) {
-                            captureError = "Only a protected owner can resolve legacy refund evidence."
+                        if (!canRecoverLegacyMembershipEvidence(profile)) {
+                            captureError = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
                             return@commit
                         }
                         val terminalId = appCtx.terminalStore.terminalId()
@@ -1475,6 +1534,15 @@ class MembershipsViewModel : ViewModel() {
     fun retryRefundAction(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            val action = db.membershipRefundMoneyDao().actionById(actionId)
+            if (
+                action != null &&
+                membershipRefundActionRequiresAuditControl(action.kind, action.state) &&
+                !canRecoverLegacyMembershipEvidence(appCtx.shiftCache.profile.value)
+            ) {
+                notice.value = MEMBERSHIP_AUDIT_CONTROL_MESSAGE
+                return@launch
+            }
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipRefundMoneyDao().retryAction(actionId)
                 }

@@ -33,6 +33,33 @@ data class CustomerCacheEntity(
     val notes: String?,
 )
 
+/**
+ * Recent server-authoritative purchases for one stable customer id. This is a
+ * read cache, not an accounting ledger: the backend remains authoritative and
+ * a scoped refresh replaces this customer's complete bounded result set.
+ */
+@Entity(
+    tableName = "customer_order_history_cache",
+    indices = [Index("customerId"), Index("createdAt")],
+)
+data class CustomerOrderHistoryEntity(
+    @PrimaryKey val id: String,
+    val customerId: String,
+    val invoiceNo: String?,
+    val status: String,
+    val type: String,
+    val sourceLabel: String?,
+    val totalMinor: Long,
+    val paidMinor: Long,
+    val refundedMinor: Long,
+    val pointsRedeemedMinor: Long,
+    val itemsCount: Int,
+    /** Comma-separated normalized payment rails; values contain no commas. */
+    val paymentMethods: String,
+    val createdAt: String,
+    val invoiceIssuedAt: String?,
+)
+
 object CustomerWriteState {
     const val PENDING = "pending"
     const val SYNCED = "synced"

@@ -3,7 +3,9 @@ package cloud.dcompany.erp.ui.screens.analytics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.BranchScopeMismatchException
 import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
+import cloud.dcompany.erp.core.auth.verifyBranchScopedPayload
 import cloud.dcompany.erp.core.db.cached
 import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
@@ -79,8 +81,19 @@ internal fun supplementalListPresentation(
 }
 
 internal fun analyticsLoadError(error: Throwable, fallback: String): String = when (error) {
+    is BranchScopeMismatchException -> error.message
+        ?: "Could not verify which branch these figures belong to."
     is ApiException -> error.message?.takeIf(String::isNotBlank) ?: fallback
     else -> "$fallback Check the connection and try again."
+}
+
+internal fun verifyTopItemBranches(expectedBranchId: String?, rows: List<TopItem>) {
+    // An empty list has no row-level branch echo, but it still must not be
+    // displayed outside a verified branch scope.
+    verifyBranchScopedPayload(expectedBranchId, expectedBranchId, "item ranking")
+    rows.forEach {
+        verifyBranchScopedPayload(expectedBranchId, it.branchId, "item ranking")
+    }
 }
 
 /**
@@ -139,11 +152,24 @@ class AnalyticsViewModel : ViewModel() {
         todayJob?.cancel()
         val today = businessToday()
         val key = "dashboard:$today"
+        val expectedBranchId = cacheIsolation.currentLease()?.scope?.branchId
         _state.value = _state.value.copy(todayLoading = true, todayError = null)
         todayJob = viewModelScope.launch {
             try {
+                verifyBranchScopedPayload(
+                    expectedBranchId,
+                    expectedBranchId,
+                    "analytics dashboard",
+                )
                 db.reportSnapshotDao().cached<DashboardKpis>(key)?.let { (cachedValue, fetchedAt) ->
-                    if (requestId == todaySerial) {
+                    val belongsToActiveBranch = runCatching {
+                        verifyBranchScopedPayload(
+                            expectedBranchId,
+                            cachedValue.branchId,
+                            "saved dashboard",
+                        )
+                    }.isSuccess
+                    if (belongsToActiveBranch && requestId == todaySerial) {
                         _state.value = _state.value.copy(
                             dashboard = cachedValue,
                             dashboardFetchedAtMillis = fetchedAt,
@@ -152,13 +178,23 @@ class AnalyticsViewModel : ViewModel() {
                 }
                 lateinit var dashboard: DashboardKpis
                 val committed = cacheIsolation.fetchAndCommitScoped(
-                    fetch = { api.dashboard(today.toString()) },
+                    fetch = {
+                        api.dashboard(today.toString()).also {
+                            verifyBranchScopedPayload(
+                                expectedBranchId,
+                                it.branchId,
+                                "analytics dashboard",
+                            )
+                        }
+                    },
                     store = {
                         dashboard = it
                         db.reportSnapshotDao().store(key, it)
                     },
                 )
-                if (!committed || requestId != todaySerial) return@launch
+                if (!committed || requestId != todaySerial) {
+                    return@launch
+                }
                 val now = System.currentTimeMillis()
                 _state.value = _state.value.copy(
                     dashboard = dashboard,
@@ -187,6 +223,7 @@ class AnalyticsViewModel : ViewModel() {
         val s = _state.value
         val today = businessToday()
         val key = "growth:${s.growthPeriod.query}:$today"
+        val expectedBranchId = cacheIsolation.currentLease()?.scope?.branchId
         // Cleared immediately, same reasoning as ReportsViewModel.load(): a
         // period switch must not go on showing the PREVIOUS period's
         // comparison under the newly-selected chip while this period's own
@@ -194,8 +231,20 @@ class AnalyticsViewModel : ViewModel() {
         _state.value = s.copy(growthLoading = true, growthError = null, growth = null, growthFetchedAtMillis = null)
         growthJob = viewModelScope.launch {
             try {
+                verifyBranchScopedPayload(
+                    expectedBranchId,
+                    expectedBranchId,
+                    "growth comparison",
+                )
                 db.reportSnapshotDao().cached<GrowthData>(key)?.let { (cachedValue, fetchedAt) ->
-                    if (requestId == growthSerial) {
+                    val belongsToActiveBranch = runCatching {
+                        verifyBranchScopedPayload(
+                            expectedBranchId,
+                            cachedValue.branchId,
+                            "saved growth comparison",
+                        )
+                    }.isSuccess
+                    if (belongsToActiveBranch && requestId == growthSerial) {
                         _state.value = _state.value.copy(
                             growth = cachedValue,
                             growthFetchedAtMillis = fetchedAt,
@@ -204,13 +253,23 @@ class AnalyticsViewModel : ViewModel() {
                 }
                 lateinit var growth: GrowthData
                 val committed = cacheIsolation.fetchAndCommitScoped(
-                    fetch = { api.growth(s.growthPeriod.query) },
+                    fetch = {
+                        api.growth(s.growthPeriod.query).also {
+                            verifyBranchScopedPayload(
+                                expectedBranchId,
+                                it.branchId,
+                                "growth comparison",
+                            )
+                        }
+                    },
                     store = {
                         growth = it
                         db.reportSnapshotDao().store(key, it)
                     },
                 )
-                if (!committed || requestId != growthSerial) return@launch
+                if (!committed || requestId != growthSerial) {
+                    return@launch
+                }
                 val now = System.currentTimeMillis()
                 _state.value = _state.value.copy(
                     growth = growth, growthFetchedAtMillis = now, growthError = null,
@@ -242,11 +301,16 @@ class AnalyticsViewModel : ViewModel() {
         val today = businessToday()
         val from = today.withDayOfMonth(1)
         val key = "top-items:$from:$today:10"
+        val expectedBranchId = cacheIsolation.currentLease()?.scope?.branchId
         _state.value = _state.value.copy(topItemsLoading = true, topItemsError = null)
         topItemsJob = viewModelScope.launch {
             try {
+                verifyTopItemBranches(expectedBranchId, emptyList())
                 db.reportSnapshotDao().cached<List<TopItem>>(key)?.let { (cachedValue, fetchedAt) ->
-                    if (requestId == topItemsSerial) {
+                    val belongsToActiveBranch = runCatching {
+                        verifyTopItemBranches(expectedBranchId, cachedValue)
+                    }.isSuccess
+                    if (belongsToActiveBranch && requestId == topItemsSerial) {
                         _state.value = _state.value.copy(
                             topItems = cachedValue,
                             topItemsFetchedAtMillis = fetchedAt,
@@ -255,13 +319,19 @@ class AnalyticsViewModel : ViewModel() {
                 }
                 lateinit var topItems: List<TopItem>
                 val committed = cacheIsolation.fetchAndCommitScoped(
-                    fetch = { api.topItems(from.toString(), today.toString(), 10) },
+                    fetch = {
+                        api.topItems(from.toString(), today.toString(), 10).also {
+                            verifyTopItemBranches(expectedBranchId, it)
+                        }
+                    },
                     store = {
                         topItems = it
                         db.reportSnapshotDao().store(key, it)
                     },
                 )
-                if (!committed || requestId != topItemsSerial) return@launch
+                if (!committed || requestId != topItemsSerial) {
+                    return@launch
+                }
                 _state.value = _state.value.copy(
                     topItems = topItems,
                     topItemsFetchedAtMillis = System.currentTimeMillis(),

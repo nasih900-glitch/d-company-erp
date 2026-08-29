@@ -8,33 +8,157 @@ import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
 import pytest
 from psycopg import sql
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Branch,
     Company,
     Customer,
-    Order,
-    Payment,
     PosRefundCashHandoff,
     PosRefundCashHandoffCompletion,
     PosRefundProviderPayoutStart,
     PosRefundRequest,
-    Refund,
     Shift,
-    Terminal,
     User,
 )
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _insert_legacy_branch(
+    session: Session,
+    *,
+    company_id,
+) -> SimpleNamespace:
+    """Insert only columns present in the migration-under-test schema."""
+
+    branch_id = uuid4()
+    session.execute(
+        text(
+            "INSERT INTO branches (id, company_id, name) "
+            "VALUES (:id, :company_id, 'Main')"
+        ),
+        {"id": branch_id, "company_id": company_id},
+    )
+    return SimpleNamespace(id=branch_id)
+
+
+def _insert_legacy_terminal(
+    session: Session,
+    *,
+    branch_id,
+    name: str,
+    device_id: str,
+) -> SimpleNamespace:
+    """Insert only terminal columns present before revision 0052."""
+
+    terminal_id = uuid4()
+    session.execute(
+        text(
+            "INSERT INTO terminals (id, branch_id, name, device_id) "
+            "VALUES (:id, :branch_id, :name, :device_id)"
+        ),
+        {
+            "id": terminal_id,
+            "branch_id": branch_id,
+            "name": name,
+            "device_id": device_id,
+        },
+    )
+    return SimpleNamespace(id=terminal_id)
+
+
+def _insert_legacy_order(
+    session: Session,
+    *,
+    company_id,
+    branch_id,
+    terminal_id,
+    shift_id,
+    opened_by,
+    customer_id=None,
+    amount_minor: int,
+    occurred_at: datetime,
+) -> SimpleNamespace:
+    """Insert the exact common 0034-0036 order shape, not today's ORM."""
+
+    order_id = uuid4()
+    session.execute(
+        text(
+            """
+            INSERT INTO orders (
+                id, company_id, branch_id, terminal_id, shift_id, opened_by,
+                customer_id, type, status, subtotal_minor, total_minor,
+                opened_at, closed_at
+            ) VALUES (
+                :id, :company_id, :branch_id, :terminal_id, :shift_id,
+                :opened_by, :customer_id, 'takeaway', 'paid', :amount_minor,
+                :amount_minor, :occurred_at, :occurred_at
+            )
+            """
+        ),
+        {
+            "id": order_id,
+            "company_id": company_id,
+            "branch_id": branch_id,
+            "terminal_id": terminal_id,
+            "shift_id": shift_id,
+            "opened_by": opened_by,
+            "customer_id": customer_id,
+            "amount_minor": amount_minor,
+            "occurred_at": occurred_at,
+        },
+    )
+    return SimpleNamespace(id=order_id)
+
+
+def _insert_legacy_payment(
+    session: Session,
+    *,
+    order_id,
+    shift_id,
+    method: str,
+    amount_minor: int,
+    paid_at: datetime,
+    ref_external: str | None = None,
+) -> SimpleNamespace:
+    """Insert only payment columns available before source revision 0048."""
+
+    payment_id = uuid4()
+    is_cash = method == "cash"
+    session.execute(
+        text(
+            """
+            INSERT INTO payments (
+                id, order_id, shift_id, method, amount_minor, tendered_minor,
+                change_minor, ref_external, paid_at
+            ) VALUES (
+                :id, :order_id, :shift_id, :method, :amount_minor,
+                :tendered_minor, :change_minor, :ref_external, :paid_at
+            )
+            """
+        ),
+        {
+            "id": payment_id,
+            "order_id": order_id,
+            "shift_id": shift_id,
+            "method": method,
+            "amount_minor": amount_minor,
+            "tendered_minor": amount_minor if is_cash else None,
+            "change_minor": 0 if is_cash else None,
+            "ref_external": ref_external,
+            "paid_at": paid_at,
+        },
+    )
+    return SimpleNamespace(id=payment_id)
 
 
 def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -136,9 +260,11 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
         try:
             with Session(engine) as session:
                 company = Company(id=uuid4(), name="0034 downgrade guard")
-                branch = Branch(id=uuid4(), company_id=company.id, name="Main")
-                terminal = Terminal(
-                    id=uuid4(),
+                session.add(company)
+                session.flush()
+                branch = _insert_legacy_branch(session, company_id=company.id)
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Guard terminal",
                     device_id=f"guard-{uuid4()}",
@@ -160,11 +286,7 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                 # These models expose IDs instead of relationships; make the
                 # FK order explicit so this test proves the migration rather
                 # than SQLAlchemy's unit-of-work dependency heuristics.
-                session.add(company)
-                session.flush()
-                session.add_all([branch, owner, customer])
-                session.flush()
-                session.add(terminal)
+                session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
                 shift = Shift(
@@ -180,22 +302,16 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                 )
                 session.add(shift)
                 session.flush()
-                session.add(
-                    Order(
-                        id=uuid4(),
-                        company_id=company.id,
-                        branch_id=branch.id,
-                        terminal_id=terminal.id,
-                        shift_id=shift.id,
-                        opened_by=owner.id,
-                        customer_id=customer.id,
-                        type="takeaway",
-                        status="paid",
-                        subtotal_minor=100,
-                        total_minor=100,
-                        opened_at=now,
-                        closed_at=now,
-                    )
+                _insert_legacy_order(
+                    session,
+                    company_id=company.id,
+                    branch_id=branch.id,
+                    terminal_id=terminal.id,
+                    shift_id=shift.id,
+                    opened_by=owner.id,
+                    customer_id=customer.id,
+                    amount_minor=100,
+                    occurred_at=now,
                 )
                 session.commit()
         finally:
@@ -242,9 +358,11 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
         try:
             with Session(engine) as session:
                 company = Company(id=uuid4(), name="0036 orphan provider guard")
-                branch = Branch(id=uuid4(), company_id=company.id, name="Main")
-                terminal = Terminal(
-                    id=uuid4(),
+                session.add(company)
+                session.flush()
+                branch = _insert_legacy_branch(session, company_id=company.id)
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Orphan provider terminal",
                     device_id=f"orphan-provider-{uuid4()}",
@@ -257,13 +375,8 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                     password_hash="not-used-by-migration-test",
                     status="active",
                 )
-                session.add(company)
+                session.add(owner)
                 session.flush()
-                session.add_all([branch, owner])
-                session.flush()
-                session.add(terminal)
-                session.flush()
-
                 now = datetime.now(UTC)
                 shift = Shift(
                     id=uuid4(),
@@ -278,22 +391,16 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                 )
                 session.add(shift)
                 session.flush()
-                order = Order(
-                    id=uuid4(),
+                order = _insert_legacy_order(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     shift_id=shift.id,
                     opened_by=owner.id,
-                    type="takeaway",
-                    status="paid",
-                    subtotal_minor=10_000,
-                    total_minor=10_000,
-                    opened_at=now,
-                    closed_at=now,
+                    amount_minor=10_000,
+                    occurred_at=now,
                 )
-                session.add(order)
-                session.flush()
                 session.add(
                     PosRefundRequest(
                         id=uuid4(),
@@ -359,9 +466,11 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
         try:
             with Session(engine) as session:
                 company = Company(id=uuid4(), name="0036 legacy LTV guard")
-                branch = Branch(id=uuid4(), company_id=company.id, name="Main")
-                terminal = Terminal(
-                    id=uuid4(),
+                session.add(company)
+                session.flush()
+                branch = _insert_legacy_branch(session, company_id=company.id)
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Legacy LTV terminal",
                     device_id=f"legacy-ltv-{uuid4()}",
@@ -381,11 +490,7 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
                     phone=f"5{uuid4().int % 10**9:09d}",
                     total_spent_minor=10_000,
                 )
-                session.add(company)
-                session.flush()
-                session.add_all([branch, owner, customer])
-                session.flush()
-                session.add(terminal)
+                session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
                 shift = Shift(
@@ -401,34 +506,25 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
                 )
                 session.add(shift)
                 session.flush()
-                order = Order(
-                    id=uuid4(),
+                order = _insert_legacy_order(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     shift_id=shift.id,
                     opened_by=owner.id,
                     customer_id=customer.id,
-                    type="takeaway",
-                    status="paid",
-                    subtotal_minor=10_000,
-                    total_minor=10_000,
-                    opened_at=now,
-                    closed_at=now,
+                    amount_minor=10_000,
+                    occurred_at=now,
                 )
-                session.add(order)
-                session.flush()
-                session.add(
-                    Payment(
-                        id=uuid4(),
-                        order_id=order.id,
-                        shift_id=shift.id,
-                        method="cash",
-                        amount_minor=10_000,
-                        paid_at=now,
-                    )
+                _insert_legacy_payment(
+                    session,
+                    order_id=order.id,
+                    shift_id=shift.id,
+                    method="cash",
+                    amount_minor=10_000,
+                    paid_at=now,
                 )
-                session.flush()
                 # Use the exact pre-0036 shape: the reconciliation-state column
                 # does not exist yet, and no financial/customer value is inferred.
                 session.execute(
@@ -566,9 +662,11 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
         try:
             with Session(engine) as session:
                 company = Company(id=uuid4(), name="0036 downgrade guard")
-                branch = Branch(id=uuid4(), company_id=company.id, name="Main")
-                terminal = Terminal(
-                    id=uuid4(),
+                session.add(company)
+                session.flush()
+                branch = _insert_legacy_branch(session, company_id=company.id)
+                terminal = _insert_legacy_terminal(
+                    session,
                     branch_id=branch.id,
                     name="Guard terminal",
                     device_id=f"guard-0036-{uuid4()}",
@@ -587,13 +685,8 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                     name="Guard customer",
                     phone=f"6{uuid4().int % 10**9:09d}",
                 )
-                session.add(company)
+                session.add_all([owner, customer])
                 session.flush()
-                session.add_all([branch, owner, customer])
-                session.flush()
-                session.add(terminal)
-                session.flush()
-
                 now = datetime.now(UTC)
                 shift = Shift(
                     id=uuid4(),
@@ -608,37 +701,26 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                 )
                 session.add(shift)
                 session.flush()
-                order = Order(
-                    id=uuid4(),
+                order = _insert_legacy_order(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     shift_id=shift.id,
                     opened_by=owner.id,
                     customer_id=customer.id,
-                    type="takeaway",
-                    status="paid",
-                    subtotal_minor=10_000,
-                    total_minor=10_000,
-                    opened_at=now,
-                    closed_at=now,
+                    amount_minor=10_000,
+                    occurred_at=now,
                 )
-                session.add(order)
-                session.flush()
-                session.add(
-                    Payment(
-                        id=uuid4(),
-                        order_id=order.id,
-                        shift_id=shift.id,
-                        method=(
-                            "upi" if workflow_state == "provider_start" else "cash"
-                        ),
-                        amount_minor=10_000,
-                        paid_at=now,
-                        ref_external="sale-reference",
-                    )
+                _insert_legacy_payment(
+                    session,
+                    order_id=order.id,
+                    shift_id=shift.id,
+                    method=("upi" if workflow_state == "provider_start" else "cash"),
+                    amount_minor=10_000,
+                    paid_at=now,
+                    ref_external="sale-reference",
                 )
-                session.flush()
                 request = PosRefundRequest(
                     id=uuid4(),
                     company_id=company.id,
@@ -711,39 +793,57 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                     )
                     session.flush()
                     if workflow_state == "cash_settlement":
-                        session.add(
-                            Refund(
-                                id=uuid4(),
-                                request_id=request.id,
-                                order_id=order.id,
-                                company_id=company.id,
-                                branch_id=branch.id,
-                                terminal_id=terminal.id,
-                                settlement_shift_id=shift.id,
-                                approved_by=owner.id,
-                                manager_override_user_id=None,
-                                reason_code="CUSTOMER_REQUEST",
-                                amount_minor=10_000,
-                                mode="cash",
-                                settlement_method="cash",
-                                settled_at=now,
-                                settled_by=owner.id,
-                                external_reference=None,
-                                provider_settled_at=None,
-                                client_occurred_at=now,
-                                captured_time_reconciled=True,
-                                provider_evidence_reconciled=None,
-                                settlement_idempotency_key=(
-                                    f"downgrade-settle:{uuid4()}"
-                                ),
-                                receipt_no=(
+                        # This disposable database is intentionally pinned to
+                        # revision 0036. The current Refund ORM includes later
+                        # columns (for example 0043 loyalty reconciliation),
+                        # so using it here would test model/schema skew instead
+                        # of 0036's downgrade guard. Insert only the exact 0036
+                        # wire columns through schema-appropriate SQL.
+                        session.execute(
+                            text(
+                                """
+                                INSERT INTO refunds (
+                                    id, request_id, order_id, company_id,
+                                    branch_id, terminal_id, settlement_shift_id,
+                                    approved_by, manager_override_user_id,
+                                    reason_code, amount_minor, mode,
+                                    settlement_method, settled_at, settled_by,
+                                    external_reference, provider_settled_at,
+                                    client_occurred_at, captured_time_reconciled,
+                                    provider_evidence_reconciled,
+                                    settlement_idempotency_key, receipt_no,
+                                    receipt_fiscal_year, receipt_issued_at,
+                                    customer_spend_reconciled, note
+                                ) VALUES (
+                                    :id, :request_id, :order_id, :company_id,
+                                    :branch_id, :terminal_id, :shift_id,
+                                    :approved_by, NULL, 'CUSTOMER_REQUEST',
+                                    10000, 'cash', 'cash', :settled_at,
+                                    :settled_by, NULL, NULL, :client_occurred_at,
+                                    true, NULL, :idempotency_key, :receipt_no,
+                                    '2026-27', :receipt_issued_at, true,
+                                    '0036 downgrade proof'
+                                )
+                                """
+                            ),
+                            {
+                                "id": uuid4(),
+                                "request_id": request.id,
+                                "order_id": order.id,
+                                "company_id": company.id,
+                                "branch_id": branch.id,
+                                "terminal_id": terminal.id,
+                                "shift_id": shift.id,
+                                "approved_by": owner.id,
+                                "settled_at": now,
+                                "settled_by": owner.id,
+                                "client_occurred_at": now,
+                                "idempotency_key": f"downgrade-settle:{uuid4()}",
+                                "receipt_no": (
                                     f"R/RF/26-27/{uuid4().int % 100000:05d}"
                                 ),
-                                receipt_fiscal_year="2026-27",
-                                receipt_issued_at=now,
-                                customer_spend_reconciled=True,
-                                note="0036 downgrade proof",
-                            )
+                                "receipt_issued_at": now,
+                            },
                         )
                 session.commit()
         finally:

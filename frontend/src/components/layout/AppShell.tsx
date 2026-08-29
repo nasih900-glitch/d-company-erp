@@ -2,69 +2,58 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Calculator, LayoutGrid, BookOpen, Boxes, Gamepad2,
-  Wallet, ScanLine, Users, BarChart3, LogOut, Tv, Settings, Menu, X, FileText,
+  Wallet, ScanLine, Users, LogOut, Tv, Settings, Menu, X, FileText,
   ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
+  MessageSquareWarning, RotateCcw,
+  CreditCard, HelpCircle, LayoutDashboard,
+  type LucideIcon,
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
+import { hasAdminSystemAccess } from '@/lib/admin-access';
 import { rolesLabel } from '@/lib/roles';
+import { canAccessRefunds } from '@/modules/refunds/refund-policy';
+import { canViewMemberships } from '@/modules/memberships/membership-policy';
+import {
+  canManageGamingCentreProducts,
+  GAMING_CENTRE_TERMINAL_POLICY,
+  visibleProfileNavigationGroups,
+  type ProfileNavIcon,
+} from '@/lib/product-profile';
 import InstallButton from './InstallButton';
 import ConnectivityBanner from './ConnectivityBanner';
+import SupportLauncher, { openSupportLauncher } from '@/components/support/SupportLauncher';
+import { bugReports } from '@/lib/erp-api';
+import { subscribeRealtime } from '@/lib/realtime';
 
-// `module` matches a key in the backend's MODULE_PERMISSIONS — used to hide
-// a tab when the caller's role/company access-control override says no.
-// Tabs without a `module` are visible to everyone, same as before this existed.
-//
-// Grouped so the screens staff open constantly during a shift aren't mixed
-// in with occasional setup/admin screens — mirrors the same grouping used
-// in the native app's Workspace list. Every route/link below is unchanged,
-// only organized into sections.
-const NAV_GROUPS = [
-  {
-    title: 'Daily Operations',
-    items: [
-      { to: '/pos',        label: 'POS',        Icon: Calculator },
-      { to: '/operations', label: 'Operations', Icon: ClipboardList },
-      { to: '/tables',     label: 'Tables',     Icon: LayoutGrid },
-      { to: '/kitchen',    label: 'Kitchen',    Icon: ChefHat },
-      { to: '/gaming',     label: 'Gaming',     Icon: Gamepad2 },
-      { to: '/reservations', label: 'Reservations', Icon: CalendarClock },
-      { to: '/customers',  label: 'Customers',  Icon: UserCircle },
-    ],
-  },
-  {
-    title: 'Catalog & Stock',
-    items: [
-      { to: '/menu',      label: 'Menu',      Icon: BookOpen },
-      { to: '/inventory', label: 'Inventory', Icon: Boxes, module: 'inventory' },
-      { to: '/events',    label: 'Events',    Icon: Tv },
-    ],
-  },
-  {
-    title: 'Reports & Money',
-    items: [
-      { to: '/ocr',       label: 'OCR',       Icon: ScanLine },
-      { to: '/analytics', label: 'Analytics', Icon: BarChart3, module: 'insights_reports' },
-      { to: '/insights',  label: 'Insights',  Icon: Sparkles, module: 'insights_reports' },
-      { to: '/reports',   label: 'Reports',   Icon: FileText, module: 'insights_reports' },
-      { to: '/finance',   label: 'Finance',   Icon: Wallet },
-    ],
-  },
-  {
-    title: 'Setup',
-    items: [
-      { to: '/staff',    label: 'Staff',     Icon: Users },
-      { to: '/audit',    label: 'Audit Log', Icon: ShieldCheck, protectedOnly: true },
-      { to: '/settings', label: 'Settings',  Icon: Settings },
-    ],
-  },
-];
-
-const NAV = NAV_GROUPS.flatMap((g) => g.items);
+const NAV_ICONS: Record<ProfileNavIcon, LucideIcon> = {
+  gaming: Gamepad2,
+  pos: Calculator,
+  shift: ClipboardList,
+  stock: Boxes,
+  help: HelpCircle,
+  dashboard: LayoutDashboard,
+  finance: Wallet,
+  reports: FileText,
+  staff: Users,
+  settings: Settings,
+  audit: ShieldCheck,
+  supportInbox: MessageSquareWarning,
+  tables: LayoutGrid,
+  kitchen: ChefHat,
+  reservations: CalendarClock,
+  customers: UserCircle,
+  memberships: CreditCard,
+  menu: BookOpen,
+  events: Tv,
+  ocr: ScanLine,
+  refunds: RotateCcw,
+  insights: Sparkles,
+};
 
 export default function AppShell({ children }: { children?: ReactNode }) {
   const {
-    me, logout, demo, terminalReady, terminalOptions, terminalIssue, selectTerminal,
+    me, logout, demo, terminalId, terminalReady, terminalOptions, terminalIssue, selectTerminal,
   } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const loc = useLocation();
@@ -74,24 +63,33 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   // backend will 403 on (see core/permissions.py's admin.audit.read carve-out).
   const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
+  const hasSystemAccess = hasAdminSystemAccess(me);
+  const hasRefundAccess = Boolean(demo || canAccessRefunds(me));
+  const hasMembershipAccess = Boolean(demo || canViewMemberships(me));
+  const hasProductManagementAccess = canManageGamingCentreProducts(me, demo);
+  const [supportUnread, setSupportUnread] = useState(0);
   const accessibleModules = me?.accessible_modules;
-  const isVisible = useCallback(
-    (item: (typeof NAV)[number]) => {
-      if ('protectedOnly' in item && !hasAuditAccess) return false;
-      if (item.module && !isProtectedOwner && accessibleModules && !accessibleModules.includes(item.module)) {
-        return false;
-      }
-      return true;
-    },
-    [isProtectedOwner, hasAuditAccess, accessibleModules],
-  );
   const navGroups = useMemo(
-    () => NAV_GROUPS
-      .map((g) => ({ ...g, items: g.items.filter(isVisible) }))
-      .filter((g) => g.items.length > 0),
-    [isVisible],
+    () => visibleProfileNavigationGroups({
+      isOwner: isProtectedOwner,
+      hasAuditAccess,
+      hasSystemAccess,
+      hasRefundAccess,
+      hasMembershipAccess,
+      hasProductManagementAccess,
+      accessibleModules,
+    }),
+    [
+      accessibleModules,
+      hasAuditAccess,
+      hasMembershipAccess,
+      hasProductManagementAccess,
+      hasRefundAccess,
+      hasSystemAccess,
+      isProtectedOwner,
+    ],
   );
-  const navItems = useMemo(() => NAV.filter(isVisible), [isVisible]);
+  const navItems = useMemo(() => navGroups.flatMap((group) => group.items), [navGroups]);
 
   const current = useMemo(
     () => navItems.find((n) => n.to === loc.pathname),
@@ -106,6 +104,31 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       .join(''),
     [me?.name],
   );
+  const selectedTerminal = useMemo(
+    () => terminalOptions.find((terminal) => terminal.id === terminalId) ?? null,
+    [terminalId, terminalOptions],
+  );
+
+  const refreshSupportSummary = useCallback(() => {
+    if (!hasSystemAccess || demo) {
+      setSupportUnread(0);
+      return;
+    }
+    const controller = new AbortController();
+    void bugReports.inboxSummary(controller.signal)
+      .then((summary) => setSupportUnread(summary.unread))
+      .catch(() => { /* the protected inbox itself shows actionable load errors */ });
+    return () => controller.abort();
+  }, [demo, hasSystemAccess]);
+
+  useEffect(() => {
+    const abort = refreshSupportSummary();
+    const unsubscribe = subscribeRealtime('bug_reports', refreshSupportSummary);
+    return () => {
+      abort?.();
+      unsubscribe();
+    };
+  }, [refreshSupportSummary]);
 
   // Close the drawer whenever the route changes.
   const onNavigate = () => setDrawerOpen(false);
@@ -208,22 +231,51 @@ export default function AppShell({ children }: { children?: ReactNode }) {
               <p className="px-3 pt-1 text-[10px] font-bold uppercase tracking-wider text-fg-muted/70">
                 {group.title}
               </p>
-              {group.items.map(({ to, label, Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  onClick={onNavigate}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +
-                    (isActive
-                      ? 'bg-bg-raised text-fg shadow-glow'
-                      : 'text-fg-muted hover:text-fg hover:bg-bg-raised/50 active:scale-[0.98]')
-                  }
-                >
-                  <Icon size={18} />
-                  {label}
-                </NavLink>
-              ))}
+              {group.items.map((item) => {
+                const Icon = NAV_ICONS[item.icon];
+                const content = (
+                  <>
+                    <Icon size={18} />
+                    {item.label}
+                    {item.to === '/bug-reports' && supportUnread > 0 && (
+                      <span className="ml-auto grid min-w-5 place-items-center rounded-full bg-accent-bad px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        {Math.min(supportUnread, 99)}
+                      </span>
+                    )}
+                  </>
+                );
+                if (item.action === 'help') {
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        onNavigate();
+                        openSupportLauncher();
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-fg-muted hover:bg-bg-raised/50 hover:text-fg active:scale-[0.98]"
+                    >
+                      {content}
+                    </button>
+                  );
+                }
+                if (!item.to) return null;
+                return (
+                  <NavLink
+                    key={item.id}
+                    to={item.to}
+                    onClick={onNavigate}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +
+                      (isActive
+                        ? 'bg-bg-raised text-fg shadow-glow'
+                        : 'text-fg-muted hover:text-fg hover:bg-bg-raised/50 active:scale-[0.98]')
+                    }
+                  >
+                    {content}
+                  </NavLink>
+                );
+              })}
             </div>
           ))}
         </nav>
@@ -238,6 +290,35 @@ export default function AppShell({ children }: { children?: ReactNode }) {
           <div className="px-2 py-3">
             <p className="text-sm font-medium">{me?.name}</p>
             <p className="text-xs text-fg-muted">{rolesLabel(me?.roles)}</p>
+            {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
+              && selectedTerminal && terminalOptions.length > 1 && (
+              <p className="mt-1 text-xs text-fg-muted">Terminal · {selectedTerminal.name}</p>
+            )}
+            {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
+              && terminalOptions.length > 1 && (
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                  Work terminal
+                </span>
+                <select
+                  className="input !min-h-[42px] !py-2 text-xs"
+                  value={terminalId ?? ''}
+                  onChange={(event) => selectTerminal(event.target.value)}
+                  aria-label="Change work terminal"
+                >
+                  {terminalOptions.map((terminal) => (
+                    <option key={terminal.id} value={terminal.id}>
+                      {terminal.name} · {terminal.purpose === 'gaming'
+                        ? 'Gaming'
+                        : terminal.purpose === 'cafe_pos' ? 'POS' : 'Combined'}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-[10px] leading-4 text-fg-muted">
+                  Drafts and open-shift selection stay separate for each terminal.
+                </span>
+              </label>
+            )}
           </div>
           <button onClick={logout} className="btn btn-ghost w-full mt-2">
             <LogOut size={16} /> Sign out
@@ -264,9 +345,10 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         <ConnectivityBanner />
         {!terminalReady && terminalIssue && (
           <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
-            <div className="font-semibold text-accent-gold">Terminal setup required</div>
+            <div className="font-semibold text-accent-gold">Shared register setup needs attention</div>
             <p className="mt-1 text-fg-muted">{terminalIssue}</p>
-            {terminalOptions.length > 1 && (
+            {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
+              && terminalOptions.length > 1 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {terminalOptions.map((terminal) => (
                   <button
@@ -283,6 +365,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         )}
         {children ?? <Outlet />}
       </main>
+      <SupportLauncher inboxUnread={hasSystemAccess ? supportUnread : 0} />
     </div>
   );
 }

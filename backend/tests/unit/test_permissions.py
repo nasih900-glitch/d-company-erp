@@ -72,6 +72,8 @@ def test_low_privilege_roles_never_default_to_sensitive_business_actions() -> No
     denied = {
         "admin.system",
         "admin.audit.read",
+        "settings.manage",
+        "memberships.manage",
         "staff.write",
         "staff.payroll.write",
         "finance.write",
@@ -151,6 +153,8 @@ def test_auditor_role_is_read_only() -> None:
         "staff.payroll.write",
         "admin.audit.read",
         "admin.system",
+        "settings.manage",
+        "memberships.manage",
     }
     assert auditor_perms.isdisjoint(mutating)
     # Every permission granted is declared and every mutating one accounted for.
@@ -238,6 +242,8 @@ async def test_effective_permissions_keep_admin_access_audit_only() -> None:
 
     session.execute.assert_not_awaited()
     assert "finance.write" in granted
+    assert "settings.manage" in granted
+    assert "memberships.manage" in granted
     assert "admin.audit.read" not in granted
     assert "admin.system" not in granted
 
@@ -291,7 +297,23 @@ def test_all_role_perms_are_declared() -> None:
 
 def test_co_owner_role_matches_owner_permissions_exactly() -> None:
     assert ROLE_PERMISSIONS["co_owner"] == ROLE_PERMISSIONS["owner"]
+    assert "settings.manage" in ROLE_PERMISSIONS["co_owner"]
+    assert "memberships.manage" in ROLE_PERMISSIONS["co_owner"]
     assert "admin.audit.read" not in ROLE_PERMISSIONS["co_owner"]
+    assert "admin.system" not in ROLE_PERMISSIONS["co_owner"]
+
+
+async def test_owner_management_permissions_do_not_grant_protected_admin_controls() -> None:
+    owner = _tenant(protected_access=False, roles=("owner",))
+    manager = _tenant(protected_access=False, roles=("manager",))
+
+    assert await _has_permission(None, owner, "settings.manage") is True
+    assert await _has_permission(None, owner, "memberships.manage") is True
+    assert await _has_permission(None, owner, "admin.audit.read") is False
+    assert await _has_permission(None, owner, "admin.system") is False
+
+    assert await _has_permission(None, manager, "settings.manage") is False
+    assert await _has_permission(None, manager, "memberships.manage") is False
 
 
 async def test_protected_access_never_leaks_admin_audit_read() -> None:
@@ -305,6 +327,49 @@ async def test_protected_access_never_leaks_admin_audit_read() -> None:
     # The blanket bypass still applies to operational permissions.
     assert await _has_permission(None, co_owner, "finance.write") is True
     assert await _has_permission(None, co_owner, "staff.write") is True
+    assert await _has_permission(None, co_owner, "settings.manage") is True
+    assert await _has_permission(None, co_owner, "memberships.manage") is True
+
+
+async def test_gaming_stop_permission_keeps_partner_and_owner_boundaries() -> None:
+    """Normal session Stop is a gaming.write operation, not an audit repair.
+
+    A company may explicitly delegate the Gaming module to a partner, while a
+    default read-only partner and ordinary service staff remain unable to
+    mutate sessions. Owners, co-owners and gaming supervisors keep their
+    normal operational access; co-owner access still cannot cross the hard
+    audit/system boundary.
+    """
+    partner = _tenant(protected_access=False, roles=("partner",))
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=None),
+    ):
+        assert await _has_permission(None, partner, "gaming.write") is False
+
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=True),
+    ):
+        assert await _has_permission(None, partner, "gaming.write") is True
+        # Module delegation never turns a partner into the protected auditor.
+        assert await _has_permission(None, partner, "admin.audit.read") is False
+        assert await _has_permission(None, partner, "admin.system") is False
+
+    staff = _tenant(protected_access=False, roles=("staff",))
+    owner = _tenant(protected_access=False, roles=("owner",))
+    gaming_supervisor = _tenant(protected_access=False, roles=("gaming_supervisor",))
+    with patch(
+        "app.core.permissions._module_override",
+        new=AsyncMock(return_value=None),
+    ):
+        assert await _has_permission(None, staff, "gaming.write") is False
+        assert await _has_permission(None, owner, "gaming.write") is True
+        assert await _has_permission(None, gaming_supervisor, "gaming.write") is True
+
+    co_owner = _tenant(protected_access=True, audit_access=False, roles=("co_owner",))
+    assert await _has_permission(None, co_owner, "gaming.write") is True
+    assert await _has_permission(None, co_owner, "admin.audit.read") is False
 
 
 async def test_audit_access_grants_admin_audit_read_regardless_of_role() -> None:

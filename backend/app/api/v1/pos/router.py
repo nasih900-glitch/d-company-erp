@@ -7,7 +7,10 @@ the POS deep build.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+import base64
+import binascii
+import json
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -22,7 +25,14 @@ from fastapi import (
     Response,
     status,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import func, or_, select
 from sqlalchemy import inspect as sa_inspect
 
@@ -76,6 +86,8 @@ from app.models import (
     Terminal,
     User,
 )
+from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
+from app.services.gaming.billing_mode import is_package_billed
 from app.services.inventory.deduction import deduct_for_order
 from app.services.pos.checkout_claims import (
     acquire_checkout_claim,
@@ -91,16 +103,19 @@ from app.services.pos.membership_benefits import (
 )
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.points import (
+    apply_refund_loyalty_adjustment,
     consume_points_redemption,
     minor_to_points,
     points_redeemed_for_order,
     rank_up_bonus_points,
+    record_order_loyalty_settlement,
     reserve_catalog_reward_redemption,
     reserve_points_redemption,
 )
 from app.services.pos.pricing import (
     InvoiceNumberService,
     LineRequest,
+    ModifierSelection,
     OrderPricingService,
     _round_to_rupee,
     apply_manual_discount,
@@ -116,6 +131,15 @@ from app.services.pos.shift_validation import (
 log = get_logger(__name__)
 
 router = APIRouter()
+
+PosPaymentMethod = Literal["cash", "card", "upi", "qr", "wallet"]
+_POS_PAYMENT_METHOD_ORDER: tuple[PosPaymentMethod, ...] = (
+    "cash",
+    "card",
+    "upi",
+    "qr",
+    "wallet",
+)
 _KITCHEN_ITEM_TYPES = {"food", "drink", "dessert"}
 _LEGACY_VOID_REASONS = {
     "Legacy cancellation - reason not recorded",
@@ -130,12 +154,24 @@ _KITCHEN_LINE_STATUS_BY_ORDER_STATE = {
 
 
 # ----------- schemas -----------
+class OrderModifierSelectionCreate(BaseModel):
+    """Untrusted client selection; names and prices are resolved server-side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    modifier_id: UUID
+    qty: int = Field(default=1, strict=True, gt=0)
+
+
 class OrderLineCreate(BaseModel):
     client_line_id: UUID | None = None
     menu_item_id: UUID
     variant_id: UUID | None = None
     qty: int = Field(gt=0)
-    modifiers: list[dict] | None = None
+    modifiers: list[OrderModifierSelectionCreate] | None = Field(
+        default=None,
+        max_length=100,
+    )
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -165,7 +201,8 @@ class OrderLineRead(BaseModel):
     client_line_id: UUID | None = None
     menu_item_id: UUID
     variant_id: UUID | None = None
-    modifiers: list[dict] | None = None
+    variant_snapshot: OrderVariantSnapshotRead | None = None
+    modifiers: list[OrderModifierSnapshotRead] | None = None
     name: str
     sku: str
     hsn_or_sac: str
@@ -281,9 +318,9 @@ class CheckoutClaimRead(BaseModel):
 
 
 class PaymentCreate(BaseModel):
-    method: Literal["cash", "card", "upi", "qr", "wallet"]
+    method: PosPaymentMethod
     amount_minor: int = Field(gt=0)
-    tendered_minor: int | None = None
+    tendered_minor: int | None = Field(default=None, ge=0)
     ref_external: str | None = Field(default=None, max_length=200)
     expected_order_total_minor: int | None = Field(default=None, ge=0)
     expected_due_minor: int | None = Field(default=None, ge=0)
@@ -294,10 +331,694 @@ class PaymentCreate(BaseModel):
     # tip is layered on afterward). See record_payment for how it is applied.
     tip_minor: int = Field(default=0, ge=0)
 
+    @model_validator(mode="after")
+    def validate_tender_contract(self) -> PaymentCreate:
+        """Keep physical tender facts unambiguous across every client.
+
+        Cash must record what the customer actually handed over, including any
+        tip. Non-cash rails have no cash tender/change concept and must not
+        smuggle one into the receipt or drawer reconciliation.
+        """
+        collected_minor = self.amount_minor + self.tip_minor
+        if self.method == "cash":
+            if self.tendered_minor is None:
+                raise ValueError("cash tendered amount is required")
+            if self.tendered_minor < collected_minor:
+                raise ValueError("cash tendered amount must cover the payment and tip")
+        elif self.tendered_minor is not None:
+            raise ValueError("cash tendered amount is only valid for cash payments")
+        return self
+
+
+class PaymentRead(BaseModel):
+    """Authoritative settlement receipt returned by a successful payment."""
+
+    id: UUID
+    order_id: UUID
+    shift_id: UUID
+    method: PosPaymentMethod
+    # amount_minor is the total actually collected/banked (bill + tip), which
+    # preserves the pre-existing API meaning. bill_amount_minor makes the split
+    # explicit so receipt clients never add the tip twice.
+    amount_minor: int
+    bill_amount_minor: int
+    tip_minor: int
+    tendered_minor: int | None
+    change_minor: int | None
+    ref_external: str | None
+    paid_at: datetime
+    order_status: str
+    invoice_no: str | None
+    fiscal_year: str | None
+    invoice_issued_at: datetime | None
+
+
+class ReceiptLineHistoryRead(BaseModel):
+    """Immutable sold-line snapshot; decimal values stay exact as strings."""
+
+    id: UUID
+    menu_item_id: UUID
+    menu_item_name: str
+    menu_item_type: str
+    variant_id: UUID | None
+    variant_snapshot: dict | None
+    modifiers: list[dict]
+    qty: str
+    unit_price_minor: int
+    line_total_minor: int
+    discount_minor: int
+    hsn_or_sac: str | None
+    tax_rate: str
+    taxable_value_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+    note: str | None
+    voided_at: datetime | None
+    voided_by: UUID | None
+    voided_by_name: str | None
+    void_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReceiptPaymentHistoryRead(BaseModel):
+    id: UUID
+    shift_id: UUID
+    method: PosPaymentMethod
+    amount_minor: int
+    tendered_minor: int | None
+    change_minor: int | None
+    reference: str | None
+    paid_at: datetime
+    recorded_by: UUID | None
+    recorded_by_name: str | None
+    created_at: datetime
+
+
+class ReceiptRefundHistoryRead(BaseModel):
+    """Immutable proof of money returned against the original receipt."""
+
+    id: UUID
+    request_id: UUID | None
+    company_id: UUID | None
+    branch_id: UUID | None
+    terminal_id: UUID | None
+    settlement_shift_id: UUID | None
+    approved_by: UUID
+    approved_by_name: str | None
+    manager_override_user_id: UUID | None
+    manager_override_user_name: str | None
+    reason_code: str
+    amount_minor: int
+    mode: str
+    settlement_method: PosPaymentMethod | None
+    settled_at: datetime | None
+    settled_by: UUID | None
+    settled_by_name: str | None
+    external_reference: str | None
+    provider_settled_at: datetime | None
+    client_occurred_at: datetime | None
+    captured_time_reconciled: bool | None
+    provider_evidence_reconciled: bool | None
+    settlement_idempotency_key: str | None
+    receipt_no: str | None
+    receipt_fiscal_year: str | None
+    receipt_issued_at: datetime | None
+    customer_spend_reconciled: bool | None
+    loyalty_reconciliation_state: str | None
+    note: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReceiptGamingSessionHistoryRead(BaseModel):
+    id: UUID
+    station_id: UUID
+    # Station labels are current display metadata. The immutable source link is
+    # station_id; pre-0057 history cannot truthfully reconstruct old labels.
+    station_code: str
+    station_name: str
+    station_type: str
+    source_shift_id: UUID
+    started_by: UUID
+    started_by_name: str | None
+    stopped_by: UUID | None
+    stopped_by_name: str | None
+    sent_to_pos_by: UUID | None
+    sent_to_pos_by_name: str | None
+    started_at: datetime
+    stopped_at: datetime | None
+    sent_to_pos_at: datetime | None
+    billing_mode: str
+    rate_per_hour_minor: int
+    package_id: UUID | None
+    package_price_minor_snapshot: int | None
+    package_duration_minutes_snapshot: int | None
+    package_variant_snapshot: str | None
+    timer_minutes: int | None
+    paused_minutes: int
+    billable_minutes: int | None
+    amount_minor: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReceiptHistoryRead(BaseModel):
+    """Canonical receipt projection shared by web and native clients."""
+
+    order_id: UUID
+    company_id: UUID
+    branch_id: UUID
+    terminal_id: UUID
+    shift_id: UUID
+    shift_opened_by: UUID | None
+    shift_opened_by_name: str | None
+    shift_opened_at: datetime | None
+    shift_closed_at: datetime | None
+    opened_by: UUID
+    opened_by_name: str | None
+    invoice_no: str
+    fiscal_year: str
+    status: str
+    order_type: str
+    table_id: UUID | None
+    subtotal_minor: int
+    discount_minor: int
+    manual_discount_minor: int
+    points_redeemed_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+    tax_minor: int
+    round_off_minor: int
+    tip_minor: int
+    total_minor: int
+    paid_minor: int
+    refunded_minor: int
+    net_collected_minor: int
+    customer_name: str | None
+    customer_phone: str | None
+    customer_gstin: str | None
+    customer_address: str | None
+    customer_state_code: str | None
+    place_of_supply_state_code: str | None
+    is_reverse_charge: bool
+    irn: str | None
+    irn_ack_no: str | None
+    irn_acknowledged_at: datetime | None
+    e_invoice_qr: str | None
+    notes: str | None
+    opened_at: datetime
+    held_at: datetime | None
+    closed_at: datetime
+    invoice_issued_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    lines: list[ReceiptLineHistoryRead]
+    payments: list[ReceiptPaymentHistoryRead]
+    refunds: list[ReceiptRefundHistoryRead]
+    gaming_sessions: list[ReceiptGamingSessionHistoryRead]
+
+
+class ReceiptHistoryPage(BaseModel):
+    items: list[ReceiptHistoryRead]
+    next_cursor: str | None
+    has_more: bool
+
+
+def _encode_receipt_cursor(invoice_issued_at: datetime, order_id: UUID) -> str:
+    payload = json.dumps(
+        [invoice_issued_at.astimezone(UTC).isoformat(), str(order_id)],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_receipt_cursor(cursor: str) -> tuple[datetime, UUID]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        decoded = base64.b64decode(
+            padded.encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        )
+        values = json.loads(decoded.decode("utf-8"))
+        if not isinstance(values, list) or len(values) != 2:
+            raise ValueError("invalid cursor shape")
+        issued_at = datetime.fromisoformat(str(values[0]).replace("Z", "+00:00"))
+        if issued_at.tzinfo is None:
+            raise ValueError("cursor timestamp has no timezone")
+        return issued_at.astimezone(UTC), UUID(str(values[1]))
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BusinessRuleError(
+            "Receipt history cursor is invalid. Refresh receipt history and try again."
+        ) from exc
+
+
+def _exact_decimal_text(value: object) -> str:
+    return format(Decimal(str(value)), "f")
+
+
+async def _receipt_history_reads(
+    session,
+    *,
+    orders: list[Order],
+    company_id: UUID,
+    branch_id: UUID,
+) -> list[ReceiptHistoryRead]:
+    if not orders:
+        return []
+
+    order_ids = [order.id for order in orders]
+    line_rows = (
+        await session.execute(
+            select(OrderLine)
+            .where(OrderLine.order_id.in_(order_ids))
+            .order_by(OrderLine.order_id, OrderLine.created_at, OrderLine.id)
+        )
+    ).scalars().all()
+    payment_rows = (
+        await session.execute(
+            select(Payment)
+            .where(Payment.order_id.in_(order_ids))
+            .order_by(Payment.order_id, Payment.paid_at, Payment.id)
+        )
+    ).scalars().all()
+    refund_rows = (
+        await session.execute(
+            select(Refund)
+            .where(Refund.order_id.in_(order_ids))
+            .order_by(
+                Refund.order_id,
+                Refund.settled_at.nulls_last(),
+                Refund.created_at,
+                Refund.id,
+            )
+        )
+    ).scalars().all()
+    gaming_rows = (
+        await session.execute(
+            select(GamingSession, Station)
+            .join(Station, Station.id == GamingSession.station_id)
+            .where(
+                GamingSession.order_id.in_(order_ids),
+                GamingSession.company_id == company_id,
+                Station.company_id == company_id,
+                Station.branch_id == branch_id,
+            )
+            .order_by(GamingSession.order_id, GamingSession.start_at, GamingSession.id)
+        )
+    ).all()
+    shift_ids = {order.shift_id for order in orders}
+    shifts = (
+        await session.execute(
+            select(Shift).where(
+                Shift.id.in_(shift_ids),
+                Shift.company_id == company_id,
+                Shift.branch_id == branch_id,
+            )
+        )
+    ).scalars().all()
+    shifts_by_id = {shift.id: shift for shift in shifts}
+
+    actor_ids: set[UUID] = {order.opened_by for order in orders}
+    actor_ids.update(shift.opened_by for shift in shifts)
+    actor_ids.update(line.voided_by for line in line_rows if line.voided_by is not None)
+    actor_ids.update(
+        payment.recorded_by
+        for payment in payment_rows
+        if payment.recorded_by is not None
+    )
+    actor_ids.update(refund.approved_by for refund in refund_rows)
+    actor_ids.update(
+        refund.manager_override_user_id
+        for refund in refund_rows
+        if refund.manager_override_user_id is not None
+    )
+    actor_ids.update(
+        refund.settled_by for refund in refund_rows if refund.settled_by is not None
+    )
+    for gaming_session, _station in gaming_rows:
+        actor_ids.add(gaming_session.opened_by)
+        if gaming_session.stopped_by is not None:
+            actor_ids.add(gaming_session.stopped_by)
+        if gaming_session.sent_to_pos_by is not None:
+            actor_ids.add(gaming_session.sent_to_pos_by)
+    actor_names = dict(
+        (
+            await session.execute(
+                select(User.id, User.name).where(
+                    User.id.in_(actor_ids),
+                    User.company_id == company_id,
+                )
+            )
+        ).all()
+    )
+
+    lines_by_order: dict[UUID, list[OrderLine]] = {}
+    for line in line_rows:
+        lines_by_order.setdefault(line.order_id, []).append(line)
+    payments_by_order: dict[UUID, list[Payment]] = {}
+    for payment in payment_rows:
+        payments_by_order.setdefault(payment.order_id, []).append(payment)
+    refunds_by_order: dict[UUID, list[Refund]] = {}
+    for refund in refund_rows:
+        refunds_by_order.setdefault(refund.order_id, []).append(refund)
+    gaming_by_order: dict[UUID, list[tuple[GamingSession, Station]]] = {}
+    for gaming_session, station in gaming_rows:
+        assert gaming_session.order_id is not None
+        gaming_by_order.setdefault(gaming_session.order_id, []).append(
+            (gaming_session, station)
+        )
+
+    results: list[ReceiptHistoryRead] = []
+    for order in orders:
+        if (
+            order.invoice_no is None
+            or order.fiscal_year is None
+            or order.invoice_issued_at is None
+            or order.closed_at is None
+        ):
+            # The selecting query excludes this state. Keep this guard so a
+            # future caller cannot accidentally publish a guessed receipt.
+            raise BusinessRuleError(
+                "A finalized order is missing immutable invoice identity. "
+                "Ask a protected owner to reconcile it before opening its receipt."
+            )
+        shift = shifts_by_id.get(order.shift_id)
+        order_payments = payments_by_order.get(order.id, [])
+        order_refunds = refunds_by_order.get(order.id, [])
+        paid_minor = sum(int(payment.amount_minor) for payment in order_payments)
+        refunded_minor = sum(int(refund.amount_minor) for refund in order_refunds)
+        results.append(
+            ReceiptHistoryRead(
+                order_id=order.id,
+                company_id=order.company_id,
+                branch_id=order.branch_id,
+                terminal_id=order.terminal_id,
+                shift_id=order.shift_id,
+                shift_opened_by=shift.opened_by if shift else None,
+                shift_opened_by_name=(
+                    actor_names.get(shift.opened_by) if shift else None
+                ),
+                shift_opened_at=shift.opened_at if shift else None,
+                shift_closed_at=shift.closed_at if shift else None,
+                opened_by=order.opened_by,
+                opened_by_name=actor_names.get(order.opened_by),
+                invoice_no=order.invoice_no,
+                fiscal_year=order.fiscal_year,
+                status=order.status,
+                order_type=order.type,
+                table_id=order.table_id,
+                subtotal_minor=int(order.subtotal_minor or 0),
+                discount_minor=int(order.discount_minor or 0),
+                manual_discount_minor=int(order.manual_discount_minor or 0),
+                points_redeemed_minor=int(order.points_redeemed_minor or 0),
+                cgst_minor=int(order.cgst_minor or 0),
+                sgst_minor=int(order.sgst_minor or 0),
+                igst_minor=int(order.igst_minor or 0),
+                cess_minor=int(order.cess_minor or 0),
+                tax_minor=int(order.tax_minor or 0),
+                round_off_minor=int(order.round_off_minor or 0),
+                tip_minor=int(order.tip_minor or 0),
+                total_minor=int(order.total_minor or 0),
+                paid_minor=paid_minor,
+                refunded_minor=refunded_minor,
+                net_collected_minor=paid_minor - refunded_minor,
+                customer_name=order.customer_name,
+                customer_phone=order.customer_phone,
+                customer_gstin=order.customer_gstin,
+                customer_address=order.customer_address,
+                customer_state_code=order.customer_state_code,
+                place_of_supply_state_code=order.place_of_supply_state_code,
+                is_reverse_charge=bool(order.is_reverse_charge),
+                irn=order.irn,
+                irn_ack_no=order.irn_ack_no,
+                irn_acknowledged_at=order.irn_acknowledged_at,
+                e_invoice_qr=order.e_invoice_qr,
+                notes=order.notes,
+                opened_at=order.opened_at,
+                held_at=order.held_at,
+                closed_at=order.closed_at,
+                invoice_issued_at=order.invoice_issued_at,
+                created_at=order.created_at,
+                updated_at=order.updated_at,
+                lines=[
+                    ReceiptLineHistoryRead(
+                        id=line.id,
+                        menu_item_id=line.menu_item_id,
+                        menu_item_name=line.menu_item_name_snapshot,
+                        menu_item_type=line.menu_item_type_snapshot,
+                        variant_id=line.variant_id,
+                        variant_snapshot=line.variant_snapshot,
+                        modifiers=list(line.modifiers or []),
+                        qty=_exact_decimal_text(line.qty),
+                        unit_price_minor=int(line.unit_price_minor),
+                        line_total_minor=int(line.line_total_minor),
+                        discount_minor=int(line.discount_minor or 0),
+                        hsn_or_sac=line.hsn_or_sac,
+                        tax_rate=_exact_decimal_text(line.tax_rate),
+                        taxable_value_minor=int(line.taxable_value_minor or 0),
+                        cgst_minor=int(line.cgst_minor or 0),
+                        sgst_minor=int(line.sgst_minor or 0),
+                        igst_minor=int(line.igst_minor or 0),
+                        cess_minor=int(line.cess_minor or 0),
+                        note=line.note,
+                        voided_at=line.voided_at,
+                        voided_by=line.voided_by,
+                        voided_by_name=(
+                            actor_names.get(line.voided_by)
+                            if line.voided_by is not None
+                            else None
+                        ),
+                        void_reason=line.void_reason,
+                        created_at=line.created_at,
+                        updated_at=line.updated_at,
+                    )
+                    for line in lines_by_order.get(order.id, [])
+                ],
+                payments=[
+                    ReceiptPaymentHistoryRead(
+                        id=payment.id,
+                        shift_id=payment.shift_id,
+                        method=payment.method,
+                        amount_minor=int(payment.amount_minor),
+                        tendered_minor=(
+                            int(payment.tendered_minor)
+                            if payment.tendered_minor is not None
+                            else None
+                        ),
+                        change_minor=(
+                            int(payment.change_minor)
+                            if payment.change_minor is not None
+                            else None
+                        ),
+                        reference=payment.ref_external,
+                        paid_at=payment.paid_at,
+                        recorded_by=payment.recorded_by,
+                        recorded_by_name=(
+                            actor_names.get(payment.recorded_by)
+                            if payment.recorded_by is not None
+                            else None
+                        ),
+                        created_at=payment.created_at,
+                    )
+                    for payment in order_payments
+                ],
+                refunds=[
+                    ReceiptRefundHistoryRead(
+                        id=refund.id,
+                        request_id=refund.request_id,
+                        company_id=refund.company_id,
+                        branch_id=refund.branch_id,
+                        terminal_id=refund.terminal_id,
+                        settlement_shift_id=refund.settlement_shift_id,
+                        approved_by=refund.approved_by,
+                        approved_by_name=actor_names.get(refund.approved_by),
+                        manager_override_user_id=refund.manager_override_user_id,
+                        manager_override_user_name=(
+                            actor_names.get(refund.manager_override_user_id)
+                            if refund.manager_override_user_id is not None
+                            else None
+                        ),
+                        reason_code=refund.reason_code,
+                        amount_minor=int(refund.amount_minor),
+                        mode=refund.mode,
+                        settlement_method=refund.settlement_method,
+                        settled_at=refund.settled_at,
+                        settled_by=refund.settled_by,
+                        settled_by_name=(
+                            actor_names.get(refund.settled_by)
+                            if refund.settled_by is not None
+                            else None
+                        ),
+                        external_reference=refund.external_reference,
+                        provider_settled_at=refund.provider_settled_at,
+                        client_occurred_at=refund.client_occurred_at,
+                        captured_time_reconciled=refund.captured_time_reconciled,
+                        provider_evidence_reconciled=(
+                            refund.provider_evidence_reconciled
+                        ),
+                        settlement_idempotency_key=(
+                            refund.settlement_idempotency_key
+                        ),
+                        receipt_no=refund.receipt_no,
+                        receipt_fiscal_year=refund.receipt_fiscal_year,
+                        receipt_issued_at=refund.receipt_issued_at,
+                        customer_spend_reconciled=refund.customer_spend_reconciled,
+                        loyalty_reconciliation_state=(
+                            refund.loyalty_reconciliation_state
+                        ),
+                        note=refund.note,
+                        created_at=refund.created_at,
+                        updated_at=refund.updated_at,
+                    )
+                    for refund in order_refunds
+                ],
+                gaming_sessions=[
+                    ReceiptGamingSessionHistoryRead(
+                        id=gaming_session.id,
+                        station_id=gaming_session.station_id,
+                        station_code=station.code,
+                        station_name=station.name,
+                        station_type=station.type,
+                        source_shift_id=gaming_session.shift_id,
+                        started_by=gaming_session.opened_by,
+                        started_by_name=actor_names.get(gaming_session.opened_by),
+                        stopped_by=gaming_session.stopped_by,
+                        stopped_by_name=(
+                            actor_names.get(gaming_session.stopped_by)
+                            if gaming_session.stopped_by is not None
+                            else None
+                        ),
+                        sent_to_pos_by=gaming_session.sent_to_pos_by,
+                        sent_to_pos_by_name=(
+                            actor_names.get(gaming_session.sent_to_pos_by)
+                            if gaming_session.sent_to_pos_by is not None
+                            else None
+                        ),
+                        started_at=gaming_session.start_at,
+                        stopped_at=gaming_session.end_at,
+                        sent_to_pos_at=gaming_session.sent_to_pos_at,
+                        billing_mode=gaming_session.billing_mode,
+                        rate_per_hour_minor=int(gaming_session.rate_per_hour_minor),
+                        package_id=gaming_session.package_id,
+                        package_price_minor_snapshot=(
+                            int(gaming_session.package_price_minor_snapshot)
+                            if gaming_session.package_price_minor_snapshot is not None
+                            else None
+                        ),
+                        package_duration_minutes_snapshot=(
+                            int(gaming_session.package_duration_minutes_snapshot)
+                            if gaming_session.package_duration_minutes_snapshot is not None
+                            else None
+                        ),
+                        package_variant_snapshot=gaming_session.package_variant_snapshot,
+                        timer_minutes=gaming_session.timer_minutes,
+                        paused_minutes=int(gaming_session.paused_minutes or 0),
+                        billable_minutes=gaming_session.billable_minutes,
+                        amount_minor=(
+                            int(gaming_session.amount_minor)
+                            if gaming_session.amount_minor is not None
+                            else None
+                        ),
+                        created_at=gaming_session.created_at,
+                        updated_at=gaming_session.updated_at,
+                    )
+                    for gaming_session, station in gaming_by_order.get(order.id, [])
+                ],
+            )
+        )
+    return results
+
+
+async def _payment_read_from_stored_response(
+    session,
+    *,
+    body: dict,
+    order_id: UUID,
+) -> PaymentRead:
+    """Read both current and pre-receipt-grade idempotency responses safely.
+
+    A payment response can outlive an application deployment. Releases before
+    ``PaymentRead`` stored only the payment id, collected amount, tip and
+    invoice identity. Replaying one of those keys must still return the
+    already-recorded payment rather than fail in a way that tempts a cashier
+    to submit a new key. Only that exact legacy shape is reconstructed, using
+    the immutable Payment row for every missing settlement fact; other invalid
+    stored bodies remain errors instead of being guessed at.
+    """
+    try:
+        return PaymentRead.model_validate(body)
+    except ValidationError as validation_error:
+        legacy_fields = {
+            "id",
+            "amount_minor",
+            "tip_minor",
+            "order_status",
+            "invoice_no",
+            "fiscal_year",
+            "invoice_issued_at",
+        }
+        if set(body) != legacy_fields:
+            raise validation_error
+
+        try:
+            payment_id = UUID(str(body["id"]))
+            legacy_amount_minor = int(body["amount_minor"])
+            legacy_tip_minor = int(body["tip_minor"])
+        except (TypeError, ValueError) as exc:
+            raise BusinessRuleError(
+                "Payment is already recorded, but its saved receipt is invalid. "
+                "Do not collect payment again; ask a protected owner to reconcile it."
+            ) from exc
+
+        payment = (
+            await session.execute(
+                select(Payment).where(
+                    Payment.id == payment_id,
+                    Payment.order_id == order_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            payment is None
+            or legacy_amount_minor != payment.amount_minor
+            or legacy_tip_minor < 0
+            or legacy_tip_minor > payment.amount_minor
+        ):
+            raise BusinessRuleError(
+                "Payment is already recorded, but its saved receipt cannot be "
+                "reconstructed. Do not collect payment again; ask a protected "
+                "owner to reconcile it."
+            )
+
+        return PaymentRead(
+            id=payment.id,
+            order_id=payment.order_id,
+            shift_id=payment.shift_id,
+            method=payment.method,
+            amount_minor=payment.amount_minor,
+            bill_amount_minor=payment.amount_minor - legacy_tip_minor,
+            tip_minor=legacy_tip_minor,
+            tendered_minor=payment.tendered_minor,
+            change_minor=payment.change_minor,
+            ref_external=payment.ref_external,
+            paid_at=payment.paid_at,
+            order_status=str(body["order_status"]),
+            invoice_no=body["invoice_no"],
+            fiscal_year=body["fiscal_year"],
+            invoice_issued_at=body["invoice_issued_at"],
+        )
+
 
 class OrderCustomerUpdate(BaseModel):
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str | None = Field(default=None, max_length=20)
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
     @field_validator("customer_name", "customer_phone")
     @classmethod
@@ -310,6 +1031,7 @@ class OrderDiscountUpdate(BaseModel):
     # Absolute set, not an increment — re-sending the same value is a no-op,
     # and a cashier who changes their mind sends the new total, not a delta.
     manual_discount_minor: int = Field(ge=0)
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
 
 class OrderPointsRedemptionUpdate(BaseModel):
@@ -317,6 +1039,7 @@ class OrderPointsRedemptionUpdate(BaseModel):
     # bill, not an increment. Requires a customer already attached to the
     # order (points belong to a specific phone number's balance).
     points: int = Field(ge=0)
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
 
 class RefundCreate(BaseModel):
@@ -471,6 +1194,12 @@ class PosRefundRequestRead(BaseModel):
     refund_id: UUID | None = None
     client_action_id: str
     customer_spend_reconciled: bool | None = None
+    loyalty_reconciliation_state: Literal[
+        "not_applicable",
+        "applied",
+        "legacy_redemption_restored",
+        "legacy_unknown",
+    ] | None = None
     note: str | None = None
 
 
@@ -624,45 +1353,60 @@ async def _upsert_and_attach_customer(
     phone: str,
     name: str | None,
     order: Order,
+    at: datetime,
     order_lines: list[OrderLine] | None = None,
 ) -> Customer:
     """Find or create customer by phone, bump visit_count + total_spent,
     award loyalty points (1× food, 2× gaming/hookah/streaming/events, × membership tier).
     """
-    existing = (
-        await session.execute(
-            select(Customer).where(
-                Customer.company_id == company_id,
-                Customer.phone == phone,
-                Customer.deleted_at.is_(None),
-            ).with_for_update()
-        )
-    ).scalar_one_or_none()
-    now = datetime.now(timezone.utc)
-
-    # Resolve membership multiplier if customer already exists and has an active sub
-    multiplier = 1.0
-    if existing:
-        sub = (
+    # Finalization has a pending Order(open->paid) update and Payment insert.
+    # Resolve all customer/menu reads without autoflush, then attach the stable
+    # customer ID before the single source-snapshot flush below. Otherwise a
+    # query here can flush a paid invoice without its customer linkage and a
+    # second UPDATE would correctly be rejected by the paid-source DB guard.
+    with session.no_autoflush:
+        existing = (
             await session.execute(
-                select(CustomerMembership, MembershipTier)
-                .join(MembershipTier, MembershipTier.id == CustomerMembership.tier_id)
-                .where(
-                    CustomerMembership.customer_id == existing.id,
-                    CustomerMembership.starts_at <= now,
-                    CustomerMembership.expires_at > now,
-                    CustomerMembership.revoked_at.is_(None),
-                )
-                .limit(1)
+                select(Customer).where(
+                    Customer.company_id == company_id,
+                    Customer.phone == phone,
+                    Customer.deleted_at.is_(None),
+                ).with_for_update()
             )
-        ).first()
-        if sub:
-            multiplier = float(sub.MembershipTier.point_multiplier or 1)
+        ).scalar_one_or_none()
+        # Use the authoritative checkout timestamp throughout this transaction.
+        # In particular, the immutable loyalty settlement must match the invoice
+        # issue time exactly rather than a second wall-clock sample.
+        now = at
 
-    points_earned = await _compute_points_with_multiplier(
-        session, order=order, order_lines=order_lines or [],
-        membership_multiplier=multiplier,
-    )
+        # Resolve membership multiplier if the customer has an active plan.
+        multiplier = 1.0
+        if existing:
+            sub = (
+                await session.execute(
+                    select(CustomerMembership, MembershipTier)
+                    .join(
+                        MembershipTier,
+                        MembershipTier.id == CustomerMembership.tier_id,
+                    )
+                    .where(
+                        CustomerMembership.customer_id == existing.id,
+                        CustomerMembership.starts_at <= now,
+                        CustomerMembership.expires_at > now,
+                        CustomerMembership.revoked_at.is_(None),
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if sub:
+                multiplier = float(sub.MembershipTier.point_multiplier or 1)
+
+        points_earned = await _compute_points_with_multiplier(
+            session,
+            order=order,
+            order_lines=order_lines or [],
+            membership_multiplier=multiplier,
+        )
 
     if existing:
         old_lifetime = int(existing.lifetime_gaming_points_earned or 0)
@@ -682,6 +1426,14 @@ async def _upsert_and_attach_customer(
         if name and not existing.name:
             existing.name = name
         order.customer_id = existing.id
+        await record_order_loyalty_settlement(
+            session,
+            order=order,
+            customer=existing,
+            points_earned=int(points_earned),
+            rank_bonus_points_awarded=bonus,
+            at=now,
+        )
         return existing
     else:
         bonus = rank_up_bonus_points(old_lifetime=0, new_lifetime=int(points_earned))
@@ -699,6 +1451,14 @@ async def _upsert_and_attach_customer(
         )
         session.add(customer)
         order.customer_id = customer.id
+        await record_order_loyalty_settlement(
+            session,
+            order=order,
+            customer=customer,
+            points_earned=int(points_earned),
+            rank_bonus_points_awarded=bonus,
+            at=now,
+        )
         return customer
 
 
@@ -951,8 +1711,8 @@ async def _allocate_pos_refund_receipt(
             "Cannot issue the refund receipt because the branch identity is invalid."
         )
     return await InvoiceNumberService(session).allocate(
+        company_id=company_id,
         branch_id=branch_id,
-        branch_code=branch.code or "RF",
         prefix="R",
         series="pos_refund",
         at=occurred_at,
@@ -1099,6 +1859,9 @@ def _pos_refund_request_read(
         customer_spend_reconciled=(
             refund.customer_spend_reconciled if refund else None
         ),
+        loyalty_reconciliation_state=(
+            refund.loyalty_reconciliation_state if refund else None
+        ),
         note=refund_request.note,
     )
 
@@ -1190,7 +1953,7 @@ async def _reprice_unpaid_order_for_customer(
         if gaming_session
         and station
         and station.type == "ps5"
-        and gaming_session.package_id is None
+        and not is_package_billed(gaming_session)
         else 0
     )
     requested_hookah_count = (
@@ -1233,7 +1996,7 @@ async def _reprice_unpaid_order_for_customer(
             if (
                 station.type == "ps5"
                 and benefits.gaming_minutes
-                and gaming_session.package_id is None
+                and not is_package_billed(gaming_session)
             ):
                 # A package session's amount_minor is a fixed, advertised
                 # price (see gaming/router.py) with no proportional
@@ -1350,19 +2113,20 @@ async def _source_label(session, order: Order) -> str | None:
     return row
 
 
-def _reject_unsupported_customizations(lines: list[OrderLineCreate]) -> None:
-    """Never accept a priced customization that the tax engine ignores.
-
-    Per-line preparation notes are supported end to end. Variants and priced
-    modifiers remain blocked until the menu API exposes and validates them.
-    Silently dropping either would undercharge the customer and corrupt the
-    receipt snapshot.
-    """
-    if any(line.variant_id is not None or line.modifiers for line in lines):
-        raise BusinessRuleError(
-            "Priced variants and modifiers are not enabled yet. "
-            "Use the item note for preparation instructions."
-        )
+def _pricing_line_request(line: OrderLineCreate) -> LineRequest:
+    """Translate IDs/quantities only; pricing resolves every mutable fact."""
+    return LineRequest(
+        menu_item_id=line.menu_item_id,
+        qty=int(line.qty),
+        variant_id=line.variant_id,
+        modifiers=tuple(
+            ModifierSelection(
+                modifier_id=selection.modifier_id,
+                quantity=selection.qty,
+            )
+            for selection in (line.modifiers or ())
+        ),
+    )
 
 
 def _validate_client_line_ids(lines: list[OrderLineCreate]) -> None:
@@ -1427,6 +2191,36 @@ def _require_checkout_version(order: Order, expected: int, *, operation: str) ->
         )
 
 
+def _require_settlement_metadata_version(
+    order: Order,
+    expected: int | None,
+    *,
+    operation: str,
+) -> None:
+    """Require optimistic concurrency for shared bills awaiting settlement.
+
+    Direct, open POS orders retain backward compatibility for older clients,
+    although any client that supplies a version still receives stale-write
+    protection. A held bill is shared between operational screens and tills,
+    so accepting an unversioned customer/benefit mutation would allow one
+    cashier to overwrite a bill another cashier just reviewed.
+    """
+    if expected is None:
+        if order.status == "held":
+            raise BusinessRuleError(
+                f"Reload this shared bill before {operation}; its current checkout "
+                "version is required.",
+                details={
+                    "current_checkout_version": max(
+                        1,
+                        int(order.checkout_version or 1),
+                    )
+                },
+            )
+        return
+    _require_checkout_version(order, expected, operation=operation)
+
+
 async def _kitchen_item_ids(
     session,
     *,
@@ -1480,6 +2274,22 @@ async def _materialize_legacy_kitchen_line_state(session, order: Order) -> None:
         return
     for line in existing_lines:
         line.kitchen_status = target_status
+        if target_status == "served":
+            # Migration 0042 materialises every legacy served batch. This is
+            # the fail-safe for an anomalous row created by an older writer
+            # after that migration: preserve the best historical event time
+            # instead of falsely treating a late append as today's service.
+            line.kitchen_served_at = (
+                getattr(line, "kitchen_served_at", None)
+                or getattr(order, "updated_at", None)
+                or getattr(order, "kitchen_ready_at", None)
+                or getattr(line, "updated_at", None)
+                or getattr(line, "kitchen_released_at", None)
+                or getattr(line, "created_at", None)
+                or datetime.now(timezone.utc)
+            )
+        else:
+            line.kitchen_served_at = None
 
 
 async def _reaggregate_active_order_lines(
@@ -1590,8 +2400,9 @@ def _order_line_read(line: OrderLine, item: MenuItem) -> OrderLineRead:
         client_line_id=getattr(line, "client_line_id", None),
         menu_item_id=line.menu_item_id,
         variant_id=line.variant_id,
+        variant_snapshot=getattr(line, "variant_snapshot", None),
         modifiers=line.modifiers,
-        name=item.name,
+        name=line.menu_item_name_snapshot,
         sku=item.sku,
         hsn_or_sac=line.hsn_or_sac or item.hsn_code or "",
         qty=float(line.qty),
@@ -1711,8 +2522,8 @@ async def _finalize_order(
     timezone_name = branch.timezone or await company_timezone(session, company_id)
     if not order.invoice_no:
         order.invoice_no, order.fiscal_year = await InvoiceNumberService(session).allocate(
+            company_id=company_id,
             branch_id=order.branch_id,
-            branch_code=branch.code or "MN",
             at=at,
             timezone_name=timezone_name,
         )
@@ -1786,6 +2597,7 @@ async def _finalize_order(
             name=order.customer_name,
             order=order,
             order_lines=list(order_lines),
+            at=at,
         )
 
 
@@ -1797,11 +2609,11 @@ async def _finalize_order(
 )
 async def get_receipt_business(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.read")),
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
 ) -> ReceiptBusinessRead:
     """Return only fields needed for billing and receipt rendering.
 
-    Company/branch administration remains protected by ``admin.system``. POS
+    Company/branch administration remains protected by ``settings.manage``. POS
     users get a projection for their JWT/terminal-resolved branch instead of
     access to integration URLs or payment-provider configuration.
     """
@@ -1826,6 +2638,119 @@ async def get_receipt_business(
         raise NotFoundError("Current POS branch was not found for this company.")
     company, branch = row
     return _receipt_business_read(company, branch)
+
+
+@router.get(
+    "/receipts",
+    response_model=ReceiptHistoryPage,
+    summary="List immutable POS receipts for cross-platform history sync",
+)
+async def list_receipt_history(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ReceiptHistoryPage:
+    """Return newest-first finalized receipts with a stable opaque cursor.
+
+    History is scoped to the authenticated company and branch, but not to the
+    currently selected terminal. A shop's one active Hybrid workspace must
+    still be able to read receipts produced by an archived historical till.
+    Financial facts remain linked to their original terminal and shift in the
+    response; no row is repointed or re-attributed.
+    """
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before viewing receipts."
+        )
+
+    stmt = select(Order).where(
+        Order.company_id == tenant.company_id,
+        Order.branch_id == tenant.branch_id,
+        Order.status.in_(("paid", "refunded")),
+        Order.invoice_no.is_not(None),
+        Order.fiscal_year.is_not(None),
+        Order.invoice_issued_at.is_not(None),
+        Order.closed_at.is_not(None),
+    )
+    if cursor is not None:
+        cursor_issued_at, cursor_order_id = _decode_receipt_cursor(cursor)
+        stmt = stmt.where(
+            or_(
+                Order.invoice_issued_at < cursor_issued_at,
+                (
+                    (Order.invoice_issued_at == cursor_issued_at)
+                    & (Order.id < cursor_order_id)
+                ),
+            )
+        )
+    rows = (
+        await session.execute(
+            stmt.order_by(Order.invoice_issued_at.desc(), Order.id.desc()).limit(
+                limit + 1
+            )
+        )
+    ).scalars().all()
+    has_more = len(rows) > limit
+    page_orders = list(rows[:limit])
+    items = await _receipt_history_reads(
+        session,
+        orders=page_orders,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+    )
+    next_cursor: str | None = None
+    if has_more and page_orders:
+        last_order = page_orders[-1]
+        assert last_order.invoice_issued_at is not None
+        next_cursor = _encode_receipt_cursor(
+            last_order.invoice_issued_at,
+            last_order.id,
+        )
+    return ReceiptHistoryPage(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
+@router.get(
+    "/receipts/{order_id}",
+    response_model=ReceiptHistoryRead,
+    summary="Get one immutable POS receipt with payment and Gaming provenance",
+)
+async def get_receipt_history(
+    order_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
+) -> ReceiptHistoryRead:
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before viewing receipts."
+        )
+    order = (
+        await session.execute(
+            select(Order).where(
+                Order.id == order_id,
+                Order.company_id == tenant.company_id,
+                Order.branch_id == tenant.branch_id,
+                Order.status.in_(("paid", "refunded")),
+                Order.invoice_no.is_not(None),
+                Order.fiscal_year.is_not(None),
+                Order.invoice_issued_at.is_not(None),
+                Order.closed_at.is_not(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if order is None:
+        raise NotFoundError("Receipt not found for this company and branch.")
+    reads = await _receipt_history_reads(
+        session,
+        orders=[order],
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+    )
+    return reads[0]
 
 
 @router.post(
@@ -1862,7 +2787,6 @@ async def create_order(
         raise BusinessRuleError("order must have at least one line")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
-    _reject_unsupported_customizations(payload.lines)
     _validate_client_line_ids(payload.lines)
 
     branch = await session.get(Branch, tenant.branch_id)
@@ -1939,10 +2863,7 @@ async def create_order(
         customer_phone=payload.customer_phone,
         place_of_supply_state_code=place_of_supply,
         delivery_via=delivery_via,
-        line_requests=[
-            LineRequest(menu_item_id=line.menu_item_id, qty=int(line.qty))
-            for line in payload.lines
-        ],
+        line_requests=[_pricing_line_request(line) for line in payload.lines],
     )
     kitchen_item_ids = await _kitchen_item_ids(
         session,
@@ -1998,8 +2919,22 @@ async def create_order(
             order_id=order.id,
             client_line_id=requested_line.client_line_id,
             menu_item_id=priced_line.menu_item_id,
-            variant_id=requested_line.variant_id,
-            modifiers=requested_line.modifiers,
+            menu_item_name_snapshot=priced_line.name,
+            menu_item_type_snapshot=priced_line.item_type,
+            variant_id=(
+                priced_line.variant_snapshot.id
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            variant_snapshot=(
+                priced_line.variant_snapshot.as_dict()
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            modifiers=(
+                [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots]
+                or None
+            ),
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -2072,7 +3007,6 @@ async def add_order_lines(
     if existing_response:
         return OrderRead.model_validate(existing_response["body"])
 
-    _reject_unsupported_customizations(payload.lines)
     _validate_client_line_ids(payload.lines)
 
     order = (
@@ -2133,10 +3067,7 @@ async def add_order_lines(
         customer_phone=order.customer_phone,
         place_of_supply_state_code=order.place_of_supply_state_code,
         delivery_via=order.delivery_via,
-        line_requests=[
-            LineRequest(menu_item_id=line.menu_item_id, qty=int(line.qty))
-            for line in payload.lines
-        ],
+        line_requests=[_pricing_line_request(line) for line in payload.lines],
     )
     kitchen_item_ids = await _kitchen_item_ids(
         session,
@@ -2162,8 +3093,22 @@ async def add_order_lines(
             order_id=order.id,
             client_line_id=requested_line.client_line_id,
             menu_item_id=priced_line.menu_item_id,
-            variant_id=requested_line.variant_id,
-            modifiers=requested_line.modifiers,
+            menu_item_name_snapshot=priced_line.name,
+            menu_item_type_snapshot=priced_line.item_type,
+            variant_id=(
+                priced_line.variant_snapshot.id
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            variant_snapshot=(
+                priced_line.variant_snapshot.as_dict()
+                if priced_line.variant_snapshot is not None
+                else None
+            ),
+            modifiers=(
+                [snapshot.as_dict() for snapshot in priced_line.modifier_snapshots]
+                or None
+            ),
             qty=priced_line.qty,
             unit_price_minor=priced_line.unit_inclusive_minor,
             line_total_minor=priced_line.line_inclusive_minor,
@@ -2253,11 +3198,15 @@ async def attach_order_customer(
         terminal_id=tenant.terminal_id,
         operation="attaching a customer to an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Change the customer before "
-            "sending it for payment."
+            f"cannot change the customer on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its customer",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2306,6 +3255,7 @@ async def attach_order_customer(
             company_id=tenant.company_id,
         )
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -2362,11 +3312,15 @@ async def apply_order_discount(
         terminal_id=tenant.terminal_id,
         operation="applying a discount to an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Apply the discount before "
-            "sending it for payment."
+            f"cannot change the discount on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its discount",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2420,6 +3374,7 @@ async def apply_order_discount(
     order.total_minor = remaining_after_manual - points_result.amount_minor
 
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -2468,11 +3423,15 @@ async def redeem_points(
         terminal_id=tenant.terminal_id,
         operation="redeeming points on an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Apply points before sending "
-            "it for payment."
+            f"cannot change points on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its points redemption",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2528,6 +3487,7 @@ async def redeem_points(
     order.total_minor = remaining_after_manual - points_result.amount_minor
 
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -2540,6 +3500,7 @@ async def redeem_points(
 
 class OrderRewardRedemptionUpdate(BaseModel):
     reward_key: str
+    expected_checkout_version: int | None = Field(default=None, ge=1)
 
 
 @router.patch("/orders/{order_id}/reward", response_model=OrderRead)
@@ -2577,11 +3538,15 @@ async def redeem_reward(
         terminal_id=tenant.terminal_id,
         operation="redeeming a reward on an order",
     )
-    if order.status != "open":
+    if order.status not in ("open", "held"):
         raise BusinessRuleError(
-            "This bill is frozen after Send to POS. Apply the reward before sending "
-            "it for payment."
+            f"cannot change a reward on an order in status={order.status}"
         )
+    _require_settlement_metadata_version(
+        order,
+        payload.expected_checkout_version,
+        operation="changing its reward redemption",
+    )
     await guard_checkout_relevant_mutation(
         session,
         order=order,
@@ -2633,6 +3598,7 @@ async def redeem_reward(
     order.total_minor = remaining_after_manual - points_result.amount_minor
 
     await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
     response = await _build_order_read(session, order)
     await store_response(
         session,
@@ -3229,6 +4195,11 @@ class OrderListItem(BaseModel):
     paid_minor: int = 0
     refundable_minor: int = 0
     pending_refund_minor: int = 0
+    # Exact distinct rails actually collected for this order. The server still
+    # resolves and validates `mode=original` when accepting a refund; this
+    # summary exists so clients can label that action truthfully and hide it
+    # for mixed-payment history instead of guessing.
+    payment_methods: list[PosPaymentMethod] = Field(default_factory=list)
 
 
 @router.get("/orders", response_model=list[OrderListItem])
@@ -3311,15 +4282,22 @@ async def list_orders(
             )
         ).all()
     )
-    paid_by_order = dict(
-        (
-            await session.execute(
-                select(Payment.order_id, func.coalesce(func.sum(Payment.amount_minor), 0))
-                .where(Payment.order_id.in_(order_ids))
-                .group_by(Payment.order_id)
+    payment_rows = (
+        await session.execute(
+            select(
+                Payment.order_id,
+                Payment.method,
+                func.coalesce(func.sum(Payment.amount_minor), 0),
             )
-        ).all()
-    )
+            .where(Payment.order_id.in_(order_ids))
+            .group_by(Payment.order_id, Payment.method)
+        )
+    ).all()
+    paid_by_order: dict[UUID, int] = {}
+    methods_by_order: dict[UUID, set[str]] = {}
+    for order_id, method, amount in payment_rows:
+        paid_by_order[order_id] = paid_by_order.get(order_id, 0) + int(amount or 0)
+        methods_by_order.setdefault(order_id, set()).add(str(method))
     refunded_by_order = dict(
         (
             await session.execute(
@@ -3376,6 +4354,11 @@ async def list_orders(
             paid_minor=paid,
             refundable_minor=max(0, paid - refunded - reserved),
             pending_refund_minor=reserved,
+            payment_methods=[
+                method
+                for method in _POS_PAYMENT_METHOD_ORDER
+                if method in methods_by_order.get(o.id, set())
+            ],
         ))
     return out
 
@@ -3403,6 +4386,14 @@ class ShiftRead(BaseModel):
     # Accurate name for Payment receipts + membership receipts. Payment rows
     # may include tips and this is before refunds, so this is not net sales.
     gross_collections_minor: int
+    # Gross receipts by payment rail across POS and membership collections.
+    # These remain separate from ``expected_minor``: only cash affects the
+    # physical drawer, while card/UPI/other receipts still belong in the
+    # shift's commercial reconciliation.
+    cash_collections_minor: int
+    card_collections_minor: int
+    upi_collections_minor: int
+    other_collections_minor: int
     settled_pos_refunds_minor: int
     settled_membership_refunds_minor: int
     total_refunds_minor: int
@@ -3443,6 +4434,28 @@ async def list_shifts(
         .correlate(Shift)
         .scalar_subquery()
     )
+
+    def payment_rail_total(method: str):
+        pos_total = (
+            select(func.coalesce(func.sum(Payment.amount_minor), 0))
+            .where(Payment.shift_id == Shift.id, Payment.method == method)
+            .correlate(Shift)
+            .scalar_subquery()
+        )
+        membership_total = (
+            select(func.coalesce(func.sum(MembershipPayment.amount_minor), 0))
+            .where(
+                MembershipPayment.shift_id == Shift.id,
+                MembershipPayment.method == method,
+            )
+            .correlate(Shift)
+            .scalar_subquery()
+        )
+        return pos_total + membership_total
+
+    cash_collections_subq = payment_rail_total("cash")
+    card_collections_subq = payment_rail_total("card")
+    upi_collections_subq = payment_rail_total("upi")
     membership_refunds_subq = (
         select(func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0))
         .where(MembershipRefundSettlement.shift_id == Shift.id)
@@ -3462,6 +4475,9 @@ async def list_shifts(
             User.email,
             sales_subq.label("pos_sales"),
             membership_sales_subq.label("membership_sales"),
+            cash_collections_subq.label("cash_collections"),
+            card_collections_subq.label("card_collections"),
+            upi_collections_subq.label("upi_collections"),
             pos_refunds_subq.label("pos_refunds"),
             membership_refunds_subq.label("membership_refunds"),
         )
@@ -3484,12 +4500,24 @@ async def list_shifts(
         opener_email,
         pos_sales_value,
         membership_sales_value,
+        cash_collections_value,
+        card_collections_value,
+        upi_collections_value,
         pos_refunds_value,
         membership_refunds_value,
     ) in rows:
         pos_sales = int(pos_sales_value or 0)
         membership_sales = int(membership_sales_value or 0)
         gross_collections = pos_sales + membership_sales
+        cash_collections = int(cash_collections_value or 0)
+        card_collections = int(card_collections_value or 0)
+        upi_collections = int(upi_collections_value or 0)
+        other_collections = (
+            gross_collections
+            - cash_collections
+            - card_collections
+            - upi_collections
+        )
         pos_refunds = int(pos_refunds_value or 0)
         membership_refunds = int(membership_refunds_value or 0)
         total_refunds = pos_refunds + membership_refunds
@@ -3504,6 +4532,10 @@ async def list_shifts(
                 pos_sales_minor=pos_sales,
                 membership_sales_minor=membership_sales,
                 gross_collections_minor=gross_collections,
+                cash_collections_minor=cash_collections,
+                card_collections_minor=card_collections,
+                upi_collections_minor=upi_collections,
+                other_collections_minor=other_collections,
                 settled_pos_refunds_minor=pos_refunds,
                 settled_membership_refunds_minor=membership_refunds,
                 total_refunds_minor=total_refunds,
@@ -3711,7 +4743,11 @@ def _schedule_order_paid_event(
     background_tasks.add_task(_publish)
 
 
-@router.post("/orders/{order_id}/payments", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/orders/{order_id}/payments",
+    response_model=PaymentRead,
+    status_code=status.HTTP_201_CREATED,
+)
 async def record_payment(
     order_id: UUID,
     payload: PaymentCreate,
@@ -3723,7 +4759,7 @@ async def record_payment(
         str | None,
         Header(alias="X-Checkout-Claim"),
     ] = None,
-) -> dict:
+) -> PaymentRead:
     if tenant.terminal_id is None:
         raise BusinessRuleError("X-Terminal-Id header required for POS writes")
     if tenant.branch_id is None:
@@ -3737,7 +4773,11 @@ async def record_payment(
         terminal_id=tenant.terminal_id,
     )
     if existing_response:
-        return existing_response["body"]
+        return await _payment_read_from_stored_response(
+            session,
+            body=existing_response["body"],
+            order_id=order_id,
+        )
 
     order = (
         await session.execute(
@@ -3805,13 +4845,6 @@ async def record_payment(
     # check (app/api/v1/reports/router.py) already expect.
     tip_minor = int(payload.tip_minor or 0)
     collected_minor = payload.amount_minor + tip_minor
-    if (
-        payload.method == "cash"
-        and payload.tendered_minor is not None
-        and payload.tendered_minor < collected_minor
-    ):
-        raise BusinessRuleError("cash tendered cannot be less than payment amount")
-
     now = datetime.now(timezone.utc)
     if tip_minor:
         order.tip_minor = int(order.tip_minor or 0) + tip_minor
@@ -3820,11 +4853,12 @@ async def record_payment(
         id=uuid4(),
         order_id=order_id,
         shift_id=order.shift_id,
+        recorded_by=tenant.user_id,
         method=payload.method,
         amount_minor=collected_minor,
         tendered_minor=payload.tendered_minor,
         change_minor=(payload.tendered_minor - collected_minor)
-        if payload.tendered_minor and payload.method == "cash"
+        if payload.tendered_minor is not None and payload.method == "cash"
         else None,
         ref_external=payload.ref_external,
         paid_at=now,
@@ -3850,17 +4884,23 @@ async def record_payment(
             method=payload.method,
             occurred_at=now,
         )
-    response = {
-        "id": str(payment.id),
-        "amount_minor": payment.amount_minor,
-        "tip_minor": tip_minor,
-        "order_status": order.status,
-        "invoice_no": order.invoice_no,
-        "fiscal_year": order.fiscal_year,
-        "invoice_issued_at": order.invoice_issued_at.isoformat()
-        if order.invoice_issued_at
-        else None,
-    }
+    response = PaymentRead(
+        id=payment.id,
+        order_id=payment.order_id,
+        shift_id=payment.shift_id,
+        method=payment.method,
+        amount_minor=payment.amount_minor,
+        bill_amount_minor=payload.amount_minor,
+        tip_minor=tip_minor,
+        tendered_minor=payment.tendered_minor,
+        change_minor=payment.change_minor,
+        ref_external=payment.ref_external,
+        paid_at=payment.paid_at,
+        order_status=order.status,
+        invoice_no=order.invoice_no,
+        fiscal_year=order.fiscal_year,
+        invoice_issued_at=order.invoice_issued_at,
+    )
     # Consumed in the same transaction as Payment + invoice finalization.  If
     # any later flush/commit fails the delete rolls back with the sale, so the
     # cashier can safely retry using the same idempotency key and claim.
@@ -3869,7 +4909,7 @@ async def record_payment(
         session,
         key=idempotency_key,
         status_code=status.HTTP_201_CREATED,
-        body=response,
+        body=response.model_dump(mode="json"),
     )
     return response
 
@@ -3911,8 +4951,36 @@ async def _settle_pos_refund(
         branch_id=refund_request.branch_id,
         occurred_at=settled_at,
     )
+    refund_id = uuid4()
+    customer_spend_reconciled = order.customer_id is None
+
+    if refund_request.settlement_method == "cash":
+        shift.expected_minor = int(shift.expected_minor or 0) - amount
+
+    # Once value has physically moved, the immutable settlement must not roll
+    # back because an ancillary LTV record drifted. Forward orders normally
+    # reconcile here; legacy/deleted/inconsistent customers are explicitly
+    # flagged for owner repair while the real refund remains recorded.
+    if order.customer_id is not None:
+        customer = await session.get(Customer, order.customer_id, with_for_update=True)
+        if customer is not None and customer.company_id == refund_request.company_id:
+            current_spend = int(customer.total_spent_minor or 0)
+            if current_spend >= amount:
+                customer.total_spent_minor = current_spend - amount
+                customer_spend_reconciled = True
+            else:
+                # Never hide pre-existing LTV drift by flooring the accumulator
+                # and claiming success. The payout remains immutable and the
+                # owner reconciliation queue derives an authoritative balance
+                # from normalized payment/refund facts.
+                customer_spend_reconciled = False
+
+    # Keep the Refund pending while loyalty derives its state.  The no-autoflush
+    # boundary prevents a placeholder state from becoming immutable.  Once the
+    # final state is assigned we flush this parent explicitly, before the
+    # pending adjustment's FK/DB guard needs to read it.
     refund = Refund(
-        id=uuid4(),
+        id=refund_id,
         request_id=refund_request.id,
         order_id=order.id,
         company_id=refund_request.company_id,
@@ -3936,34 +5004,26 @@ async def _settle_pos_refund(
         receipt_no=receipt_no,
         receipt_fiscal_year=receipt_fiscal_year,
         receipt_issued_at=accounting_finalized_at,
-        customer_spend_reconciled=order.customer_id is None,
+        customer_spend_reconciled=customer_spend_reconciled,
+        loyalty_reconciliation_state="legacy_unknown",
         note=refund_request.note,
     )
     session.add(refund)
-
-    if refund_request.settlement_method == "cash":
-        shift.expected_minor = int(shift.expected_minor or 0) - amount
-
-    # Once value has physically moved, the immutable settlement must not roll
-    # back because an ancillary LTV record drifted. Forward orders normally
-    # reconcile here; legacy/deleted/inconsistent customers are explicitly
-    # flagged for owner repair while the real refund remains recorded.
-    if order.customer_id is not None:
-        customer = await session.get(Customer, order.customer_id, with_for_update=True)
-        if customer is not None and customer.company_id == refund_request.company_id:
-            current_spend = int(customer.total_spent_minor or 0)
-            if current_spend >= amount:
-                customer.total_spent_minor = current_spend - amount
-                refund.customer_spend_reconciled = True
-            else:
-                # Never hide pre-existing LTV drift by flooring the accumulator
-                # and claiming success. The payout remains immutable and the
-                # owner reconciliation queue derives an authoritative balance
-                # from normalized payment/refund facts.
-                refund.customer_spend_reconciled = False
+    with session.no_autoflush:
+        loyalty_reconciliation_state = await apply_refund_loyalty_adjustment(
+            session,
+            refund_id=refund_id,
+            order=order,
+            company_id=refund_request.company_id,
+            paid_total_minor=paid_total,
+            cumulative_refunded_minor=refunded_before + amount,
+            at=accounting_finalized_at,
+        )
+    refund.loyalty_reconciliation_state = loyalty_reconciliation_state
 
     if refunded_before + amount >= paid_total:
         order.status = "refunded"
+    await session.flush([refund])
 
     # A monetary refund is not proof that prepared food or consumed gaming
     # inventory returned to stock. Inventory reversal requires a separate,
@@ -4204,6 +5264,17 @@ async def create_pos_refund_request(
     )
     if order.status not in {"paid", "refunded"}:
         raise BusinessRuleError("Only a paid order can be refunded.")
+    if (
+        order.closed_at is None
+        or order.invoice_issued_at is None
+        or not (order.invoice_no or "").strip()
+        or not (order.fiscal_year or "").strip()
+    ):
+        raise BusinessRuleError(
+            "This paid order is missing immutable invoice evidence. Ask a protected "
+            "owner to reconcile the sale before refunding it. No refund task or cash "
+            "handover was created."
+        )
 
     # The order lock serializes both duplicate client_action_id recovery and
     # different-key partial refunds, preventing over-reservation.
@@ -6549,11 +7620,53 @@ async def open_shift(
         raise BusinessRuleError("X-Terminal-Id header required to open a shift")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
-    # Serialize shift opening per terminal so two simultaneous clients cannot
+    # Terminal management locks branch -> terminal. Use the same order here so
+    # an archive/configuration change cannot pass its no-open-shift check while
+    # this request is creating a shift on the same workspace.
+    branch = (
+        await session.execute(
+            select(Branch)
+            .where(
+                Branch.id == tenant.branch_id,
+                Branch.company_id == tenant.company_id,
+                Branch.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if branch is None:
+        raise BusinessRuleError(
+            "This shop is no longer available. Reload the app before opening a shift."
+        )
+    terminal = (
+        await session.execute(
+            select(Terminal)
+            .where(
+                Terminal.id == tenant.terminal_id,
+                Terminal.branch_id == tenant.branch_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if terminal is None:
+        raise BusinessRuleError(
+            "The selected workspace does not belong to this shop. Reload the app "
+            "and use its active workspace before opening a shift."
+        )
+    if not terminal.is_active:
+        raise BusinessRuleError(
+            "This workspace has been archived and cannot open a shift. Reload the "
+            "app and use the active workspace."
+        )
+    if terminal.purpose != "hybrid":
+        raise BusinessRuleError(
+            "This Gaming Centre requires one Hybrid workspace for Gaming, POS and "
+            "Shift. Ask the owner to complete the one-workspace setup before "
+            "opening a shift."
+        )
+
+    # The locked active terminal serializes simultaneous clients so they cannot
     # create two live shifts for the same drawer.
-    await session.execute(
-        select(Terminal).where(Terminal.id == tenant.terminal_id).with_for_update()
-    )
     existing = (
         await session.execute(
             select(Shift).where(

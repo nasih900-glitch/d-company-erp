@@ -31,6 +31,10 @@ data class ShiftDetail(
     // cannot provide an audited breakdown; it must never be shown as zero.
     @SerialName("membership_sales_minor") val membershipSalesMinor: Long? = null,
     @SerialName("gross_collections_minor") val grossCollectionsMinor: Long? = null,
+    @SerialName("cash_collections_minor") val cashCollectionsMinor: Long? = null,
+    @SerialName("card_collections_minor") val cardCollectionsMinor: Long? = null,
+    @SerialName("upi_collections_minor") val upiCollectionsMinor: Long? = null,
+    @SerialName("other_collections_minor") val otherCollectionsMinor: Long? = null,
     @SerialName("settled_pos_refunds_minor") val settledPosRefundsMinor: Long? = null,
     @SerialName("settled_membership_refunds_minor") val settledMembershipRefundsMinor: Long? = null,
     @SerialName("total_refunds_minor") val totalRefundsMinor: Long? = null,

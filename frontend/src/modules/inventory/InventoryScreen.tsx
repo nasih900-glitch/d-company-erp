@@ -24,7 +24,7 @@ import { INGREDIENTS } from '@/lib/demo-data';
 import { inr, inrShort } from '@/lib/inr';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
-  inventory, settings, type IngredientDTO, type SupplierDTO, type BranchDTO,
+  inventory, type IngredientDTO, type SupplierDTO, type BranchReferenceDTO,
 } from '@/lib/erp-api';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
@@ -40,7 +40,7 @@ export default function InventoryScreen() {
   const [tab, setTab] = useState<Tab>('ingredients');
   const [ingredients, setIngredients] = useState<IngredientDTO[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,7 +60,7 @@ export default function InventoryScreen() {
         const [ings, sups, brs] = await Promise.all([
           inventory.listIngredients(),
           inventory.listSuppliers().catch(() => []),
-          settings.listBranches().catch(() => []),
+          inventory.listBranches().catch(() => []),
         ]);
         setIngredients(ings);
         setSuppliers(sups);
@@ -554,7 +554,7 @@ function GRNForm({
 }: {
   ingredients: IngredientDTO[];
   suppliers: SupplierDTO[];
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   onClose: () => void;
   onSuccess: () => void;
 }) {
@@ -705,7 +705,7 @@ function AdjustmentForm({
   ingredient, branches, onClose, onSuccess,
 }: {
   ingredient: IngredientDTO;
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   onClose: () => void;
   onSuccess: () => void;
 }) {

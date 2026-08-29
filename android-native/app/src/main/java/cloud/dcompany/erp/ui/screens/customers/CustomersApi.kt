@@ -38,4 +38,10 @@ interface CustomersApi {
         @Body body: CustomerUpdateBody,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Customer
+
+    @GET("customers/{id}/history")
+    suspend fun history(
+        @Path("id") id: String,
+        @Query("limit") limit: Int = 50,
+    ): List<CustomerOrderHistory>
 }

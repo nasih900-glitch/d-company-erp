@@ -9,6 +9,7 @@ from app.services.reports.aggregator import (
     fy_full_range,
     fy_quarter_range,
     month_range,
+    parse_fiscal_year_start,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "fiscal_quarter",
     "fiscal_year_for_date",
     "month_range",
+    "parse_fiscal_year_start",
 ]

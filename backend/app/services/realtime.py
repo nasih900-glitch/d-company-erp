@@ -24,9 +24,12 @@ of sync with what a plain GET would return.
 from __future__ import annotations
 
 from collections import defaultdict
-from uuid import UUID
+from typing import TYPE_CHECKING
 
-from fastapi import WebSocket
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from fastapi import WebSocket
 
 from app.core.logging import get_logger
 
@@ -35,7 +38,8 @@ log = get_logger(__name__)
 RESOURCES = frozenset({
     "shifts", "tables", "orders", "gaming", "kitchen", "attendance",
     "menu", "customers", "inventory", "finance", "staff", "events",
-    "memberships", "access_control", "ocr", "settings",
+    "memberships", "access_control", "ocr", "settings", "bug_reports",
+    "receipts", "audit",
 })
 
 
@@ -82,7 +86,16 @@ manager = ConnectionManager()
 # covered automatically instead of silently missing the broadcast the way
 # a manually-placed call site could.
 _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
+    # Login is special: a successful login writes an audit row but does not yet
+    # have a bearer token for the generic middleware to identify the company.
+    # The endpoint therefore schedules the audit broadcast explicitly after
+    # committing login_success.  Keeping the route mapped here documents the
+    # public resource contract and lets resource-map tests prevent drift.
+    ("/auth/login", "audit"),
+    ("/auth/register/confirm", "audit"),
+    ("/auth/password-reset/confirm", "audit"),
     ("/pos/shifts", "shifts"),
+    ("/pos/receipts", "receipts"),
     ("/pos/refund-requests", "orders"),
     ("/pos/customer-spend-reconciliations", "customers"),
     ("/tables", "tables"),
@@ -101,6 +114,7 @@ _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/events", "events"),
     ("/memberships", "memberships"),
     ("/settings", "settings"),
+    ("/bug-reports", "bug_reports"),
     # Narrow on purpose — NOT a bare "/admin" row, which would also swallow
     # /admin/pricing/unlock and /admin/audit/*, neither of which is a
     # resource anything should be pull-refreshing on.
@@ -124,18 +138,24 @@ def resources_for_path(path: str) -> tuple[str, ...]:
     finance/report aggregates. Broadcasting only ``memberships`` left every
     other terminal displaying stale money until its next poll.
     """
+    def with_audit(*resources: str) -> tuple[str, ...]:
+        """Every successful mapped write also changes the audit timeline."""
+        if not resources or "audit" in resources:
+            return resources
+        return (*resources, "audit")
+
     primary = resource_for_path(path)
     if primary is None:
         return ()
     normalized_path = path.rstrip("/")
     if primary == "memberships":
-        return ("memberships", "shifts", "customers", "finance")
+        return with_audit("memberships", "shifts", "customers", "finance")
     if "/pos/customer-spend-reconciliations" in path:
         # This owner correction writes Customer.total_spent_minor directly.
         # Customer screens and finance/LTV aggregates both read that value.
-        return ("customers", "finance")
+        return with_audit("customers", "finance")
     if "/pos/refund-requests" in path:
-        return ("orders", "shifts", "customers", "finance")
+        return with_audit("orders", "receipts", "shifts", "customers", "finance")
     if "/pos/orders/" in normalized_path and normalized_path.endswith("/payments"):
         # Every accepted payment changes shift collections and finance/report
         # aggregates. When it settles the balance, the same route also runs
@@ -143,8 +163,9 @@ def resources_for_path(path: str) -> tuple[str, ...]:
         # and deducts any recipe ingredients from inventory. Path-only
         # invalidation therefore has to include both completion resources for
         # this route, while ordinary unpaid-order edits remain narrowly scoped.
-        return (
+        return with_audit(
             "orders",
+            "receipts",
             "tables",
             "kitchen",
             "shifts",
@@ -157,15 +178,28 @@ def resources_for_path(path: str) -> tuple[str, ...]:
         # run the shared finalizer: customer metrics, finance/report facts
         # (including the completed sale/COGS boundary), and recipe inventory
         # can change.
-        return ("orders", "tables", "kitchen", "customers", "finance", "inventory")
+        return with_audit(
+            "orders",
+            "receipts",
+            "tables",
+            "kitchen",
+            "customers",
+            "finance",
+            "inventory",
+        )
     if "/pos/orders" in path:
         # Table rounds, line edits/cancellations, held handoff, checkout claims,
         # and whole-order void can change these three operational screens. The
         # financial completion routes are handled above rather than widening
         # every draft-order edit to unrelated customer and finance reads.
-        return ("orders", "tables", "kitchen")
+        return with_audit("orders", "tables", "kitchen")
     if "/gaming/sessions" in path and (
         "/send-to-pos" in path or "/reconcile-to-pos" in path
     ):
-        return ("gaming", "orders")
-    return (primary,)
+        return with_audit("gaming", "orders")
+    if normalized_path.endswith("/inventory/grn"):
+        # Receiving stock posts the source-linked inventory/AP journal in the
+        # same transaction. Refresh both the physical-stock view and every
+        # finance/report cache that reads that journal.
+        return with_audit("inventory", "finance")
+    return with_audit(primary)

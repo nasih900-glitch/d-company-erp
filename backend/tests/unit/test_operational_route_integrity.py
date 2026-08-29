@@ -18,12 +18,13 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.dialects import postgresql
 
 from app.api.v1.gaming import router as gaming_router
+from app.api.v1.memberships import router as memberships_router
 from app.api.v1.pos import router as pos_router
 from app.core.errors import BusinessRuleError, ConflictError, ForbiddenError
 from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
 from app.events.events import OrderPaid
-from app.models import Branch, Order, OrderLine, Payment, Station, Table
+from app.models import Branch, Order, OrderLine, Payment, Station, Table, Terminal
 
 
 class _Result:
@@ -105,6 +106,27 @@ def test_table_bill_routes_enforce_required_domain_permissions() -> None:
     assert "pos.void" not in ROLE_PERMISSIONS["staff"]
     assert "pos.void" in ROLE_PERMISSIONS["cashier"]
     assert "pos.void" in ROLE_PERMISSIONS["manager"]
+
+
+def test_membership_operations_do_not_widen_legacy_evidence_controls() -> None:
+    """Co-owners can sell/refund memberships, but not rewrite recovery evidence."""
+    assert _route_permissions(memberships_router.prepare_membership_payment) == (
+        "memberships.manage",
+    )
+    assert _route_permissions(memberships_router.refund_membership) == (
+        "memberships.manage",
+    )
+
+    protected_support_endpoints = (
+        memberships_router.resolve_rejected_membership_payment_attempt,
+        memberships_router.register_rejected_membership_refund_attempt,
+        memberships_router.list_rejected_membership_refund_attempts,
+        memberships_router.resolve_rejected_membership_refund_attempt,
+        memberships_router.reconcile_membership_evidence,
+        memberships_router.list_membership_evidence_reconciliations,
+    )
+    for endpoint in protected_support_endpoints:
+        assert _route_permissions(endpoint) == ("admin.system",)
 
 
 @pytest.mark.asyncio
@@ -411,6 +433,7 @@ def test_confirmed_payment_rejects_a_stale_or_partial_full_settlement() -> None:
     partial_without_client_expectations = pos_router.PaymentCreate(
         method="cash",
         amount_minor=5_000,
+        tendered_minor=5_000,
     )
     with pytest.raises(BusinessRuleError, match="Split payments are not enabled"):
         pos_router._validate_confirmed_payment_balance(
@@ -521,9 +544,10 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     payment = next(entity for entity in session.added if isinstance(entity, Payment))
     assert payment.amount_minor == 11_500  # bill + tip actually collected
 
-    assert response["amount_minor"] == 11_500
-    assert response["tip_minor"] == 1_500
-    assert response["order_status"] == "paid"
+    assert response.amount_minor == 11_500
+    assert response.bill_amount_minor == 10_000
+    assert response.tip_minor == 1_500
+    assert response.order_status == "paid"
     assert stored["status_code"] == 201
 
     # A fully-settled payment must queue exactly one OrderPaid publish as a
@@ -611,6 +635,7 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         pos_router.PaymentCreate(
             method="cash",
             amount_minor=5_000,
+            tendered_minor=5_000,
             expected_order_total_minor=5_000,
             expected_due_minor=5_000,
         ),
@@ -708,6 +733,7 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
         pos_router.PaymentCreate(
             method="cash",
             amount_minor=5_000,
+            tendered_minor=6_000,
             expected_order_total_minor=5_000,
             expected_due_minor=5_000,
         ),
@@ -716,7 +742,14 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
         background_tasks,
         tenant,
     )
-    assert response["order_status"] == "paid"
+    assert response.method == "cash"
+    assert response.amount_minor == 5_000
+    assert response.bill_amount_minor == 5_000
+    assert response.tip_minor == 0
+    assert response.tendered_minor == 6_000
+    assert response.change_minor == 1_000
+    assert response.paid_at is not None
+    assert response.order_status == "paid"
 
     # Must not raise even though the bus explodes.
     await background_tasks()
@@ -875,6 +908,109 @@ async def test_customer_repricing_updates_existing_lines_and_canonical_order_tot
     assert order.round_off_minor == 0
 
 
+@pytest.mark.asyncio
+async def test_deleted_package_session_cannot_receive_hourly_membership_waiver(
+    monkeypatch,
+) -> None:
+    company_id = uuid4()
+    branch_id = uuid4()
+    item_id = uuid4()
+    order = SimpleNamespace(
+        id=uuid4(),
+        branch_id=branch_id,
+        customer_phone="9000000000",
+        place_of_supply_state_code="32",
+        delivery_via=None,
+        subtotal_minor=0,
+        discount_minor=0,
+        manual_discount_minor=0,
+        points_redeemed_minor=0,
+        cgst_minor=0,
+        sgst_minor=0,
+        igst_minor=0,
+        cess_minor=0,
+        tax_minor=0,
+        round_off_minor=0,
+        total_minor=0,
+    )
+    line = SimpleNamespace(
+        menu_item_id=item_id,
+        qty=1,
+        unit_price_minor=15_000,
+        line_total_minor=15_000,
+        discount_minor=0,
+        taxable_value_minor=12_712,
+        tax_rate=0.18,
+        cgst_minor=1_144,
+        sgst_minor=1_144,
+        igst_minor=0,
+        cess_minor=0,
+    )
+    item = SimpleNamespace(
+        id=item_id,
+        sku="SESSION-PS5",
+        type="gaming",
+        price_includes_tax=True,
+    )
+    station = SimpleNamespace(type="ps5")
+    gaming_session = SimpleNamespace(
+        package_id=None,
+        billing_mode="legacy_ambiguous",
+        package_price_minor_snapshot=None,
+        package_duration_minutes_snapshot=None,
+        package_variant_snapshot=None,
+        package_station_type_snapshot=None,
+        status="ended",
+        amount_minor=15_000,
+        billable_minutes=60,
+        rate_per_hour_minor=15_000,
+        rate_includes_tax=True,
+        tax_rate=0.18,
+    )
+    requested: dict[str, int] = {}
+
+    async def _reserve(*_args, **kwargs):
+        requested["gaming_minutes"] = kwargs["requested_gaming_minutes"]
+        return SimpleNamespace(gaming_minutes=60, hookah_count=0)
+
+    class _Pricing:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def price_time_based_line(self, **kwargs):
+            assert kwargs["amount_minor"] == 15_000
+            assert kwargs["allowance_minor"] == 0
+            return SimpleNamespace(
+                total_minor=15_000,
+                discount_minor=0,
+                taxable_minor=12_712,
+                cgst_minor=1_144,
+                sgst_minor=1_144,
+                igst_minor=0,
+            )
+
+    monkeypatch.setattr(pos_router, "reserve_membership_benefits", _reserve)
+    monkeypatch.setattr(pos_router, "OrderPricingService", _Pricing)
+    db = _Session(
+        _Result(rows=[line]),
+        _Result(rows=[item]),
+        _Result(rows=[(gaming_session, station)]),
+        _Result(),
+        _Result(),
+    )
+
+    await pos_router._reprice_unpaid_order_for_customer(
+        db,
+        order=order,
+        company_id=company_id,
+    )
+
+    assert requested["gaming_minutes"] == 0
+    assert line.line_total_minor == 15_000
+    assert line.discount_minor == 0
+    assert order.total_minor == 15_000
+
+
 def test_cancel_reason_is_trimmed_and_whitespace_only_is_rejected() -> None:
     assert gaming_router.SessionCancel(reason="  Customer left  ").reason == "Customer left"
     with pytest.raises(PydanticValidationError):
@@ -1020,6 +1156,9 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
                     "qa-owner@example.test",
                     83_600,
                     199_900,
+                    93_600,
+                    60_000,
+                    100_000,
                     2_000,
                     1_000,
                 )
@@ -1044,6 +1183,10 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
     assert summary.pos_sales_minor == 83_600
     assert summary.membership_sales_minor == 199_900
     assert summary.gross_collections_minor == 283_500
+    assert summary.cash_collections_minor == 93_600
+    assert summary.card_collections_minor == 60_000
+    assert summary.upi_collections_minor == 100_000
+    assert summary.other_collections_minor == 29_900
     assert summary.total_sales_minor == 283_500  # compatibility alias only
     assert summary.settled_pos_refunds_minor == 2_000
     assert summary.settled_membership_refunds_minor == 1_000
@@ -1063,6 +1206,10 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
             "pos_sales_minor",
             "membership_sales_minor",
             "gross_collections_minor",
+            "cash_collections_minor",
+            "card_collections_minor",
+            "upi_collections_minor",
+            "other_collections_minor",
             "settled_pos_refunds_minor",
             "settled_membership_refunds_minor",
             "total_refunds_minor",
@@ -1073,6 +1220,10 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
         "pos_sales_minor": 83_600,
         "membership_sales_minor": 199_900,
         "gross_collections_minor": 283_500,
+        "cash_collections_minor": 93_600,
+        "card_collections_minor": 60_000,
+        "upi_collections_minor": 100_000,
+        "other_collections_minor": 29_900,
         "settled_pos_refunds_minor": 2_000,
         "settled_membership_refunds_minor": 1_000,
         "total_refunds_minor": 3_000,
@@ -1414,11 +1565,25 @@ async def test_session_send_uses_the_sessions_original_shift(monkeypatch) -> Non
     station = _station(tenant)
     original_shift = _shift(tenant)
     gaming_session = _gaming_session(tenant, station.id, original_shift.id)
-    menu_item = SimpleNamespace(id=uuid4(), hsn_code="999692")
+    menu_item = SimpleNamespace(
+        id=uuid4(),
+        name="Gaming session",
+        type="gaming",
+        hsn_code="999692",
+    )
+    terminal = SimpleNamespace(
+        id=tenant.terminal_id,
+        branch_id=tenant.branch_id,
+        purpose="hybrid",
+    )
     session = _Session(
         _Result(scalar=gaming_session),
         _Result(scalar=original_shift),
-        entities={(Station, station.id): station},
+        _Result(rows=[]),  # no staged Gaming add-ons to copy into this bill
+        entities={
+            (Station, station.id): station,
+            (Terminal, terminal.id): terminal,
+        },
     )
 
     async def _menu_item(_session, *, company_id, station):
@@ -1511,6 +1676,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
     first_session = _Session(
         _Result(scalar=gaming_session),
         _Result(scalar=shift),
+        _Result(scalar=0),  # no active add-ons block whole-session cancellation
         entities={(Station, station.id): station},
     )
 
@@ -1561,6 +1727,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             _Session(
                 _Result(scalar=gaming_session),
                 _Result(scalar=shift),
+                _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
             wrong_terminal,
@@ -1582,6 +1749,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             _Session(
                 _Result(scalar=gaming_session),
                 _Result(scalar=shift),
+                _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
             other_staff,
@@ -1602,6 +1770,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             _Session(
                 _Result(scalar=gaming_session),
                 _Result(scalar=shift),
+                _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
             protected_owner,
@@ -1654,7 +1823,11 @@ async def test_start_session_replay_returns_stored_response_without_recreating()
     )
 
     response = await gaming_router.start_session(
-        gaming_router.SessionStart(station_id=station.id, shift_id=shift.id),
+        gaming_router.SessionStart(
+            station_id=station.id,
+            shift_id=shift.id,
+            expected_rate_per_hour_minor=20_000,
+        ),
         session,
         request,
         tenant,
@@ -1703,6 +1876,8 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
     line = SimpleNamespace(
         id=uuid4(),
         menu_item_id=uuid4(),
+        menu_item_name_snapshot="Sandwich",
+        menu_item_type_snapshot="food",
         variant_id=None,
         modifiers=None,
         qty=1,
@@ -1757,7 +1932,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
         _Result(rows=[order]),
         _Result(rows=[(order.id, 1)]),
         _Result(rows=[(order.id, "PS5 1")]),
-        _Result(rows=[]),  # paid_by_order — nothing paid on a held order
+        _Result(rows=[]),  # payment rows — nothing paid on a held order
         _Result(rows=[]),  # refunded_by_order
         _Result(rows=[]),  # accepted, unresolved refund requests
     )
@@ -1773,6 +1948,7 @@ async def test_held_order_list_returns_authoritative_held_timestamp() -> None:
     assert response[0].source_label == "PS5 1"
     assert response[0].paid_minor == 0
     assert response[0].refundable_minor == 0
+    assert response[0].payment_methods == []
     order_params = session.statements[0].compile().params.values()
     assert tenant.company_id in order_params
     assert tenant.branch_id in order_params
@@ -1801,7 +1977,12 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
         _Result(rows=[order]),
         _Result(rows=[(order.id, 3)]),  # counts_by_order
         _Result(rows=[]),  # station_by_order
-        _Result(rows=[(order.id, 1_000)]),  # paid_by_order
+        _Result(
+            rows=[
+                (order.id, "upi", 600),
+                (order.id, "cash", 400),
+            ]
+        ),  # legacy mixed payment rows; response order is canonical
         _Result(rows=[(order.id, 400)]),  # refunded_by_order — one prior partial refund
         _Result(rows=[]),  # accepted, unresolved refund requests
     )
@@ -1811,3 +1992,4 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
     assert response[0].checkout_version == 3
     assert response[0].paid_minor == 1_000
     assert response[0].refundable_minor == 600
+    assert response[0].payment_methods == ["cash", "upi"]

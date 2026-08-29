@@ -4,10 +4,14 @@ import cloud.dcompany.erp.core.auth.OutboxGateResult
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -73,29 +77,35 @@ class SessionLoginErrorTest {
     }
 
     @Test
-    fun `cached authenticated employee is published before server refresh can finish`() = runBlocking {
-        val published = CompletableDeferred<Unit>()
+    fun `cached identity is display only until server refresh decides write authority`() = runBlocking {
+        val verifyingPublished = CompletableDeferred<Unit>()
         val remoteStarted = CompletableDeferred<Unit>()
         val releaseRemote = CompletableDeferred<Unit>()
+        var cachedWriteAuthorityActivated = false
 
         val restore = launch(Dispatchers.Default) {
-            restoreCachedBeforeRemote(
+            verifyRemoteBeforeCachedActivation(
                 cached = "cached-employee",
-                activateCached = { true },
-                publishCached = { published.complete(Unit) },
-                refreshRemote = { cachedSessionActive ->
-                    if (cachedSessionActive) remoteStarted.complete(Unit)
+                validateCachedIdentity = { true },
+                publishVerifying = { verifyingPublished.complete(Unit) },
+                refreshRemote = { cachedIdentity ->
+                    if (cachedIdentity != null) remoteStarted.complete(Unit)
                     releaseRemote.await()
+                    cachedWriteAuthorityActivated = true
                 },
             )
         }
 
         try {
             withTimeout(1_000) {
-                published.await()
+                verifyingPublished.await()
                 remoteStarted.await()
             }
             assertFalse("remote validation must still be blocked", restore.isCompleted)
+            assertFalse(
+                "cached write authority must remain inactive during live verification",
+                cachedWriteAuthorityActivated,
+            )
         } finally {
             releaseRemote.complete(Unit)
             restore.join()
@@ -103,9 +113,50 @@ class SessionLoginErrorTest {
     }
 
     @Test
+    fun `cancellation immediately after token install rolls back before propagating`() = runBlocking {
+        val installed = CompletableDeferred<Unit>()
+        val holdInstallReturn = CompletableDeferred<Unit>()
+        val rolledBack = CompletableDeferred<String>()
+        val capturedLease = AtomicReference<String?>(null)
+
+        val login = launch(Dispatchers.Default) {
+            try {
+                withContext(Dispatchers.IO) {
+                    capturedLease.set("installed-login-lineage")
+                    installed.complete(Unit)
+                    // Model cancellation winning the IO-to-caller return race
+                    // after installForLogin has already persisted its token.
+                    holdInstallReturn.await()
+                }
+            } catch (cancelled: CancellationException) {
+                rollbackCancelledLoginAndRethrow(
+                    installedLogin = capturedLease.get(),
+                    cancelled = cancelled,
+                    rollbackIfCurrent = { lease ->
+                        // A suspension here proves rollback runs with a live
+                        // NonCancellable job rather than the cancelled login.
+                        delay(10)
+                        rolledBack.complete(lease)
+                    },
+                )
+            }
+        }
+
+        withTimeout(1_000) { installed.await() }
+        login.cancel(CancellationException("login screen left"))
+        withTimeout(1_000) { login.join() }
+
+        assertEquals(
+            "installed-login-lineage",
+            withTimeout(1_000) { rolledBack.await() },
+        )
+        assertTrue(login.isCancelled)
+    }
+
+    @Test
     fun `offline restore keeps cached identity and does not request sign out`() {
         val action = restoreFailureAction(
-            cachedSessionActive = true,
+            cachedIdentityAvailable = true,
             error = ApiException("server unreachable", status = null, code = "network_error"),
         )
 
@@ -118,7 +169,7 @@ class SessionLoginErrorTest {
         assertEquals(
             RestoreFailureAction.SHOW_UNREACHABLE,
             restoreFailureAction(
-                cachedSessionActive = false,
+                cachedIdentityAvailable = false,
                 error = ApiException("server unreachable", status = null, code = "network_error"),
             ),
         )
@@ -129,15 +180,45 @@ class SessionLoginErrorTest {
         assertEquals(
             RestoreFailureAction.SIGN_OUT,
             restoreFailureAction(
-                cachedSessionActive = true,
+                cachedIdentityAvailable = true,
                 error = ApiException("expired", status = 401, code = "auth_error"),
             ),
         )
         assertEquals(
             RestoreFailureAction.SIGN_OUT,
             restoreFailureAction(
-                cachedSessionActive = true,
+                cachedIdentityAvailable = true,
                 error = ApiException("forbidden", status = 403, code = "auth_error"),
+            ),
+        )
+    }
+
+    @Test
+    fun `server errors never unlock cached write authority`() {
+        assertEquals(
+            RestoreFailureAction.SHOW_UNREACHABLE,
+            restoreFailureAction(
+                cachedIdentityAvailable = true,
+                error = ApiException("temporary server failure", status = 503),
+            ),
+        )
+        assertEquals(
+            RestoreFailureAction.SHOW_UNREACHABLE,
+            restoreFailureAction(
+                cachedIdentityAvailable = true,
+                error = ApiException("update required", status = 426),
+            ),
+        )
+    }
+
+    @Test
+    fun `fresh server profile prevents stale cached fallback when terminal verification loses network`() {
+        assertEquals(
+            RestoreFailureAction.SHOW_UNREACHABLE,
+            restoreFailureAction(
+                cachedIdentityAvailable = true,
+                liveProfileVerified = true,
+                error = ApiException("terminal list unavailable", status = null, code = "network_error"),
             ),
         )
     }

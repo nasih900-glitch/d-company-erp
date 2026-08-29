@@ -56,8 +56,28 @@ class SyncResourceAccessTest {
 
         assertTrue(access.canPull("shifts"))
         assertTrue(access.canPull("orders"))
+        assertTrue(access.canPull("receipts"))
         assertFalse(access.canPull("finance"))
         assertFalse(access.canPull("settings"))
+    }
+
+    @Test
+    fun `settings cache follows dedicated management permission not admin system`() {
+        val settingsOwner = SyncResourceAccess.from(
+            profile(
+                roles = listOf("owner"),
+                permissions = listOf(ErpPermission.SettingsManage),
+            ),
+        )
+        val protectedAdminOnly = SyncResourceAccess.from(
+            profile(
+                roles = listOf("super_owner"),
+                permissions = listOf(ErpPermission.AdminSystem),
+            ),
+        )
+
+        assertTrue(settingsOwner.canPull("settings"))
+        assertFalse(protectedAdminOnly.canPull("settings"))
     }
 
     @Test

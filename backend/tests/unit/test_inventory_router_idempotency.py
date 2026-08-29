@@ -36,11 +36,18 @@ from app.core.tenant import TenantContext
 
 
 class _Result:
-    def __init__(self, *, scalar=None) -> None:
+    def __init__(self, *, scalar=None, rows=None) -> None:
         self.scalar = scalar
+        self.rows = [] if rows is None else rows
 
     def scalar_one_or_none(self):
         return self.scalar
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.rows
 
 
 class _NoIdempotencyState:
@@ -66,6 +73,7 @@ class _Session:
         self.rollback_count = 0
         self.flush_error = flush_error
         self.statements: list = []
+        self.added: list = []
 
     async def execute(self, statement):
         self.statements.append(statement)
@@ -73,8 +81,8 @@ class _Session:
             raise AssertionError(f"unexpected database statement: {statement}")
         return self.results.pop(0)
 
-    def add(self, _obj) -> None:
-        pass
+    def add(self, obj) -> None:
+        self.added.append(obj)
 
     async def flush(self) -> None:
         self.flush_count += 1
@@ -277,7 +285,7 @@ async def test_post_adjustment_locks_ingredient_before_deterministic_fifo_batch(
         qty_on_hand=10.0,
         cost_per_unit_minor=50,
     )
-    session = _Session(_Result(scalar=ingredient), _Result(scalar=batch))
+    session = _Session(_Result(scalar=ingredient), _Result(rows=[batch]))
 
     with (
         patch.object(inventory_router, "check_or_reserve", AsyncMock(return_value=None)),
@@ -304,3 +312,87 @@ async def test_post_adjustment_locks_ingredient_before_deterministic_fifo_batch(
     assert "FROM BATCHES" in batch_sql
     assert "ORDER BY BATCHES.RECEIVED_AT, BATCHES.ID" in batch_sql
     assert "FOR UPDATE" in batch_sql
+
+
+@pytest.mark.asyncio
+async def test_negative_adjustment_consumes_every_fifo_batch_without_stock_drift() -> None:
+    """A reduction larger than the oldest receipt must continue into newer
+    batches, and the movement trail must add up to the ingredient delta."""
+    tenant = _tenant()
+    branch_id = uuid4()
+    ingredient_id = uuid4()
+    ingredient = SimpleNamespace(
+        id=ingredient_id,
+        company_id=tenant.company_id,
+        deleted_at=None,
+        current_qty=10.0,
+    )
+    oldest = SimpleNamespace(id=uuid4(), qty_on_hand=2.0, cost_per_unit_minor=40)
+    newer = SimpleNamespace(id=uuid4(), qty_on_hand=8.0, cost_per_unit_minor=55)
+    session = _Session(
+        _Result(scalar=ingredient),
+        _Result(rows=[oldest, newer]),
+    )
+
+    with (
+        patch.object(inventory_router, "check_or_reserve", AsyncMock(return_value=None)),
+        patch.object(inventory_router, "_require_writable_branch", AsyncMock()),
+        patch.object(inventory_router, "store_response", AsyncMock()),
+    ):
+        result = await inventory_router.post_adjustment(
+            inventory_router.StockAdjustment(
+                ingredient_id=ingredient_id,
+                branch_id=branch_id,
+                qty_delta=-5,
+                type="waste",
+            ),
+            session,
+            _Request(_WithIdempotencyState("adjustment:multi-batch", "hash")),
+            tenant,
+        )
+
+    assert oldest.qty_on_hand == 0.0
+    assert newer.qty_on_hand == 5.0
+    assert ingredient.current_qty == 5.0
+    assert [movement.qty_delta for movement in session.added] == [-2.0, -3.0]
+    assert [movement.cost_per_unit_minor for movement in session.added] == [40, 55]
+    assert sum(movement.qty_delta for movement in session.added) == -5.0
+    assert result["id"] == str(session.added[0].id)
+    assert result["remaining"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_negative_adjustment_above_branch_balance_is_rejected_before_mutation() -> None:
+    tenant = _tenant()
+    branch_id = uuid4()
+    ingredient_id = uuid4()
+    ingredient = SimpleNamespace(
+        id=ingredient_id,
+        company_id=tenant.company_id,
+        deleted_at=None,
+        current_qty=10.0,
+    )
+    batch = SimpleNamespace(id=uuid4(), qty_on_hand=2.0, cost_per_unit_minor=40)
+    session = _Session(_Result(scalar=ingredient), _Result(rows=[batch]))
+
+    with (
+        patch.object(inventory_router, "check_or_reserve", AsyncMock(return_value=None)),
+        patch.object(inventory_router, "_require_writable_branch", AsyncMock()),
+        patch.object(inventory_router, "store_response", AsyncMock()),
+    ):
+        with pytest.raises(BusinessRuleError, match="only 2 units are available"):
+            await inventory_router.post_adjustment(
+                inventory_router.StockAdjustment(
+                    ingredient_id=ingredient_id,
+                    branch_id=branch_id,
+                    qty_delta=-3,
+                    type="damage",
+                ),
+                session,
+                _Request(_WithIdempotencyState("adjustment:over-balance", "hash")),
+                tenant,
+            )
+
+    assert batch.qty_on_hand == 2.0
+    assert ingredient.current_qty == 10.0
+    assert session.added == []

@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Loader2, Package, Plus, RefreshCw } from 'lucide-react';
 
 import Modal from '@/components/ui/Modal';
-import { finance, settings, type AssetDTO, type BranchDTO } from '@/lib/erp-api';
+import { finance, type AssetDTO, type BranchReferenceDTO } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import { rupeesToMinor } from '@/lib/manual-collections';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 // ============================================================================
 // FIXED ASSETS — equipment register (gaming, kitchen, furniture, ...),
@@ -27,29 +28,30 @@ function categoryLabel(type: string): string {
 
 export default function AssetsTab() {
   const [rows, setRows] = useState<AssetDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setErr(null);
     try {
       const [assets, branchRows] = await Promise.all([
         finance.listAssets(),
-        settings.listBranches(),
+        finance.listBranches(),
       ]);
       setRows(assets);
       setBranches(branchRows);
     } catch (error) {
       setErr((error as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   if (loading) {
     return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading fixed assets…</div>;
@@ -86,7 +88,7 @@ export default function AssetsTab() {
           {rows.length} asset{rows.length === 1 ? '' : 's'} on the register
         </p>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load} aria-label="Refresh assets"><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh assets"><RefreshCw size={14}/></button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
             <Plus size={14}/> Add asset
           </button>
@@ -95,7 +97,7 @@ export default function AssetsTab() {
 
       {!branches.length && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
-          Add a branch in <b>Settings → Branches</b> before recording an asset.
+          No shop is available for this asset. Ask the protected owner to check your shop access.
         </div>
       )}
       {err && <ErrorRow text={err}/>}
@@ -186,7 +188,7 @@ function AssetForm({
   onClose,
   onSuccess,
 }: {
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   onClose: () => void;
   onSuccess: () => void;
 }) {

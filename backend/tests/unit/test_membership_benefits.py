@@ -340,6 +340,7 @@ async def test_percentage_discount_still_applies_after_the_free_allowance() -> N
         id=uuid4(),
         company_id=company.id,
         name="Main",
+        invoice_series_code="MN",
         state_code="32",
     )
 
@@ -680,6 +681,7 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
         id=uuid4(),
         company_id=company_id,
         name="Main",
+        invoice_series_code="MN",
         code="MN",
         timezone="Asia/Kolkata",
     )

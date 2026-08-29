@@ -104,6 +104,35 @@ class GamingSourceShiftClosedError(BusinessRuleError):
     code = "gaming_source_shift_closed"
 
 
+class GamingBillingRepairRequiredError(ConflictError):
+    """An ended/corrupt gaming row must not silently become a zero bill."""
+
+    code = "gaming_billing_repair_required"
+
+
+class GamingExtensionNotAppliedError(ConflictError):
+    """Proof that one scoped extension action has no immutable charge receipt."""
+
+    code = "gaming_extension_not_applied"
+
+
+class GamingLegacyServerSessionNotFoundError(BusinessRuleError):
+    """A recovery probe conclusively found no accepted server Start.
+
+    Unlike ambiguous or contradictory evidence, this rolled-back outcome is
+    safe for the protected owner to replace with a manual-bill or no-play
+    decision using a fresh request body for the same retained local action.
+    """
+
+    code = "gaming_legacy_server_session_not_found"
+
+
+class GamingLegacyStopOwnerReviewRequiredError(BusinessRuleError):
+    """A retained hourly Stop predates the accepted server Start timestamp."""
+
+    code = "gaming_legacy_stop_owner_review_required"
+
+
 class RateLimitError(AppError):
     status_code = 429
     code = "rate_limited"

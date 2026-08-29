@@ -15,6 +15,18 @@ data class GamingStationEntity(
     val isActive: Boolean,
 )
 
+/** Active base/extension packages cached for offline-safe session capture. */
+@Entity(tableName = "gaming_package_cache")
+data class GamingPackageCacheEntity(
+    @PrimaryKey val id: String,
+    val stationType: String,
+    val variant: String,
+    val kind: String,
+    val name: String,
+    val durationMinutes: Int,
+    val priceMinor: Long,
+)
+
 /**
  * Every session the server knows about, for every terminal — not just this
  * one. Sessions are a shared floor view (another tablet's start must show
@@ -28,6 +40,8 @@ data class GamingStationEntity(
 data class GamingSessionCacheEntity(
     @PrimaryKey val id: String,
     val stationId: String,
+    /** The opening shift owns terminal-bound stop/send/cancel actions. */
+    val shiftId: String? = null,
     val status: String,
     val startAtMillis: Long,
     val endAtMillis: Long? = null,
@@ -35,9 +49,61 @@ data class GamingSessionCacheEntity(
     val timerEndsAtMillis: Long? = null,
     val billableMinutes: Int? = null,
     val amountMinor: Long? = null,
+    /** Server-locked billing snapshot; never substitute the station's current price. */
+    val ratePerHourMinor: Long? = null,
+    val packageId: String? = null,
+    /** Package identity may retire; these server-locked facts remain authoritative. */
+    val billingMode: String? = null,
+    val packagePriceMinorSnapshot: Long? = null,
+    val packageDurationMinutesSnapshot: Int? = null,
+    val packageVariantSnapshot: String? = null,
+    val packageStationTypeSnapshot: String? = null,
+    val extraControllers: Int = 0,
     val customerName: String? = null,
     val customerPhone: String? = null,
     val orderId: String? = null,
+)
+
+/**
+ * Server-authoritative food/drink/dessert staged against an unbilled Gaming
+ * session. These rows are display receipts only and may be replaced after a
+ * complete per-session pull. The local financial command always lives in
+ * [LocalGamingSessionAddonActionEntity].
+ */
+@Entity(
+    tableName = "gaming_session_addon_cache",
+    indices = [Index("gamingSessionId"), Index("clientLineId")],
+)
+data class GamingSessionAddonCacheEntity(
+    @PrimaryKey val id: String,
+    val gamingSessionId: String,
+    val clientLineId: String,
+    val menuItemId: String,
+    val menuItemName: String,
+    val menuItemType: String,
+    val variantId: String? = null,
+    /** Immutable server JSON; never reconstructed from the mutable catalogue. */
+    val variantSnapshotJson: String? = null,
+    val modifiersJson: String = "[]",
+    val qty: Int,
+    val catalogUnitPriceMinor: Long,
+    val unitPriceMinor: Long,
+    val lineTotalMinor: Long,
+    val discountMinor: Long,
+    val hsnOrSac: String? = null,
+    val taxRate: Double,
+    val taxableValueMinor: Long,
+    val cgstMinor: Long,
+    val sgstMinor: Long,
+    val igstMinor: Long,
+    val cessMinor: Long,
+    val note: String? = null,
+    val createdBy: String,
+    val createdTerminalId: String,
+    val createdAtMillis: Long,
+    val voidedAtMillis: Long? = null,
+    val voidedBy: String? = null,
+    val voidReason: String? = null,
 )
 
 object GamingSessionState {
@@ -59,7 +125,42 @@ object GamingSessionState {
     const val START_REJECTED = "start_rejected"
     const val STOP_REJECTED = "stop_rejected"
     const val SEND_REJECTED = "send_rejected"
+    /** A pre-v28 package outbox was resolved without replaying untrusted pricing facts. */
+    const val LEGACY_RESOLVED = "legacy_resolved"
 }
+
+object GamingLegacyResolution {
+    const val MANUAL_BILL_RECORDED = "manual_bill_recorded"
+    const val CONFIRMED_NO_PLAY = "confirmed_no_play"
+    /** Server proved the quarantined client Start had already committed. */
+    const val SERVER_SESSION_RECOVERED = "server_session_recovered"
+}
+
+object GamingLegacyResolutionAttemptState {
+    const val PENDING = "pending"
+    const val AMBIGUOUS = "ambiguous"
+    const val REJECTED = "rejected"
+    const val RESOLVED = "resolved"
+}
+
+enum class RecoveredLegacyServerDisposition {
+    /** Authoritative state is safe to expose and the client-only blocker can close. */
+    RESOLVE_LOCAL,
+    /** Preserve/replay the exact captured Stop on the same local action. */
+    RESTORE_CAPTURED_STOP,
+    /** Receipt is real, but billing chronology remains unsafe for ordinary staff actions. */
+    RETAIN_BILLING_REVIEW,
+}
+
+/**
+ * Version 27 did not retain package catalogue facts at tap time. Reconstructing
+ * them later from a mutable cache can silently reprice an unresolved financial
+ * start, so migration quarantines that evidence instead of replaying it.
+ */
+const val LEGACY_PACKAGE_START_REVIEW_ERROR =
+    "This pre-upgrade package start has no trustworthy tap-time price, duration, or variant. " +
+        "It will not be replayed automatically because the tablet cannot prove whether an earlier Start reached the server. " +
+        "A protected owner must review the captured start/stop evidence before resolving this shift."
 
 /** Terminal server outcomes that can safely supersede a stale local overlay. */
 internal enum class GamingServerReconciliation {
@@ -135,10 +236,9 @@ const val RECOVER_LEGACY_GAMING_REJECTIONS_SQL =
  * `shiftId` may itself be a [LocalShiftEntity.localId] rather than a real
  * server shift id, if the session was started against a shift that was
  * also opened offline — SyncEngine resolves it at push time the same way
- * it already does for `LocalOrderEntity.shiftId`. Null for a stop-only row,
- * since stopping a session doesn't need its shift at all and a session
- * this device didn't start doesn't carry one over the wire in the first
- * place (`GameSession` has no shift_id field).
+ * it already does for `LocalOrderEntity.shiftId`. New server snapshots carry
+ * the source shift as well, allowing Android to fail closed on a foreign
+ * terminal. Null remains valid only for legacy cached rows.
  */
 @Entity(tableName = "local_gaming_sessions", indices = [Index("state")])
 data class LocalGamingSessionEntity(
@@ -157,6 +257,159 @@ data class LocalGamingSessionEntity(
     val timerEndsAtMillis: Long? = null,
     val billableMinutes: Int? = null,
     val amountMinor: Long? = null,
+    /** Server-locked billing snapshot for trustworthy offline presentation. */
+    val ratePerHourMinor: Long? = null,
+    val packageId: String? = null,
+    /** Immutable package facts captured with an offline start request. */
+    val packagePriceMinor: Long? = null,
+    val packageDurationMinutes: Int? = null,
+    val packageVariant: String? = null,
+    /** Explicit server billing mode and locked station type survive package retirement. */
+    val billingMode: String? = null,
+    val packageStationTypeSnapshot: String? = null,
+    val extraControllers: Int = 0,
     val orderId: String? = null,
     val lastError: String? = null,
+    /**
+     * Immutable v27 capture evidence. A recovered server Start can have a
+     * later authoritative receipt-time start, and its queued Stop may need to
+     * be clamped to that instant before replay. Keep both original tablet
+     * timestamps separately so the operational overlay can use authoritative
+     * chronology without rewriting the protected-owner audit evidence.
+     */
+    val legacyOriginalCapturedStartAtMillis: Long? = null,
+    val legacyOriginalCapturedStopAtMillis: Long? = null,
+    /**
+     * Durable protected-owner resolution for a pre-v28 package start whose
+     * original price/duration/variant cannot be reconstructed safely.
+     *
+     * The request fields are captured before the audit API is called. A lost
+     * response therefore retries the exact body with [localId] as its stable
+     * idempotency identity instead of allowing a second, conflicting choice.
+     */
+    val legacyResolution: String? = null,
+    val legacyResolutionReason: String? = null,
+    val legacyResolutionReferenceOrderId: String? = null,
+    val legacyResolutionAttemptState: String? = null,
+    val legacyResolutionError: String? = null,
+    val legacyResolutionCapturedAtMillis: Long? = null,
+    val legacyResolvedAtMillis: Long? = null,
+    val legacyResolvedByUserId: String? = null,
+    val legacyResolutionReceiptId: Long? = null,
+)
+
+object GamingPackageExtensionState {
+    /** Captured durably and ready for a first network attempt. */
+    const val PENDING = "pending"
+    /** A request left the device but its result was not observed; replay only with the same action id. */
+    const val AMBIGUOUS = "ambiguous"
+    /** The server confirmed the package extension for this immutable action id. */
+    const val CONFIRMED = "confirmed"
+    /** The server definitively refused the captured request; staff action is required before retry. */
+    const val REJECTED = "rejected"
+    /** A deterministic refusal acknowledged by staff after an authoritative refresh. */
+    const val DISCARDED = "discarded"
+}
+
+object GamingSessionAddonActionType {
+    const val ADD = "add"
+    const val VOID = "void"
+}
+
+object GamingSessionAddonActionState {
+    /** Durable and not yet attempted. */
+    const val PENDING = "pending"
+    /** Request may have committed; replay only the exact same action/body/key. */
+    const val AMBIGUOUS = "ambiguous"
+    /** Server receipt was validated and committed locally. */
+    const val CONFIRMED = "confirmed"
+    /** Deterministic refusal requires explicit staff review. */
+    const val REJECTED = "rejected"
+    /** A deterministic refusal was acknowledged without rewriting the request. */
+    const val DISCARDED = "discarded"
+}
+
+/**
+ * Immutable, owner-scoped Gaming add-on command.
+ *
+ * [actionId] is the sole HTTP idempotency key. For ADD, [clientLineId] is the
+ * durable line identity sent to the server. For VOID it identifies the exact
+ * retained line snapshot and [serverAddonId] is filled only from a validated
+ * server receipt (or was already known when the void was captured).
+ *
+ * ADD may be captured before an offline session Start receives its server id;
+ * [localSessionId] retains that dependency. Sync resolves the id without ever
+ * changing the selected item, quantity, options, price, actor, or workspace.
+ */
+@Entity(
+    tableName = "local_gaming_session_addon_actions",
+    indices = [
+        Index("state"),
+        Index("localSessionId"),
+        Index("serverSessionId"),
+        Index("shiftId"),
+        Index("clientLineId"),
+        Index(value = ["ownerCompanyId", "ownerUserId", "branchId", "terminalId", "state"]),
+    ],
+)
+data class LocalGamingSessionAddonActionEntity(
+    @PrimaryKey val actionId: String,
+    val actionType: String,
+    val ownerCompanyId: String,
+    val ownerUserId: String,
+    val branchId: String,
+    val terminalId: String,
+    val localSessionId: String? = null,
+    val serverSessionId: String? = null,
+    val shiftId: String,
+    val clientLineId: String,
+    val serverAddonId: String? = null,
+    val menuItemId: String,
+    val menuItemName: String,
+    val menuItemType: String,
+    val variantId: String? = null,
+    /** Immutable local selection snapshot used to recreate the exact body. */
+    val modifierSelectionsJson: String = "[]",
+    val qty: Int,
+    val expectedUnitPriceMinor: Long,
+    val note: String? = null,
+    val voidReason: String? = null,
+    val createdAtMillis: Long,
+    val state: String = GamingSessionAddonActionState.PENDING,
+    val lastError: String? = null,
+    val resolvedAtMillis: Long? = null,
+    val resolutionReason: String? = null,
+)
+
+/**
+ * Durable money-affecting package-extension request.
+ *
+ * [actionId] is both the immutable local primary key and the HTTP
+ * Idempotency-Key. The expected package/session facts are captured at tap
+ * time, so retrying an ambiguous request can never silently buy a newer price
+ * or extend a changed session snapshot. Confirmed rows are retained as local
+ * evidence and do not block a later, distinct extension.
+ */
+@Entity(
+    tableName = "local_gaming_package_extensions",
+    indices = [Index("state"), Index("serverSessionId"), Index("shiftId")],
+)
+data class LocalGamingPackageExtensionEntity(
+    @PrimaryKey val actionId: String,
+    val serverSessionId: String,
+    val localSessionId: String? = null,
+    /** Exact shift provenance for the close gate; null is treated as unresolved legacy work. */
+    val shiftId: String? = null,
+    val packageId: String,
+    val expectedPackagePriceMinor: Long,
+    val expectedPackageDurationMinutes: Int,
+    val expectedPackageVariant: String,
+    /** Server CAS snapshot captured at the same instant as the package choice. */
+    val expectedSessionTimerMinutes: Int,
+    val expectedSessionAmountMinor: Long,
+    val createdAtMillis: Long,
+    val state: String = GamingPackageExtensionState.PENDING,
+    val lastError: String? = null,
+    val resolvedAtMillis: Long? = null,
+    val resolutionReason: String? = null,
 )

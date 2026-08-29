@@ -109,9 +109,11 @@ data class OutboxSnapshot(val groups: List<UnresolvedOutboxGroup>) {
  */
 internal data class SignOutBlockers(
     val gamingAwaitingPosCount: Int,
-    val acceptedCashRefundCount: Int,
+    val activeRefundCount: Int,
     val kitchenPendingCount: Int,
     val kitchenRejectedCount: Int,
+    val supportPendingCount: Int,
+    val supportReviewCount: Int,
     val pendingWriteCount: Int,
     val rejectedWriteCount: Int,
 )
@@ -123,10 +125,20 @@ internal fun OutboxSnapshot.signOutBlockers(): SignOutBlockers {
     val gamingAwaitingPos = countWhere {
         it.resource == "gaming_sessions" && it.state == GamingSessionState.ENDED_UNBILLED
     }
-    val acceptedCashRefunds = countWhere {
+    val activeRefunds = countWhere {
         it.resource == "refunds" && it.state in setOf(
             RefundState.ACCEPTED_CASH_DUE,
             RefundState.CASH_HANDOFF_IN_PROGRESS,
+            RefundState.CASH_SETTLE_PENDING,
+            RefundState.CASH_SETTLE_REJECTED,
+            RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING,
+            RefundState.CASH_FINALIZE_REJECTED,
+            RefundState.ACCEPTED_PROVIDER_DUE,
+            RefundState.PROVIDER_PAYOUT_IN_PROGRESS,
+            RefundState.PROVIDER_COMPLETION_PENDING,
+            RefundState.PROVIDER_COMPLETION_REJECTED,
+            RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING,
+            RefundState.PROVIDER_FINALIZE_REJECTED,
         )
     }
     val kitchenPending = countWhere {
@@ -137,21 +149,34 @@ internal fun OutboxSnapshot.signOutBlockers(): SignOutBlockers {
         it.resource in setOf("kitchen_advances", "kitchen_cancellation_acks") &&
             it.state == "rejected"
     }
+    val supportPending = countWhere {
+        it.resource == "support_requests" && it.state == "pending"
+    }
+    val supportReview = countWhere {
+        it.resource == "support_requests" && it.state == "action_required"
+    }
     val workflowActionCount =
-        gamingAwaitingPos + acceptedCashRefunds + kitchenPending + kitchenRejected
+        gamingAwaitingPos + activeRefunds + kitchenPending + kitchenRejected +
+            supportPending + supportReview
     val rejectedWrites = countWhere { group ->
         group.state.contains("rejected") &&
             group.resource !in setOf("kitchen_advances", "kitchen_cancellation_acks") &&
             !(group.resource == "refunds" && group.state in setOf(
-                RefundState.ACCEPTED_CASH_DUE,
-                RefundState.CASH_HANDOFF_IN_PROGRESS,
+                RefundState.ACCEPTED_CASH_DUE, RefundState.CASH_HANDOFF_IN_PROGRESS,
+                RefundState.CASH_SETTLE_PENDING, RefundState.CASH_SETTLE_REJECTED,
+                RefundState.CASH_HANDED_OVER_PENDING_ACCOUNTING, RefundState.CASH_FINALIZE_REJECTED,
+                RefundState.ACCEPTED_PROVIDER_DUE, RefundState.PROVIDER_PAYOUT_IN_PROGRESS,
+                RefundState.PROVIDER_COMPLETION_PENDING, RefundState.PROVIDER_COMPLETION_REJECTED,
+                RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING, RefundState.PROVIDER_FINALIZE_REJECTED,
             ))
     }
     return SignOutBlockers(
         gamingAwaitingPosCount = gamingAwaitingPos,
-        acceptedCashRefundCount = acceptedCashRefunds,
+        activeRefundCount = activeRefunds,
         kitchenPendingCount = kitchenPending,
         kitchenRejectedCount = kitchenRejected,
+        supportPendingCount = supportPending,
+        supportReviewCount = supportReview,
         pendingWriteCount = (count - workflowActionCount - rejectedWrites).coerceAtLeast(0),
         rejectedWriteCount = rejectedWrites,
     )
@@ -170,12 +195,12 @@ internal fun signOutBlockedMessage(snapshot: OutboxSnapshot): String {
                 },
             )
         }
-        if (blockers.acceptedCashRefundCount > 0) {
+        if (blockers.activeRefundCount > 0) {
             add(
-                if (blockers.acceptedCashRefundCount == 1) {
-                    "1 cash refund still needs a safe handover decision"
+                if (blockers.activeRefundCount == 1) {
+                    "1 refund still needs a safe payout or accounting decision"
                 } else {
-                    "${blockers.acceptedCashRefundCount} cash refunds still need safe handover decisions"
+                    "${blockers.activeRefundCount} refunds still need safe payout or accounting decisions"
                 },
             )
         }
@@ -194,6 +219,24 @@ internal fun signOutBlockedMessage(snapshot: OutboxSnapshot): String {
                     "1 kitchen update needs review"
                 } else {
                     "${blockers.kitchenRejectedCount} kitchen updates need review"
+                },
+            )
+        }
+        if (blockers.supportPendingCount > 0) {
+            add(
+                if (blockers.supportPendingCount == 1) {
+                    "1 help request is waiting for server confirmation"
+                } else {
+                    "${blockers.supportPendingCount} help requests are waiting for server confirmation"
+                },
+            )
+        }
+        if (blockers.supportReviewCount > 0) {
+            add(
+                if (blockers.supportReviewCount == 1) {
+                    "1 help request needs review"
+                } else {
+                    "${blockers.supportReviewCount} help requests need review"
                 },
             )
         }
@@ -224,11 +267,11 @@ internal fun signOutBlockedMessage(snapshot: OutboxSnapshot): String {
                     "Cancel / void and enter a reason if it should not be charged.",
             )
         }
-        if (blockers.acceptedCashRefundCount > 0) {
+        if (blockers.activeRefundCount > 0) {
             add(
-                "Open Refunds and verify each task against the customer and drawer. If a handover " +
-                    "was already started, do not pay twice after a restart; confirm settlement or " +
-                    "have a protected owner withdraw it only when no cash was given.",
+                "Open Refunds and verify each task against the customer, drawer, and provider. If a payout " +
+                    "was already started, do not pay twice after a restart; record its exact outcome and " +
+                    "finish accounting, or use protected recovery only when no value moved.",
             )
         }
         if (blockers.kitchenPendingCount > 0 || blockers.kitchenRejectedCount > 0) {
@@ -236,6 +279,13 @@ internal fun signOutBlockedMessage(snapshot: OutboxSnapshot): String {
                 "Open Kitchen. Use Sync now for waiting updates. For an update that needs review, " +
                     "choose Check again; remove the saved update only after verifying the live " +
                     "server ticket is already correct.",
+            )
+        }
+        if (blockers.supportPendingCount > 0 || blockers.supportReviewCount > 0) {
+            add(
+                "Open Help, then My help requests. Reconnect and retry anything waiting. " +
+                    "If a saved request still needs review, first check the owner's web inbox; " +
+                    "then retry it or remove only the saved tablet copy.",
             )
         }
         if (blockers.pendingWriteCount > 0 || blockers.rejectedWriteCount > 0) {

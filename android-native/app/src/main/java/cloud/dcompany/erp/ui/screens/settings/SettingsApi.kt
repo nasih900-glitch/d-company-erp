@@ -27,7 +27,7 @@ import retrofit2.http.Query
  * idempotency needed) and createBranch/createTerminal (Shape D, mandatory
  * idempotency, since a retry with no key could 409 or silently duplicate)
  * are real offline outbox writes — the plausible "no signal at the back
- * office" cases. updateBranch, deleteTerminal, and the password-change
+ * office" cases. updateBranch, updateTerminal, deleteTerminal, and the password-change
  * flow below stay online-only: editing an existing branch or deleting a
  * terminal is a rare, deliberate admin action typically done once at
  * setup, and password reset is an inherently live OTP round-trip that
@@ -75,6 +75,13 @@ interface SettingsApi {
         @Body body: TerminalCreateBody,
         @Header("Idempotency-Key") idempotencyKey: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): TerminalDto
+
+    /** Natural absolute PATCH: retrying the same name/device binding is safe. */
+    @PATCH("settings/terminals/{id}")
+    suspend fun updateTerminal(
+        @Path("id") id: String,
+        @Body body: TerminalUpdateBody,
     ): TerminalDto
 
     /** 204 on success; 409 when the till has shift, order or audit history. */

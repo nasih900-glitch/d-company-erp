@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Destructive E2E smoke test for a dedicated staging database only.
+"""Destructive E2E smoke test for a dedicated disposable local database only.
 
 The cleanup physically removes invoices, payments, audit rows, and counters.
-It must never run against the live D Company hostname. Production verification
-uses traceable browser transactions that remain voided/cancelled in history.
+It therefore requires both a loopback API and a positively identified local
+database whose name uses an allow-listed disposable prefix. Production
+verification uses traceable browser transactions that remain voided/cancelled
+in history.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import os
 import secrets
@@ -89,17 +92,75 @@ from app.models import (
 )
 
 
-CONFIRMATION = "I_UNDERSTAND_THIS_TOUCHES_LIVE"
+CONFIRMATION = "I_UNDERSTAND_THIS_ERASES_A_DISPOSABLE_LOCAL_DATABASE"
 BASE_URL = os.environ.get("LIVE_E2E_BASE_URL", "https://dcompany.duckdns.org/api/v1").rstrip("/")
-ALLOW = os.environ.get("LIVE_E2E_ALLOW_PRODUCTION")
+DISPOSABLE_CONFIRMATION = os.environ.get("LIVE_E2E_DISPOSABLE_CONFIRMATION")
+EXPECTED_DATABASE = os.environ.get("LIVE_E2E_EXPECTED_DATABASE", "").strip()
+ARTIFACT_PATH = os.environ.get("LIVE_E2E_ARTIFACT_PATH")
 RUN_ID = os.environ.get("LIVE_E2E_RUN_ID") or f"LIVE_E2E_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{secrets.token_hex(3)}"
 MARKER = f"E2E{int(time.time()):x}{secrets.token_hex(2)}"[:18]
 TIMEOUT = 25
-PRODUCTION_HOSTS = {"dcompany.duckdns.org", "www.dcompany.duckdns.org"}
+DISPOSABLE_DATABASE_PREFIXES = ("erp_phase14_staff_", "dcompany_e2e_")
 
 
 class E2EError(RuntimeError):
     pass
+
+
+def _is_loopback_host(hostname: str | None) -> bool:
+    """Accept only localhost or a literal loopback address for the API."""
+    if not hostname:
+        return False
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_destructive_confirmation() -> None:
+    """Fail closed before opening a database session or creating test data."""
+    if not _is_loopback_host(urlparse(BASE_URL).hostname):
+        raise E2EError(
+            "LIVE_E2E_BASE_URL must use localhost or a literal loopback address"
+        )
+    if DISPOSABLE_CONFIRMATION != CONFIRMATION:
+        raise E2EError(
+            "Set LIVE_E2E_DISPOSABLE_CONFIRMATION to the exact disposable-database "
+            "confirmation token"
+        )
+    if not EXPECTED_DATABASE.startswith(DISPOSABLE_DATABASE_PREFIXES):
+        allowed = ", ".join(DISPOSABLE_DATABASE_PREFIXES)
+        raise E2EError(
+            f"LIVE_E2E_EXPECTED_DATABASE must start with an allowed disposable "
+            f"prefix: {allowed}"
+        )
+
+
+async def _assert_disposable_database(session: Any, *, operation: str) -> str:
+    """Prove the connected PostgreSQL database is the expected local throwaway DB."""
+    _validate_destructive_confirmation()
+    row = (
+        await session.execute(
+            text(
+                "SELECT current_database(), "
+                "COALESCE(inet_server_addr()::text, 'unix_socket')"
+            )
+        )
+    ).one()
+    current_database = str(row[0])
+    server_address = str(row[1])
+    if current_database != EXPECTED_DATABASE:
+        raise E2EError(
+            f"Refusing {operation}: connected database {current_database!r} does not "
+            f"match LIVE_E2E_EXPECTED_DATABASE {EXPECTED_DATABASE!r}"
+        )
+    if server_address != "unix_socket" and not _is_loopback_host(server_address):
+        raise E2EError(
+            f"Refusing {operation}: PostgreSQL server {server_address!r} is not local"
+        )
+    return current_database
 
 
 def _json_default(value: Any) -> str:
@@ -278,6 +339,7 @@ def _eq(col: Any, value: Any) -> Any:
 async def setup_identity() -> dict[str, Any]:
     """Create a temporary company-scoped admin user, terminal, and branch."""
     async with AsyncSessionLocal() as session:
+        await _assert_disposable_database(session, operation="test identity setup")
         company = (
             await session.execute(
                 select(Company)
@@ -299,16 +361,59 @@ async def setup_identity() -> dict[str, Any]:
         if role is None:
             raise E2EError("no existing super_owner role exists for live E2E user")
 
+        # Keep one real same-company terminal from a different branch as a
+        # negative-control identity. The guarded run never mutates it; it is
+        # used only to prove that a cashier cannot pair this run's temporary
+        # shift/station with the wrong branch or terminal.
+        wrong_terminal_id = (
+            await session.execute(
+                select(Terminal.id)
+                .join(Branch, Branch.id == Terminal.branch_id)
+                .where(
+                    Branch.company_id == company.id,
+                    Branch.deleted_at.is_(None),
+                )
+                .order_by(Terminal.created_at.asc(), Terminal.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if wrong_terminal_id is None:
+            raise E2EError("no existing terminal is available for branch rejection proof")
+
         original_webhook_url = company.google_sheets_webhook_url
         company.google_sheets_webhook_url = None
 
-        suffix = RUN_ID[-6:].lower()
-        # Invoice numbers are capped at 20 chars; keep the temporary branch code short.
-        branch_code = f"E{suffix[:4].upper()}"
+        # Invoice numbers are capped at 20 chars, while each branch's immutable
+        # invoice series is exactly two characters and unique per company.
+        # Allocate from the actual unused set so repeated disposable runs do
+        # not collide even when earlier evidence databases are preserved.
+        existing_series = set(
+            (
+                await session.execute(
+                    select(Branch.invoice_series_code).where(
+                        Branch.company_id == company.id
+                    )
+                )
+            ).scalars()
+        )
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        invoice_series_code = next(
+            (
+                candidate
+                for first in alphabet
+                for second in alphabet
+                if (candidate := f"{first}{second}") not in existing_series
+            ),
+            None,
+        )
+        if invoice_series_code is None:
+            raise E2EError("no unused two-character invoice series remains")
+        branch_code = f"E{secrets.token_hex(3).upper()}"
         branch = Branch(
             id=uuid4(),
             company_id=company.id,
             code=branch_code,
+            invoice_series_code=invoice_series_code,
             name=f"{MARKER} Branch",
             address=MARKER,
             state_code="32",
@@ -350,6 +455,7 @@ async def setup_identity() -> dict[str, Any]:
             "company_id": str(company.id),
             "branch_id": str(branch.id),
             "terminal_id": str(terminal.id),
+            "wrong_terminal_id": str(wrong_terminal_id),
             "role_id": str(role.id),
             "user_id": str(user.id),
             "email": user.email,
@@ -362,6 +468,10 @@ async def cleanup(identity: dict[str, Any] | None = None) -> dict[str, int]:
     """Remove every row that this E2E run created."""
     counts: dict[str, int] = {}
     async with AsyncSessionLocal() as session:
+        # This check deliberately lives inside the cleanup transaction. A
+        # successful startup guard is not treated as permission for a later
+        # connection to disable triggers or delete financial history.
+        await _assert_disposable_database(session, operation="destructive cleanup")
         # Membership 0035 still owns its separate staging cleanup policy. POS
         # 0036 deliberately has no caller-settable production bypass.
         await session.execute(
@@ -958,20 +1068,18 @@ def check(condition: bool, label: str, checks: list[str]) -> None:
 
 
 async def main() -> int:
-    if (urlparse(BASE_URL).hostname or "").lower() in PRODUCTION_HOSTS:
+    verified_database: str | None = None
+    try:
+        _validate_destructive_confirmation()
+        async with AsyncSessionLocal() as session:
+            verified_database = await _assert_disposable_database(
+                session,
+                operation="workflow startup",
+            )
+    except Exception as exc:
         print(json.dumps({
             "status": "BLOCKED",
-            "reason": (
-                "This destructive script is staging-only and refuses the live D Company hostname. "
-                "Use traceable browser verification in production."
-            ),
-            "run_id": RUN_ID,
-        }, indent=2))
-        return 2
-    if ALLOW != CONFIRMATION:
-        print(json.dumps({
-            "status": "BLOCKED",
-            "reason": "Set LIVE_E2E_ALLOW_PRODUCTION to the exact confirmation token before running.",
+            "reason": str(exc),
             "run_id": RUN_ID,
         }, indent=2))
         return 2
@@ -1112,6 +1220,22 @@ async def main() -> int:
             },
         )
         check(bool(customer.get("id")), "customer creates", checks)
+        customer_search = http_json(
+            "GET",
+            f"/customers?q={MARKER}",
+            token=token,
+        )
+        customer_by_phone = http_json(
+            "GET",
+            f"/customers/by-phone/{customer_phone}",
+            token=token,
+        )
+        check(
+            any(str(row.get("id")) == customer["id"] for row in customer_search)
+            and customer_by_phone.get("id") == customer["id"],
+            "customer search and exact POS phone lookup find the new customer",
+            checks,
+        )
 
         tier = http_json(
             "POST",
@@ -1156,21 +1280,91 @@ async def main() -> int:
         shift_id = shift["id"]
         check(bool(shift_id), "POS shift opens on temp terminal", checks)
 
-        membership_collected_at = datetime.now(timezone.utc).isoformat()
-        subscription = http_json(
+        membership_action_id = f"membership-payment:{MARKER}"
+        membership_request = http_json(
             "POST",
-            "/memberships/subscribe",
+            "/memberships/payment-requests",
             token=token,
             terminal_id=identity["terminal_id"],
-            idem=f"membership-subscribe:{MARKER}",
+            idem=membership_action_id,
             payload={
                 "customer_id": customer["id"],
                 "tier_id": tier["id"],
                 "shift_id": shift_id,
                 "expected_amount_minor": 109900,
-                "collected_at": membership_collected_at,
                 "billing_cycle": "monthly",
                 "paid_via": "cash",
+                "client_action_id": membership_action_id,
+            },
+        )
+        membership_request_replay = http_json(
+            "POST",
+            "/memberships/payment-requests",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=membership_action_id,
+            payload={
+                "customer_id": customer["id"],
+                "tier_id": tier["id"],
+                "shift_id": shift_id,
+                "expected_amount_minor": 109900,
+                "billing_cycle": "monthly",
+                "paid_via": "cash",
+                "client_action_id": membership_action_id,
+            },
+        )
+        check(
+            membership_request.get("status") == "accepted_payment_due"
+            and membership_request_replay.get("id") == membership_request.get("id"),
+            "membership payment is prepared once before cash collection",
+            checks,
+        )
+        membership_collection = http_json(
+            "POST",
+            f"/memberships/payment-requests/{membership_request['id']}/begin-cash-collection",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"membership-cash-begin:{MARKER}",
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 109900,
+                "ready_to_collect": True,
+            },
+        )
+        check(
+            membership_collection.get("status") == "cash_collection_in_progress",
+            "membership cash collection begins only after server acceptance",
+            checks,
+        )
+        membership_collected_at = datetime.now(timezone.utc).isoformat()
+        membership_completed = http_json(
+            "POST",
+            f"/memberships/payment-requests/{membership_request['id']}/settle",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"membership-cash-settle:{MARKER}",
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 109900,
+                "collected_at": membership_collected_at,
+                "payment_received": True,
+            },
+        )
+        check(
+            membership_completed.get("status")
+            == "payment_completed_pending_posting",
+            "membership cash completion is durably recorded before accounting",
+            checks,
+        )
+        membership_posted = http_json(
+            "POST",
+            f"/memberships/payment-requests/{membership_request['id']}/finalize",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"membership-cash-finalize:{MARKER}",
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 109900,
             },
         )
         current_subscription = http_json(
@@ -1179,11 +1373,13 @@ async def main() -> int:
             token=token,
         )
         check(
-            subscription.get("is_active") is True
-            and current_subscription.get("id") == subscription.get("id"),
-            "customer membership subscribes and reads active",
+            membership_posted.get("status") == "settled"
+            and membership_posted.get("membership_id") == current_subscription.get("id")
+            and current_subscription.get("is_active") is True,
+            "membership accounting finalizes once and entitlement reads active",
             checks,
         )
+        subscription = current_subscription
 
         categories: dict[str, str] = {}
         for idx, name in enumerate(["Food", "Drinks", "Gaming", "Shisha", "Streaming"], start=1):
@@ -1296,8 +1492,8 @@ async def main() -> int:
                 "lines": [
                     {
                         "ingredient_id": ingredient["id"],
-                        "qty": 10,
-                        "unit_cost_minor": 4500,
+                        "qty": 100,
+                        "unit_cost_minor": 450,
                         "lot_code": f"{RUN_ID}-LOT",
                         "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
                     }
@@ -1330,7 +1526,7 @@ async def main() -> int:
         check(
             any(
                 str(row.get("id")) == ingredient["id"]
-                and float(row.get("current_qty") or 0) == 9.0
+                and float(row.get("current_qty") or 0) == 99.0
                 for row in stock_rows
             ),
             "inventory stock view reflects GRN and adjustment",
@@ -1343,6 +1539,29 @@ async def main() -> int:
                 for row in batch_rows
             ),
             "inventory batch traceability reads",
+            checks,
+        )
+        recipe = http_json(
+            "POST",
+            "/inventory/recipes",
+            token=token,
+            payload={
+                "menu_item_id": items["coffee"],
+                "name": f"{MARKER} Coffee Recipe",
+                "yield_qty": 1,
+                "lines": [
+                    {
+                        "ingredient_id": ingredient["id"],
+                        "qty": 2,
+                        "wastage_pct": 0.05,
+                    }
+                ],
+            },
+        )
+        check(
+            recipe.get("is_active") is True
+            and len(recipe.get("lines", [])) == 1,
+            "inventory recipe links the sold drink to costed FIFO stock",
             checks,
         )
 
@@ -1555,6 +1774,7 @@ async def main() -> int:
         )
 
         stations: dict[str, str] = {}
+        station_rates: dict[str, int] = {}
         short_station_code = f"E2E{RUN_ID[-6:].upper()}"
         for station_type, title, rate, code_suffix in [
             ("ps5", "PS5 Station", 20000, "PS5"),
@@ -1578,7 +1798,42 @@ async def main() -> int:
                 },
             )
             stations[station_type] = created["id"]
+            station_rates[station_type] = rate
         check(set(stations) == {"ps5", "vr", "simulator", "streaming", "hookah"}, "gaming stations create for all cafe session types", checks)
+
+        _, _, wrong_pos_terminal_raw = http_request(
+            "POST",
+            "/pos/orders",
+            token=token,
+            terminal_id=identity["wrong_terminal_id"],
+            idem=f"{RUN_ID}-wrong-terminal-order",
+            payload={
+                "type": "takeaway",
+                "shift_id": shift_id,
+                "lines": [{"menu_item_id": items["coffee"], "qty": 1}],
+            },
+            expected=(403,),
+        )
+        _, _, wrong_gaming_terminal_raw = http_request(
+            "POST",
+            "/gaming/sessions/start",
+            token=token,
+            terminal_id=identity["wrong_terminal_id"],
+            idem=f"gaming-wrong-terminal:{MARKER}",
+            payload={
+                "station_id": stations["ps5"],
+                "shift_id": shift_id,
+                "customer_name": MARKER,
+                "expected_rate_per_hour_minor": station_rates["ps5"],
+            },
+            expected=(403,),
+        )
+        check(
+            b"different branch" in wrong_pos_terminal_raw.lower()
+            and b"different branch" in wrong_gaming_terminal_raw.lower(),
+            "POS and Gaming reject a same-company terminal from the wrong branch",
+            checks,
+        )
 
         order = http_json(
             "POST",
@@ -1634,6 +1889,27 @@ async def main() -> int:
             },
         )
         check(payment.get("order_status") == "paid", "POS payment marks order paid", checks)
+        payment_replay = http_json(
+            "POST",
+            f"/pos/orders/{order['id']}/payments",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-payment-1",
+            payload={
+                "method": "cash",
+                "amount_minor": total_minor,
+                "tendered_minor": total_minor,
+                "expected_order_total_minor": total_minor,
+                "expected_due_minor": total_minor,
+                "ref_external": MARKER,
+            },
+        )
+        check(
+            payment_replay.get("id") == payment.get("id")
+            and payment_replay.get("order_status") == "paid",
+            "replaying the same cash payment idempotency key returns one settlement",
+            checks,
+        )
 
         persisted_order = http_json(
             "GET",
@@ -1648,6 +1924,100 @@ async def main() -> int:
             and bool(persisted_order.get("fiscal_year"))
             and len(persisted_order.get("lines", [])) == 5,
             "POS paid order reads back with an issued invoice and complete lines",
+            checks,
+        )
+
+        customer_after_cash = http_json(
+            "GET",
+            f"/customers/by-phone/{customer_phone}",
+            token=token,
+        )
+        earned_points = int(customer_after_cash.get("loyalty_points") or 0)
+        lifetime_after_cash = int(
+            customer_after_cash.get("lifetime_gaming_points_earned") or 0
+        )
+        check(
+            earned_points > 0 and lifetime_after_cash > 0,
+            "settled gaming/service lines award server-authoritative loyalty points",
+            checks,
+        )
+
+        upi_order = http_json(
+            "POST",
+            "/pos/orders",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-upi-order-1",
+            payload={
+                "type": "takeaway",
+                "shift_id": shift_id,
+                "customer_name": MARKER,
+                "customer_phone": customer_phone,
+                "notes": f"{MARKER} UPI loyalty redemption",
+                "lines": [{"menu_item_id": items["ps5"], "qty": 2}],
+            },
+        )
+        points_to_redeem = min(10, earned_points)
+        upi_with_points = http_json(
+            "PATCH",
+            f"/pos/orders/{upi_order['id']}/points",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"{RUN_ID}-upi-points-1",
+            payload={
+                "points": points_to_redeem,
+                "expected_checkout_version": upi_order["checkout_version"],
+            },
+        )
+        check(
+            upi_with_points.get("points_redeemed") == points_to_redeem
+            and int(upi_with_points.get("points_redeemed_minor") or 0) > 0
+            and int(upi_with_points.get("total_minor") or 0) > 0,
+            "POS reserves existing loyalty points and reprices the bill once",
+            checks,
+        )
+        upi_total_minor = int(upi_with_points["total_minor"])
+        upi_payment_key = f"{RUN_ID}-upi-payment-1"
+        upi_payment = http_json(
+            "POST",
+            f"/pos/orders/{upi_order['id']}/payments",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=upi_payment_key,
+            payload={
+                "method": "upi",
+                "amount_minor": upi_total_minor,
+                "expected_order_total_minor": upi_total_minor,
+                "expected_due_minor": upi_total_minor,
+                "ref_external": f"{MARKER}-UPI",
+            },
+        )
+        upi_payment_replay = http_json(
+            "POST",
+            f"/pos/orders/{upi_order['id']}/payments",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=upi_payment_key,
+            payload={
+                "method": "upi",
+                "amount_minor": upi_total_minor,
+                "expected_order_total_minor": upi_total_minor,
+                "expected_due_minor": upi_total_minor,
+                "ref_external": f"{MARKER}-UPI",
+            },
+        )
+        customer_after_upi = http_json(
+            "GET",
+            f"/customers/by-phone/{customer_phone}",
+            token=token,
+        )
+        check(
+            upi_payment.get("method") == "upi"
+            and upi_payment.get("order_status") == "paid"
+            and upi_payment_replay.get("id") == upi_payment.get("id")
+            and int(customer_after_upi.get("lifetime_gaming_points_earned") or 0)
+            > lifetime_after_cash,
+            "UPI checkout settles once and loyalty lifetime progress advances",
             checks,
         )
 
@@ -1724,7 +2094,7 @@ async def main() -> int:
             "POS refund records server handoff before drawer cash is touched",
             checks,
         )
-        refund = http_json(
+        refund_completion = http_json(
             "POST",
             f"/pos/refund-requests/{refund_request['id']}/settle-cash",
             token=token,
@@ -1738,8 +2108,40 @@ async def main() -> int:
             },
         )
         check(
-            refund.get("status") == "settled" and bool(refund.get("refund_id")),
-            "POS partial cash refund settles exactly once on the server",
+            refund_completion.get("status")
+            == "cash_handed_over_pending_accounting"
+            and not refund_completion.get("refund_id"),
+            "POS records completed cash handover before fallible refund accounting",
+            checks,
+        )
+        refund_finalize_key = f"{RUN_ID}-refund-finalize-1"
+        refund = http_json(
+            "POST",
+            f"/pos/refund-requests/{refund_request['id']}/finalize-cash",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=refund_finalize_key,
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 100,
+            },
+        )
+        refund_replay = http_json(
+            "POST",
+            f"/pos/refund-requests/{refund_request['id']}/finalize-cash",
+            token=token,
+            terminal_id=identity["terminal_id"],
+            idem=refund_finalize_key,
+            payload={
+                "shift_id": shift_id,
+                "expected_amount_minor": 100,
+            },
+        )
+        check(
+            refund.get("status") == "settled"
+            and bool(refund.get("refund_id"))
+            and refund_replay.get("refund_id") == refund.get("refund_id"),
+            "POS partial cash refund accounting finalizes exactly once",
             checks,
         )
 
@@ -1793,7 +2195,10 @@ async def main() -> int:
             token=token,
             terminal_id=identity["terminal_id"],
             idem=add_lines_key,
-            payload={"lines": [{"menu_item_id": items["snack"], "qty": 1}]},
+            payload={
+                "expected_checkout_version": table_order["checkout_version"],
+                "lines": [{"menu_item_id": items["snack"], "qty": 1}],
+            },
         )
         check(
             len(appended.get("lines", [])) == 2
@@ -1807,7 +2212,10 @@ async def main() -> int:
             token=token,
             terminal_id=identity["terminal_id"],
             idem=add_lines_key,
-            payload={"lines": [{"menu_item_id": items["snack"], "qty": 1}]},
+            payload={
+                "expected_checkout_version": table_order["checkout_version"],
+                "lines": [{"menu_item_id": items["snack"], "qty": 1}],
+            },
         )
         check(
             len(replayed.get("lines", [])) == 2 and replayed["total_minor"] == appended["total_minor"],
@@ -1815,12 +2223,45 @@ async def main() -> int:
             checks,
         )
 
+        table_kitchen_queue = http_json("GET", "/kitchen/queue", token=token)
+        table_kitchen_order = next(
+            (row for row in table_kitchen_queue if row.get("id") == table_order["id"]),
+            None,
+        )
+        check(
+            table_kitchen_order is not None
+            and table_kitchen_order.get("kitchen_state") == "received"
+            and len(table_kitchen_order.get("lines", [])) == 2,
+            "table order reaches KDS as a received two-item preparation round",
+            checks,
+        )
+        for kitchen_state in ("preparing", "ready", "served"):
+            state_row = http_json(
+                "PATCH",
+                f"/kitchen/orders/{table_order['id']}/state",
+                token=token,
+                payload={"state": kitchen_state},
+            )
+            check(
+                state_row.get("kitchen_state") == kitchen_state,
+                f"table order KDS advances to {kitchen_state}",
+                checks,
+            )
+        table_queue_after_served = http_json("GET", "/kitchen/queue", token=token)
+        check(
+            not any(row.get("id") == table_order["id"] for row in table_queue_after_served),
+            "KDS removes the served table preparation round from active work",
+            checks,
+        )
+
+        table_send_key = f"{RUN_ID}-table-order-1-send"
         held = http_json(
             "PATCH",
             f"/pos/orders/{table_order['id']}/send-to-pos",
             token=token,
             terminal_id=identity["terminal_id"],
-            payload={},
+            idem=table_send_key,
+            payload={"expected_checkout_version": replayed["checkout_version"]},
         )
         check(held.get("status") == "held", "sending a table order to POS marks it held", checks)
 
@@ -1829,7 +2270,8 @@ async def main() -> int:
             f"/pos/orders/{table_order['id']}/send-to-pos",
             token=token,
             terminal_id=identity["terminal_id"],
-            payload={},
+            idem=table_send_key,
+            payload={"expected_checkout_version": replayed["checkout_version"]},
         )
         check(
             held_replay.get("id") == held.get("id")
@@ -1852,17 +2294,21 @@ async def main() -> int:
             checks,
         )
 
-        add_after_held = http_json(
+        _, _, add_after_held_raw = http_request(
             "POST",
             f"/pos/orders/{table_order['id']}/lines",
             token=token,
             terminal_id=identity["terminal_id"],
             idem=f"{RUN_ID}-table-order-1-lines-2",
-            payload={"lines": [{"menu_item_id": items["coffee"], "qty": 1}]},
+            payload={
+                "expected_checkout_version": held["checkout_version"],
+                "lines": [{"menu_item_id": items["coffee"], "qty": 1}],
+            },
+            expected=(422,),
         )
         check(
-            len(add_after_held.get("lines", [])) == 3,
-            "POS can still add lines to a held order found via search",
+            b"items are locked" in add_after_held_raw.lower(),
+            "held table bill is immutable after Send to POS",
             checks,
         )
 
@@ -1888,10 +2334,10 @@ async def main() -> int:
             idem=f"{RUN_ID}-table-order-1-pay",
             payload={
                 "method": "cash",
-                "amount_minor": add_after_held["total_minor"],
-                "tendered_minor": add_after_held["total_minor"],
-                "expected_order_total_minor": add_after_held["total_minor"],
-                "expected_due_minor": add_after_held["total_minor"],
+                "amount_minor": held["total_minor"],
+                "tendered_minor": held["total_minor"],
+                "expected_order_total_minor": held["total_minor"],
+                "expected_due_minor": held["total_minor"],
                 "ref_external": MARKER,
             },
         )
@@ -1911,7 +2357,10 @@ async def main() -> int:
             token=token,
             terminal_id=identity["terminal_id"],
             idem=f"{RUN_ID}-table-order-1-lines-3",
-            payload={"lines": [{"menu_item_id": items["coffee"], "qty": 1}]},
+            payload={
+                "expected_checkout_version": held["checkout_version"],
+                "lines": [{"menu_item_id": items["coffee"], "qty": 1}],
+            },
             expected=(422,),
         )
         check(
@@ -1931,6 +2380,7 @@ async def main() -> int:
                 "shift_id": shift_id,
                 "customer_name": MARKER,
                 "timer_minutes": 60,
+                "expected_rate_per_hour_minor": station_rates["ps5"],
             },
             expected=(422,),
         )
@@ -1953,6 +2403,7 @@ async def main() -> int:
                     "customer_name": MARKER,
                     "customer_phone": f"7{secrets.randbelow(10**9):09d}",
                     "timer_minutes": 60,
+                    "expected_rate_per_hour_minor": station_rates[station_type],
                 },
             )
             check(
@@ -2206,6 +2657,27 @@ async def main() -> int:
             checks,
         )
         check(
+            report_daily.get("branch_id") == identity["branch_id"]
+            and int(daily_payments.get("cash_minor") or 0) > 0
+            and int(daily_payments.get("upi_minor") or 0) > 0
+            and int(report_daily.get("cogs_minor") or 0) > 0
+            and report_daily.get("gross_profit_minor")
+            == report_daily.get("net_revenue_minor") - report_daily.get("cogs_minor"),
+            "daily report is branch-scoped and reconciles cash, UPI, FIFO COGS, and gross profit",
+            checks,
+        )
+        stock_after_sales = http_json("GET", "/inventory/ingredients", token=token)
+        sold_ingredient = next(
+            (row for row in stock_after_sales if row.get("id") == ingredient["id"]),
+            None,
+        )
+        check(
+            sold_ingredient is not None
+            and 0 < float(sold_ingredient.get("current_qty") or 0) < 99.0,
+            "settled recipe-backed drink sales consume FIFO stock exactly once",
+            checks,
+        )
+        check(
             isinstance(tax_compliance.get("issues"), list)
             and isinstance(tax_compliance.get("checked_orders"), int),
             "GST compliance report computes",
@@ -2255,6 +2727,27 @@ async def main() -> int:
             isinstance(dashboard.get("revenue_total_minor"), int)
             and isinstance(dashboard.get("orders_count"), int),
             "analytics dashboard computes",
+            checks,
+        )
+
+        distributable = http_json("GET", "/finance/distributable", token=token)
+        finance_metrics = http_json(
+            "GET",
+            f"/finance/metrics?period_start={today}&period_end={today}",
+            token=token,
+        )
+        cash_position = distributable.get("cash_position", {})
+        check(
+            isinstance(distributable.get("spendable_cash_bank_minor"), int)
+            and distributable.get("spendable_cash_bank_minor")
+            == cash_position.get("spendable_cash_bank_minor")
+            and distributable.get("safe_to_distribute_minor")
+            == min(
+                distributable.get("profit_based_capacity_minor"),
+                distributable.get("cash_based_capacity_minor"),
+            )
+            and isinstance(finance_metrics.get("orders_count"), int),
+            "Finance exposes explicit spendable cash, safe distribution cap, and period metrics",
             checks,
         )
         check(
@@ -2310,7 +2803,17 @@ async def main() -> int:
             "inventory valuation insight computes",
             checks,
         )
-        check(isinstance(recipe_margin, list), "recipe margin insight reads", checks)
+        coffee_margin = next(
+            (row for row in recipe_margin if row.get("menu_item_id") == items["coffee"]),
+            None,
+        )
+        check(
+            coffee_margin is not None
+            and int(coffee_margin.get("cost_minor") or 0) > 0
+            and coffee_margin.get("costing_complete") is True,
+            "recipe margin insight uses the received FIFO cost for the sold drink",
+            checks,
+        )
         check(
             isinstance(growth.get("current"), dict),
             "growth insight computes",
@@ -2328,12 +2831,14 @@ async def main() -> int:
             "POST",
             f"/memberships/{subscription['id']}/cancel",
             token=token,
+            terminal_id=identity["terminal_id"],
+            idem=f"membership-cancel:{MARKER}",
             payload={},
         )
         check(
             cancelled.get("auto_renew") is False
-            and cancelled.get("cancelled_at") is not None,
-            "membership cancellation persists",
+            and cancelled.get("is_active") is True,
+            "membership cancellation converges safely for a prepaid non-renewing term",
             checks,
         )
 
@@ -2409,6 +2914,7 @@ async def main() -> int:
                 "station_id": stations["ps5"],
                 "shift_id": shift_id,
                 "customer_name": f"{MARKER} close blocker",
+                "expected_rate_per_hour_minor": station_rates["ps5"],
             },
         )
         stopped_unsent = http_json(
@@ -2486,6 +2992,18 @@ async def main() -> int:
             checks,
         )
 
+        logout = http_json(
+            "POST",
+            "/auth/logout",
+            token=token,
+            payload={},
+        )
+        check(
+            logout.get("message") == "Signed out.",
+            "logout returns explicit signed-out feedback",
+            checks,
+        )
+
         async with AsyncSessionLocal() as session:
             user = await session.get(User, UUID(identity["user_id"]))
             if user is None:
@@ -2526,16 +3044,23 @@ async def main() -> int:
             failures.append(f"residual scan failed: {exc}")
             status = "FAIL"
 
-    print(json.dumps({
+    result = {
         "status": status if not failures else "FAIL",
         "run_id": RUN_ID,
         "marker": MARKER,
         "base_url": BASE_URL,
+        "database": verified_database,
         "checks": checks,
         "cleanup_counts": cleanup_counts,
         "residual_counts": residual_counts,
         "failures": failures,
-    }, indent=2, sort_keys=True))
+    }
+    rendered = json.dumps(result, indent=2, sort_keys=True)
+    if ARTIFACT_PATH:
+        artifact = Path(ARTIFACT_PATH).expanduser().resolve()
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(f"{rendered}\n", encoding="utf-8")
+    print(rendered)
     return 0 if status == "PASS" and not failures else 1
 
 

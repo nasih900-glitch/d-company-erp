@@ -3,11 +3,14 @@ package cloud.dcompany.erp.ui.screens.reports
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.BranchScopeMismatchException
 import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
+import cloud.dcompany.erp.core.auth.verifyBranchScopedPayload
 import cloud.dcompany.erp.core.db.cached
 import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.CostingCoverage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +27,7 @@ import java.time.ZoneId
  * ask for tomorrow's takings and be told, truthfully, that there were none.
  */
 private val BUSINESS_ZONE: ZoneId = ZoneId.of("Asia/Kolkata")
+private const val COSTING_COVERAGE_CACHE_KEY = "reports:inventory-costing-coverage"
 
 internal fun businessToday(): LocalDate = LocalDate.now(BUSINESS_ZONE)
 
@@ -73,6 +77,9 @@ data class ReportsUiState(
     val loading: Boolean = true,
     val error: String? = null,
     val report: ReportData? = null,
+    val costingCoverage: CostingCoverage? = null,
+    val costingLoading: Boolean = true,
+    val costingError: String? = null,
     /** When `report` was last actually fetched from the server — null for a report that's never synced. */
     val fetchedAtMillis: Long? = null,
 ) {
@@ -115,6 +122,8 @@ internal fun reportPresentation(state: ReportsUiState): ReportPresentation = whe
 }
 
 internal fun reportLoadError(error: Throwable): String = when (error) {
+    is BranchScopeMismatchException -> error.message
+        ?: "Could not verify which branch this report belongs to."
     is ApiException -> error.message?.takeIf(String::isNotBlank) ?: "Could not load the report."
     else -> "Could not refresh the report. Check the connection and try again."
 }
@@ -238,15 +247,48 @@ class ReportsViewModel : ViewModel() {
         inFlight?.cancel()
         val s = _state.value
         val key = cacheKey(s)
+        val expectedBranchId = cacheIsolation.currentLease()?.scope?.branchId
         // Cleared immediately, not left showing the PREVIOUS period's figures
         // under the new heading while this period's own cache is read — that
         // read is a fast local lookup, not worth a flash of wrong numbers to
         // save.
-        _state.value = s.copy(loading = true, error = null, report = null, fetchedAtMillis = null)
+        _state.value = s.copy(
+            loading = true,
+            error = null,
+            report = null,
+            fetchedAtMillis = null,
+            costingLoading = true,
+            costingError = null,
+        )
         inFlight = viewModelScope.launch {
             try {
+                verifyBranchScopedPayload(
+                    expectedBranchId,
+                    expectedBranchId,
+                    "report",
+                )
+                db.reportSnapshotDao().cached<CostingCoverage>(COSTING_COVERAGE_CACHE_KEY)
+                    ?.let { (cachedCoverage, _) ->
+                        val belongsToActiveBranch = runCatching {
+                            verifyBranchScopedPayload(
+                                expectedBranchId,
+                                cachedCoverage.branchId,
+                                "saved inventory costing status",
+                            )
+                        }.isSuccess
+                        if (belongsToActiveBranch && requestId == requestSerial) {
+                            _state.value = _state.value.copy(costingCoverage = cachedCoverage)
+                        }
+                    }
                 db.reportSnapshotDao().cached<ReportData>(key)?.let { (cachedReport, fetchedAt) ->
-                    if (requestId == requestSerial) {
+                    val belongsToActiveBranch = runCatching {
+                        verifyBranchScopedPayload(
+                            expectedBranchId,
+                            cachedReport.branchId,
+                            "saved report",
+                        )
+                    }.isSuccess
+                    if (belongsToActiveBranch && requestId == requestSerial) {
                         _state.value = _state.value.copy(
                             report = cachedReport,
                             fetchedAtMillis = fetchedAt,
@@ -256,7 +298,7 @@ class ReportsViewModel : ViewModel() {
                 lateinit var report: ReportData
                 val committed = cacheIsolation.fetchAndCommitScoped(
                     fetch = {
-                        when (s.period) {
+                        val fetched = when (s.period) {
                             ReportPeriod.DAILY -> api.daily(s.onDate.toString())
                             // YearMonth.toString() is exactly the "2026-08" the
                             // backend validates yyyy_mm against.
@@ -264,26 +306,77 @@ class ReportsViewModel : ViewModel() {
                             ReportPeriod.QUARTERLY -> api.quarterly(s.fiscalYear, s.quarter)
                             ReportPeriod.YEARLY -> api.yearly(s.fiscalYear)
                         }
+                        verifyBranchScopedPayload(
+                            expectedBranchId,
+                            fetched.branchId,
+                            "report",
+                        )
+                        fetched
                     },
                     store = {
                         report = it
                         db.reportSnapshotDao().store(key, it)
                     },
                 )
-                if (!committed || requestId != requestSerial) return@launch
+                if (!committed || requestId != requestSerial) {
+                    return@launch
+                }
                 val now = System.currentTimeMillis()
                 _state.value = _state.value.copy(
                     report = report, fetchedAtMillis = now, error = null,
                 )
+                try {
+                    lateinit var coverage: CostingCoverage
+                    val coverageCommitted = cacheIsolation.fetchAndCommitScoped(
+                        fetch = {
+                            api.costingCoverage().also {
+                                verifyBranchScopedPayload(
+                                    expectedBranchId,
+                                    it.branchId,
+                                    "inventory costing status",
+                                )
+                            }
+                        },
+                        store = {
+                            coverage = it
+                            db.reportSnapshotDao().store(COSTING_COVERAGE_CACHE_KEY, it)
+                        },
+                    )
+                    if (coverageCommitted && requestId == requestSerial) {
+                        _state.value = _state.value.copy(
+                            costingCoverage = coverage,
+                            costingError = null,
+                        )
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (requestId == requestSerial) {
+                        _state.value = _state.value.copy(
+                            costingError = if (_state.value.costingCoverage == null) {
+                                "Inventory costing status could not be verified. COGS and profit may be incomplete."
+                            } else {
+                                "Inventory costing status could not refresh. The saved warning is still shown."
+                            },
+                        )
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 if (requestId == requestSerial) {
-                    _state.value = _state.value.copy(error = reportLoadError(error))
+                    _state.value = _state.value.copy(
+                        error = reportLoadError(error),
+                        costingError = _state.value.costingError
+                            ?: _state.value.costingCoverage?.let {
+                                "Inventory costing status could not refresh. The saved warning is still shown."
+                            }
+                            ?: "Inventory costing status could not be verified. COGS and profit may be incomplete.",
+                    )
                 }
             } finally {
                 if (requestId == requestSerial) {
-                    _state.value = _state.value.copy(loading = false)
+                    _state.value = _state.value.copy(loading = false, costingLoading = false)
                 }
             }
         }

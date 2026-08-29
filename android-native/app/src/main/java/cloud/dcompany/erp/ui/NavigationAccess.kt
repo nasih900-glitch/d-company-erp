@@ -6,16 +6,45 @@ import cloud.dcompany.erp.core.net.MeResponse
 
 /** Membership money writes require both server permission and protected-owner identity. */
 fun canManageMemberships(profile: MeResponse): Boolean =
-    profile.protectedAccess && EffectivePermissions.from(profile).has(ErpPermission.AdminSystem)
+    EffectivePermissions.from(profile).membershipAccess(profile).canManageMoney
 
-/** The minimum server permission needed for each Android destination. */
-fun allowedDestinations(profile: MeResponse): List<Destination> {
+/** Legacy attempt/evidence recovery is Audit Control, not ordinary owner work. */
+fun canRecoverMembershipEvidence(profile: MeResponse): Boolean =
+    EffectivePermissions.from(profile).membershipAccess(profile).canRecoverLegacyEvidence
+
+/** Settings management follows the same server permission as its write endpoints. */
+fun canManageSystemSettings(profile: MeResponse): Boolean =
+    EffectivePermissions.from(profile).has(ErpPermission.SettingsManage)
+
+/**
+ * Product-profile, owner-tier and server-permission intersection for every
+ * Android route. Feature flags never grant authority and permissions never
+ * make a dormant product module visible.
+ */
+fun allowedDestinations(
+    profile: MeResponse,
+    featureProfile: WorkspaceFeatureProfile = WorkspaceFeatureProfiles.Active,
+): List<Destination> {
     val permissions = EffectivePermissions.from(profile)
-    return Destination.entries.filter { destination ->
+    val ownerWorkspace = profile.protectedAccess || profile.auditAccess
+    val managementWorkspace = ownerWorkspace || profile.roles.any { role ->
+        val normalized = role.trim().lowercase().replace('-', '_').replace(' ', '_')
+        normalized.contains("manager") || normalized.contains("owner")
+    }
+    return featureProfile.navigationOrder.filter { destination ->
+        if (!featureProfile.includes(destination)) return@filter false
+        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace) &&
+            (!featureProfile.requiresManagement(destination) || managementWorkspace)
+        if (!audienceAllowed) return@filter false
         when (destination) {
+            Destination.Dashboard -> permissions.has(ErpPermission.AnalyticsRead)
             Destination.Pos -> permissions.has(ErpPermission.PosRead)
             Destination.Gaming -> permissions.has(ErpPermission.GamingRead)
             Destination.Tables -> permissions.has(ErpPermission.TablesRead)
+            Destination.Reservations -> permissions.hasAny(
+                ErpPermission.TablesRead,
+                ErpPermission.GamingRead,
+            )
             Destination.Kitchen -> permissions.has(ErpPermission.KitchenRead)
             Destination.Shift -> permissions.hasAny(
                 ErpPermission.PosShiftOpen,
@@ -41,8 +70,9 @@ fun allowedDestinations(profile: MeResponse): List<Destination> {
             Destination.AuditLog,
             Destination.AccessControl,
             -> profile.auditAccess
-            // Account/password access must remain available to every user.
+            Destination.SupportInbox -> permissions.has(ErpPermission.AdminSystem)
             Destination.Settings -> true
+            Destination.Help -> true
         }
     }
 }

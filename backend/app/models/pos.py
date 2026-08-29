@@ -15,6 +15,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     UniqueConstraint,
     event,
@@ -53,6 +54,16 @@ class Shift(Base, TimestampMixin, TenantMixin):
 class Order(Base, TimestampMixin, TenantMixin):
     __tablename__ = "orders"
     __table_args__ = (
+        CheckConstraint(
+            "source_integrity_revision IS NULL "
+            "OR source_integrity_revision = 48",
+            name="ck_order_source_integrity_revision",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "invoice_no",
+            name="uq_orders_company_invoice_no",
+        ),
         Index(
             "uq_orders_active_table_bill",
             "company_id",
@@ -126,7 +137,7 @@ class Order(Base, TimestampMixin, TenantMixin):
     )
     idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True, index=True)
     # ----- Invoice numbering (per branch, per FY, no gaps) -----
-    invoice_no: Mapped[str | None] = mapped_column(String(20), unique=True, index=True)
+    invoice_no: Mapped[str | None] = mapped_column(String(20), index=True)
     fiscal_year: Mapped[str | None] = mapped_column(String(7))  # e.g. "2026-27"
     # ----- Customer identity for GSTR-1 categorization -----
     customer_name: Mapped[str | None] = mapped_column(String(200))
@@ -163,6 +174,10 @@ class Order(Base, TimestampMixin, TenantMixin):
         server_onupdate=FetchedValue(),
         nullable=False,
     )
+    # NULL means the final invoice predates revision 0048. The database marks
+    # only forward transitions into paid/refunded/invoiced state with 48, so
+    # open drafts do not make a rollback unnecessarily irreversible.
+    source_integrity_revision: Mapped[int | None] = mapped_column(SmallInteger)
 
 
 class OrderCheckoutClaim(Base, TimestampMixin, TenantMixin):
@@ -224,10 +239,21 @@ class OrderLine(Base, TimestampMixin):
     __tablename__ = "order_lines"
     __table_args__ = (
         CheckConstraint(
+            "variant_snapshot IS NULL OR jsonb_typeof(variant_snapshot) = 'object'",
+            name="ck_order_line_variant_snapshot_object",
+        ),
+        CheckConstraint(
             "(kitchen_released_at IS NULL AND kitchen_round_no IS NULL) OR "
             "(kitchen_released_at IS NOT NULL AND kitchen_round_no IS NOT NULL "
             "AND kitchen_round_no > 0)",
             name="ck_order_line_kitchen_release_pair",
+        ),
+        CheckConstraint(
+            "(COALESCE(kitchen_status, 'queued') = 'served' "
+            "AND kitchen_served_at IS NOT NULL) OR "
+            "(COALESCE(kitchen_status, 'queued') <> 'served' "
+            "AND kitchen_served_at IS NULL)",
+            name="ck_order_line_kitchen_served_pair",
         ),
         CheckConstraint(
             "(voided_at IS NULL AND voided_by IS NULL AND void_reason IS NULL) OR "
@@ -246,6 +272,19 @@ class OrderLine(Base, TimestampMixin):
             "AND kitchen_void_acknowledged_by IS NOT NULL "
             "AND voided_at IS NOT NULL AND kitchen_released_at IS NOT NULL)",
             name="ck_order_line_kitchen_void_ack_pair",
+        ),
+        CheckConstraint(
+            "char_length(trim(menu_item_name_snapshot)) >= 1",
+            name="ck_order_line_reporting_snapshot_name",
+        ),
+        CheckConstraint(
+            "char_length(trim(menu_item_type_snapshot)) >= 1",
+            name="ck_order_line_reporting_snapshot_type",
+        ),
+        CheckConstraint(
+            "reporting_snapshot_revision IS NULL "
+            "OR reporting_snapshot_revision = 49",
+            name="ck_order_line_reporting_snapshot_revision",
         ),
         Index(
             "uq_order_lines_order_client_line",
@@ -272,6 +311,15 @@ class OrderLine(Base, TimestampMixin):
             ),
         ),
         Index(
+            "ix_order_lines_kitchen_served_history",
+            "order_id",
+            "kitchen_served_at",
+            postgresql_where=text(
+                "kitchen_released_at IS NOT NULL AND voided_at IS NULL "
+                "AND kitchen_status = 'served'"
+            ),
+        ),
+        Index(
             "ix_order_lines_kitchen_void_acknowledged_by",
             "kitchen_void_acknowledged_by",
             postgresql_where=text(
@@ -290,10 +338,28 @@ class OrderLine(Base, TimestampMixin):
     menu_item_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("menu_items.id", ondelete="RESTRICT"), nullable=False
     )
+    # Immutable catalogue facts captured when the line is written. Historical
+    # reports and receipts must not change when a menu item is renamed or
+    # reclassified later (migration 0049 enforces this in PostgreSQL).
+    menu_item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    menu_item_type_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    reporting_snapshot_revision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        server_default=text("49"),
+    )
     variant_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("menu_variants.id", ondelete="SET NULL")
     )
-    modifiers: Mapped[list[dict] | None] = mapped_column(JSONB)
+    # Immutable server-priced snapshot. ``variant_id`` may be cleared when a
+    # catalog option is deleted, but historical receipts must retain the sold
+    # name and delta.
+    # PostgreSQL JSONB normally serializes Python ``None`` as the JSON literal
+    # ``null``. That is not SQL NULL and therefore violates the object-only
+    # snapshot constraint for every ordinary, non-variant menu item.
+    variant_snapshot: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    # Immutable modifier-option snapshots; never persist client-supplied names
+    # or prices here.
+    modifiers: Mapped[list[dict] | None] = mapped_column(JSONB(none_as_null=True))
     qty: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
     unit_price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     line_total_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -316,6 +382,12 @@ class OrderLine(Base, TimestampMixin):
         DateTime(timezone=True)
     )
     kitchen_round_no: Mapped[int | None] = mapped_column(Integer)
+    # Exact completion time used by the branch-local "Served today" history.
+    # Order.opened_at is deliberately insufficient: a ticket can cross the
+    # cafe's local midnight before the kitchen finishes it.
+    kitchen_served_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     voided_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
@@ -332,6 +404,29 @@ class OrderLine(Base, TimestampMixin):
 
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="ck_payment_positive_amount"),
+        CheckConstraint(
+            "method IN ('cash', 'card', 'upi', 'qr', 'wallet')",
+            name="ck_payment_supported_method",
+        ),
+        CheckConstraint(
+            "(method = 'cash' AND tendered_minor IS NOT NULL "
+            "AND tendered_minor >= amount_minor "
+            "AND change_minor IS NOT NULL "
+            "AND change_minor = tendered_minor - amount_minor) OR "
+            "(method <> 'cash' AND tendered_minor IS NULL "
+            "AND change_minor IS NULL)",
+            name="ck_payment_tender_contract",
+            postgresql_not_valid=True,
+        ),
+        CheckConstraint(
+            "source_integrity_revision IS NOT NULL "
+            "AND source_integrity_revision = 48",
+            name="ck_payment_source_integrity_revision",
+            postgresql_not_valid=True,
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     order_id: Mapped[UUID] = mapped_column(
@@ -340,12 +435,25 @@ class Payment(Base, TimestampMixin):
     shift_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="RESTRICT"), nullable=False
     )
+    # Immutable cashier attribution. Historical rows created before migration
+    # 0057 remain NULL rather than being falsely attributed to the order opener.
+    # Forward API writes always set this from the authenticated tenant context;
+    # Payment itself is append-only at the database layer (migration 0048).
+    recorded_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+    )
     method: Mapped[str] = mapped_column(String(20), nullable=False)  # cash|card|upi|qr|wallet
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tendered_minor: Mapped[int | None] = mapped_column(BigInteger)
     change_minor: Mapped[int | None] = mapped_column(BigInteger)
     ref_external: Mapped[str | None] = mapped_column(String(200))
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_integrity_revision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        server_default=text("48"),
+    )
 
 
 class Refund(Base, TimestampMixin):
@@ -362,6 +470,13 @@ class Refund(Base, TimestampMixin):
 
     __tablename__ = "refunds"
     __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="ck_refund_positive_amount"),
+        CheckConstraint(
+            "source_integrity_revision IS NOT NULL "
+            "AND source_integrity_revision = 48",
+            name="ck_refund_source_integrity_revision",
+            postgresql_not_valid=True,
+        ),
         CheckConstraint(
             "request_id IS NOT NULL",
             name="ck_refund_forward_write_linkage",
@@ -386,6 +501,13 @@ class Refund(Base, TimestampMixin):
             "AND provider_settled_at IS NOT NULL "
             "AND provider_evidence_reconciled IS NOT NULL)",
             name="ck_refund_request_external_provenance",
+        ),
+        CheckConstraint(
+            "request_id IS NULL OR (loyalty_reconciliation_state IS NOT NULL "
+            "AND loyalty_reconciliation_state IN ('not_applicable', 'applied', "
+            "'legacy_redemption_restored', 'legacy_unknown'))",
+            name="ck_refund_loyalty_reconciliation_state",
+            postgresql_not_valid=True,
         ),
         UniqueConstraint("request_id", name="uq_refund_request"),
         UniqueConstraint(
@@ -460,7 +582,16 @@ class Refund(Base, TimestampMixin):
     # same transaction, false when the real payout posted but owner LTV
     # reconciliation remains necessary.
     customer_spend_reconciled: Mapped[bool | None] = mapped_column(Boolean)
+    # Forward refunds explicitly record whether loyalty was fully adjusted,
+    # safely restored from redemption-only legacy evidence, not applicable,
+    # or requires owner review because pre-ledger earn history is unknowable.
+    # NULL is retained only for refunds created before revision 0043.
+    loyalty_reconciliation_state: Mapped[str | None] = mapped_column(String(40))
     note: Mapped[str | None] = mapped_column(String(500))
+    source_integrity_revision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        server_default=text("48"),
+    )
 
 
 class PosRefundRequest(Base, TimestampMixin, TenantMixin):
@@ -734,7 +865,9 @@ class PosRefundWithdrawal(Base, TimestampMixin, TenantMixin):
         ),
         CheckConstraint(
             "(resolution = 'provider_payout_abandoned' "
+            "AND verification_reference IS NOT NULL "
             "AND char_length(trim(verification_reference)) >= 3 "
+            "AND verification_status IS NOT NULL "
             "AND verification_status IN ("
             "'no_matching_transaction', 'provider_declined', 'provider_reversed'"
             ") AND verified_at IS NOT NULL) OR "
@@ -917,6 +1050,16 @@ def _guard_append_only_financial_row(row: object, label: str) -> None:
     )
     if changed:
         raise ValueError(f"{label} is immutable: " + ", ".join(changed))
+
+
+@event.listens_for(Payment, "before_update")
+def _guard_payment_update(_mapper, _connection, row: Payment) -> None:
+    _guard_append_only_financial_row(row, "POS payment")
+
+
+@event.listens_for(Payment, "before_delete")
+def _guard_payment_delete(_mapper, _connection, _row: Payment) -> None:
+    raise ValueError("POS payment is immutable and cannot be deleted")
 
 
 @event.listens_for(Refund, "before_update")

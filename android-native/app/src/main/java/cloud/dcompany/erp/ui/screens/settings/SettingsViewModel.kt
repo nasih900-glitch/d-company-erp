@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.screens.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.BranchCacheEntity
 import cloud.dcompany.erp.core.db.CompanyCacheEntity
 import cloud.dcompany.erp.core.db.LocalBranchEntity
@@ -13,6 +14,7 @@ import cloud.dcompany.erp.core.db.TerminalCacheEntity
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.net.Terminal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,13 +27,14 @@ import java.util.UUID
 enum class SettingsTab(val label: String) {
     Account("Account"),
     Company("Company"),
-    Branches("Branches"),
+    Branches("Shop"),
     Terminals("Terminals"),
 }
 
 data class PendingBranchRow(
     val localId: String,
     val name: String,
+    val invoiceSeriesCode: String?,
     val rejected: Boolean,
     val error: String?,
 )
@@ -41,6 +44,7 @@ data class PendingTerminalRow(
     val branchId: String,
     val branchName: String,
     val name: String,
+    val purpose: String,
     val rejected: Boolean,
     val error: String?,
 )
@@ -56,6 +60,7 @@ data class SettingsUiState(
     val accountBusy: Boolean = false,
     val accountError: String? = null,
     val accountNotice: String? = null,
+    val passwordChanged: Boolean = false,
 
     // -- company (cache + Shape C pending edit) ------------------------------
     val companyLoading: Boolean = true,
@@ -89,7 +94,11 @@ data class SettingsUiState(
     val selectedBranchId: String? = null,
     val terminalBusy: Boolean = false,
     val terminalName: String = "",
+    /** Null forces an explicit operational-purpose choice for every new till. */
+    val terminalPurpose: String? = null,
     val terminalDeviceId: String = "",
+    val terminalEdit: TerminalEditForm? = null,
+    val terminalEditError: String? = null,
     val terminalFormError: String? = null,
     val terminalActionError: String? = null,
     val terminalNotice: String? = null,
@@ -114,6 +123,24 @@ data class SettingsUiState(
                 ?: BranchForm()
             return form != original
         }
+
+    /** Catch a known duplicate immediately, including while fully offline. */
+    fun invoiceSeriesConflict(form: BranchForm): String? {
+        val requested = normalizeInvoiceSeries(form.invoiceSeriesCode)
+        branches.firstOrNull {
+            it.id != form.id && normalizeInvoiceSeries(it.invoiceSeriesCode) == requested
+        }?.let { existing ->
+            return "Invoice series '$requested' is already used by ${existing.name}. " +
+                "Choose another two-character code."
+        }
+        pendingBranches.firstOrNull {
+            form.isNew && it.invoiceSeriesCode?.let(::normalizeInvoiceSeries) == requested
+        }?.let { pending ->
+            return "Invoice series '$requested' is already queued for ${pending.name}. " +
+                "Choose another two-character code."
+        }
+        return null
+    }
 }
 
 internal enum class SettingsReadPresentation {
@@ -141,7 +168,7 @@ internal fun settingsReadPresentation(
 /**
  * Settings — lowest-frequency screen in this rebuild. Company profile edits
  * and new Branch/Terminal creation are real offline outbox writes; editing
- * an existing branch, deleting a terminal, and the Account tab all stay
+ * an existing branch, editing/deleting a terminal, and the Account tab all stay
  * online-only, per SettingsApi's class doc.
  */
 class SettingsViewModel : ViewModel() {
@@ -257,6 +284,7 @@ class SettingsViewModel : ViewModel() {
                 _state.value = _state.value.copy(
                     challenge = null,
                     accountNotice = result.message.ifBlank { "Password updated." },
+                    passwordChanged = true,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -506,7 +534,7 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchesError = error.settingsReadable("Could not refresh branches."),
+                    branchesError = error.settingsReadable("Could not refresh the shop."),
                 )
             } finally {
                 _state.value = _state.value.copy(
@@ -549,6 +577,10 @@ class SettingsViewModel : ViewModel() {
             _state.value = _state.value.copy(branchFormError = message)
             return
         }
+        _state.value.invoiceSeriesConflict(form)?.let { message ->
+            _state.value = _state.value.copy(branchFormError = message)
+            return
+        }
         _state.value = _state.value.copy(branchSaving = true, branchFormError = null)
         if (form.isNew) {
             val scopeLease = cacheIsolation.currentLease() ?: run {
@@ -563,6 +595,7 @@ class SettingsViewModel : ViewModel() {
                                     localId = UUID.randomUUID().toString(),
                                     name = form.name.trim(),
                                     code = form.code.trim().uppercase().ifBlank { null },
+                                    invoiceSeriesCode = normalizeInvoiceSeries(form.invoiceSeriesCode),
                                     address = form.address.trim().ifBlank { null },
                                     timezone = form.timezone.trim().ifBlank { null },
                                     opensAt = form.opensAt.trim().ifBlank { null },
@@ -578,7 +611,7 @@ class SettingsViewModel : ViewModel() {
                     ) return@launch
                     _state.value = _state.value.copy(
                         branchForm = null,
-                        branchNotice = "Branch \"${form.name.trim()}\" queued — will sync when back online.",
+                        branchNotice = "Shop \"${form.name.trim()}\" queued — will sync when back online.",
                     )
                     clearNoticeLater { it.copy(branchNotice = null) }
                     appCtx.sync.requestSync()
@@ -587,7 +620,7 @@ class SettingsViewModel : ViewModel() {
                 } catch (error: Exception) {
                     _state.value = _state.value.copy(
                         branchFormError = error.settingsReadable(
-                            "Could not save this branch on the tablet.",
+                            "Could not save this shop on the tablet.",
                         ),
                     )
                 } finally {
@@ -606,7 +639,7 @@ class SettingsViewModel : ViewModel() {
                 keys.done(operation)
                 _state.value = _state.value.copy(
                     branchForm = null,
-                    branchNotice = "Branch \"${saved.name}\" saved.",
+                    branchNotice = "Shop \"${saved.name}\" saved.",
                 )
                 loadBranches()
                 clearNoticeLater { it.copy(branchNotice = null) }
@@ -614,7 +647,7 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchFormError = error.settingsReadable("Could not save this branch."),
+                    branchFormError = error.settingsReadable("Could not save this shop."),
                 )
             } finally {
                 _state.value = _state.value.copy(branchSaving = false)
@@ -632,9 +665,9 @@ class SettingsViewModel : ViewModel() {
             ) return@launch
             _state.value = _state.value.copy(
                 branchNotice = if (queued) {
-                    "Retry queued for the same branch. It will sync when online."
+                    "Retry queued for the same shop. It will sync when online."
                 } else {
-                    "That branch is no longer rejected. Its current status is shown above."
+                    "That shop is no longer rejected. Its current status is shown above."
                 },
             )
             if (queued) appCtx.sync.requestSync()
@@ -652,9 +685,9 @@ class SettingsViewModel : ViewModel() {
                 ) return@launch
                 _state.value = _state.value.copy(
                     branchNotice = if (discarded) {
-                        "Failed local branch discarded. Settings will refresh from the server when online."
+                        "Failed local shop discarded. Settings will refresh from the server when online."
                     } else {
-                        "That branch is no longer rejected, so it was not discarded."
+                        "That shop is no longer rejected, so it was not discarded."
                     },
                 )
                 if (discarded) {
@@ -665,7 +698,7 @@ class SettingsViewModel : ViewModel() {
                     } catch (error: Exception) {
                         _state.value = _state.value.copy(
                             branchesError = error.settingsReadable(
-                                "The failed local branch was discarded, but branches could not be refreshed.",
+                                "The failed local shop was discarded, but shop details could not be refreshed.",
                             ),
                         )
                     }
@@ -674,7 +707,7 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchNotice = error.settingsReadable("Could not discard the failed branch."),
+                    branchNotice = error.settingsReadable("Could not discard the failed shop."),
                 )
             }
         }
@@ -727,15 +760,148 @@ class SettingsViewModel : ViewModel() {
         _state.value = _state.value.copy(terminalName = value, terminalFormError = null)
     }
 
+    fun setTerminalPurpose(value: String) {
+        _state.value = _state.value.copy(
+            terminalPurpose = value.takeIf(TerminalPurpose::isKnown),
+            terminalFormError = null,
+        )
+    }
+
     fun setTerminalDeviceId(value: String) {
         _state.value = _state.value.copy(terminalDeviceId = value, terminalFormError = null)
+    }
+
+    fun openTerminalEdit(terminal: TerminalDto) {
+        if (_state.value.terminalBusy) return
+        _state.value = _state.value.copy(
+            terminalEdit = terminal.toEditForm(),
+            terminalEditError = null,
+            terminalActionError = null,
+        )
+    }
+
+    fun setTerminalEditName(value: String) {
+        _state.value.terminalEdit?.let { edit ->
+            _state.value = _state.value.copy(
+                terminalEdit = edit.copy(name = value),
+                terminalEditError = null,
+            )
+        }
+    }
+
+    fun setTerminalEditPurpose(value: String) {
+        _state.value.terminalEdit?.let { edit ->
+            _state.value = _state.value.copy(
+                terminalEdit = edit.copy(purpose = value),
+                terminalEditError = null,
+            )
+        }
+    }
+
+    fun setTerminalEditDeviceId(value: String) {
+        _state.value.terminalEdit?.let { edit ->
+            _state.value = _state.value.copy(
+                terminalEdit = edit.copy(deviceId = value),
+                terminalEditError = null,
+            )
+        }
+    }
+
+    fun closeTerminalEdit() {
+        if (_state.value.terminalBusy) return
+        _state.value = _state.value.copy(terminalEdit = null, terminalEditError = null)
+    }
+
+    /** Rename/rebind the existing server row in place. This is intentionally
+     * online-only: recreating a terminal would sever its shift/order history,
+     * while PATCH preserves the stable terminal id and every reference to it. */
+    fun saveTerminalEdit() {
+        if (_state.value.terminalBusy) return
+        val edit = _state.value.terminalEdit ?: return
+        edit.validate()?.let { message ->
+            _state.value = _state.value.copy(terminalEditError = message)
+            return
+        }
+        val normalizedName = edit.name.trim()
+        val duplicate = _state.value.allTerminals.firstOrNull {
+            it.id != edit.id &&
+                it.branchId == edit.branchId &&
+                it.name.trim().equals(normalizedName, ignoreCase = true)
+        }
+        if (duplicate != null) {
+            _state.value = _state.value.copy(
+                terminalEditError = "A till named \"${duplicate.name}\" already exists in this shop.",
+            )
+            return
+        }
+
+        _state.value = _state.value.copy(
+            terminalBusy = true,
+            terminalEditError = null,
+            terminalActionError = null,
+            terminalsError = null,
+        )
+        viewModelScope.launch {
+            try {
+                val updated = api.updateTerminal(edit.id, edit.toBody())
+                _state.value = _state.value.copy(
+                    allTerminals = _state.value.allTerminals.map { current ->
+                        if (current.id == updated.id) updated else current
+                    },
+                    terminalEdit = null,
+                    terminalEditError = null,
+                    terminalNotice = "Till \"${updated.name}\" updated without changing its history.",
+                )
+                if (appCtx.terminalStore.terminalId() == updated.id) {
+                    try {
+                        appCtx.terminalStore.rememberValidated(
+                            Terminal(
+                                id = updated.id,
+                                name = updated.name,
+                                branchId = updated.branchId,
+                                purpose = updated.purpose,
+                            ),
+                        )
+                    } catch (labelError: Exception) {
+                        _state.value = _state.value.copy(
+                            terminalsError = labelError.settingsReadable(
+                                "The terminal was updated, but this tablet could not save the new till label. Sign in online again to refresh it.",
+                            ),
+                        )
+                    }
+                }
+                try {
+                    refreshTerminalsCache()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (refreshError: Exception) {
+                    // The authoritative PATCH already succeeded. Keep the
+                    // optimistic row and report only that the list refresh is
+                    // pending; never invite a second rename as if it failed.
+                    _state.value = _state.value.copy(
+                        terminalsError = refreshError.settingsReadable(
+                            "The terminal was updated, but the full terminal list could not be refreshed.",
+                        ),
+                    )
+                }
+                clearNoticeLater { it.copy(terminalNotice = null) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    terminalEditError = error.settingsReadable("Could not update this terminal."),
+                )
+            } finally {
+                _state.value = _state.value.copy(terminalBusy = false)
+            }
+        }
     }
 
     fun addTerminal() {
         if (_state.value.terminalBusy) return
         val branchId = _state.value.selectedBranchId ?: run {
             _state.value = _state.value.copy(
-                terminalFormError = "Select or create a branch before adding a terminal.",
+                terminalFormError = "Set up the shop before adding a terminal.",
             )
             return
         }
@@ -747,6 +913,13 @@ class SettingsViewModel : ViewModel() {
         if (name.length > 100) {
             _state.value = _state.value.copy(
                 terminalFormError = "Till name must be 100 characters or fewer.",
+            )
+            return
+        }
+        val purpose = _state.value.terminalPurpose
+        if (!TerminalPurpose.isKnown(purpose)) {
+            _state.value = _state.value.copy(
+                terminalFormError = "Choose POS only, Gaming, or Gaming + POS.",
             )
             return
         }
@@ -772,6 +945,7 @@ class SettingsViewModel : ViewModel() {
                                 localId = UUID.randomUUID().toString(),
                                 branchId = branchId,
                                 name = name,
+                                purpose = requireNotNull(purpose),
                                 deviceId = deviceId,
                                 createdAtMillis = System.currentTimeMillis(),
                             ),
@@ -780,6 +954,7 @@ class SettingsViewModel : ViewModel() {
                 ) return@launch
                 _state.value = _state.value.copy(
                     terminalName = "",
+                    terminalPurpose = null,
                     terminalDeviceId = "",
                     terminalNotice = "Till \"$name\" queued — will sync when back online.",
                 )
@@ -954,24 +1129,27 @@ private fun LocalCompanyEditEntity.overlayOnto(base: CompanyDto?): CompanyDto {
 
 private fun BranchCacheEntity.toDto(): BranchDto = BranchDto(
     id = id, name = name, code = code, address = address, timezone = timezone,
+    invoiceSeriesCode = invoiceSeriesCode.orEmpty(),
     opensAt = opensAt, closesAt = closesAt, stateCode = stateCode,
     fssaiLicenseNo = fssaiLicenseNo, tradeLicenseNo = tradeLicenseNo, branchGstin = branchGstin,
 )
 
 private fun LocalBranchEntity.toPendingRow() = PendingBranchRow(
-    localId = localId, name = name,
+    localId = localId, name = name, invoiceSeriesCode = invoiceSeriesCode,
     rejected = syncState == SettingsWriteState.REJECTED, error = lastError,
 )
 
 private fun TerminalCacheEntity.toDto(): TerminalDto = TerminalDto(
-    id = id, branchId = branchId, name = name, deviceId = deviceId, lastSeenAt = lastSeenAt,
+    id = id, branchId = branchId, name = name, purpose = purpose,
+    deviceId = deviceId, lastSeenAt = lastSeenAt,
 )
 
 private fun LocalTerminalEntity.toPendingRow(branches: List<BranchDto>) = PendingTerminalRow(
     localId = localId,
     branchId = branchId,
-    branchName = branches.firstOrNull { it.id == branchId }?.name ?: "Unknown branch",
+    branchName = branches.firstOrNull { it.id == branchId }?.name ?: "Unknown shop",
     name = name,
+    purpose = purpose,
     rejected = syncState == SettingsWriteState.REJECTED, error = lastError,
 )
 
@@ -992,16 +1170,19 @@ private fun LocalTerminalEntity.toPendingRow(branches: List<BranchDto>) = Pendin
 private fun ApiException.readable(): String {
     val server = message?.takeIf { it.isNotBlank() } ?: "The request failed."
     return when {
+        status == 409 && server.contains("invoice series cannot be changed", ignoreCase = true) ->
+            "$server Refresh this shop and keep its current invoice series."
+        status == 409 && server.contains("invoice series", ignoreCase = true) ->
+            "$server Choose a different two-character series, then save again."
         status == 422 && code == null ->
-            "$server The server rejected one of these values — timezone (must be an " +
-                "IANA name like Asia/Kolkata), GSTIN (15 characters), PAN (10 " +
-                "characters), UPI ID (name@bank), FSSAI (14 digits) or opening hours " +
-                "(HH:MM)."
+            "$server The server rejected one of these values — check the required field " +
+                "formats, timezone (use an IANA name like Asia/Kolkata), company identity, " +
+                "UPI ID (name@bank), licences and opening hours (HH:MM)."
         isAmbiguous ->
             "$server It is not known whether the change was applied. Tap save again — " +
                 "the same request is replayed, so it cannot be applied twice."
         status == 403 ->
-            "$server Company and branch settings need an owner or manager login."
+            "$server Company and shop settings need an owner login."
         else -> server
     }
 }

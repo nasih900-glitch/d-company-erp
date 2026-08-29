@@ -46,8 +46,11 @@ interface FinanceDao {
     suspend fun markExpenseRejected(localId: String, error: String)
 
     /** A rejected expense is parked, not auto-retried — same reasoning as CustomersViewModel.retrySync. */
-    @Query("UPDATE local_expenses SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
-    suspend fun retryExpense(localId: String)
+    @Query(
+        "UPDATE local_expenses SET syncState = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND syncState = 'rejected'",
+    )
+    suspend fun retryExpense(localId: String): Int
 
     // ------------------------------------------------------------ asset cache
     @Query("SELECT * FROM asset_cache ORDER BY purchaseDate DESC")
@@ -84,8 +87,11 @@ interface FinanceDao {
     @Query("UPDATE local_assets SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markAssetRejected(localId: String, error: String)
 
-    @Query("UPDATE local_assets SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
-    suspend fun retryAsset(localId: String)
+    @Query(
+        "UPDATE local_assets SET syncState = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND syncState = 'rejected'",
+    )
+    suspend fun retryAsset(localId: String): Int
 
     // ---------------------------------------------------- capital entry cache
     @Query("SELECT * FROM capital_entry_cache WHERE partnerId = :partnerId ORDER BY effectiveAt DESC")
@@ -142,6 +148,9 @@ interface FinanceDao {
     @Query("UPDATE local_capital_entries SET syncState = 'rejected', lastError = :error WHERE localId = :localId")
     suspend fun markCapitalEntryRejected(localId: String, error: String)
 
-    @Query("UPDATE local_capital_entries SET syncState = 'pending', lastError = NULL WHERE localId = :localId")
-    suspend fun retryCapitalEntry(localId: String)
+    @Query(
+        "UPDATE local_capital_entries SET syncState = 'pending', lastError = NULL " +
+            "WHERE localId = :localId AND syncState = 'rejected'",
+    )
+    suspend fun retryCapitalEntry(localId: String): Int
 }

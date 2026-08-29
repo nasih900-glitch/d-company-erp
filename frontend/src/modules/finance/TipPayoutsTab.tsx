@@ -5,14 +5,14 @@ import Modal from '@/components/ui/Modal';
 import {
   accounting,
   finance,
-  settings,
-  type BranchDTO,
+  type BranchReferenceDTO,
   type TipPayoutDTO,
   type TipPayoutMethod,
 } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import { manualCollectionMethodLabel, MANUAL_COLLECTION_METHODS, rupeesToMinor } from '@/lib/manual-collections';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 // Ledger account code for Tips Payable — see backend/app/services/accounting/accounts.py.
 const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
@@ -23,20 +23,20 @@ const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
 export default function TipPayoutsTab() {
   const { me } = useAuth();
   const [rows, setRows] = useState<TipPayoutDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [tipsPayableBalance, setTipsPayableBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [voiding, setVoiding] = useState<TipPayoutDTO | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setErr(null);
     try {
       const [payouts, branchRows, trialBalance] = await Promise.all([
         finance.listTipPayouts({ include_voided: true, limit: 500 }),
-        settings.listBranches(),
+        finance.listBranches(),
         accounting.trialBalance(),
       ]);
       setRows(payouts);
@@ -46,11 +46,12 @@ export default function TipPayoutsTab() {
     } catch (error) {
       setErr((error as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   if (loading) {
     return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading tip payouts…</div>;
@@ -92,7 +93,7 @@ export default function TipPayoutsTab() {
           Immutable payout register · newest first
         </p>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load} aria-label="Refresh tip payouts">
+          <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh tip payouts">
             <RefreshCw size={14}/>
           </button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
@@ -103,7 +104,7 @@ export default function TipPayoutsTab() {
 
       {!branches.length && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
-          Add a branch in <b>Settings → Branches</b> before recording a payout.
+          No shop is available for this payout. Ask the protected owner to check your shop access.
         </div>
       )}
       {err && <ErrorRow text={err}/>}
@@ -251,7 +252,7 @@ function TipPayoutForm({
   onClose,
   onSuccess,
 }: {
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   defaultBranchId: string;
   tipsPayableBalance: number | null;
   onClose: () => void;

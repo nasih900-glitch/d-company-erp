@@ -39,18 +39,19 @@ class GamingAlarmReconcilerTest {
     }
 
     @Test
-    fun `pending local start does not arm a timer before server confirmation`() {
+    fun `pending local start arms its captured timer before server confirmation`() {
         val local = LocalGamingSessionEntity(
             localId = "local-start",
             stationId = station.id,
             timerMinutes = 60,
+            timerEndsAtMillis = 61_000,
             startedAtMillis = 1_000,
             state = GamingSessionState.START_PENDING,
             status = "starting",
         )
 
         assertEquals(
-            emptyList<GamingAlarmCandidate>(),
+            listOf(GamingAlarmCandidate("local-start", station.id, "PS5 One", 61_000)),
             gamingAlarmCandidates(emptyList(), listOf(local), listOf(station)),
         )
     }

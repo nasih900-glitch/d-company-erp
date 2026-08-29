@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 
 import { auth } from '@/lib/erp-api';
+import { webLandingRouteFor } from '@/lib/product-profile';
 import { useAuth } from './AuthContext';
 
 type Mode = 'login' | 'reset-request' | 'reset-confirm' | 'register-request' | 'register-confirm';
@@ -51,8 +52,8 @@ export default function Login() {
     setErr(null);
     try {
       if (mode === 'login') {
-        await login(email, password);
-        nav('/pos', { replace: true });
+        const profile = await login(email, password);
+        nav(webLandingRouteFor(profile), { replace: true });
         return;
       }
 

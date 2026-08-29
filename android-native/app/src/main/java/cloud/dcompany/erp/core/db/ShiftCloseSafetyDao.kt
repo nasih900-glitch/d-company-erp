@@ -73,6 +73,12 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_gaming_sessions
               WHERE state IN ('start_pending', 'stop_pending', 'send_pending') AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_gaming_package_extensions
+              WHERE state = 'pending' AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_gaming_session_addon_actions
+              WHERE state = 'pending' AND terminalId = :terminalId AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_refunds
               WHERE state IN ('request_pending', 'cash_settle_pending', 'withdrawal_pending') AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId)
@@ -107,11 +113,18 @@ interface ShiftCloseSafetyDao {
               WHERE a.state <> 'pending' AND
                 (b.shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND b.shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_sessions
-              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled') AND
+              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved') AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_gaming_package_extensions
+              WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND
+                (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
+            (SELECT COUNT(*) FROM local_gaming_session_addon_actions
+              WHERE state NOT IN ('pending', 'confirmed', 'discarded') AND terminalId = :terminalId AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_refunds
-              WHERE state NOT IN ('request_pending', 'cash_settle_pending', 'withdrawal_pending',
-                                  'settled', 'withdrawn', 'cancelled', 'synced') AND
+              WHERE (state NOT IN ('request_pending', 'cash_settle_pending', 'withdrawal_pending',
+                                   'settled', 'withdrawn', 'cancelled', 'synced')
+                     OR (state = 'withdrawn' AND payoutConflict = 1)) AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId)
                  OR (:serverShiftId IS NOT NULL AND serverShiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_subscriptions
@@ -131,7 +144,7 @@ interface ShiftCloseSafetyDao {
               WHERE syncState NOT IN ('pending', 'synced') AND terminalId = :terminalId AND
                 (shiftId = :localShiftId OR (:serverShiftId IS NOT NULL AND shiftId = :serverShiftId))) +
             (SELECT COUNT(*) FROM local_gaming_sessions
-              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled') AND
+              WHERE state NOT IN ('start_pending', 'stop_pending', 'send_pending', 'sent', 'cancelled', 'legacy_resolved') AND
                 shiftId IS NULL)
           ) AS attentionLocalCount,
           (
@@ -153,7 +166,14 @@ interface ShiftCloseSafetyDao {
             (SELECT COUNT(*) FROM local_membership_refund_actions
               WHERE state <> 'synced' AND trim(shiftId) = '') +
             (SELECT COUNT(*) FROM local_held_order_payments
-              WHERE syncState <> 'synced' AND (shiftId IS NULL OR terminalId IS NULL))
+              WHERE syncState <> 'synced' AND (shiftId IS NULL OR terminalId IS NULL)) +
+            (SELECT COUNT(*) FROM local_gaming_package_extensions
+              WHERE state NOT IN ('confirmed', 'discarded') AND
+                (shiftId IS NULL OR trim(shiftId) = '')) +
+            (SELECT COUNT(*) FROM local_gaming_session_addon_actions
+              WHERE state NOT IN ('confirmed', 'discarded') AND
+                (trim(ownerCompanyId) = '' OR trim(ownerUserId) = '' OR trim(branchId) = '' OR
+                 trim(terminalId) = '' OR trim(shiftId) = ''))
           ) AS unscopedAttentionCount
         """,
     )
@@ -349,12 +369,26 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
     )
 
     val guardedTables = listOf(
-        GuardedTable("local_orders", "NEW.shiftId", "NEW.syncState = 'pending'"),
+        GuardedTable(
+            "local_orders",
+            "NEW.shiftId",
+            "NEW.syncState IN ('draft', 'preparing', 'awaiting_payment', 'pending')",
+        ),
         GuardedTable("local_table_orders", "NEW.shiftId", "NEW.state = 'pending'"),
         GuardedTable(
             "local_gaming_sessions",
             "NEW.shiftId",
             "NEW.state IN ('start_pending', 'stop_pending', 'send_pending')",
+        ),
+        GuardedTable(
+            "local_gaming_package_extensions",
+            "NEW.shiftId",
+            "NEW.state = 'pending'",
+        ),
+        GuardedTable(
+            "local_gaming_session_addon_actions",
+            "NEW.shiftId",
+            "NEW.state = 'pending'",
         ),
         GuardedTable(
             "local_refunds",
@@ -384,6 +418,13 @@ internal fun installShiftClosingWriteGuards(db: SupportSQLiteDatabase) {
         ),
     )
     for ((table, shiftExpression, pendingCondition) in guardedTables) {
+        // This installer also runs from older stepwise migrations. Newer
+        // guarded outbox tables may not exist until a later migration.
+        val tableExists = db.query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            arrayOf(table),
+        ).use { it.moveToFirst() }
+        if (!tableExists) continue
         db.execSQL(
             """
             CREATE TRIGGER IF NOT EXISTS `guard_${table}_while_shift_closing`

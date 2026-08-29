@@ -18,17 +18,22 @@ import { inr } from '@/lib/inr';
 import { DEFAULT_BUSINESS_TIMEZONE, dateISOInTimeZone } from '@/lib/manual-collections';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import {
+  GAMING_CENTRE_FEATURES,
+  profileDeferredMoneyLabel,
+  profileMembershipMoneyLabel,
+} from '@/lib/product-profile';
+import {
   analytics as analyticsApi,
   insights,
+  pos,
   reports as reportsApi,
-  settings,
-  type BranchDTO,
-  type CompanyDTO,
   type CostingCoverageDTO,
+  type ReceiptBusinessDTO,
 } from '@/lib/erp-api';
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useNotifications } from '@/components/ui/Notifications';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
 type HalfYear = 'H1' | 'H2';
@@ -41,6 +46,8 @@ const PERIODS: Array<{ value: Period; label: string }> = [
   { value: 'half_yearly', label: 'Half-yearly' },
   { value: 'yearly', label: 'Yearly' },
 ];
+
+const TAX_COMPLIANCE_UI_ENABLED = GAMING_CENTRE_FEATURES.taxCompliance;
 
 interface ReportData {
   period: Period | 'custom';
@@ -146,8 +153,7 @@ export default function ReportsScreen() {
   const [taxError, setTaxError] = useState<string | null>(null);
   const [loading, setLoading] = useState(LIVE_MODE);
   const [error, setError] = useState<string | null>(null);
-  const [company, setCompany] = useState<CompanyDTO | null>(null);
-  const [branch, setBranch] = useState<BranchDTO | null>(null);
+  const [receiptIdentity, setReceiptIdentity] = useState<ReceiptBusinessDTO | null>(null);
   const [timezoneReady, setTimezoneReady] = useState(!LIVE_MODE);
   const [exportingPeriod, setExportingPeriod] = useState(false);
   const [exportingGstr1, setExportingGstr1] = useState(false);
@@ -166,19 +172,23 @@ export default function ReportsScreen() {
   const [quarter, setQuarter] = useState<number>(currentFiscalQuarter(todayAsDate));
   const [halfYear, setHalfYear] = useState<HalfYear>(currentFiscalHalf(todayAsDate));
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!timezoneReady) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     setTaxError(null);
     try {
       const data = await fetchReport(period, { onDate, weekDate, month, year, quarter, halfYear });
       setReport(data);
-      try {
-        setTaxHealth(await fetchTaxCompliance(data.period_start, data.period_end));
-      } catch (taxIssue) {
+      if (TAX_COMPLIANCE_UI_ENABLED) {
+        try {
+          setTaxHealth(await fetchTaxCompliance(data.period_start, data.period_end));
+        } catch (taxIssue) {
+          setTaxHealth(null);
+          setTaxError((taxIssue as Error).message);
+        }
+      } else {
         setTaxHealth(null);
-        setTaxError((taxIssue as Error).message);
       }
       if (LIVE_MODE && canViewCosting) {
         try {
@@ -192,25 +202,29 @@ export default function ReportsScreen() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [canViewCosting, halfYear, month, onDate, period, quarter, timezoneReady, weekDate, year]);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({
+    resources: ['finance', 'inventory', 'orders', 'shifts'],
+    refresh: () => load(true),
+    enabled: timezoneReady,
+  });
 
   useEffect(() => {
     if (!LIVE_MODE) return;
     let cancelled = false;
-    Promise.all([settings.getCompany(), settings.listBranches()])
-      .then(([companyData, branches]) => {
+    pos.receiptBusiness()
+      .then((identity) => {
         if (cancelled) return;
         const businessToday = dateISOInTimeZone(
           new Date(),
-          companyData.timezone || DEFAULT_BUSINESS_TIMEZONE,
+          identity.timezone || DEFAULT_BUSINESS_TIMEZONE,
         );
         const businessDate = parseISODate(businessToday);
-        setCompany(companyData);
-        setBranch(branches[0] ?? null);
+        setReceiptIdentity(identity);
         setOnDate(businessToday);
         setWeekDate(businessToday);
         setMonth(businessToday.slice(0, 7));
@@ -221,8 +235,7 @@ export default function ReportsScreen() {
       })
       .catch(() => {
         if (cancelled) return;
-        setCompany(null);
-        setBranch(null);
+        setReceiptIdentity(null);
         setTimezoneReady(true);
       });
     return () => { cancelled = true; };
@@ -300,21 +313,42 @@ export default function ReportsScreen() {
     }
   }
 
+  const membershipRevenueLabel = profileMembershipMoneyLabel(
+    'revenue',
+    report?.revenue.memberships_minor ?? 0,
+  );
+  const membershipRefundLabel = profileMembershipMoneyLabel(
+    'refund',
+    report?.membership_refunds_issued_minor ?? 0,
+  );
+  const eventRevenueLabel = profileDeferredMoneyLabel(
+    'eventRevenue',
+    report?.revenue.event_tickets_minor ?? 0,
+  );
+  const deliveryRevenueLabel = profileDeferredMoneyLabel(
+    'deliveryRevenue',
+    report?.revenue.delivery_aggregator_minor ?? 0,
+  );
+  const taxCollectedLabel = profileDeferredMoneyLabel(
+    'taxCollected',
+    report?.tax_collected.total_minor ?? 0,
+  );
+
   return (
     <div className="reports-screen">
       {/* Print-only header */}
       <div className="hidden print:block mb-4">
         <h1 className="text-2xl font-bold text-black">
-          {LIVE_MODE ? (company?.legal_name || company?.name || 'D Company') : COMPANY.name}
+          {LIVE_MODE ? (receiptIdentity?.supplier_name || receiptIdentity?.brand_name || 'D Company') : COMPANY.name}
         </h1>
         <p className="text-xs text-black/70">
-          {LIVE_MODE ? (branch?.address || 'Business address not configured') : COMPANY.address}
+          {LIVE_MODE ? (receiptIdentity?.address || 'Business address not configured') : COMPANY.address}
         </p>
-        {LIVE_MODE && (branch?.branch_gstin || company?.gstin) && (
-          <p className="text-xs text-black/70">GSTIN: {branch?.branch_gstin || company?.gstin}</p>
+        {TAX_COMPLIANCE_UI_ENABLED && LIVE_MODE && receiptIdentity?.gstin && (
+          <p className="text-xs text-black/70">GSTIN: {receiptIdentity.gstin}</p>
         )}
-        {LIVE_MODE && branch?.fssai_license_no && (
-          <p className="text-xs text-black/70">FSSAI: {branch.fssai_license_no}</p>
+        {TAX_COMPLIANCE_UI_ENABLED && LIVE_MODE && receiptIdentity?.fssai_license_no && (
+          <p className="text-xs text-black/70">FSSAI: {receiptIdentity.fssai_license_no}</p>
         )}
         {!LIVE_MODE && <p className="text-xs text-black/70">Sample report - not for filing</p>}
       </div>
@@ -323,7 +357,7 @@ export default function ReportsScreen() {
       <header className="flex items-end justify-between mb-4 flex-wrap gap-4 print:hidden">
         <div>
           <h2 className="text-2xl font-bold">Reports</h2>
-          <p className="text-fg-muted text-sm">P&amp;L · Indian FY · Kerala GST</p>
+          <p className="text-fg-muted text-sm">Gaming, counter sales and shift reconciliation</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => window.print()} className="btn btn-ghost">
@@ -464,12 +498,12 @@ export default function ReportsScreen() {
             </div>
           )}
 
-          {taxError && (
+          {TAX_COMPLIANCE_UI_ENABLED && taxError && (
             <p className="text-accent-bad text-sm mb-4 print:hidden">{taxError}</p>
           )}
-          {taxHealth && <TaxHealthPanel data={taxHealth} />}
+          {TAX_COMPLIANCE_UI_ENABLED && taxHealth && <TaxHealthPanel data={taxHealth} />}
 
-          {LIVE_MODE && canExport && (
+          {TAX_COMPLIANCE_UI_ENABLED && LIVE_MODE && canExport && (
             <section className="card mb-4 print:hidden">
               <div className="flex items-start justify-between gap-3 flex-wrap mb-1">
                 <div>
@@ -501,10 +535,15 @@ export default function ReportsScreen() {
               <Row label="Gaming"                            v={report.revenue.gaming_minor}/>
               {isAppStoreAllowedType('hookah') && report.revenue.hookah_minor > 0 &&
                 <Row label="Hookah"                           v={report.revenue.hookah_minor}/>}
-              <Row label="Event tickets"                     v={report.revenue.event_tickets_minor}/>
-              <Row label="Memberships"                       v={report.revenue.memberships_minor ?? 0}/>
-              <Row label="Delivery (Zomato/Swiggy §9(5))"    v={report.revenue.delivery_aggregator_minor}
-                   sub="aggregator pays the GST"/>
+              {eventRevenueLabel && (
+                <Row label={eventRevenueLabel} v={report.revenue.event_tickets_minor}/>
+              )}
+              {membershipRevenueLabel && (
+                <Row label={membershipRevenueLabel} v={report.revenue.memberships_minor ?? 0}/>
+              )}
+              {deliveryRevenueLabel && (
+                <Row label={deliveryRevenueLabel} v={report.revenue.delivery_aggregator_minor}/>
+              )}
               {report.revenue.manual_collections_minor > 0 &&
                 <Row label="Manual collections (unitemized)" v={report.revenue.manual_collections_minor}
                   sub="off-POS / legacy daily totals"/>}
@@ -526,10 +565,15 @@ export default function ReportsScreen() {
                 <Row label="Add back: refunded tips" v={report.refunded_tips_minor}
                   sub="tips were a staff liability, not cafe revenue"/>
               )}
-              <Row label="Less: GST collected" v={-report.tax_collected.total_minor}
-                sub="owed to the government, never was your money"/>
+              {taxCollectedLabel && (
+                <Row
+                  label={TAX_COMPLIANCE_UI_ENABLED ? 'Less: GST collected' : 'Less: recorded indirect tax'}
+                  v={-report.tax_collected.total_minor}
+                  sub="recorded tax liability, not operating revenue"
+                />
+              )}
               <Divider/>
-              <Row label="Net revenue (after GST)" v={report.net_revenue_minor} bold
+              <Row label={taxCollectedLabel ? 'Net revenue after recorded tax' : 'Net revenue'} v={report.net_revenue_minor} bold
                 sub="what's really yours before any costs"/>
               <Row label="Less: cost of goods sold" v={-report.cogs_minor}
                 sub="what the food/drinks/items you sold actually cost you"/>
@@ -538,22 +582,33 @@ export default function ReportsScreen() {
                 sub="what's left after replacing what you sold"/>
             </section>
 
-            {/* GST collected */}
-            <section className="card print:border print:border-black/30 print:p-3">
-              <h4 className="font-bold mb-3">GST collected</h4>
-              <Row label="CGST" v={report.tax_collected.cgst_minor}/>
-              <Row label="SGST" v={report.tax_collected.sgst_minor}/>
-              {report.tax_collected.igst_minor > 0 &&
-                <Row label="IGST (inter-state)" v={report.tax_collected.igst_minor}/>}
-              {report.tax_collected.cess_minor > 0 &&
-                <Row label="Cess" v={report.tax_collected.cess_minor}/>}
-              <Divider/>
-              <Row label="Total GST" v={report.tax_collected.total_minor} bold/>
-              <p className="text-[10px] text-fg-muted print:text-black/60 mt-2">
-                Collected GST for accountant review and return preparation.
-                Input tax credit is not applied by this report.
-              </p>
-            </section>
+            {/* Statutory filing detail is deferred in the Gaming Centre profile.
+                Keep any historical liability visible as one neutral total. */}
+            {TAX_COMPLIANCE_UI_ENABLED ? (
+              <section className="card print:border print:border-black/30 print:p-3">
+                <h4 className="font-bold mb-3">GST collected</h4>
+                <Row label="CGST" v={report.tax_collected.cgst_minor}/>
+                <Row label="SGST" v={report.tax_collected.sgst_minor}/>
+                {report.tax_collected.igst_minor > 0 &&
+                  <Row label="IGST (inter-state)" v={report.tax_collected.igst_minor}/>}
+                {report.tax_collected.cess_minor > 0 &&
+                  <Row label="Cess" v={report.tax_collected.cess_minor}/>}
+                <Divider/>
+                <Row label="Total GST" v={report.tax_collected.total_minor} bold/>
+                <p className="text-[10px] text-fg-muted print:text-black/60 mt-2">
+                  Collected GST for accountant review and return preparation.
+                  Input tax credit is not applied by this report.
+                </p>
+              </section>
+            ) : taxCollectedLabel ? (
+              <section className="card print:border print:border-black/30 print:p-3">
+                <h4 className="font-bold mb-3">Recorded tax liability</h4>
+                <Row label={taxCollectedLabel} v={report.tax_collected.total_minor} bold/>
+                <p className="text-[10px] text-fg-muted print:text-black/60 mt-2">
+                  Historical amount retained in the management totals. Statutory filing tools are outside this product profile.
+                </p>
+              </section>
+            ) : null}
 
             {/* Payments */}
             <section className="card print:border print:border-black/30 print:p-3">
@@ -574,8 +629,8 @@ export default function ReportsScreen() {
               )}
               {(report.settled_refunds_issued_minor ?? 0) > 0 && (
                 <Row label="Less: cash/payment refunds" v={-report.settled_refunds_issued_minor}
-                  sub={(report.membership_refunds_issued_minor ?? 0) > 0
-                    ? `includes ${inr(report.membership_refunds_issued_minor)} in settled membership reversals`
+                  sub={membershipRefundLabel
+                    ? `includes ${inr(report.membership_refunds_issued_minor)} in settled ${membershipRefundLabel.toLocaleLowerCase('en-IN')}`
                     : undefined}/>
               )}
               {report.refunds_issued_minor - report.settled_refunds_issued_minor > 0 && (

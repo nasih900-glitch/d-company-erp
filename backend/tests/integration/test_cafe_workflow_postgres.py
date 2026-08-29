@@ -61,7 +61,10 @@ async def test_concurrent_line_cancel_and_send_serialize_on_order_snapshot() -> 
                 "DELETE FROM orders WHERE id = %s", (ids["order_two"],)
             )
             connection.commit()
-        upgraded = _run_alembic(database_url, "upgrade", "0037")
+        # The companion migration test validates the exact 0037 boundary.
+        # Runtime tests must pair current application code with the current
+        # schema because pricing now reads normalized modifier groups (0040).
+        upgraded = _run_alembic(database_url, "upgrade", "head")
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
 
         engine = create_async_engine(
@@ -201,7 +204,9 @@ async def test_table_round_cancel_ack_handoff_and_direct_payment_release(
                 "DELETE FROM orders WHERE id = %s", (ids["order_two"],)
             )
             connection.commit()
-        upgraded = _run_alembic(database_url, "upgrade", "0037")
+        # Keep current runtime code on the current schema; exact 0037 backfill
+        # behavior is covered in test_cafe_workflow_migration.py.
+        upgraded = _run_alembic(database_url, "upgrade", "head")
         assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
 
         async_url = database_url.replace(

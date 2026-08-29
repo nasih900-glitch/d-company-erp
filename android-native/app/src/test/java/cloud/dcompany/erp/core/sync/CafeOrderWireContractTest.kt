@@ -1,7 +1,12 @@
 package cloud.dcompany.erp.core.sync
 
+import cloud.dcompany.erp.core.db.CafeActionLine
+import cloud.dcompany.erp.core.db.CafeActionPayload
+import cloud.dcompany.erp.core.db.CafeOrderConverters
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.ui.screens.tables.OrderLineBody
 import cloud.dcompany.erp.ui.screens.tables.OrderLinesAppendBody
 import cloud.dcompany.erp.ui.screens.tables.TableOrder
@@ -16,13 +21,58 @@ import org.junit.Test
 class CafeOrderWireContractTest {
 
     @Test
+    fun `durable table action retains configuration snapshots across restart`() {
+        val converters = CafeOrderConverters()
+        val payload = CafeActionPayload(
+            lines = listOf(
+                CafeActionLine(
+                    clientLineId = "client-1",
+                    menuItemId = "item-1",
+                    name = "Cappuccino",
+                    qty = 1,
+                    note = "less hot",
+                    estimateUnitMinor = 23_000,
+                    variantId = "large",
+                    variantName = "Large",
+                    variantPriceDeltaMinor = 3_000,
+                    modifiers = listOf(
+                        LocalModifierSelectionSnapshot(
+                            modifierId = "oat",
+                            modifierGroupId = "milk",
+                            name = "Oat milk",
+                            priceDeltaMinor = 2_000,
+                            qty = 1,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val restored = converters.payloadFromJson(converters.payloadToJson(payload)).lines.single()
+
+        assertEquals("Large", restored.variantName)
+        assertEquals("Oat milk", restored.modifiers.single().name)
+        assertEquals("less hot", restored.note)
+        assertEquals(23_000L, restored.estimateUnitMinor)
+    }
+
+    @Test
     fun `round request uses stable client ids notes shift table and checkout version`() {
         val create = ApiClient.json.encodeToString(
             TableOrderCreateBody(
                 type = "dine_in",
                 shiftId = "shift-1",
                 tableId = "table-1",
-                lines = listOf(OrderLineBody("client-line-1", "menu-1", 2, "No salt")),
+                lines = listOf(
+                    OrderLineBody(
+                        clientLineId = "client-line-1",
+                        menuItemId = "menu-1",
+                        qty = 2,
+                        note = "No salt",
+                        variantId = "variant-large",
+                        modifiers = listOf(ModifierSelectionRequest("modifier-oat", 1)),
+                    ),
+                ),
             ),
         )
         val append = ApiClient.json.encodeToString(
@@ -36,6 +86,8 @@ class CafeOrderWireContractTest {
         assertTrue(create.contains("\"table_id\":\"table-1\""))
         assertTrue(create.contains("\"client_line_id\":\"client-line-1\""))
         assertTrue(create.contains("\"note\":\"No salt\""))
+        assertTrue(create.contains("\"variant_id\":\"variant-large\""))
+        assertTrue(create.contains("\"modifier_id\":\"modifier-oat\""))
         assertTrue(append.contains("\"expected_checkout_version\":7"))
         assertTrue(append.contains("\"client_line_id\":\"client-line-2\""))
         assertFalse(append.contains("\"note\""))
@@ -53,6 +105,8 @@ class CafeOrderWireContractTest {
                 "id":"line-1","client_line_id":"client-1","menu_item_id":"menu-1",
                 "name":"Coffee","qty":1.0,"unit_price_minor":1000,"line_total_minor":1000,
                 "note":"No sugar","kitchen_status":"cooking",
+                "variant_snapshot":{"variant_id":"variant-large","name":"Large"},
+                "modifiers":[{"modifier_id":"modifier-oat","name":"Oat milk","qty":1}],
                 "kitchen_released_at":"2026-08-26T10:00:01Z","kitchen_round_no":1
               }],
               "voided_lines":[{
@@ -70,6 +124,8 @@ class CafeOrderWireContractTest {
         assertEquals(8L, decoded.checkoutVersion)
         assertEquals(1, decoded.lines.single().kitchenRoundNo)
         assertEquals("No sugar", decoded.lines.single().note)
+        assertEquals("Large", decoded.lines.single().variantSnapshot?.name)
+        assertEquals(listOf("Oat milk"), decoded.lines.single().modifiers.map { it.name })
         assertEquals("Guest changed order", decoded.voidedLines.single().voidReason)
         assertEquals(
             "2026-08-26T10:04:00Z",

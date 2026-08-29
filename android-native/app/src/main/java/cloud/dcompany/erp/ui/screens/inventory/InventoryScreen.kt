@@ -5,17 +5,25 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,6 +34,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -33,7 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,10 +58,47 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SyncProblem
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WarningAmber
 import cloud.dcompany.erp.core.auth.InventoryAccess
 import cloud.dcompany.erp.core.db.BatchCacheEntity
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.ConfirmDialog
+import cloud.dcompany.erp.ui.components.DataListRow
+import cloud.dcompany.erp.ui.components.DecimalField
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
+import cloud.dcompany.erp.ui.components.InfoRow
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PanelDivider
+import cloud.dcompany.erp.ui.components.PickerField
+import cloud.dcompany.erp.ui.components.PremiumTabBar
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.TabOption
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
@@ -64,16 +111,22 @@ private val UNITS = listOf(
 )
 
 @Composable
-fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryViewModel = viewModel()) {
-    val state by vm.state.collectAsState()
+fun InventoryScreen(
+    access: InventoryAccess = InventoryAccess(),
+    vm: InventoryViewModel = viewModel(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
+    val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
 
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Header(state, access.canManageInventory, vm)
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         if (!access.canManageInventory) ViewOnlyNotice()
 
         when {
-            state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            state.loading -> Box(Modifier.fillMaxSize().weight(1f), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     CircularProgressIndicator(color = Brand.Gold)
                     Text("Loading inventory…", color = Brand.ForegroundMuted)
@@ -83,50 +136,59 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
             // Nothing cached and nothing coming: the screen is useless until
             // this is fixed, so it shows that plainly rather than a spinner
             // that never resolves.
-            state.couldNotLoad -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(24.dp).width(460.dp),
-                ) {
-                    Text(
-                        "Could not load inventory",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Brand.Foreground,
-                    )
-                    Text(
-                        state.refreshError
-                            ?: "No inventory is cached on this tablet yet. Check the connection and try again.",
-                        color = Brand.ForegroundMuted,
-                    )
-                    Button(onClick = vm::retry) { Text("Retry") }
-                }
+            state.couldNotLoad -> SectionCard(Modifier.weight(1f), elevated = true) {
+                DesignedEmptyState(
+                    title = "Could not load inventory",
+                    body = state.refreshError
+                        ?: "No inventory is cached on this tablet yet. Check the connection and try again.",
+                    icon = Icons.Default.CloudOff,
+                    primaryLabel = "Retry",
+                    onPrimary = vm::retry,
+                )
             }
 
-            else -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            else -> Column(
+                Modifier.fillMaxSize().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 listOfNotNull(state.refreshError, state.branchesError).distinct().forEach { error ->
                     RefreshErrorBanner(error, vm::retry)
-                    Spacer(Modifier.height(10.dp))
                 }
                 state.notice?.let {
                     NoticeBanner(it, vm::dismissNotice)
-                    Spacer(Modifier.height(10.dp))
                 }
                 if (state.pendingGrns.isNotEmpty() || state.pendingAdjustments.isNotEmpty()) {
                     PendingStockChangesPanel(state, access.canManageInventory, vm)
-                    Spacer(Modifier.height(12.dp))
                 }
+                BranchContext(state, vm)
                 StatRow(state)
                 if (state.restockPriority.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
                     RestockStrip(state, vm)
                 }
-                Spacer(Modifier.height(12.dp))
-                TabBar(state, vm)
-                Spacer(Modifier.height(12.dp))
+                TabBar(state, access.canManageCosting, vm)
+                InventoryActionBar(state, access.canManageInventory, vm)
                 when (state.tab) {
-                    InventoryTab.INGREDIENTS -> IngredientsPane(state, access.canManageInventory, vm)
-                    InventoryTab.SUPPLIERS -> SuppliersPane(state, access.canManageInventory, vm)
+                    InventoryTab.INGREDIENTS -> IngredientsPane(
+                        state,
+                        access.canManageInventory,
+                        vm,
+                        presentation,
+                        Modifier.weight(1f),
+                    )
+                    InventoryTab.SUPPLIERS -> SuppliersPane(
+                        state,
+                        access.canManageInventory,
+                        vm,
+                        presentation,
+                        Modifier.weight(1f),
+                    )
+                    InventoryTab.RECIPES -> RecipesPane(
+                        state = state,
+                        canManageCosting = access.canManageCosting,
+                        vm = vm,
+                        presentation = presentation,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }
@@ -134,9 +196,11 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
 
     when (val d = state.dialog.takeIf { access.canManageInventory }) {
         is InventoryDialog.IngredientForm -> IngredientDialog(d.editing, state, vm)
-        is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm)
+        is InventoryDialog.SupplierForm -> SupplierDialog(d.editing, state, vm, presentation)
         is InventoryDialog.Grn -> GrnDialog(state, vm)
         is InventoryDialog.Adjust -> AdjustDialog(d.ingredient, state, vm)
+        is InventoryDialog.RecipeCreate -> RecipeCreateDialog(d.menuItem, state, vm)
+        is InventoryDialog.RecipeLineForm -> RecipeLineDialog(d.recipe, d.editing, state, vm)
         is InventoryDialog.ConfirmDeleteIngredient -> ConfirmDialog(
             title = "Delete ${d.ingredient.name}?",
             body = "Existing batches stay in the audit trail. Recipes that use it will " +
@@ -158,51 +222,120 @@ fun InventoryScreen(access: InventoryAccess = InventoryAccess(), vm: InventoryVi
             onConfirm = { vm.deleteSupplier(d.supplier) },
             onDismiss = vm::closeDialog,
         )
+        is InventoryDialog.ConfirmDeleteRecipe -> ConfirmDialog(
+            title = "Deactivate ${d.recipe.name}?",
+            body = "Future sales of this menu item will stop deducting ingredients until a new recipe is linked. Past stock movements remain unchanged.",
+            confirmLabel = "Deactivate recipe",
+            busy = state.busy,
+            error = state.formError,
+            onConfirm = { vm.deleteRecipe(d.recipe) },
+            onDismiss = vm::closeDialog,
+        )
+        is InventoryDialog.ConfirmDeleteRecipeLine -> ConfirmDialog(
+            title = "Remove this ingredient link?",
+            body = "Future sales will no longer deduct this ingredient from the recipe. Past stock movements remain unchanged.",
+            confirmLabel = "Remove line",
+            busy = state.busy,
+            error = state.formError,
+            onConfirm = { vm.deleteRecipeLine(d.recipe, d.line) },
+            onDismiss = vm::closeDialog,
+        )
         null -> Unit
     }
 }
 
-// ------------------------------------------------------------------- chrome
+@Composable
+private fun BranchContext(state: InventoryUiState, vm: InventoryViewModel) {
+    val selected = state.branches.firstOrNull { it.id == state.branchId }
+    if (state.branches.size <= 1) {
+        OperationalBanner(
+            title = selected?.name ?: "Branch unavailable",
+            detail = if (selected == null) {
+                "Refresh Inventory before receiving or adjusting stock."
+            } else {
+                "Quantities, FIFO value, receipts and adjustments below are scoped to this branch."
+            },
+            tone = if (selected == null) UiTone.Warning else UiTone.Information,
+            icon = Icons.Default.Inventory2,
+        )
+    } else {
+        SectionCard(
+            title = "Stock location",
+            subtitle = "Changing branch reloads quantities and FIFO value before stock actions unlock",
+            icon = Icons.Default.Inventory2,
+            contentPadding = PaddingValues(12.dp),
+        ) {
+            PickerField(
+                label = "Branch",
+                selectedLabel = selected?.name ?: "— select —",
+                options = state.branches.map { it.id to it.name },
+                onSelect = vm::selectBranch,
+            )
+        }
+    }
+}
 
 @Composable
-private fun Header(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
-    Row(
-        Modifier.fillMaxWidth().padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Inventory",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Brand.Foreground,
-            )
-            Text(
-                "FIFO batches · recipe-driven deductions · low-stock alerts",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = vm::retry, enabled = !state.syncing) { Text("Refresh") }
-            if (canWrite && state.tab == InventoryTab.INGREDIENTS) {
-                OutlinedButton(
-                    onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
-                    enabled = state.ingredientsLoaded,
-                ) { Text("New ingredient") }
-                Button(
-                    onClick = { vm.openDialog(InventoryDialog.Grn) },
-                    enabled = state.branchId != null &&
-                        state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
-                ) { Text("Receive stock (GRN)") }
-            } else if (canWrite) {
-                Button(
-                    onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
-                    enabled = state.suppliersLoaded,
-                ) {
-                    Text("New supplier")
+private fun InventoryActionBar(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 700.dp
+        ActionBar(
+            leading = {
+                OperationalStatusBadge(
+                    label = if (canWrite) "Stock controls enabled" else "View only",
+                    tone = if (canWrite) UiTone.Success else UiTone.Neutral,
+                    icon = if (canWrite) Icons.Default.CheckCircle else Icons.Default.Inventory2,
+                )
+            },
+            trailing = {
+                ErpButton(
+                    text = if (state.syncing) "Refreshing" else "Refresh",
+                    onClick = vm::retry,
+                    enabled = !state.syncing,
+                    busy = state.syncing,
+                    intent = ActionIntent.Quiet,
+                    leadingIcon = Icons.Default.Refresh,
+                )
+                if (canWrite) {
+                    when (state.tab) {
+                    InventoryTab.INGREDIENTS -> {
+                        ErpButton(
+                            text = if (compact) "Ingredient" else "New ingredient",
+                            onClick = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
+                            enabled = state.ingredientsLoaded,
+                            intent = ActionIntent.Secondary,
+                            leadingIcon = Icons.Default.Add,
+                        )
+                        ErpButton(
+                            text = if (compact) "Receive" else "Receive stock",
+                            onClick = { vm.openDialog(InventoryDialog.Grn) },
+                            enabled = state.branchId != null &&
+                                state.syncedSuppliers.isNotEmpty() && state.syncedIngredients.isNotEmpty(),
+                            leadingIcon = Icons.Default.LocalShipping,
+                        )
+                    }
+                    InventoryTab.SUPPLIERS -> {
+                        ErpButton(
+                            text = if (compact) "Supplier" else "New supplier",
+                            onClick = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
+                            enabled = state.suppliersLoaded,
+                            leadingIcon = Icons.Default.Add,
+                        )
+                    }
+                    InventoryTab.RECIPES -> state.selectedRecipeMenuItem?.let { item ->
+                        if (state.activeRecipe == null) {
+                            ErpButton(
+                                text = if (compact) "Link" else "Link recipe",
+                                onClick = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
+                                enabled = state.syncedIngredients.isNotEmpty() && !state.recipesLoading,
+                                leadingIcon = Icons.Default.Add,
+                            )
+                        }
+                    }
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -213,12 +346,12 @@ private fun PendingStockChangesPanel(
     canWrite: Boolean,
     vm: InventoryViewModel,
 ) {
-    Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        title = "Pending stock changes",
+        subtitle = "Receipts and adjustments waiting for the server",
+        icon = Icons.Default.SyncProblem,
+        contentPadding = PaddingValues(12.dp),
     ) {
-        Text("Pending stock changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
         state.pendingGrns.forEach { grn ->
             PendingRow(
                 text = "Stock receipt from ${grn.supplierName}",
@@ -261,7 +394,7 @@ private fun PendingRow(
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else "Not synced yet",
-            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            color = if (rejected) Brand.Danger else Brand.Warning,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -269,173 +402,507 @@ private fun PendingRow(
 
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
-    }
+    OperationalBanner(
+        title = "Inventory updated",
+        detail = message,
+        tone = UiTone.Information,
+        icon = Icons.Default.CheckCircle,
+        action = { TextButton(onClick = onDismiss) { Text("Dismiss") } },
+    )
 }
 
 @Composable
 private fun RefreshErrorBanner(message: String, onRetry: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.Danger, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Danger, modifier = Modifier.weight(1f))
-        TextButton(onClick = onRetry) { Text("Retry") }
-    }
+    OperationalBanner(
+        title = "Inventory refresh failed",
+        detail = message,
+        tone = UiTone.Danger,
+        icon = Icons.Default.CloudOff,
+        action = {
+            ErpButton("Retry", onRetry, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Refresh)
+        },
+    )
 }
 
 @Composable
 private fun StatRow(state: InventoryUiState) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        StatCard("Stock value", state.stockValueMinor.asRupees(), Brand.Foreground, Modifier.weight(1f))
-        StatCard("Ingredients", state.ingredients.size.toString(), Brand.Foreground, Modifier.weight(1f))
-        StatCard(
-            "Low stock",
-            state.lowCount.toString(),
-            if (state.lowCount > 0) Brand.Danger else Brand.Good,
-            Modifier.weight(1f),
-        )
+    AdaptiveStatGrid(count = 4) { index, modifier ->
+        when (index) {
+            0 -> StockValueMetric(state, modifier)
+            1 -> IngredientCountMetric(state, modifier)
+            2 -> LowStockMetric(state, modifier)
+            else -> SupplierCountMetric(state, modifier)
+        }
     }
 }
 
 @Composable
-private fun StatCard(label: String, value: String, tone: Color, modifier: Modifier = Modifier) {
-    Column(
-        modifier.clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Text(value, style = MaterialTheme.typography.headlineMedium, color = tone)
-    }
-}
+private fun StockValueMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Stock value",
+    value = state.stockValueMinor?.asRupees() ?: "Unavailable",
+    detail = if (state.stockValueMinor == null) {
+        "Exact FIFO valuation has not synced"
+    } else {
+        "Exact remaining FIFO batch value"
+    },
+    icon = Icons.Default.Inventory2,
+    tone = UiTone.Information,
+    modifier = modifier,
+)
+
+@Composable
+private fun IngredientCountMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Ingredients",
+    value = state.ingredients.size.toString(),
+    detail = "Tracked stock items",
+    icon = Icons.Default.Tune,
+    tone = UiTone.Information,
+    modifier = modifier,
+)
+
+@Composable
+private fun LowStockMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Low stock",
+    value = state.lowCount.toString(),
+    detail = if (state.lowCount == 0) "All above reorder level" else "Needs attention",
+    icon = if (state.lowCount == 0) Icons.Default.CheckCircle else Icons.Default.WarningAmber,
+    tone = if (state.lowCount == 0) UiTone.Success else UiTone.Danger,
+    modifier = modifier,
+)
+
+@Composable
+private fun SupplierCountMetric(state: InventoryUiState, modifier: Modifier) = CompactStatCard(
+    label = "Suppliers",
+    value = state.suppliers.size.toString(),
+    detail = "Available for receipts",
+    icon = Icons.Default.LocalShipping,
+    tone = UiTone.Neutral,
+    modifier = modifier,
+)
 
 /** The one thing an owner opens this screen to find out: what to buy today. */
 @Composable
 private fun RestockStrip(state: InventoryUiState, vm: InventoryViewModel) {
-    Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(Brand.Surface).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    SectionCard(
+        contentPadding = PaddingValues(10.dp),
     ) {
-        Text(
-            "Restock priority",
-            style = MaterialTheme.typography.labelLarge,
-            color = Brand.Danger,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.restockPriority.forEach { ingredient ->
-                Column(
-                    Modifier.weight(1f).clip(Radius.shapeSm)
-                        .background(Brand.SurfaceRaised)
-                        .clickable { vm.select(ingredient) }
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                Modifier.width(190.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    Icons.Default.WarningAmber,
+                    contentDescription = null,
+                    tint = Brand.Danger,
+                    modifier = Modifier.size(24.dp),
+                )
+                Column {
                     Text(
-                        ingredient.name,
+                        "Restock priority",
                         color = Brand.Foreground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "${ingredient.currentQty.asQty()} / " +
-                            "${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
-                        color = Brand.Danger,
+                        "Lowest stock first",
+                        color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
-                    if (ingredient.reorderQty > 0) {
+                }
+            }
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(state.restockPriority, key = { it.localWriteId ?: it.id }) { ingredient ->
+                    Row(
+                        Modifier.width(205.dp).heightIn(min = 64.dp)
+                            .clip(Radius.shapeSm)
+                            .background(Brand.SurfaceRaised)
+                            .clickable { vm.select(ingredient) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = Brand.Danger,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                ingredient.name,
+                                color = Brand.Foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                "${ingredient.currentQty.asQty()} / " +
+                                    "${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
+                                color = Brand.Danger,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            if (ingredient.reorderQty > 0) {
+                                Text(
+                                    "Order ${ingredient.reorderQty.asQty()} ${ingredient.baseUnit}",
+                                    color = Brand.ForegroundMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabBar(state: InventoryUiState, canManageCosting: Boolean, vm: InventoryViewModel) {
+    PremiumTabBar(
+        options = buildList {
+            add(
+            TabOption(InventoryTab.INGREDIENTS.name, "Ingredients", state.ingredients.size),
+            )
+            add(
+            TabOption(InventoryTab.SUPPLIERS.name, "Suppliers", state.suppliers.size),
+            )
+            if (canManageCosting) {
+                add(TabOption(InventoryTab.RECIPES.name, "Recipe links", state.recipeMenuItems.size))
+            }
+        },
+        selectedId = state.tab.name,
+        onSelect = { id -> vm.selectTab(InventoryTab.valueOf(id)) },
+    )
+}
+
+// -------------------------------------------------------------- recipe links
+
+@Composable
+private fun RecipesPane(
+    state: InventoryUiState,
+    canManageCosting: Boolean,
+    vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
+    modifier: Modifier = Modifier,
+) {
+    if (!canManageCosting) return
+    if (state.recipeMenuItems.isEmpty()) {
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "No stock-costed menu items",
+                body = if (presentation.showsRestaurantOperations) {
+                    "Food, drink, dessert and hookah items appear here after the menu has synced."
+                } else {
+                    "Products configured for stock costing appear here after the menu has synced."
+                },
+                icon = Icons.Default.Inventory2,
+                primaryLabel = "Refresh",
+                onPrimary = vm::retry,
+            )
+        }
+        return
+    }
+
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.recipeMenuItems, query) {
+        val needle = query.trim()
+        if (needle.isEmpty()) state.recipeMenuItems else state.recipeMenuItems.filter {
+            it.name.contains(needle, ignoreCase = true) || it.sku.contains(needle, ignoreCase = true)
+        }
+    }
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OperationalBanner(
+            title = "Protected recipe costing",
+            detail = "These links decide which ingredients are deducted after a paid sale. Changes require a live connection and are never queued offline.",
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+        )
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search menu item or SKU",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
+            if (maxWidth >= 820.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    RecipeItemList(filtered, state, vm, Modifier.weight(1f))
+                    RecipeDetail(state, vm, Modifier.width(420.dp).fillMaxHeight())
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    RecipeItemList(filtered, state, vm, Modifier.weight(0.46f))
+                    RecipeDetail(state, vm, Modifier.weight(0.54f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipeItemList(
+    items: List<cloud.dcompany.erp.core.db.MenuItemEntity>,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+    modifier: Modifier,
+) {
+    SectionCard(
+        modifier = modifier,
+        title = "Menu items",
+        subtitle = "Select an item to inspect its active stock link",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(items, key = { it.id }) { item ->
+                val selected = state.selectedRecipeMenuItemId == item.id
+                DataListRow(
+                    modifier = Modifier.background(
+                        if (selected) Brand.SurfaceRaised else Color.Transparent,
+                    ),
+                    onClick = { vm.selectRecipeMenuItem(item) },
+                    content = {
                         Text(
-                            "Order ${ingredient.reorderQty.asQty()} ${ingredient.baseUnit}",
+                            item.name,
+                            color = Brand.Foreground,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "${item.sku} · ${item.type}",
+                            color = Brand.ForegroundMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
+                )
+                PanelDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipeDetail(state: InventoryUiState, vm: InventoryViewModel, modifier: Modifier) {
+    val item = state.selectedRecipeMenuItem
+    val active = state.activeRecipe
+    SectionCard(
+        modifier = modifier,
+        title = item?.name ?: "Recipe details",
+        subtitle = item?.let { "${it.sku} · future paid sales only" }
+            ?: "Select a menu item to inspect its stock deductions",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(14.dp),
+    ) {
+        when {
+            item == null -> DesignedEmptyState(
+                title = "Select a menu item",
+                body = "Choose an item to view or create its ingredient deductions.",
+                icon = Icons.Default.Inventory2,
+            )
+            state.recipesLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                CircularProgressIndicator(color = Brand.Gold)
+            }
+            state.recipesError != null -> DesignedEmptyState(
+                title = "Could not load recipe",
+                body = state.recipesError,
+                icon = Icons.Default.CloudOff,
+                primaryLabel = "Retry",
+                onPrimary = vm::retryRecipes,
+            )
+            active == null -> DesignedEmptyState(
+                title = "No active recipe",
+                body = "Sales of ${item.name} do not currently deduct ingredient stock. Link at least one ingredient before relying on COGS.",
+                icon = Icons.Default.WarningAmber,
+                primaryLabel = "Link recipe",
+                onPrimary = { vm.openDialog(InventoryDialog.RecipeCreate(item)) },
+            )
+            else -> {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(active.name, color = Brand.Foreground, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Version ${active.version} · yield ${active.yieldQty.asQty()}",
                             color = Brand.ForegroundMuted,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
+                    TextButton(
+                        onClick = { vm.openDialog(InventoryDialog.ConfirmDeleteRecipe(active)) },
+                    ) { Text("Deactivate", color = Brand.Danger) }
                 }
+                InfoRow("Recorded recipe cost", active.costMinor.asRupees())
+                PanelDivider()
+                Text("Ingredient deductions", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                if (active.lines.isEmpty()) {
+                    OperationalBanner(
+                        title = "Empty recipe",
+                        detail = "This item will not deduct stock until at least one ingredient line is added.",
+                        tone = UiTone.Warning,
+                        icon = Icons.Default.WarningAmber,
+                    )
+                }
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(active.lines, key = { it.id }) { line ->
+                        val ingredient = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
+                        Column(
+                            Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                                .background(Brand.SurfaceRaised).padding(10.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        ingredient?.name ?: "Unavailable ingredient",
+                                        color = if (ingredient == null) Brand.Danger else Brand.Foreground,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        "${line.qty.asQty()} ${ingredient?.baseUnit.orEmpty()}" +
+                                            if (line.wastagePct > 0) " + ${(line.wastagePct * 100).asQty()}% waste" else "",
+                                        color = Brand.ForegroundMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        vm.openDialog(InventoryDialog.RecipeLineForm(active, line))
+                                    },
+                                ) { Text("Edit") }
+                                TextButton(
+                                    onClick = {
+                                        vm.openDialog(
+                                            InventoryDialog.ConfirmDeleteRecipeLine(active, line),
+                                        )
+                                    },
+                                ) { Text("Remove", color = Brand.Danger) }
+                            }
+                        }
+                    }
+                }
+                ErpButton(
+                    text = "Add ingredient",
+                    onClick = { vm.openDialog(InventoryDialog.RecipeLineForm(active, null)) },
+                    enabled = state.syncedIngredients.isNotEmpty(),
+                    leadingIcon = Icons.Default.Add,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
-            // Keep the tiles the same size when there are fewer than six.
-            repeat(6 - state.restockPriority.size) { Spacer(Modifier.weight(1f)) }
         }
-    }
-}
-
-@Composable
-private fun TabBar(state: InventoryUiState, vm: InventoryViewModel) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        TabButton("Ingredients", state.tab == InventoryTab.INGREDIENTS) {
-            vm.selectTab(InventoryTab.INGREDIENTS)
-        }
-        TabButton("Suppliers", state.tab == InventoryTab.SUPPLIERS) {
-            vm.selectTab(InventoryTab.SUPPLIERS)
-        }
-    }
-}
-
-@Composable
-private fun TabButton(label: String, active: Boolean, onClick: () -> Unit) {
-    Column(
-        Modifier.clickable(onClick = onClick).padding(horizontal = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (active) Brand.Gold else Brand.ForegroundMuted,
-            modifier = Modifier.padding(vertical = 10.dp),
-        )
-        Box(
-            Modifier.height(2.dp).width(96.dp)
-                .background(if (active) Brand.Gold else Color.Transparent),
-        )
     }
 }
 
 // -------------------------------------------------------------- ingredients
 
 @Composable
-private fun IngredientsPane(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun IngredientsPane(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
+    modifier: Modifier = Modifier,
+) {
     if (state.ingredientsUnavailable) {
-        EmptyState(
-            title = "Ingredients unavailable",
-            body = state.refreshError
-                ?: "This tablet has not successfully downloaded ingredients yet.",
-            actionLabel = "Retry",
-            actionEnabled = !state.syncing,
-            onAction = vm::retry,
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "Ingredients unavailable",
+                body = state.refreshError
+                    ?: "This tablet has not successfully downloaded ingredients yet.",
+                icon = Icons.Default.CloudOff,
+                primaryLabel = "Retry",
+                onPrimary = vm::retry,
+            )
+        }
         return
     }
     if (state.ingredients.isEmpty()) {
-        EmptyState(
-            title = "No ingredients yet",
-            body = "Add what the kitchen and bar actually consume — milk, beans, cups — " +
-                "then record a stock receipt so each one has a costed batch to draw from.",
-            actionLabel = "New ingredient",
-            actionEnabled = canWrite,
-            onAction = { vm.openDialog(InventoryDialog.IngredientForm(null)) },
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "No ingredients yet",
+                body = if (presentation.showsRestaurantOperations) {
+                    "Add what the kitchen and bar actually consume, then record a stock receipt " +
+                        "so each ingredient has a costed FIFO batch to draw from."
+                } else {
+                    "Add the stock items used by products you sell, then record a stock receipt " +
+                        "so each item has a costed FIFO batch to draw from."
+                },
+                icon = Icons.Default.Inventory2,
+                primaryLabel = if (canWrite) "New ingredient" else null,
+                onPrimary = if (canWrite) {
+                    { vm.openDialog(InventoryDialog.IngredientForm(null)) }
+                } else null,
+            )
+        }
         return
     }
 
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
-        ) {
-            items(state.sortedIngredients, key = { it.localWriteId ?: it.id }) { ingredient ->
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.sortedIngredients, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) state.sortedIngredients else state.sortedIngredients.filter {
+            it.name.contains(needle, ignoreCase = true) || it.sku.contains(needle, ignoreCase = true)
+        }
+    }
+
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search ingredients or SKU",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
+            if (maxWidth >= 820.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    IngredientResultsPanel(filtered, state, canWrite, vm, Modifier.weight(1f))
+                    DetailPanel(state, canWrite, vm, Modifier.width(360.dp).fillMaxHeight())
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    IngredientResultsPanel(filtered, state, canWrite, vm, Modifier.weight(0.58f))
+                    if (state.selected != null) {
+                        DetailPanel(state, canWrite, vm, Modifier.weight(0.42f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IngredientResultsPanel(
+    rows: List<IngredientRow>,
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
+    SectionCard(
+        modifier = modifier,
+        title = "Ingredient stock",
+        subtitle = "${rows.size} result${if (rows.size == 1) "" else "s"} · lowest stock first",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        if (rows.isEmpty()) {
+            DesignedEmptyState(
+                title = "No matching ingredients",
+                body = "Try another ingredient name or SKU.",
+                icon = Icons.Default.Inventory2,
+            )
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(rows, key = { _, item -> item.localWriteId ?: item.id }) { index, ingredient ->
                 IngredientRowCard(
                     ingredient = ingredient,
                     selected = ingredient.sku == state.selectedSku,
@@ -447,9 +914,10 @@ private fun IngredientsPane(state: InventoryUiState, canWrite: Boolean, vm: Inve
                     onCancelRemoval = { vm.cancelIngredientRemoval(ingredient) },
                     onRetrySync = { vm.retryIngredientSync(ingredient) },
                 )
+                    if (index < rows.lastIndex) PanelDivider()
+                }
             }
         }
-        DetailPanel(state, canWrite, vm)
     }
 }
 
@@ -465,83 +933,124 @@ private fun IngredientRowCard(
     onCancelRemoval: () -> Unit,
     onRetrySync: () -> Unit,
 ) {
+    val statusLabel: String
+    val statusTone: UiTone
+    val statusIcon = when {
+        ingredient.rejectedError != null -> Icons.Default.SyncProblem
+        ingredient.pendingDelete || ingredient.pendingLocalId != null || ingredient.createConfirmationPending ->
+            Icons.Default.SyncProblem
+        ingredient.isLow -> Icons.Default.WarningAmber
+        else -> Icons.Default.CheckCircle
+    }
+    when {
+        ingredient.rejectedError != null -> {
+            statusLabel = "Sync issue"
+            statusTone = UiTone.Danger
+        }
+        ingredient.pendingDelete -> {
+            statusLabel = "Removal pending"
+            statusTone = UiTone.Warning
+        }
+        ingredient.createConfirmationPending -> {
+            statusLabel = "Confirming create"
+            statusTone = UiTone.Warning
+        }
+        ingredient.pendingLocalId != null -> {
+            statusLabel = "Pending sync"
+            statusTone = UiTone.Warning
+        }
+        ingredient.isLow -> {
+            statusLabel = "Low stock"
+            statusTone = UiTone.Danger
+        }
+        else -> {
+            statusLabel = "Healthy"
+            statusTone = UiTone.Success
+        }
+    }
+
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+        Modifier.fillMaxWidth()
             .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .border(1.dp, if (selected) Brand.GoldMuted else Color.Transparent),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+        DataListRow(
+            onClick = onClick,
+            content = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        ingredient.name,
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OperationalStatusBadge(statusLabel, statusTone, icon = statusIcon)
+                }
                 Text(
-                    ingredient.name,
-                    color = Brand.Foreground,
-                    style = MaterialTheme.typography.bodyLarge,
+                    "${ingredient.sku} · reorder at ${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    ingredient.sku,
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(140.dp)) {
+                LevelBar(ingredient, Modifier.fillMaxWidth())
+            },
+            trailing = {
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(132.dp)) {
                 Text(
                     "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
                     color = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    ingredient.stockValueMinor.asRupees(),
+                    ingredient.stockValueMinor?.asRupees() ?: "Value unavailable",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
-            }
-            Spacer(Modifier.width(8.dp))
-            if (canWrite && !ingredient.pendingDelete && !ingredient.createConfirmationPending) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!ingredient.isUnsyncedDraft) SmallAction("Adjust", onAdjust)
-                    SmallAction("Edit", onEdit)
-                    SmallAction("Delete", onDelete, Brand.Danger)
                 }
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LevelBar(ingredient, Modifier.weight(1f))
-            Spacer(Modifier.width(10.dp))
-            Text(
-                if (ingredient.reorderThreshold > 0) {
-                    "Reorder at ${ingredient.reorderThreshold.asQty()} ${ingredient.baseUnit}"
-                } else {
-                    "No reorder level set"
-                },
-                color = if (ingredient.isLow) Brand.Danger else Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+                if (canWrite && !ingredient.pendingDelete && !ingredient.createConfirmationPending) {
+                    IngredientActionsMenu(
+                        canAdjust = !ingredient.isUnsyncedDraft,
+                        onAdjust = onAdjust,
+                        onEdit = onEdit,
+                        onDelete = onDelete,
+                    )
+                }
+            },
+        )
         if (ingredient.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
-                color = Brand.GoldMuted,
+                color = Brand.Warning,
                 style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else if (ingredient.pendingDelete) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 Text(
                     "Removal pending sync",
-                    color = Brand.GoldMuted,
+                    color = Brand.Warning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel") }
             }
         } else if (ingredient.pendingLocalId != null) {
-            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Not synced yet",
+                color = Brand.Information,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         } else if (ingredient.rejectedError != null) {
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
@@ -558,6 +1067,38 @@ private fun IngredientRowCard(
 }
 
 @Composable
+private fun IngredientActionsMenu(
+    canAdjust: Boolean,
+    onAdjust: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (canAdjust) {
+            ErpButton("Adjust", onAdjust, intent = ActionIntent.Secondary, leadingIcon = Icons.Default.Tune)
+        }
+        Box {
+            IconButton(onClick = { expanded = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "More ingredient actions", tint = Brand.ForegroundMuted)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Edit ingredient") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = { expanded = false; onEdit() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete ingredient", color = Brand.Danger) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                    onClick = { expanded = false; onDelete() },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
     // Full bar = four times the reorder level, so "comfortable" and "about to
     // run out" are visibly different rather than both reading as near-full.
@@ -565,7 +1106,7 @@ private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
     val fraction = (ingredient.currentQty / denom).coerceIn(0.0, 1.0).toFloat()
     val colour = when {
         ingredient.isLow -> Brand.Danger
-        fraction < 0.4f -> Brand.Gold
+        fraction < 0.4f -> Brand.Warning
         else -> Brand.Good
     }
     Box(modifier.height(6.dp).clip(RoundedCornerShape(3.dp)).background(Brand.SurfaceRaised)) {
@@ -574,7 +1115,7 @@ private fun LevelBar(ingredient: IngredientRow, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.Gold) {
+private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.Information) {
     Text(
         label,
         color = tint,
@@ -589,41 +1130,60 @@ private fun SmallAction(label: String, onClick: () -> Unit, tint: Color = Brand.
 
 /** FIFO batches for the selected ingredient — what the deduction engine eats first. */
 @Composable
-private fun DetailPanel(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun DetailPanel(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    modifier: Modifier = Modifier,
+) {
     val ingredient = state.selected
-    Column(
-        Modifier.width(360.dp).fillMaxSize().clip(Radius.shapeLg)
-            .background(Brand.Surface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    SectionCard(
+        modifier = modifier,
+        title = ingredient?.name ?: "FIFO batches",
+        subtitle = ingredient?.let { "Oldest available stock is consumed first" }
+            ?: "Select an ingredient to inspect its costed stock",
+        icon = Icons.Default.Inventory2,
+        contentPadding = PaddingValues(14.dp),
     ) {
         if (ingredient == null) {
-            Text("Batches", style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(
-                "Tap an ingredient to see the batches it will be drawn from, oldest first.",
-                color = Brand.ForegroundMuted,
+            DesignedEmptyState(
+                title = "Select an ingredient",
+                body = "Choose an ingredient to see the batches it will be drawn from, oldest first.",
+                icon = Icons.Default.Inventory2,
             )
-            return@Column
+            return@SectionCard
         }
 
-        Text(ingredient.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-        Text(
-            "${ingredient.currentQty.asQty()} ${ingredient.baseUnit} on hand · " +
-                "avg ${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
-            color = Brand.ForegroundMuted,
-            style = MaterialTheme.typography.labelSmall,
+        InfoRow(
+            label = "On hand",
+            value = "${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
+            valueColor = if (ingredient.isLow) Brand.Danger else Brand.Foreground,
+        )
+        InfoRow(
+            label = "Weighted cost",
+            value = "${ingredient.avgCostMinor.asRupees()}/${ingredient.baseUnit}",
+        )
+        InfoRow(
+            label = "Exact FIFO value",
+            value = ingredient.stockValueMinor?.asRupees() ?: "Unavailable — refresh Inventory",
+            valueColor = if (ingredient.stockValueMinor == null) Brand.Warning else Brand.Foreground,
         )
         if (ingredient.isUnsyncedDraft) {
-            Text(
-                "This ingredient hasn't synced yet — stock actions unlock once it has.",
-                color = Brand.GoldMuted,
-                style = MaterialTheme.typography.labelSmall,
+            OperationalBanner(
+                title = "Ingredient pending sync",
+                detail = "Stock actions unlock after the ingredient is confirmed by the server.",
+                tone = UiTone.Warning,
+                icon = Icons.Default.SyncProblem,
             )
         } else {
-            Button(
+            ErpButton(
+                text = "Adjust stock",
                 onClick = { vm.openDialog(InventoryDialog.Adjust(ingredient)) },
                 enabled = canWrite,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Adjust stock") }
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Default.Tune,
+            )
         }
 
         Text(
@@ -677,9 +1237,16 @@ private fun DetailPanel(state: InventoryUiState, canWrite: Boolean, vm: Inventor
                 color = Brand.ForegroundMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 items(state.batches, key = { it.id }) { batch ->
-                    BatchRow(batch, ingredient.baseUnit)
+                    BatchRow(
+                        batch,
+                        ingredient.baseUnit,
+                        state.branches.firstOrNull { it.id == batch.branchId }?.name,
+                    )
                 }
             }
         }
@@ -687,7 +1254,7 @@ private fun DetailPanel(state: InventoryUiState, canWrite: Boolean, vm: Inventor
 }
 
 @Composable
-private fun BatchRow(batch: BatchCacheEntity, unit: String) {
+private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(10.dp),
@@ -699,10 +1266,10 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String) {
                 color = Brand.Foreground,
                 fontWeight = FontWeight.Bold,
             )
-            Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = Brand.Gold)
+            Text("${batch.costPerUnitMinor.asRupees()}/$unit", color = Brand.Foreground)
         }
         Text(
-            "Received ${batch.receivedAt.asDay()}" +
+            (branchName?.let { "$it · " } ?: "") + "Received ${batch.receivedAt.asDay()}" +
                 (batch.lotCode?.let { " · lot $it" } ?: ""),
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
@@ -722,39 +1289,97 @@ private fun BatchRow(batch: BatchCacheEntity, unit: String) {
 // ---------------------------------------------------------------- suppliers
 
 @Composable
-private fun SuppliersPane(state: InventoryUiState, canWrite: Boolean, vm: InventoryViewModel) {
+private fun SuppliersPane(
+    state: InventoryUiState,
+    canWrite: Boolean,
+    vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
+    modifier: Modifier = Modifier,
+) {
     if (state.suppliersUnavailable) {
-        EmptyState(
-            title = "Suppliers unavailable",
-            body = state.refreshError
-                ?: "This tablet has not successfully downloaded suppliers yet.",
-            actionLabel = "Retry",
-            actionEnabled = !state.syncing,
-            onAction = vm::retry,
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "Suppliers unavailable",
+                body = state.refreshError
+                    ?: "This tablet has not successfully downloaded suppliers yet.",
+                icon = Icons.Default.CloudOff,
+                primaryLabel = "Retry",
+                onPrimary = vm::retry,
+            )
+        }
         return
     }
     if (state.suppliers.isEmpty()) {
-        EmptyState(
-            title = "No suppliers yet",
-            body = "A stock receipt has to be attributed to a supplier, so add the shops " +
-                "and distributors you buy from before recording a GRN.",
-            actionLabel = "New supplier",
-            actionEnabled = canWrite,
-            onAction = { vm.openDialog(InventoryDialog.SupplierForm(null)) },
-        )
+        SectionCard(modifier, elevated = true) {
+            DesignedEmptyState(
+                title = "No suppliers yet",
+                body = "Every goods receipt must identify a supplier. Add the shops and distributors " +
+                    "you buy from before recording stock receipts.",
+                icon = Icons.Default.LocalShipping,
+                primaryLabel = if (canWrite) "New supplier" else null,
+                onPrimary = if (canWrite) {
+                    { vm.openDialog(InventoryDialog.SupplierForm(null)) }
+                } else null,
+            )
+        }
         return
     }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(state.suppliers, key = { it.localWriteId ?: it.id }) { supplier ->
-            SupplierRowCard(
-                supplier = supplier,
-                canWrite = canWrite,
-                onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
-                onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
-                onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
-                onRetrySync = { vm.retrySupplierSync(supplier) },
-            )
+
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(state.suppliers, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) state.suppliers else state.suppliers.filter {
+            it.name.contains(needle, ignoreCase = true) ||
+                it.contact.orEmpty().contains(needle, ignoreCase = true) ||
+                (presentation.showsRestaurantOperations &&
+                    it.gstin.orEmpty().contains(needle, ignoreCase = true))
+        }
+    }
+
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SearchInput(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = if (presentation.showsRestaurantOperations) {
+                "Search suppliers, contact, or GSTIN"
+            } else {
+                "Search suppliers or contact"
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SectionCard(
+            modifier = Modifier.weight(1f),
+            title = "Supplier directory",
+            subtitle = "${filtered.size} result${if (filtered.size == 1) "" else "s"} available for goods receipts",
+            icon = Icons.Default.LocalShipping,
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            if (filtered.isEmpty()) {
+                DesignedEmptyState(
+                    title = "No matching suppliers",
+                    body = if (presentation.showsRestaurantOperations) {
+                        "Try another supplier name, contact, or GSTIN."
+                    } else {
+                        "Try another supplier name or contact."
+                    },
+                    icon = Icons.Default.LocalShipping,
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    itemsIndexed(filtered, key = { _, item -> item.localWriteId ?: item.id }) { index, supplier ->
+                        SupplierRowCard(
+                            supplier = supplier,
+                            canWrite = canWrite,
+                            presentation = presentation,
+                            onEdit = { vm.openDialog(InventoryDialog.SupplierForm(supplier)) },
+                            onDelete = { vm.openDialog(InventoryDialog.ConfirmDeleteSupplier(supplier)) },
+                            onCancelRemoval = { vm.cancelSupplierRemoval(supplier) },
+                            onRetrySync = { vm.retrySupplierSync(supplier) },
+                        )
+                        if (index < filtered.lastIndex) PanelDivider()
+                    }
+                }
+            }
         }
     }
 }
@@ -763,63 +1388,102 @@ private fun SuppliersPane(state: InventoryUiState, canWrite: Boolean, vm: Invent
 private fun SupplierRowCard(
     supplier: SupplierRow,
     canWrite: Boolean,
+    presentation: WorkspacePresentationPolicy,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onCancelRemoval: () -> Unit,
     onRetrySync: () -> Unit,
 ) {
+    val (statusLabel, statusTone) = when {
+        supplier.rejectedError != null -> "Sync issue" to UiTone.Danger
+        supplier.pendingDelete -> "Removal pending" to UiTone.Warning
+        supplier.createConfirmationPending -> "Confirming create" to UiTone.Warning
+        supplier.pendingLocalId != null -> "Pending sync" to UiTone.Warning
+        else -> "Ready" to UiTone.Success
+    }
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        Modifier.fillMaxWidth().background(Brand.Surface),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    supplier.name,
-                    color = Brand.Foreground,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+        DataListRow(
+            content = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        supplier.name,
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OperationalStatusBadge(
+                        statusLabel,
+                        statusTone,
+                        icon = if (statusTone == UiTone.Success) Icons.Default.CheckCircle else Icons.Default.SyncProblem,
+                    )
+                }
                 Text(
                     supplier.contact ?: "No contact saved",
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
-            Column(Modifier.width(220.dp)) {
-                Text("GSTIN", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                Text(supplier.gstin ?: "—", color = Brand.Foreground)
-            }
-            Column(Modifier.width(180.dp)) {
-                Text("Terms", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                Text(supplier.paymentTerms ?: "—", color = Brand.Foreground)
-            }
-            if (canWrite && !supplier.pendingDelete && !supplier.createConfirmationPending) {
-                SmallAction("Edit", onEdit)
-                SmallAction("Delete", onDelete, Brand.Danger)
-            }
-        }
+            },
+            trailing = {
+                Column(Modifier.width(180.dp), horizontalAlignment = Alignment.End) {
+                    if (presentation.showsRestaurantOperations) {
+                        Text(
+                            supplier.gstin?.let { "GSTIN $it" } ?: "GSTIN not saved",
+                            color = Brand.Foreground,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        supplier.paymentTerms ?: "No payment terms",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (canWrite && !supplier.pendingDelete && !supplier.createConfirmationPending) {
+                    SupplierActionsMenu(onEdit, onDelete)
+                }
+            },
+        )
         if (supplier.createConfirmationPending) {
             Text(
                 "Create confirmation pending — details stay locked so a retry cannot create a duplicate.",
-                color = Brand.GoldMuted,
+                color = Brand.Warning,
                 style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else if (supplier.pendingDelete) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 Text(
                     "Removal pending sync",
-                    color = Brand.GoldMuted,
+                    color = Brand.Warning,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onCancelRemoval, enabled = canWrite) { Text("Cancel") }
             }
         } else if (supplier.pendingLocalId != null) {
-            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Not synced yet",
+                color = Brand.Information,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         } else if (supplier.rejectedError != null) {
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).border(1.dp, Brand.Danger, Radius.shapeSm)
                     .padding(8.dp),
             ) {
@@ -836,6 +1500,28 @@ private fun SupplierRowCard(
 }
 
 @Composable
+private fun SupplierActionsMenu(onEdit: () -> Unit, onDelete: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More supplier actions", tint = Brand.ForegroundMuted)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit supplier") },
+                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                onClick = { expanded = false; onEdit() },
+            )
+            DropdownMenuItem(
+                text = { Text("Delete supplier", color = Brand.Danger) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Brand.Danger) },
+                onClick = { expanded = false; onDelete() },
+            )
+        }
+    }
+}
+
+@Composable
 private fun EmptyState(
     title: String,
     body: String,
@@ -847,7 +1533,7 @@ private fun EmptyState(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.width(480.dp).padding(24.dp),
+            modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(24.dp),
         ) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
             Text(body, color = Brand.ForegroundMuted)
@@ -937,7 +1623,12 @@ private fun IngredientDialog(
 }
 
 @Composable
-private fun SupplierDialog(editing: SupplierRow?, state: InventoryUiState, vm: InventoryViewModel) {
+private fun SupplierDialog(
+    editing: SupplierRow?,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+    presentation: WorkspacePresentationPolicy,
+) {
     var name by remember { mutableStateOf(editing?.name ?: "") }
     var contact by remember { mutableStateOf(editing?.contact ?: "") }
     var gstin by remember { mutableStateOf(editing?.gstin ?: "") }
@@ -968,13 +1659,15 @@ private fun SupplierDialog(editing: SupplierRow?, state: InventoryUiState, vm: I
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
-            value = gstin,
-            onValueChange = { gstin = it.uppercase() },
-            label = { Text("GSTIN") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (presentation.showsRestaurantOperations) {
+            OutlinedTextField(
+                value = gstin,
+                onValueChange = { gstin = it.uppercase() },
+                label = { Text("GSTIN") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OutlinedTextField(
             value = terms,
             onValueChange = { terms = it },
@@ -993,44 +1686,247 @@ private data class GrnLineDraft(
     val lotCode: String = "",
 )
 
+private data class RecipeLineDraft(
+    val ingredientId: String = "",
+    val qty: String = "",
+    val wastagePercent: String = "0",
+) {
+    fun error(lineNumber: Int): String? = when {
+        ingredientId.isBlank() -> "Select an ingredient on recipe line $lineNumber."
+        qty.toDoubleOrNull() == null || qty.toDouble() <= 0 ->
+            "Enter a quantity greater than zero on recipe line $lineNumber."
+        wastagePercent.toDoubleOrNull() == null || wastagePercent.toDouble() !in 0.0..100.0 ->
+            "Wastage on recipe line $lineNumber must be from 0 to 100%."
+        else -> null
+    }
+
+    fun toBody(): RecipeLineBody = RecipeLineBody(
+        ingredientId = ingredientId,
+        qty = qty.toDouble(),
+        wastagePct = wastagePercent.toDouble() / 100.0,
+    )
+}
+
+@Composable
+private fun RecipeCreateDialog(
+    menuItem: cloud.dcompany.erp.core.db.MenuItemEntity,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+) {
+    var name by remember(menuItem.id) { mutableStateOf("${menuItem.name} recipe") }
+    var yieldQty by remember(menuItem.id) { mutableStateOf("1") }
+    var lines by remember(menuItem.id) {
+        mutableStateOf(
+            listOf(RecipeLineDraft(ingredientId = state.syncedIngredients.firstOrNull()?.id.orEmpty())),
+        )
+    }
+    FormDialog(
+        title = "Link recipe to ${menuItem.name}",
+        confirmLabel = "Activate recipe",
+        busy = state.busy,
+        error = state.formError,
+        width = 760.dp,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val parsedYield = yieldQty.toDoubleOrNull()
+            val lineError = lines.mapIndexedNotNull { index, line -> line.error(index + 1) }.firstOrNull()
+            val duplicates = lines.map { it.ingredientId }.filter(String::isNotBlank)
+                .groupingBy { it }.eachCount().any { it.value > 1 }
+            when {
+                name.isBlank() -> vm.showFormError("Enter a recipe name.")
+                parsedYield == null || parsedYield <= 0 ->
+                    vm.showFormError("Yield must be greater than zero.")
+                lineError != null -> vm.showFormError(lineError)
+                duplicates -> vm.showFormError(
+                    "Each ingredient can appear only once. Combine duplicate quantities into one line.",
+                )
+                else -> vm.createRecipe(menuItem, name, parsedYield, lines.map(RecipeLineDraft::toBody))
+            }
+        },
+    ) {
+        OperationalBanner(
+            title = "Future sales only",
+            detail = "Activating this link changes ingredient deductions for future paid sales. Past sales and stock movements are not rewritten.",
+            tone = UiTone.Warning,
+            icon = Icons.Default.WarningAmber,
+        )
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Recipe name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(
+            value = yieldQty,
+            onValueChange = { yieldQty = it },
+            label = "Menu units produced by these quantities",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "Example: if the quantities make 4 portions, enter yield 4. The server divides each ingredient deduction by 4 per sale.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        lines.forEachIndexed { index, line ->
+            Column(
+                Modifier.fillMaxWidth().clip(Radius.shapeSm)
+                    .background(Brand.SurfaceRaised).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PickerField(
+                    label = "Ingredient ${index + 1}",
+                    selectedLabel = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
+                        ?.let { "${it.name} (${it.baseUnit})" } ?: "— select —",
+                    options = state.syncedIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
+                    onSelect = { id -> lines = lines.replaceAt(index) { it.copy(ingredientId = id) } },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DecimalField(
+                        value = line.qty,
+                        onValueChange = { value -> lines = lines.replaceAt(index) { it.copy(qty = value) } },
+                        label = "Quantity for full yield",
+                        modifier = Modifier.weight(1f),
+                    )
+                    DecimalField(
+                        value = line.wastagePercent,
+                        onValueChange = { value ->
+                            lines = lines.replaceAt(index) { it.copy(wastagePercent = value) }
+                        },
+                        label = "Wastage %",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (lines.size > 1) {
+                    TextButton(onClick = { lines = lines.removeAt(index) }) {
+                        Text("Remove line", color = Brand.Danger)
+                    }
+                }
+            }
+        }
+        OutlinedButton(
+            onClick = { lines = lines + RecipeLineDraft() },
+            enabled = state.syncedIngredients.isNotEmpty(),
+        ) { Text("Add ingredient") }
+    }
+}
+
+@Composable
+private fun RecipeLineDialog(
+    recipe: Recipe,
+    editing: RecipeLine?,
+    state: InventoryUiState,
+    vm: InventoryViewModel,
+) {
+    val initialIngredient = editing?.ingredientId ?: state.syncedIngredients.firstOrNull()?.id.orEmpty()
+    var ingredientId by remember(recipe.id, editing?.id) { mutableStateOf(initialIngredient) }
+    var qty by remember(recipe.id, editing?.id) { mutableStateOf(editing?.qty?.asQty() ?: "") }
+    var wastage by remember(recipe.id, editing?.id) {
+        mutableStateOf(editing?.let { (it.wastagePct * 100).asQty() } ?: "0")
+    }
+    FormDialog(
+        title = if (editing == null) "Add recipe ingredient" else "Edit recipe ingredient",
+        confirmLabel = if (editing == null) "Add line" else "Save line",
+        busy = state.busy,
+        error = state.formError,
+        onDismiss = vm::closeDialog,
+        onConfirm = {
+            val draft = RecipeLineDraft(ingredientId, qty, wastage)
+            val duplicate = editing == null && recipe.lines.any { it.ingredientId == ingredientId }
+            when {
+                draft.error(1) != null -> vm.showFormError(draft.error(1)!!)
+                duplicate -> vm.showFormError(
+                    "This ingredient is already linked. Edit its existing line instead.",
+                )
+                else -> vm.saveRecipeLine(recipe, editing, draft.toBody())
+            }
+        },
+    ) {
+        PickerField(
+            label = "Ingredient",
+            selectedLabel = state.syncedIngredients.firstOrNull { it.id == ingredientId }
+                ?.let { "${it.name} (${it.baseUnit})" } ?: "— select —",
+            options = state.syncedIngredients.map { it.id to "${it.name} (${it.baseUnit})" },
+            onSelect = { ingredientId = it },
+        )
+        DecimalField(
+            value = qty,
+            onValueChange = { qty = it },
+            label = "Quantity for full yield (${recipe.yieldQty.asQty()} menu units)",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(
+            value = wastage,
+            onValueChange = { wastage = it },
+            label = "Wastage %",
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
 @Composable
 private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
     val pickableIngredients = state.syncedIngredients
     val pickableSuppliers = state.syncedSuppliers
     var supplierId by remember { mutableStateOf(pickableSuppliers.firstOrNull()?.id ?: "") }
     var invoiceNo by remember { mutableStateOf("") }
+    var invoiceTotal by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var lines by remember {
         mutableStateOf(listOf(GrnLineDraft(ingredientId = pickableIngredients.firstOrNull()?.id ?: "")))
     }
 
     val branchId = state.branchId
-    // Mirrors the backend's `int(qty * unit_cost_minor)` so the number shown
-    // here is the number the purchase order will actually carry.
-    val totalMinor = lines.sumOf { line ->
-        val qty = line.qty.toDoubleOrNull() ?: 0.0
-        val cost = parseRupeesToMinor(line.unitCostRupees) ?: 0L
-        (qty * cost).toLong()
+    val lineTotals = lines.map { line ->
+        grnLineTotalMinor(line.qty, parseRupeesToMinor(line.unitCostRupees))
     }
+    // The backend rounds each line HALF_UP to whole paise before summing.
+    // Never round the combined receipt or truncate fractional paise here.
+    val totalMinor = grnReceiptTotalMinor(
+        lines.map { it.qty to parseRupeesToMinor(it.unitCostRupees) },
+    )
 
     FormDialog(
         title = "Receive stock (GRN)",
         confirmLabel = "Queue receipt",
         busy = state.busy,
         error = state.formError,
-        wide = true,
+        width = 760.dp,
         onDismiss = vm::closeDialog,
         onConfirm = {
             val lineError = lines.mapIndexedNotNull { index, line ->
                 line.validationError(index + 1)
             }.firstOrNull()
             val ready = lines.mapNotNull { it.toBody() }
+            val invoiceTotalMinor = parseRupeesToMinor(invoiceTotal)
             when {
                 branchId.isNullOrBlank() -> vm.showFormError("Select a branch.")
                 supplierId.isBlank() -> vm.showFormError("Select a supplier.")
                 lineError != null -> vm.showFormError(lineError)
                 ready.isEmpty() -> vm.showFormError("Add at least one line.")
-                else -> vm.postGrn(supplierId, branchId, invoiceNo, notes, ready)
+                invoiceNo.isNotBlank() && invoiceTotal.isBlank() ->
+                    vm.showFormError("Enter the supplier invoice total, or clear the invoice number.")
+                invoiceTotal.isNotBlank() && invoiceNo.isBlank() ->
+                    vm.showFormError("Enter the supplier invoice number, or clear the invoice total.")
+                invoiceTotal.isNotBlank() && invoiceTotalMinor == null ->
+                    vm.showFormError("Enter a valid supplier invoice total.")
+                totalMinor == null -> vm.showFormError(
+                    "Check every quantity and unit cost. Quantities support up to 4 decimal places.",
+                )
+                invoiceTotalMinor != null && invoiceTotalMinor != totalMinor ->
+                    vm.showFormError(
+                        "Invoice total ${invoiceTotalMinor.asRupees()} does not match the " +
+                            "capitalised line total ${totalMinor.asRupees()}. Correct the quantities, " +
+                            "unit costs or invoice total; no receipt was queued.",
+                    )
+                else -> vm.postGrn(
+                    supplierId = supplierId,
+                    branchId = branchId,
+                    invoiceNo = invoiceNo,
+                    supplierInvoiceAmountMinor = invoiceTotalMinor,
+                    notesText = notes,
+                    lines = ready,
+                )
             }
         },
     ) {
@@ -1076,6 +1972,19 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
             label = { Text("Supplier invoice no.") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
+        )
+        DecimalField(
+            value = invoiceTotal,
+            onValueChange = { invoiceTotal = it },
+            label = "Supplier invoice total (₹)",
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "The invoice total must equal the capitalised line total after each line is rounded to paise. " +
+                "Separate freight, tax, discounts or unexplained variance cannot be queued here. " +
+                "Received time is captured when you tap Queue receipt.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
         )
 
         Text("Lines", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
@@ -1137,11 +2046,9 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                         modifier = Modifier.weight(1f),
                     )
                 }
-                val unitCost = parseRupeesToMinor(line.unitCostRupees)
-                val qty = line.qty.toDoubleOrNull() ?: 0.0
-                if (qty > 0 && unitCost != null) {
+                lineTotals[index]?.let { lineTotal ->
                     Text(
-                        "Line total ${(qty * unitCost).toLong().asRupees()}",
+                        "Line total ${lineTotal.asRupees()}",
                         color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -1155,8 +2062,8 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         ) {
             OutlinedButton(onClick = { lines = lines + GrnLineDraft() }) { Text("Add line") }
             Text(
-                "Total ${totalMinor.asRupees()}",
-                color = Brand.Gold,
+                totalMinor?.let { "Capitalised total ${it.asRupees()}" } ?: "Complete all lines",
+                color = Brand.Foreground,
                 style = MaterialTheme.typography.titleLarge,
             )
         }
@@ -1198,6 +2105,10 @@ private fun AdjustDialog(
                 typed == null -> vm.showFormError("Enter a quantity.")
                 delta == null || delta == 0.0 ->
                     vm.showFormError("A zero adjustment changes nothing — enter an amount.")
+                delta < 0 && -delta > ingredient.currentQty ->
+                    vm.showFormError(
+                        "Only ${ingredient.currentQty.asQty()} ${ingredient.baseUnit} is available in this branch.",
+                    )
                 else -> vm.postAdjustment(ingredient, branchId, type, typed, note)
             }
         },
@@ -1206,11 +2117,14 @@ private fun AdjustDialog(
             "On hand now: ${ingredient.currentQty.asQty()} ${ingredient.baseUnit}",
             color = Brand.ForegroundMuted,
         )
-        PickerField(
+        InfoRow(
             label = "Branch",
-            selectedLabel = state.branches.firstOrNull { it.id == branchId }?.name ?: "— select —",
-            options = state.branches.map { it.id to it.name },
-            onSelect = vm::selectBranch,
+            value = state.branches.firstOrNull { it.id == branchId }?.name ?: "Unavailable",
+        )
+        Text(
+            TRANSFER_UNAVAILABLE_MESSAGE,
+            color = Brand.Warning,
+            style = MaterialTheme.typography.labelSmall,
         )
         PickerField(
             label = "Type",
@@ -1260,9 +2174,8 @@ private fun AdjustDialog(
                 )
                 if (delta < 0 && ingredient.currentQty + delta < 0) {
                     Text(
-                        "That is more than the system thinks is on hand — the server will " +
-                            "floor stock at zero.",
-                        color = Brand.GoldMuted,
+                        "That exceeds this branch's recorded balance and cannot be queued.",
+                        color = Brand.Warning,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -1279,163 +2192,6 @@ private fun AdjustDialog(
     }
 }
 
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    body: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = !busy,
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-            ) { Text(confirmLabel, color = Brand.Foreground) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-/** One dialog shell so every form errors, busies and cancels the same way. */
-@Composable
-private fun FormDialog(
-    title: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    wide: Boolean = false,
-    content: @Composable () -> Unit,
-) {
-    AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
-        modifier = if (wide) Modifier.width(760.dp) else Modifier.width(480.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-                // The server's own words (or, for a local validation issue,
-                // this dialog's own words), next to the button that caused
-                // them — "SKU already exists" is actionable, "Request
-                // failed" is not.
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-// ------------------------------------------------------------------- inputs
-
-@Composable
-private fun PickerField(
-    label: String,
-    selectedLabel: String,
-    options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Column(modifier) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("▾", color = Brand.Gold)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(
-                        text = { Text(text) },
-                        onClick = {
-                            open = false
-                            onSelect(id)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DecimalField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier,
-    allowNegative: Boolean = false,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { onValueChange(filterDecimal(it, allowNegative)) },
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = modifier,
-    )
-}
-
-/**
- * Keeps a numeric field numeric. The minus sign is only ever accepted where a
- * negative is meaningful — on a waste entry it would silently invert the
- * movement and put stock *back* on the shelf.
- */
-private fun filterDecimal(raw: String, allowNegative: Boolean): String {
-    val sb = StringBuilder()
-    var dotSeen = false
-    raw.forEachIndexed { index, c ->
-        when {
-            c.isDigit() -> sb.append(c)
-            c == '.' && !dotSeen -> {
-                dotSeen = true
-                sb.append(c)
-            }
-            c == '-' && allowNegative && index == 0 -> sb.append(c)
-        }
-    }
-    return sb.toString()
-}
-
 // ------------------------------------------------------------------ helpers
 
 private fun Double.asQtyInput(): String = if (this == 0.0) "" else asQty().replace(",", "")
@@ -1446,8 +2202,15 @@ private fun GrnLineDraft.validationError(lineNumber: Int): String? {
     if (quantity == null || !quantity.isFinite() || quantity <= 0.0) {
         return "Line $lineNumber: quantity must be greater than 0."
     }
-    if (parseRupeesToMinor(unitCostRupees) == null) {
+    if (!isSupportedGrnQuantity(qty)) {
+        return "Line $lineNumber: quantity supports up to 10 whole-number digits and 4 decimal places."
+    }
+    val unitCostMinor = parseRupeesToMinor(unitCostRupees)
+    if (unitCostMinor == null) {
         return "Line $lineNumber: unit cost must be rupees with no more than 2 decimal places."
+    }
+    if (grnLineTotalMinor(qty, unitCostMinor) == null) {
+        return "Line $lineNumber: quantity and unit cost are too large to value safely."
     }
     val expiry = expiresAt.trim()
     if (expiry.isNotEmpty() && !Regex("""\d{4}-\d{2}-\d{2}""").matches(expiry)) {

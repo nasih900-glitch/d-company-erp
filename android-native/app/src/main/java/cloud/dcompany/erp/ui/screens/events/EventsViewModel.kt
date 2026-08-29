@@ -18,6 +18,7 @@ import cloud.dcompany.erp.core.db.store
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +38,7 @@ sealed interface EventsDialog {
     data class SellTickets(val event: Event) : EventsDialog
     data class Tickets(val event: Event) : EventsDialog
     data class ConfirmDelete(val event: Event) : EventsDialog
+    data class ConfirmCancel(val event: Event) : EventsDialog
 }
 
 /** A queued-but-not-yet-synced ticket sale, with the event's name resolved for display. */
@@ -87,6 +89,7 @@ data class EventsUiState(
  * whole rebuild exists for, unlike an event's own planned-in-advance
  * scheduling.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class EventsViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
@@ -260,6 +263,12 @@ class EventsViewModel : ViewModel() {
         dialog.value = EventsDialog.ConfirmDelete(event)
     }
 
+    fun openConfirmCancel(event: Event) {
+        if (!requireManage()) return
+        formError.value = null
+        dialog.value = EventsDialog.ConfirmCancel(event)
+    }
+
     fun closeDialog() {
         dialog.value = null
         formError.value = null
@@ -267,6 +276,10 @@ class EventsViewModel : ViewModel() {
 
     fun dismissNotice() {
         notice.value = null
+    }
+
+    fun dismissFormError() {
+        formError.value = null
     }
 
     fun dismissPricingUnlock() {
@@ -378,12 +391,16 @@ class EventsViewModel : ViewModel() {
     fun setEventStatus(event: Event, status: String) {
         if (!requireManage()) return
         if (busy.value) return
+        formError.value = null
         busy.value = true
         viewModelScope.launch {
             try {
                 api.updateEvent(event.id, EventUpdate(status = status))
                 busy.value = false
                 notice.value = "Event status updated."
+                if (status == "cancelled" && dialog.value is EventsDialog.ConfirmCancel) {
+                    dialog.value = null
+                }
                 appCtx.sync.refresh("events")
             } catch (e: CancellationException) {
                 throw e

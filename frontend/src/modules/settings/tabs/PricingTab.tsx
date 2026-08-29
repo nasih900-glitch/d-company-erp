@@ -25,6 +25,7 @@ import {
   type StationDTO,
 } from '@/lib/erp-api';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
 
 type MenuDraft = { price: string; gst: string };
 type StationDraft = { rate: string };
@@ -62,8 +63,12 @@ export default function PricingTab() {
       const [menuItems, stationRows, eventsList, tierRows] = await Promise.all([
         menu.items(),
         gaming.listStations(),
-        events.listAll(true),
-        memberships.listTiers(),
+        GAMING_CENTRE_FEATURES.events
+          ? events.listAll(true)
+          : Promise.resolve([] as EventDTO[]),
+        GAMING_CENTRE_FEATURES.memberships
+          ? memberships.listTiers()
+          : Promise.resolve([] as MembershipTierDTO[]),
       ]);
       const visibleMenuItems = menuItems.filter((item) => isAppStoreAllowedType(item.type));
       const visibleStationRows = stationRows.filter((station) => isAppStoreAllowedType(station.type));
@@ -277,7 +282,7 @@ export default function PricingTab() {
             className="input !pl-9"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search item, SKU, station, event, tier..."
+            placeholder="Search product, SKU, or gaming station..."
           />
         </div>
         <button className="btn btn-ghost" onClick={load} disabled={loading || !!saving}>
@@ -380,6 +385,7 @@ export default function PricingTab() {
         )}
       </PriceSection>
 
+      {GAMING_CENTRE_FEATURES.events && (
       <PriceSection icon={<Ticket size={16}/>} title="Event Ticket Prices" count={filteredEvents.length}>
         {!filteredEvents.length ? <EmptyLine/> : (
           <div className="overflow-x-auto">
@@ -419,7 +425,9 @@ export default function PricingTab() {
           </div>
         )}
       </PriceSection>
+      )}
 
+      {GAMING_CENTRE_FEATURES.memberships && (
       <PriceSection icon={<Crown size={16}/>} title="Membership Prices" count={filteredTiers.length}>
         {!filteredTiers.length ? <EmptyLine/> : (
           <div className="overflow-x-auto">
@@ -467,6 +475,7 @@ export default function PricingTab() {
           </div>
         )}
       </PriceSection>
+      )}
     </div>
   );
 }

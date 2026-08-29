@@ -5,22 +5,19 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -28,152 +25,159 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.MenuAccess
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
+import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
+
+internal fun menuItemTypeOptions(
+    presentation: WorkspacePresentationPolicy,
+): List<Pair<String, String>> = if (presentation.showsRestaurantOperations) {
+    ITEM_TYPES.map { it to it.replaceFirstChar(Char::titlecase) }
+} else {
+    listOf(
+        "food" to "Snack / product",
+        "drink" to "Drink",
+    )
+}
+
+/** Historical item types stay visible, but dormant workflows are not advertised as active choices. */
+internal fun menuItemTypeLabel(
+    type: String,
+    presentation: WorkspacePresentationPolicy,
+): String = if (presentation.showsRestaurantOperations) {
+    type.replaceFirstChar(Char::titlecase)
+} else {
+    when (type.lowercase()) {
+        "food" -> "Snack / product"
+        "drink" -> "Drink"
+        "dessert" -> "Legacy product"
+        else -> "Legacy service"
+    }
+}
 
 @Composable
-fun MenuScreen(access: MenuAccess = MenuAccess()) {
+fun MenuScreen(
+    access: MenuAccess = MenuAccess(),
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+) {
     val vm: MenuViewModel = viewModel()
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     SideEffect { vm.updateAccess(access) }
+    var search by rememberSaveable { mutableStateOf("") }
+    val searchedItems = remember(state.visibleItems, search) {
+        val query = search.trim()
+        if (query.isEmpty()) state.visibleItems else state.visibleItems.filter {
+            it.name.contains(query, ignoreCase = true) ||
+                it.sku.contains(query, ignoreCase = true) ||
+                it.type.contains(query, ignoreCase = true)
+        }
+    }
 
-    Row(Modifier.fillMaxSize().background(Brand.Background)) {
-        Column(
-            Modifier.width(300.dp).fillMaxHeight().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Menu", style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground)
-            }
-            Text(
-                "Categories & items · price/tax changes need your password",
-                style = MaterialTheme.typography.labelSmall,
-                color = Brand.ForegroundMuted,
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background)
+            .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        if (!access.canManageMenu) ViewOnlyNotice()
+        MenuSummary(state)
+        state.notice?.let { NoticeBanner(it, vm::dismissNotice) }
+        if (access.canManageMenu) {
+            OperationalBanner(
+                title = "Variants and modifiers",
+                detail = "Configure sizes, add-ons and modifier groups in the web ERP. Android POS downloads and enforces them after sync; this tablet does not edit them yet.",
+                tone = UiTone.Information,
+                icon = Icons.Default.RestaurantMenu,
             )
-            if (!access.canManageMenu) ViewOnlyNotice()
-            Button(
-                onClick = vm::startCreateCategory,
-                enabled = access.canManageMenu,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Add category")
-            }
-
-            when {
-                state.loading -> CircularProgressIndicator(color = Brand.Gold)
-                state.couldNotLoad -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Could not load the menu", color = Brand.Foreground)
-                    Text(
-                        state.loadError
-                            ?: "The tablet has not downloaded the menu yet. Check the connection and retry.",
-                        color = Brand.ForegroundMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedButton(onClick = vm::retry) { Text("Retry") }
-                }
-                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(state.categories, key = { it.id }) { cat ->
-                        CategoryRowItem(
-                            cat = cat,
-                            selected = cat.name == state.selectedCategoryName,
-                            canWrite = access.canManageMenu,
-                            onClick = { vm.selectCategory(cat.name) },
-                            onEdit = { vm.startEditCategory(cat) },
-                            onRetrySync = { vm.retryCategorySync(cat) },
-                        )
-                    }
-                }
-            }
         }
 
-        Box(
-            Modifier
-                .width(1.dp)
-                .fillMaxHeight()
-                .background(Brand.Border),
-        )
-
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
-            val selectedCategory = state.selectedCategory
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    selectedCategory?.name ?: "Pick a category",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Brand.Foreground,
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val categoryPanel: @Composable (Modifier) -> Unit = { modifier ->
+                MenuCategoryPanel(
+                    state = state,
+                    access = access,
+                    modifier = modifier,
+                    onCreate = vm::startCreateCategory,
+                    onRetry = vm::retry,
+                    onSelect = vm::selectCategory,
+                    onEdit = vm::startEditCategory,
+                    onRetrySync = vm::retryCategorySync,
                 )
-                // A still-unsynced category (a pending create, no real
-                // server id yet) has nothing an item could be assigned to —
-                // the button reappears the moment this category syncs.
-                if (selectedCategory != null && !selectedCategory.id.startsWith("local:")) {
-                    Button(
-                        onClick = { vm.startCreateItem(selectedCategory.id) },
-                        enabled = access.canManageMenu,
-                    ) { Text("Add item") }
-                }
             }
-            Spacer(Modifier.height(12.dp))
-
-            state.notice?.let {
-                NoticeBanner(it, vm::dismissNotice)
-                Spacer(Modifier.height(10.dp))
+            val itemsPanel: @Composable (Modifier) -> Unit = { modifier ->
+                MenuItemsPanel(
+                    state = state,
+                    access = access,
+                    presentation = presentation,
+                    search = search,
+                    searchedItems = searchedItems,
+                    modifier = modifier,
+                    onSearch = { search = it },
+                    onCreate = vm::startCreateItem,
+                    onEditDetails = vm::startEditItemDetails,
+                    onEditPricing = vm::startEditItemPricing,
+                    onRetrySync = vm::retryItemDetailsSync,
+                )
             }
-
-            if (state.loading) {
-                // Otherwise, while the very first sync is still in flight,
-                // this panel would invite "Add a category" (the left panel
-                // shows a spinner for the exact same reason) right as a real
-                // category list might just not have arrived yet — a tap on
-                // that invitation before the real data lands can produce a
-                // genuine, avoidable duplicate.
-                Box(Modifier.fillMaxWidth().padding(top = 24.dp), Alignment.Center) {
-                    CircularProgressIndicator(color = Brand.Gold)
+            if (maxWidth >= 820.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    categoryPanel(Modifier.width(286.dp).fillMaxHeight())
+                    itemsPanel(Modifier.weight(1f).fillMaxHeight())
                 }
-            } else if (selectedCategory == null) {
-                Text(
-                    "Add a category to start building the menu.",
-                    color = Brand.ForegroundMuted,
-                    modifier = Modifier.padding(top = 24.dp),
-                )
-            } else if (state.visibleItems.isEmpty()) {
-                Text(
-                    "No items in this category yet.",
-                    color = Brand.ForegroundMuted,
-                    modifier = Modifier.padding(top = 24.dp),
-                )
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(state.visibleItems, key = { it.id }) { item ->
-                        ItemRowCard(
-                            item = item,
-                            canWrite = access.canManageMenu,
-                            onEditDetails = { vm.startEditItemDetails(item) },
-                            onEditPricing = { vm.startEditItemPricing(item) },
-                            onRetrySync = { vm.retryItemDetailsSync(item) },
-                        )
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    val categoryHeight = if (state.loading || state.couldNotLoad || state.categories.isEmpty()) {
+                        360.dp
+                    } else {
+                        220.dp
                     }
+                    categoryPanel(Modifier.fillMaxWidth().height(categoryHeight))
+                    itemsPanel(Modifier.fillMaxWidth().weight(1f))
                 }
             }
         }
@@ -202,6 +206,7 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
             onChange = vm::itemDetailsChanged,
             onCancel = vm::cancelItemDetailsEdit,
             onSave = vm::saveItemDetails,
+            presentation = presentation,
         )
     }
     state.itemPricingEditor?.takeIf { access.canManageMenu }?.let { ed ->
@@ -212,6 +217,7 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
             onChange = vm::itemPricingChanged,
             onCancel = vm::cancelItemPricingEdit,
             onSave = vm::saveItemPricing,
+            presentation = presentation,
         )
     }
     state.itemCreateEditor?.takeIf { access.canManageMenu }?.let { ed ->
@@ -226,10 +232,169 @@ fun MenuScreen(access: MenuAccess = MenuAccess()) {
             onChange = vm::itemCreateChanged,
             onCancel = vm::cancelItemCreate,
             onSave = vm::saveItemCreate,
+            presentation = presentation,
         )
     }
     if (state.showPricingUnlock && access.canManageMenu) {
         PricingUnlockDialog(onDismiss = vm::dismissPricingUnlock, onUnlocked = vm::pricingUnlocked)
+    }
+}
+
+@Composable
+private fun MenuSummary(state: MenuUiState) {
+    val available = state.allItems.count(ItemRow::isAvailable)
+    val soldOut = state.allItems.size - available
+    AdaptiveStatGrid(count = 4) { index, modifier ->
+        when (index) {
+            0 -> CompactStatCard("Categories", state.categories.size.toString(), modifier, "Menu groups", Icons.Filled.Category, UiTone.Neutral)
+            1 -> CompactStatCard("Menu items", state.allItems.size.toString(), modifier, "Configured products", Icons.Filled.RestaurantMenu, UiTone.Information)
+            2 -> CompactStatCard("Available", available.toString(), modifier, "Ready for sale", Icons.Filled.Inventory2, UiTone.Success)
+            else -> CompactStatCard("Sold out", soldOut.toString(), modifier, "Unavailable at POS", Icons.Filled.Inventory2, if (soldOut > 0) UiTone.Warning else UiTone.Neutral)
+        }
+    }
+}
+
+@Composable
+private fun MenuCategoryPanel(
+    state: MenuUiState,
+    access: MenuAccess,
+    modifier: Modifier,
+    onCreate: () -> Unit,
+    onRetry: () -> Unit,
+    onSelect: (String) -> Unit,
+    onEdit: (CategoryRow) -> Unit,
+    onRetrySync: (CategoryRow) -> Unit,
+) {
+    SectionCard(
+        title = "Categories",
+        subtitle = "${state.categories.size} configured",
+        icon = Icons.Filled.Category,
+        modifier = modifier,
+        action = {
+            ErpButton(
+                text = "Add",
+                onClick = onCreate,
+                enabled = access.canManageMenu,
+                intent = ActionIntent.Secondary,
+                leadingIcon = Icons.Filled.Add,
+            )
+        },
+    ) {
+        when {
+            state.loading -> Box(Modifier.fillMaxWidth().heightIn(min = 150.dp), Alignment.Center) {
+                CircularProgressIndicator(color = Brand.Gold)
+            }
+            state.couldNotLoad -> DesignedEmptyState(
+                title = "Menu not available",
+                body = state.loadError ?: "The tablet has not downloaded the menu. Check the connection and retry.",
+                icon = Icons.Filled.RestaurantMenu,
+                primaryLabel = "Retry",
+                onPrimary = onRetry,
+                primaryIcon = Icons.Filled.Refresh,
+                modifier = Modifier.heightIn(min = 190.dp),
+            )
+            state.categories.isEmpty() -> DesignedEmptyState(
+                title = "No categories yet",
+                body = "Create the first category before adding products.",
+                icon = Icons.Filled.Category,
+                primaryLabel = if (access.canManageMenu) "Add category" else null,
+                onPrimary = if (access.canManageMenu) onCreate else null,
+                primaryIcon = Icons.Filled.Add,
+                modifier = Modifier.heightIn(min = 190.dp),
+            )
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                items(state.categories, key = { it.id }) { cat ->
+                    CategoryRowItem(
+                        cat = cat,
+                        selected = cat.name == state.selectedCategoryName,
+                        canWrite = access.canManageMenu,
+                        onClick = { onSelect(cat.name) },
+                        onEdit = { onEdit(cat) },
+                        onRetrySync = { onRetrySync(cat) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuItemsPanel(
+    state: MenuUiState,
+    access: MenuAccess,
+    presentation: WorkspacePresentationPolicy,
+    search: String,
+    searchedItems: List<ItemRow>,
+    modifier: Modifier,
+    onSearch: (String) -> Unit,
+    onCreate: (String) -> Unit,
+    onEditDetails: (ItemRow) -> Unit,
+    onEditPricing: (ItemRow) -> Unit,
+    onRetrySync: (ItemRow) -> Unit,
+) {
+    val selected = state.selectedCategory
+    val canCreate = selected != null && !selected.id.startsWith("local:") && access.canManageMenu
+    SectionCard(
+        title = selected?.name ?: "Menu items",
+        subtitle = if (selected == null) "Select a category to manage its products" else "${state.visibleItems.size} items in this category",
+        icon = Icons.Filled.RestaurantMenu,
+        modifier = modifier,
+        action = {
+            if (selected != null && !selected.id.startsWith("local:")) {
+                ErpButton(
+                    text = "Add item",
+                    onClick = { onCreate(selected.id) },
+                    enabled = canCreate,
+                    leadingIcon = Icons.Filled.Add,
+                )
+            }
+        },
+    ) {
+        SearchInput(
+            value = search,
+            onValueChange = onSearch,
+            placeholder = "Search this category by item, SKU or type",
+            enabled = selected != null && !state.loading,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        when {
+            state.loading -> Box(Modifier.fillMaxWidth().heightIn(min = 220.dp), Alignment.Center) {
+                CircularProgressIndicator(color = Brand.Gold)
+            }
+            selected == null -> DesignedEmptyState(
+                title = "Select a category",
+                body = if (presentation.showsRestaurantOperations) {
+                    "Choose a category to review its products, availability, pricing and tax configuration."
+                } else {
+                    "Choose a category to review its products, availability and pricing."
+                },
+                icon = Icons.Filled.Category,
+            )
+            state.visibleItems.isEmpty() -> DesignedEmptyState(
+                title = "No items in ${selected.name}",
+                body = "Add the first product when this category is ready to sell.",
+                icon = Icons.Filled.RestaurantMenu,
+                primaryLabel = if (canCreate) "Add item" else null,
+                onPrimary = if (canCreate) ({ onCreate(selected.id) }) else null,
+            )
+            searchedItems.isEmpty() -> DesignedEmptyState(
+                title = "No matching items",
+                body = "Try a different name, SKU or product type.",
+                icon = Icons.Filled.RestaurantMenu,
+            )
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                items(searchedItems, key = { it.id }) { item ->
+                    ItemRowCard(
+                        item = item,
+                        canWrite = access.canManageMenu,
+                        presentation = presentation,
+                        onEditDetails = { onEditDetails(item) },
+                        onEditPricing = { onEditPricing(item) },
+                        onRetrySync = { onRetrySync(item) },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -248,20 +413,35 @@ private fun CategoryRowItem(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(if (selected) Brand.SurfaceRaised else Brand.Surface)
-            .border(1.dp, if (selected) Brand.Gold else Brand.Border, Radius.shapeSm)
+            .background(if (selected) Brand.SurfaceHover else Brand.SurfaceRaised)
+            .border(1.dp, if (selected) Brand.GoldMuted else Brand.BorderSubtle, Radius.shapeSm)
             .clickable(onClick = onClick)
-            .padding(12.dp),
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(cat.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onEdit, enabled = canWrite) { Text("Edit") }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(cat.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
+                Text("Sort order ${cat.sortOrder}", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
+            }
+            ErpButton(
+                text = "Edit",
+                onClick = onEdit,
+                enabled = canWrite,
+                intent = ActionIntent.Quiet,
+            )
         }
         if (cat.rejectedError != null) {
             Text("Sync failed: ${cat.rejectedError}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
-            TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
+            ErpButton(
+                text = "Retry sync",
+                onClick = onRetrySync,
+                enabled = canWrite,
+                intent = ActionIntent.Destructive,
+                leadingIcon = Icons.Filled.Refresh,
+            )
         } else if (cat.pendingLocalId != null) {
-            Text("Not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            OperationalStatusBadge("Pending sync", UiTone.Information)
         }
     }
 }
@@ -270,6 +450,7 @@ private fun CategoryRowItem(
 private fun ItemRowCard(
     item: ItemRow,
     canWrite: Boolean,
+    presentation: WorkspacePresentationPolicy,
     onEditDetails: () -> Unit,
     onEditPricing: () -> Unit,
     onRetrySync: () -> Unit,
@@ -279,53 +460,70 @@ private fun ItemRowCard(
             .fillMaxWidth()
             .clip(Radius.shapeMd)
             .background(Brand.Surface)
-            .border(1.dp, Brand.Border, Radius.shapeMd)
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(item.name, color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-                Text("${item.sku} · ${item.type}", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                Text(item.name, color = Brand.Foreground, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "${item.sku} · ${menuItemTypeLabel(item.type, presentation)}",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                item.description?.takeIf(String::isNotBlank)?.let {
+                    Text(it, color = Brand.ForegroundFaint, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                }
             }
-            if (!item.isAvailable) {
-                Text("SOLD OUT", color = Brand.Danger, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-            }
+            OperationalStatusBadge(
+                label = if (item.isAvailable) "Available" else "Sold out",
+                tone = if (item.isAvailable) UiTone.Success else UiTone.Danger,
+            )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "${item.basePriceMinor.asRupees()} · ${"%.0f".format(item.taxRate * 100)}% GST",
-                color = Brand.Gold,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onEditPricing, enabled = canWrite) { Text("Price") }
-                TextButton(onClick = onEditDetails, enabled = canWrite) { Text("Details") }
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(item.basePriceMinor.asRupees(), color = Brand.Foreground, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                if (presentation.showsRestaurantOperations || item.taxRate != 0.0) {
+                    Text(
+                        if (presentation.showsRestaurantOperations) {
+                            "${"%.0f".format(item.taxRate * 100)}% GST · ${if (item.priceIncludesTax) "tax included" else "tax added"}"
+                        } else {
+                            "${"%.0f".format(item.taxRate * 100)}% recorded tax · ${if (item.priceIncludesTax) "included" else "added"}"
+                        },
+                        color = Brand.ForegroundFaint,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ErpButton(
+                    if (presentation.showsRestaurantOperations) "Price & tax" else "Price",
+                    onEditPricing,
+                    enabled = canWrite,
+                    intent = ActionIntent.Secondary,
+                )
+                ErpButton("Details", onEditDetails, enabled = canWrite, intent = ActionIntent.Quiet)
             }
         }
         if (item.detailsRejected != null) {
             Text("Sync failed: ${item.detailsRejected}", color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
-            TextButton(onClick = onRetrySync, enabled = canWrite) { Text("Retry") }
+            ErpButton("Retry sync", onRetrySync, enabled = canWrite, intent = ActionIntent.Destructive, leadingIcon = Icons.Filled.Refresh)
         } else if (item.detailsPending && item.localWriteId != null) {
-            Text("Details not synced yet", color = Brand.GoldMuted, style = MaterialTheme.typography.labelSmall)
+            OperationalStatusBadge("Details pending sync", UiTone.Information)
         }
     }
 }
 
 @Composable
 private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radius.shapeSm)
-            .background(Brand.SurfaceRaised)
-            .border(1.dp, Brand.GoldMuted, Radius.shapeSm)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(message, color = Brand.Foreground, modifier = Modifier.weight(1f))
-        TextButton(onClick = onDismiss) { Text("Dismiss") }
-    }
+    OperationalBanner(
+        title = "Menu updated",
+        detail = message,
+        tone = UiTone.Success,
+        icon = Icons.Filled.CheckCircle,
+        action = { ErpButton("Dismiss", onDismiss, intent = ActionIntent.Quiet) },
+    )
 }
 
 // --------------------------------------------------------------- dialogs
@@ -339,39 +537,42 @@ private fun CategoryEditorDialog(
     onCancel: () -> Unit,
     onSave: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text(if (editor.isUnsyncedDraft) "New category" else "Edit category") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.sortOrder.toString(),
-                    onValueChange = { onChange(editor.copy(sortOrder = it.toIntOrNull() ?: editor.sortOrder)) },
-                    label = { Text("Sort order (lower shows first)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Saving…" else "Save")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    var sortOrderText by rememberSaveable(editor.id) { mutableStateOf(editor.sortOrder.toString()) }
+    val sortOrderValid = sortOrderText.toIntOrNull() != null
+    FormDialog(
+        title = if (editor.isUnsyncedDraft) "New category" else "Edit category",
+        confirmLabel = "Save category",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        confirmEnabled = editor.valid && sortOrderValid,
+    ) {
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = sortOrderText,
+            onValueChange = { raw ->
+                // Keep the operator's exact candidate visible. Validation below
+                // rejects malformed/overflow values without silently coercing them.
+                sortOrderText = raw
+                sortOrderText.toIntOrNull()?.let { onChange(editor.copy(sortOrder = it)) }
+            },
+            label = { Text("Sort order (lower shows first)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            isError = !sortOrderValid,
+            supportingText = if (!sortOrderValid) {
+                { Text("Enter a whole number, such as 0 or 10.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -383,61 +584,55 @@ private fun ItemDetailsDialog(
     onChange: (ItemDetailsEditor) -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text("Item details") },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.description,
-                    onValueChange = { onChange(editor.copy(description = it)) },
-                    label = { Text("Description (optional)") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                CategoryDropdown(
-                    categories = categories,
-                    selectedId = editor.categoryId,
-                    onSelect = { onChange(editor.copy(categoryId = it)) },
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Available for sale", color = Brand.Foreground)
-                    Switch(
-                        checked = editor.isAvailable,
-                        onCheckedChange = { onChange(editor.copy(isAvailable = it)) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
-                    )
-                }
-                Text(
-                    "Price, tax and HSN are edited separately (needs your password).",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Brand.ForegroundMuted,
-                )
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Saving…" else "Save details")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    FormDialog(
+        title = "Item details",
+        confirmLabel = "Save details",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        width = 560.dp,
+        confirmEnabled = editor.valid,
+    ) {
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.description,
+            onValueChange = { onChange(editor.copy(description = it)) },
+            label = { Text("Description (optional)") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        CategoryDropdown(
+            categories = categories,
+            selectedId = editor.categoryId,
+            onSelect = { onChange(editor.copy(categoryId = it)) },
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Available for sale", color = Brand.Foreground)
+            Switch(
+                checked = editor.isAvailable,
+                onCheckedChange = { onChange(editor.copy(isAvailable = it)) },
+                colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
+            )
+        }
+        Text(
+            if (presentation.showsRestaurantOperations) {
+                "Price, tax and HSN are edited separately (needs your password)."
+            } else {
+                "Price is edited separately and needs your password."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = Brand.ForegroundMuted,
+        )
+    }
 }
 
 @Composable
@@ -448,63 +643,60 @@ private fun ItemPricingDialog(
     onChange: (ItemPricingEditor) -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text("Price & tax") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = editor.basePriceRupees,
-                    onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
-                    label = { Text("Price (₹)") },
-                    singleLine = true,
-                    isError = editor.basePriceMinor == null,
-                    supportingText = if (editor.basePriceMinor == null) {
-                        { Text("Enter rupees with no more than 2 decimal places.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
+    FormDialog(
+        title = if (presentation.showsRestaurantOperations) "Price & tax" else "Price",
+        confirmLabel = "Save price",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        width = 560.dp,
+        confirmEnabled = editor.valid,
+    ) {
+        OutlinedTextField(
+            value = editor.basePriceRupees,
+            onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
+            label = { Text("Price (₹)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            isError = editor.basePriceMinor == null,
+            supportingText = if (editor.basePriceMinor == null) {
+                { Text("Enter rupees with no more than 2 decimal places.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (presentation.showsRestaurantOperations) {
+            OutlinedTextField(
+                value = editor.taxRatePercent,
+                onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
+                label = { Text("GST rate (%)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                isError = !editor.taxRateValid,
+                supportingText = if (!editor.taxRateValid) {
+                    { Text("GST rate must be between 0 and 100.") }
+                } else null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = editor.hsnCode,
+                onValueChange = { onChange(editor.copy(hsnCode = it)) },
+                label = { Text("HSN/SAC (optional — a default is used if blank)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Price includes tax", color = Brand.Foreground)
+                Switch(
+                    checked = editor.priceIncludesTax,
+                    onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
                 )
-                OutlinedTextField(
-                    value = editor.taxRatePercent,
-                    onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
-                    label = { Text("GST rate (%)") },
-                    singleLine = true,
-                    isError = !editor.taxRateValid,
-                    supportingText = if (!editor.taxRateValid) {
-                        { Text("GST rate must be between 0 and 100.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.hsnCode,
-                    onValueChange = { onChange(editor.copy(hsnCode = it)) },
-                    label = { Text("HSN/SAC (optional — a default is used if blank)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Price includes tax", color = Brand.Foreground)
-                    Switch(
-                        checked = editor.priceIncludesTax,
-                        onCheckedChange = { onChange(editor.copy(priceIncludesTax = it)) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Brand.Gold),
-                    )
-                }
-                if (error != null) Text(error, color = Brand.Danger)
             }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Saving…" else "Save price")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+        }
+    }
 }
 
 @Composable
@@ -516,85 +708,83 @@ private fun ItemCreateDialog(
     onChange: (ItemCreateEditor) -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    presentation: WorkspacePresentationPolicy,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (!saving) onCancel() },
-        title = { Text("New item") },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                CategoryDropdown(
-                    categories = categories,
-                    selectedId = editor.categoryId,
-                    onSelect = { onChange(editor.copy(categoryId = it)) },
-                )
-                OutlinedTextField(
-                    value = editor.sku,
-                    onValueChange = { onChange(editor.copy(sku = it)) },
-                    label = { Text("SKU") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.name,
-                    onValueChange = { onChange(editor.copy(name = it)) },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                TypeDropdown(selected = editor.type, onSelect = { onChange(editor.copy(type = it)) })
-                OutlinedTextField(
-                    value = editor.basePriceRupees,
-                    onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
-                    label = { Text("Price (₹)") },
-                    singleLine = true,
-                    isError = editor.basePriceMinor == null,
-                    supportingText = if (editor.basePriceMinor == null) {
-                        { Text("Enter rupees with no more than 2 decimal places.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.taxRatePercent,
-                    onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
-                    label = { Text("GST rate (%, optional)") },
-                    singleLine = true,
-                    isError = !editor.taxRateValid,
-                    supportingText = if (!editor.taxRateValid) {
-                        { Text("GST rate must be between 0 and 100.") }
-                    } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.hsnCode,
-                    onValueChange = { onChange(editor.copy(hsnCode = it)) },
-                    label = { Text("HSN/SAC (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = editor.description,
-                    onValueChange = { onChange(editor.copy(description = it)) },
-                    label = { Text("Description (optional)") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (error != null) Text(error, color = Brand.Danger)
-            }
-        },
-        confirmButton = {
-            Button(onClick = onSave, enabled = !saving && editor.valid) {
-                Text(if (saving) "Creating…" else "Create")
-            }
-        },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") } },
-        containerColor = Brand.SurfaceOverlay,
-        shape = Radius.shapeLg,
-        titleContentColor = Brand.Foreground,
-        textContentColor = Brand.Foreground,
-    )
+    FormDialog(
+        title = "New item",
+        confirmLabel = "Create item",
+        busy = saving,
+        error = error,
+        onDismiss = onCancel,
+        onConfirm = onSave,
+        width = 620.dp,
+        confirmEnabled = editor.valid,
+    ) {
+        CategoryDropdown(
+            categories = categories,
+            selectedId = editor.categoryId,
+            onSelect = { onChange(editor.copy(categoryId = it)) },
+        )
+        OutlinedTextField(
+            value = editor.sku,
+            onValueChange = { onChange(editor.copy(sku = it)) },
+            label = { Text("SKU") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = editor.name,
+            onValueChange = { onChange(editor.copy(name = it)) },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TypeDropdown(
+            selected = editor.type,
+            presentation = presentation,
+            onSelect = { onChange(editor.copy(type = it)) },
+        )
+        OutlinedTextField(
+            value = editor.basePriceRupees,
+            onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
+            label = { Text("Price (₹)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            isError = editor.basePriceMinor == null,
+            supportingText = if (editor.basePriceMinor == null) {
+                { Text("Enter rupees with no more than 2 decimal places.") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (presentation.showsRestaurantOperations) {
+            OutlinedTextField(
+                value = editor.taxRatePercent,
+                onValueChange = { onChange(editor.copy(taxRatePercent = it)) },
+                label = { Text("GST rate (%, optional)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                isError = !editor.taxRateValid,
+                supportingText = if (!editor.taxRateValid) {
+                    { Text("GST rate must be between 0 and 100.") }
+                } else null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = editor.hsnCode,
+                onValueChange = { onChange(editor.copy(hsnCode = it)) },
+                label = { Text("HSN/SAC (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        OutlinedTextField(
+            value = editor.description,
+            onValueChange = { onChange(editor.copy(description = it)) },
+            label = { Text("Description (optional)") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -609,7 +799,7 @@ private fun CategoryDropdown(categories: List<CategoryRow>, selectedId: String, 
             readOnly = true,
             label = { Text("Category") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             categories.forEach { cat ->
@@ -621,20 +811,24 @@ private fun CategoryDropdown(categories: List<CategoryRow>, selectedId: String, 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TypeDropdown(selected: String, onSelect: (String) -> Unit) {
+private fun TypeDropdown(
+    selected: String,
+    presentation: WorkspacePresentationPolicy,
+    onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
-            value = selected,
+            value = menuItemTypeLabel(selected, presentation),
             onValueChange = {},
             readOnly = true,
             label = { Text("Type") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            ITEM_TYPES.forEach { t ->
-                DropdownMenuItem(text = { Text(t) }, onClick = { onSelect(t); expanded = false })
+            menuItemTypeOptions(presentation).forEach { (id, label) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(id); expanded = false })
             }
         }
     }

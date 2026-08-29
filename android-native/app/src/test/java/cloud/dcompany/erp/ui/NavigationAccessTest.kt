@@ -33,6 +33,7 @@ class NavigationAccessTest {
                 Destination.Pos,
                 Destination.Gaming,
                 Destination.Tables,
+                Destination.Reservations,
                 Destination.Kitchen,
                 Destination.Shift,
                 Destination.Customers,
@@ -42,7 +43,7 @@ class NavigationAccessTest {
                 Destination.Memberships,
                 Destination.Settings,
             ),
-            allowedDestinations(profile),
+            fullDestinations(profile),
         )
     }
 
@@ -56,7 +57,7 @@ class NavigationAccessTest {
 
         assertEquals(
             listOf(Destination.Staff, Destination.Settings),
-            allowedDestinations(profile),
+            fullDestinations(profile),
         )
         assertEquals(
             false to true,
@@ -81,7 +82,7 @@ class NavigationAccessTest {
             effective = emptyList(),
         )
 
-        assertEquals(listOf(Destination.Settings), allowedDestinations(profile))
+        assertEquals(listOf(Destination.Settings), fullDestinations(profile))
     }
 
     @Test
@@ -96,13 +97,14 @@ class NavigationAccessTest {
             listOf(
                 Destination.Pos,
                 Destination.Tables,
+                Destination.Reservations,
                 Destination.Customers,
                 Destination.Menu,
                 Destination.Staff,
                 Destination.Memberships,
                 Destination.Settings,
             ),
-            allowedDestinations(profile),
+            fullDestinations(profile),
         )
     }
 
@@ -116,7 +118,7 @@ class NavigationAccessTest {
         )
         assertNull(oldProfile.effectivePermissions)
         assertNull(oldProfile.accessibleModules)
-        assertTrue(Destination.Pos in allowedDestinations(oldProfile))
+        assertTrue(Destination.Pos in fullDestinations(oldProfile))
 
         val admin = profile(
             roles = listOf("owner"),
@@ -128,9 +130,9 @@ class NavigationAccessTest {
             ),
         )
         val permissions = EffectivePermissions.from(admin)
-        assertTrue(Destination.AuditLog in allowedDestinations(admin))
-        assertTrue(Destination.AccessControl in allowedDestinations(admin))
-        assertTrue(Destination.Memberships in allowedDestinations(admin))
+        assertTrue(Destination.AuditLog in fullDestinations(admin))
+        assertTrue(Destination.AccessControl in fullDestinations(admin))
+        assertTrue(Destination.Memberships in fullDestinations(admin))
         assertTrue(permissions.has(ErpPermission.AdminSystem))
         assertFalse(permissions.has(ErpPermission.FinanceRead))
     }
@@ -144,16 +146,41 @@ class NavigationAccessTest {
             effective = listOf(ErpPermission.AdminAuditRead, ErpPermission.AdminSystem),
         )
 
-        assertFalse(Destination.AuditLog in allowedDestinations(coOwner))
-        assertFalse(Destination.AccessControl in allowedDestinations(coOwner))
+        assertFalse(Destination.AuditLog in fullDestinations(coOwner))
+        assertFalse(Destination.AccessControl in fullDestinations(coOwner))
     }
 
     @Test
-    fun `membership writes require protected access and admin system permission`() {
+    fun `reservation destination and actions follow exact table and gaming permissions`() {
+        val tableViewer = profile(
+            roles = listOf("partner"),
+            effective = listOf(ErpPermission.TablesRead),
+        )
+        val gamingManager = profile(
+            roles = listOf("gaming_supervisor"),
+            effective = listOf(ErpPermission.GamingRead, ErpPermission.GamingWrite),
+        )
+
+        val tableAccess = EffectivePermissions.from(tableViewer).reservationsAccess()
+        val gamingAccess = EffectivePermissions.from(gamingManager).reservationsAccess()
+
+        assertTrue(Destination.Reservations in fullDestinations(tableViewer))
+        assertTrue(tableAccess.canReadTableReservations)
+        assertFalse(tableAccess.canManageTableReservations)
+        assertFalse(tableAccess.canReadGamingBookings)
+
+        assertTrue(Destination.Reservations in fullDestinations(gamingManager))
+        assertFalse(gamingAccess.canReadTableReservations)
+        assertTrue(gamingAccess.canReadGamingBookings)
+        assertTrue(gamingAccess.canManageGamingBookings)
+    }
+
+    @Test
+    fun `membership writes require protected access and dedicated membership permission`() {
         val permissionOnly = profile(
             roles = listOf("manager"),
             protectedAccess = false,
-            effective = listOf(ErpPermission.PosRead, ErpPermission.AdminSystem),
+            effective = listOf(ErpPermission.PosRead, ErpPermission.MembershipsManage),
         )
         val protectedOwner = profile(
             roles = listOf("co_owner"),
@@ -163,14 +190,83 @@ class NavigationAccessTest {
         val authorisedOwner = profile(
             roles = listOf("co_owner"),
             protectedAccess = true,
-            effective = listOf(ErpPermission.PosRead, ErpPermission.AdminSystem),
+            effective = listOf(ErpPermission.PosRead, ErpPermission.MembershipsManage),
         )
 
-        assertTrue(Destination.Memberships in allowedDestinations(permissionOnly))
+        assertTrue(Destination.Memberships in fullDestinations(permissionOnly))
         assertFalse(canManageMemberships(permissionOnly))
-        assertTrue(Destination.Memberships in allowedDestinations(protectedOwner))
+        assertTrue(Destination.Memberships in fullDestinations(protectedOwner))
         assertFalse(canManageMemberships(protectedOwner))
         assertTrue(canManageMemberships(authorisedOwner))
+    }
+
+    @Test
+    fun `system settings tabs follow dedicated settings permission not audit identity`() {
+        val settingsManager = profile(
+            roles = listOf("owner"),
+            auditAccess = false,
+            effective = listOf(ErpPermission.SettingsManage),
+        )
+        val auditOnly = profile(
+            roles = listOf("auditor"),
+            auditAccess = true,
+            effective = listOf(ErpPermission.AdminAuditRead, ErpPermission.AdminSystem),
+        )
+
+        assertTrue(canManageSystemSettings(settingsManager))
+        assertFalse(canManageSystemSettings(auditOnly))
+    }
+
+    @Test
+    fun `co-owner can manage settings and memberships without protected admin screens`() {
+        val coOwner = profile(
+            roles = listOf("co_owner"),
+            protectedAccess = true,
+            auditAccess = false,
+            effective = listOf(
+                ErpPermission.PosRead,
+                ErpPermission.SettingsManage,
+                ErpPermission.MembershipsManage,
+            ),
+        )
+        val permissions = EffectivePermissions.from(coOwner)
+
+        assertTrue(canManageSystemSettings(coOwner))
+        assertTrue(canManageMemberships(coOwner))
+        assertFalse(canRecoverMembershipEvidence(coOwner))
+        assertFalse(permissions.has(ErpPermission.AdminSystem))
+        assertFalse(permissions.has(ErpPermission.AdminAuditRead))
+        assertFalse(Destination.AuditLog in fullDestinations(coOwner))
+        assertFalse(Destination.AccessControl in fullDestinations(coOwner))
+    }
+
+    @Test
+    fun `membership recovery requires both audit identity and admin system`() {
+        val auditOwner = profile(
+            roles = listOf("super_owner"),
+            protectedAccess = true,
+            auditAccess = true,
+            effective = listOf(
+                ErpPermission.PosRead,
+                ErpPermission.MembershipsManage,
+                ErpPermission.AdminSystem,
+            ),
+        )
+        val permissionOnly = profile(
+            roles = listOf("co_owner"),
+            protectedAccess = true,
+            auditAccess = false,
+            effective = listOf(
+                ErpPermission.PosRead,
+                ErpPermission.MembershipsManage,
+                ErpPermission.AdminSystem,
+            ),
+        )
+
+        assertTrue(canManageMemberships(auditOwner))
+        assertTrue(canRecoverMembershipEvidence(auditOwner))
+        assertTrue(canManageMemberships(permissionOnly))
+        assertFalse(canRecoverMembershipEvidence(permissionOnly))
     }
 
     private fun profile(
@@ -191,4 +287,7 @@ class NavigationAccessTest {
         accessibleModules = accessibleModules,
         effectivePermissions = effective,
     )
+
+    private fun fullDestinations(profile: MeResponse): List<Destination> =
+        allowedDestinations(profile, WorkspaceFeatureProfiles.FullHospitality)
 }

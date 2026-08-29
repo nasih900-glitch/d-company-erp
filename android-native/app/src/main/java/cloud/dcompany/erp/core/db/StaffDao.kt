@@ -62,6 +62,13 @@ interface StaffDao {
     )
     suspend fun markRejected(localId: String, error: String, expectedVersion: Long): Int
 
+    /**
+     * Drop only the exact staff write the server refused after `staff.write`
+     * authority was revoked. A newer edit that raced the request must survive.
+     */
+    @Query("DELETE FROM local_staff WHERE localId = :localId AND version = :expectedVersion")
+    suspend fun deleteIfVersion(localId: String, expectedVersion: Long): Int
+
     /** Cache already reflects these once the pull after a push completes — nothing left to keep. */
     @Query("DELETE FROM local_staff WHERE state = 'synced'")
     suspend fun deleteSynced()

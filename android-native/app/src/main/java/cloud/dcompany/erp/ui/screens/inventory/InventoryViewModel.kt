@@ -15,6 +15,7 @@ import cloud.dcompany.erp.core.db.LocalGrnEntity
 import cloud.dcompany.erp.core.db.LocalGrnLineEntity
 import cloud.dcompany.erp.core.db.LocalIngredientEntity
 import cloud.dcompany.erp.core.db.LocalSupplierEntity
+import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.SupplierCacheEntity
 import cloud.dcompany.erp.core.db.SupplierWriteState
 import cloud.dcompany.erp.core.db.SyncState
@@ -24,6 +25,7 @@ import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,19 +33,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
-import kotlin.math.roundToLong
+import java.time.Instant
 
 private const val LOCAL_PREFIX = "local:"
 private const val BRANCHES_CACHE_KEY = "inventory_branches"
 
 private class CreateConfirmationPending(message: String) : Exception(message)
 
-enum class InventoryTab { INGREDIENTS, SUPPLIERS }
+enum class InventoryTab { INGREDIENTS, SUPPLIERS, RECIPES }
 
 /** Which modal is up. Owned by the ViewModel so a rotation does not lose track of which row it was for. */
 sealed interface InventoryDialog {
@@ -53,6 +56,10 @@ sealed interface InventoryDialog {
     data class Adjust(val ingredient: IngredientRow) : InventoryDialog
     data class ConfirmDeleteIngredient(val ingredient: IngredientRow) : InventoryDialog
     data class ConfirmDeleteSupplier(val supplier: SupplierRow) : InventoryDialog
+    data class RecipeCreate(val menuItem: MenuItemEntity) : InventoryDialog
+    data class RecipeLineForm(val recipe: Recipe, val editing: RecipeLine?) : InventoryDialog
+    data class ConfirmDeleteRecipe(val recipe: Recipe) : InventoryDialog
+    data class ConfirmDeleteRecipeLine(val recipe: Recipe, val line: RecipeLine) : InventoryDialog
 }
 
 /** Row shown in the ingredients list — merged cache + any pending/rejected local write. */
@@ -65,6 +72,9 @@ data class IngredientRow(
     val reorderThreshold: Double = 0.0,
     val reorderQty: Double = 0.0,
     val avgCostMinor: Long = 0,
+    /** Exact sum of remaining FIFO batches; null means the server could not verify it. */
+    val valuationMinor: Long? = null,
+    val projectionBranchId: String? = null,
     val pendingLocalId: String? = null,
     val rejectedError: String? = null,
     val pendingDelete: Boolean = false,
@@ -73,7 +83,7 @@ data class IngredientRow(
     val createConfirmationPending: Boolean = false,
 ) {
     val isLow: Boolean get() = currentQty < reorderThreshold
-    val stockValueMinor: Long get() = (currentQty * avgCostMinor).roundToLong()
+    val stockValueMinor: Long? get() = valuationMinor
     /** Not yet a real server id — nothing else can reference this ingredient (a GRN line, a supplier link) until it syncs. */
     val isUnsyncedDraft: Boolean get() = id.startsWith(LOCAL_PREFIX)
 }
@@ -139,6 +149,11 @@ data class InventoryUiState(
     val batchesError: String? = null,
     val pendingGrns: List<PendingGrnRow> = emptyList(),
     val pendingAdjustments: List<PendingAdjustmentRow> = emptyList(),
+    val recipeMenuItems: List<MenuItemEntity> = emptyList(),
+    val selectedRecipeMenuItemId: String? = null,
+    val recipes: List<Recipe> = emptyList(),
+    val recipesLoading: Boolean = false,
+    val recipesError: String? = null,
     val busy: Boolean = false,
     val dialog: InventoryDialog? = null,
     /** Error shown inside the open dialog, next to the button that caused it. */
@@ -165,13 +180,23 @@ data class InventoryUiState(
     val restockPriority: List<IngredientRow>
         get() = sortedIngredients.filter { it.reorderThreshold > 0 && it.isLow }.take(6)
 
-    val stockValueMinor: Long get() = ingredients.sumOf { it.stockValueMinor }
+    val stockValueMinor: Long?
+        get() {
+            val persisted = ingredients.filterNot(IngredientRow::isUnsyncedDraft)
+            if (persisted.any { it.stockValueMinor == null }) return null
+            return persisted.sumOf { it.stockValueMinor ?: 0L }
+        }
     val lowCount: Int get() = ingredients.count { it.isLow }
     val selected: IngredientRow? get() = ingredients.firstOrNull { it.sku == selectedSku }
 
     /** Only ingredients/suppliers that already have a real server id — a GRN or adjustment can't reference a draft that hasn't synced yet. */
-    val syncedIngredients: List<IngredientRow> get() = ingredients.filterNot { it.isUnsyncedDraft }
-    val syncedSuppliers: List<SupplierRow> get() = suppliers.filterNot { it.isUnsyncedDraft }
+    val syncedIngredients: List<IngredientRow>
+        get() = ingredients.filterNot { it.isUnsyncedDraft || it.hasQueuedDelete }
+    val syncedSuppliers: List<SupplierRow>
+        get() = suppliers.filterNot { it.isUnsyncedDraft || it.hasQueuedDelete }
+    val selectedRecipeMenuItem: MenuItemEntity?
+        get() = recipeMenuItems.firstOrNull { it.id == selectedRecipeMenuItemId }
+    val activeRecipe: Recipe? get() = recipes.firstOrNull { it.isActive }
 }
 
 /**
@@ -211,14 +236,28 @@ class InventoryViewModel : ViewModel() {
     private val notice = MutableStateFlow<String?>(null)
     private val batchesLoading = MutableStateFlow(false)
     private val batchesError = MutableStateFlow<String?>(null)
+    private val selectedRecipeMenuItemId = MutableStateFlow<String?>(null)
+    private val recipes = MutableStateFlow<List<Recipe>>(emptyList())
+    private val recipesLoading = MutableStateFlow(false)
+    private val recipesError = MutableStateFlow<String?>(null)
     private val inventoryRefreshError = appCtx.sync.resourceRefreshErrors
         .map { it["inventory"] }
         .distinctUntilChanged()
     private val batchRequests = BatchSelectionRequestGuard()
     private var batchLoadJob: Job? = null
-    private var batchTargetId: String? = null
+    private var recipeLoadJob: Job? = null
+    private var batchTargetKey: Pair<String, String?>? = null
     @Volatile private var access = InventoryAccess()
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val ingredientProjectionMeta = combine(branchId, myProfile, branchesFlow) {
+            selected, profile, branches ->
+        selected ?: resolveDefaultBranch(branches, profile)
+    }.distinctUntilChanged().flatMapLatest { selectedBranch ->
+        db.syncMetaDao().observe("ingredients:${selectedBranch ?: "all"}")
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val state: StateFlow<InventoryUiState> = combine(
         combine(
             db.inventoryDao().observeIngredientCache(),
@@ -227,7 +266,7 @@ class InventoryViewModel : ViewModel() {
             db.inventoryDao().observeLocalSuppliers(),
         ) { ic, li, sc, ls -> IngredientsAndSuppliers(ic, li, sc, ls) },
         combine(
-            db.syncMetaDao().observe("ingredients"),
+            ingredientProjectionMeta,
             db.syncMetaDao().observe("suppliers"),
             pulling,
             inventoryRefreshError,
@@ -258,7 +297,12 @@ class InventoryViewModel : ViewModel() {
     ) { data, metaAndSyncing, branchInfo, pendingWrites, ed ->
         val branches = branchInfo.branches
         val (grns, adjustments) = pendingWrites
-        val ingredientRows = mergeIngredients(data.ingredientCache, data.localIngredients)
+        val selectedBranch = branchInfo.selectedBranchId
+            ?: resolveDefaultBranch(branches, branchInfo.profile)
+        val scopedIngredientCache = data.ingredientCache.filter {
+            it.projectionBranchId == selectedBranch
+        }
+        val ingredientRows = mergeIngredients(scopedIngredientCache, data.localIngredients)
         val supplierRows = mergeSuppliers(data.supplierCache, data.localSuppliers)
         InventoryUiState(
             // Both pulls must have completed at least once — ingredients
@@ -276,8 +320,7 @@ class InventoryViewModel : ViewModel() {
             branches = branches,
             branchesLoaded = branchInfo.loaded,
             branchesError = branchInfo.error,
-            branchId = branchInfo.selectedBranchId
-                ?: resolveDefaultBranch(branches, branchInfo.profile),
+            branchId = selectedBranch,
             tab = ed.tab,
             selectedSku = ed.selectedSku,
             batches = emptyList(), // attached by the second combine stage below
@@ -288,7 +331,7 @@ class InventoryViewModel : ViewModel() {
             formError = ed.formError,
             notice = ed.notice,
         )
-    }.let { base ->
+    }.flowOn(Dispatchers.Default).let { base ->
         // Batches are a second combine stage keyed off the selected
         // ingredient's *real id*, re-derived from `base` on every emission
         // (via selected?.id) rather than tracked as a separately-mutated
@@ -301,17 +344,36 @@ class InventoryViewModel : ViewModel() {
         // after the ingredient became fully queryable. distinctUntilChanged
         // still means the Room query only restarts when this ingredient's
         // resolvable id actually changes, not on every unrelated write.
-        val selectedIngredientId = base
-            .map { it.selected?.takeIf { row -> !row.isUnsyncedDraft }?.id }
+        val selectedBatchProjection = base
+            .map { it.selected?.takeIf { row -> !row.isUnsyncedDraft }?.id to it.branchId }
             .distinctUntilChanged()
-        val batchesFlow = selectedIngredientId.flatMapLatest { id ->
-            if (id == null) flowOf(emptyList()) else db.inventoryDao().observeBatchesFor(id)
+        val batchesFlow = selectedBatchProjection.flatMapLatest { (id, selectedBranch) ->
+            if (id == null) flowOf(emptyList())
+            else db.inventoryDao().observeBatchesFor(id, selectedBranch)
         }
         combine(base, batchesFlow, batchesLoading, batchesError) { s, batches, loading, error ->
             s.copy(
                 batches = batches,
                 batchesLoading = loading,
                 batchesError = error,
+            )
+        }
+    }.let { stockState ->
+        combine(
+            stockState,
+            db.menuDao().observeAllItems(),
+            selectedRecipeMenuItemId,
+            recipes,
+            combine(recipesLoading, recipesError) { loading, error -> loading to error },
+        ) { s, menuItems, selectedMenuItemId, recipeRows, recipeLoad ->
+            s.copy(
+                recipeMenuItems = menuItems.filter {
+                    it.type.lowercase() in setOf("food", "drink", "dessert", "hookah")
+                },
+                selectedRecipeMenuItemId = selectedMenuItemId,
+                recipes = recipeRows,
+                recipesLoading = recipeLoad.first,
+                recipesError = recipeLoad.second,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InventoryUiState())
@@ -351,9 +413,13 @@ class InventoryViewModel : ViewModel() {
         loadProfile()
         retry()
         viewModelScope.launch {
-            state.map { it.selected?.takeIf { row -> !row.isUnsyncedDraft }?.id }
+            state.map {
+                it.selected?.takeIf { row -> !row.isUnsyncedDraft }?.id to it.branchId
+            }
                 .distinctUntilChanged()
-                .collect { updateBatchTarget(it) }
+                .collect { (ingredientId, selectedBranch) ->
+                    updateBatchTarget(ingredientId, selectedBranch)
+                }
         }
     }
 
@@ -362,6 +428,7 @@ class InventoryViewModel : ViewModel() {
             myProfile.value = appCtx.shiftCache.cachedProfile()?.let {
                 runCatching { ApiClient.json.decodeFromString(MeResponse.serializer(), it) }.getOrNull()
             }
+            ensureSelectedBranch(branchesFlow.value)
         }
     }
 
@@ -370,6 +437,7 @@ class InventoryViewModel : ViewModel() {
             db.reportSnapshotDao().cached<List<Branch>>(BRANCHES_CACHE_KEY)?.let { (cached, _) ->
                 branchesFlow.value = cached
                 branchesLoaded.value = true
+                ensureSelectedBranch(cached)
             }
             try {
                 lateinit var fresh: List<Branch>
@@ -383,6 +451,7 @@ class InventoryViewModel : ViewModel() {
                 if (!committed) return@launch
                 branchesFlow.value = fresh
                 branchesLoaded.value = true
+                ensureSelectedBranch(fresh)
                 branchesError.value = null
             } catch (e: CancellationException) {
                 throw e
@@ -398,6 +467,13 @@ class InventoryViewModel : ViewModel() {
         }
     }
 
+    private fun ensureSelectedBranch(branches: List<Branch>) {
+        val current = branchId.value
+        if (current != null && branches.any { it.id == current }) return
+        val selected = resolveDefaultBranch(branches, myProfile.value) ?: return
+        selectBranch(selected)
+    }
+
     private fun resolveDefaultBranch(branches: List<Branch>, profile: MeResponse?): String? {
         val mine = branches.firstOrNull { it.id == profile?.branchId }
         return (mine ?: branches.firstOrNull())?.id
@@ -411,36 +487,70 @@ class InventoryViewModel : ViewModel() {
         pulling.value = true
         viewModelScope.launch {
             try {
-                appCtx.sync.refresh("inventory")
+                val selectedBranch = branchId.value
+                if (selectedBranch == null) appCtx.sync.refresh("inventory")
+                else appCtx.sync.pullInventoryForBranch(selectedBranch)
             } finally {
                 pulling.value = false
             }
         }
     }
 
-    fun selectTab(t: InventoryTab) { tab.value = t }
+    fun selectTab(t: InventoryTab) {
+        if (t == InventoryTab.RECIPES && !access.canManageCosting) {
+            notice.value = "Recipe costing is protected-owner only on Android. Use the web ERP for manager configuration."
+            return
+        }
+        tab.value = t
+        if (t == InventoryTab.RECIPES && selectedRecipeMenuItemId.value == null) {
+            state.value.recipeMenuItems.firstOrNull()?.let(::selectRecipeMenuItem)
+        }
+    }
 
-    fun selectBranch(id: String) { branchId.value = id }
+    fun selectBranch(id: String) {
+        val selected = id.trim()
+        if (selected.isEmpty() || branchId.value == selected) return
+        if (branchesLoaded.value && branchesFlow.value.none { it.id == selected }) {
+            notice.value = "That branch is not available to this account. Refresh branches and try again."
+            return
+        }
+        branchId.value = selected
+        batchesError.value = null
+        selectedSku.value = null
+        pulling.value = true
+        viewModelScope.launch {
+            try {
+                appCtx.sync.pullInventoryForBranch(selected)
+            } finally {
+                pulling.value = false
+            }
+        }
+    }
 
     fun select(row: IngredientRow?) {
         selectedSku.value = row?.sku
-        updateBatchTarget(row?.takeIf { !it.isUnsyncedDraft }?.id)
+        updateBatchTarget(row?.takeIf { !it.isUnsyncedDraft }?.id, branchId.value)
     }
 
     fun retryBatches() {
         val id = state.value.selected?.takeIf { !it.isUnsyncedDraft }?.id ?: return
-        updateBatchTarget(id, force = true)
+        updateBatchTarget(id, state.value.branchId, force = true)
     }
 
-    private fun updateBatchTarget(ingredientId: String?, force: Boolean = false) {
-        if (!force && ingredientId == batchTargetId) return
-        val previousTarget = batchTargetId
-        batchTargetId = ingredientId
+    private fun updateBatchTarget(
+        ingredientId: String?,
+        selectedBranchId: String?,
+        force: Boolean = false,
+    ) {
+        val nextTarget = ingredientId?.let { it to selectedBranchId }
+        if (!force && nextTarget == batchTargetKey) return
+        val previousTarget = batchTargetKey
+        batchTargetKey = nextTarget
         batchLoadJob?.cancel()
-        if (previousTarget != null && previousTarget != ingredientId) {
-            appCtx.sync.clearActiveBatchTarget(previousTarget)
+        if (previousTarget != null && previousTarget != nextTarget) {
+            appCtx.sync.clearActiveBatchTarget(previousTarget.first, previousTarget.second)
         }
-        val request = batchRequests.begin(ingredientId)
+        val request = batchRequests.begin(ingredientId, selectedBranchId)
         batchesError.value = null
         if (ingredientId == null) {
             batchesLoading.value = false
@@ -450,7 +560,7 @@ class InventoryViewModel : ViewModel() {
         batchesLoading.value = true
         batchLoadJob = viewModelScope.launch {
             try {
-                val result = appCtx.sync.pullBatchesFor(ingredientId)
+                val result = appCtx.sync.pullBatchesFor(ingredientId, selectedBranchId)
                 if (!batchRequests.isCurrent(request)) return@launch
                 batchesError.value = when (result) {
                     is ResourceRefreshResult.Failed -> result.userMessage
@@ -468,20 +578,38 @@ class InventoryViewModel : ViewModel() {
 
     override fun onCleared() {
         batchLoadJob?.cancel()
-        appCtx.sync.clearActiveBatchTarget(batchTargetId)
+        recipeLoadJob?.cancel()
+        appCtx.sync.clearActiveBatchTarget(batchTargetKey?.first, batchTargetKey?.second)
         super.onCleared()
     }
 
     fun updateAccess(next: InventoryAccess) {
         access = next
+        if (!next.canManageCosting && tab.value == InventoryTab.RECIPES) {
+            tab.value = InventoryTab.INGREDIENTS
+            selectedRecipeMenuItemId.value = null
+            recipes.value = emptyList()
+            dialog.value = null
+        }
     }
 
     private fun requireWrite(): Boolean = authorizeAction(access.canManageInventory) {
         notice.value = VIEW_ONLY_MESSAGE
     }
 
+    private fun requireCostingWrite(): Boolean = authorizeAction(access.canManageCosting) {
+        notice.value =
+            "Recipe costing is protected-owner only on Android. A manager can still configure it in the web ERP."
+    }
+
     fun openDialog(d: InventoryDialog) {
-        if (!requireWrite()) return
+        val costingDialog = d is InventoryDialog.RecipeCreate ||
+            d is InventoryDialog.RecipeLineForm ||
+            d is InventoryDialog.ConfirmDeleteRecipe ||
+            d is InventoryDialog.ConfirmDeleteRecipeLine
+        if (costingDialog) {
+            if (!requireCostingWrite()) return
+        } else if (!requireWrite()) return
         when {
             d is InventoryDialog.IngredientForm && d.editing == null && !state.value.ingredientsLoaded -> {
                 notice.value =
@@ -503,6 +631,112 @@ class InventoryViewModel : ViewModel() {
     fun dismissNotice() { notice.value = null }
 
     fun showFormError(message: String) { formError.value = message }
+
+    // --------------------------------------------------------------- recipes
+
+    fun selectRecipeMenuItem(item: MenuItemEntity) {
+        if (!requireCostingWrite()) return
+        if (selectedRecipeMenuItemId.value == item.id && recipes.value.isNotEmpty()) return
+        selectedRecipeMenuItemId.value = item.id
+        loadRecipes(item.id)
+    }
+
+    fun retryRecipes() {
+        val menuItemId = selectedRecipeMenuItemId.value ?: return
+        loadRecipes(menuItemId)
+    }
+
+    private fun loadRecipes(menuItemId: String) {
+        recipeLoadJob?.cancel()
+        recipesLoading.value = true
+        recipesError.value = null
+        recipeLoadJob = viewModelScope.launch {
+            try {
+                lateinit var fresh: List<Recipe>
+                val committed = appCtx.cacheIsolation.fetchAndCommitScoped(
+                    fetch = { api.recipes(menuItemId) },
+                    store = { fresh = it },
+                )
+                if (committed && selectedRecipeMenuItemId.value == menuItemId) {
+                    recipes.value = fresh
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (selectedRecipeMenuItemId.value == menuItemId) {
+                    recipesError.value =
+                        "Could not load this recipe. Recipe changes need a live connection; no stock link was changed."
+                }
+            } finally {
+                if (selectedRecipeMenuItemId.value == menuItemId) recipesLoading.value = false
+            }
+        }
+    }
+
+    fun createRecipe(
+        menuItem: MenuItemEntity,
+        name: String,
+        yieldQty: Double,
+        lines: List<RecipeLineBody>,
+    ) = costingMutate(menuItem.id, "Recipe linked to ${menuItem.name}") {
+        api.createRecipe(
+            RecipeCreateBody(
+                menuItemId = menuItem.id,
+                name = name.trim(),
+                yieldQty = yieldQty,
+                lines = lines,
+            ),
+        )
+    }
+
+    fun saveRecipeLine(recipe: Recipe, editing: RecipeLine?, body: RecipeLineBody) =
+        costingMutate(recipe.menuItemId, "Recipe line saved") {
+            if (editing == null) api.addRecipeLine(recipe.id, body)
+            else api.updateRecipeLine(
+                recipe.id,
+                editing.id,
+                RecipeLineUpdateBody(body.ingredientId, body.qty, body.wastagePct),
+            )
+        }
+
+    fun deleteRecipe(recipe: Recipe) = costingMutate(recipe.menuItemId, "Recipe deactivated") {
+        api.deleteRecipe(recipe.id)
+    }
+
+    fun deleteRecipeLine(recipe: Recipe, line: RecipeLine) =
+        costingMutate(recipe.menuItemId, "Recipe line removed") {
+            api.deleteRecipeLine(recipe.id, line.id)
+        }
+
+    private fun costingMutate(
+        menuItemId: String,
+        successMessage: String,
+        request: suspend () -> Unit,
+    ) {
+        if (!requireCostingWrite() || busy.value) return
+        if (appCtx.cacheIsolation.currentLease() == null) {
+            formError.value = "Sign in again before changing recipe costing."
+            return
+        }
+        busy.value = true
+        formError.value = null
+        viewModelScope.launch {
+            try {
+                request()
+                dialog.value = null
+                notice.value = successMessage
+                loadRecipes(menuItemId)
+                appCtx.sync.requestSync()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                formError.value =
+                    "Could not save the recipe. Check the connection and values, then try again. Nothing was queued offline."
+            } finally {
+                busy.value = false
+            }
+        }
+    }
 
     // ------------------------------------------------------------ ingredients
 
@@ -794,25 +1028,55 @@ class InventoryViewModel : ViewModel() {
         supplierId: String,
         branchId: String,
         invoiceNo: String,
+        supplierInvoiceAmountMinor: Long?,
         notesText: String,
         lines: List<GrnLineBody>,
-    ) = localMutate {
-        val localId = UUID.randomUUID().toString()
-        db.inventoryDao().captureGrn(
-            grn = LocalGrnEntity(
-                localId = localId, branchId = branchId, supplierId = supplierId,
-                supplierInvoiceNo = invoiceNo.trim().ifBlank { null },
-                notes = notesText.trim().ifBlank { null },
-                createdAtMillis = System.currentTimeMillis(),
-            ),
-            lines = lines.map {
-                LocalGrnLineEntity(
-                    grnLocalId = localId, ingredientId = it.ingredientId, qty = it.qty,
-                    unitCostMinor = it.unitCostMinor, expiresAt = it.expiresAt, lotCode = it.lotCode,
+    ) {
+        if (!requireWrite()) return
+        val current = state.value
+        val computedTotal = grnWireReceiptTotalMinor(lines)
+        when {
+            branchId != current.branchId || current.branches.none { it.id == branchId } ->
+                showFormError("The selected branch changed or is unavailable. Close this receipt and try again.")
+            current.syncedSuppliers.none { it.id == supplierId } ->
+                showFormError("The selected supplier is no longer available. Refresh Inventory and try again.")
+            lines.isEmpty() -> showFormError("Add at least one receipt line.")
+            lines.any { line -> current.syncedIngredients.none { it.id == line.ingredientId } } ->
+                showFormError("A receipt ingredient is no longer available. Refresh Inventory and try again.")
+            computedTotal == null ->
+                showFormError("Check every quantity and unit cost. This receipt could not be valued safely.")
+            invoiceNo.isNotBlank() && supplierInvoiceAmountMinor == null ->
+                showFormError("Enter the supplier invoice total, or clear the invoice number.")
+            invoiceNo.isBlank() && supplierInvoiceAmountMinor != null ->
+                showFormError("Enter the supplier invoice number, or clear the invoice total.")
+            supplierInvoiceAmountMinor != null && supplierInvoiceAmountMinor != computedTotal ->
+                showFormError("The supplier invoice total no longer matches the capitalised line total.")
+            else -> localMutate {
+                val localId = UUID.randomUUID().toString()
+                db.inventoryDao().captureGrn(
+                    grn = LocalGrnEntity(
+                        localId = localId, branchId = branchId, supplierId = supplierId,
+                        supplierInvoiceNo = invoiceNo.trim().ifBlank { null },
+                        supplierInvoiceAmountMinor = supplierInvoiceAmountMinor,
+                        // This absolute instant is frozen before any network attempt.
+                        // Retrying tomorrow must never move yesterday's receipt into
+                        // a different accounting day. Back-dating remains a deliberate
+                        // web-ERP workflow where company timezone can be reviewed.
+                        receivedAt = Instant.now().toString(),
+                        notes = notesText.trim().ifBlank { null },
+                        createdAtMillis = System.currentTimeMillis(),
+                    ),
+                    lines = lines.map {
+                        LocalGrnLineEntity(
+                            grnLocalId = localId, ingredientId = it.ingredientId,
+                            qty = it.qty, unitCostMinor = it.unitCostMinor,
+                            expiresAt = it.expiresAt, lotCode = it.lotCode,
+                        )
+                    },
                 )
-            },
-        )
-        queuedNotice("Stock receipt saved")
+                queuedNotice("Stock receipt saved")
+            }
+        }
     }
 
     fun retryGrn(localId: String) {
@@ -840,17 +1104,39 @@ class InventoryViewModel : ViewModel() {
         type: String,
         qty: Double,
         note: String,
-    ) = localMutate {
-        val delta = adjustmentDelta(type, qty)
-        db.inventoryDao().insertAdjustment(
-            LocalAdjustmentEntity(
-                localId = UUID.randomUUID().toString(),
-                ingredientId = ingredient.id, branchId = branchId,
-                qtyDelta = delta, type = type, note = note.trim().ifBlank { null },
-                createdAtMillis = System.currentTimeMillis(),
-            ),
-        )
-        queuedNotice("Stock adjustment saved")
+    ) {
+        if (!requireWrite()) return
+        if (!isSupportedAdjustmentType(type)) {
+            showFormError(TRANSFER_UNAVAILABLE_MESSAGE)
+            return
+        }
+        val current = state.value
+        when {
+            branchId != current.branchId || current.branches.none { it.id == branchId } -> {
+                showFormError("The selected branch changed or is unavailable. Close this adjustment and try again.")
+                return
+            }
+            !qty.isFinite() || qty == 0.0 -> {
+                showFormError("Enter a non-zero adjustment quantity.")
+                return
+            }
+            current.syncedIngredients.none { it.id == ingredient.id } -> {
+                showFormError("This ingredient is no longer available. Refresh Inventory and try again.")
+                return
+            }
+        }
+        localMutate {
+            val delta = adjustmentDelta(type, qty)
+            db.inventoryDao().insertAdjustment(
+                LocalAdjustmentEntity(
+                    localId = UUID.randomUUID().toString(),
+                    ingredientId = ingredient.id, branchId = branchId,
+                    qtyDelta = delta, type = type, note = note.trim().ifBlank { null },
+                    createdAtMillis = System.currentTimeMillis(),
+                ),
+            )
+            queuedNotice("Stock adjustment saved")
+        }
     }
 
     fun retryAdjustment(localId: String) {
@@ -878,7 +1164,10 @@ class InventoryViewModel : ViewModel() {
     private fun localMutate(block: suspend () -> String) {
         if (!requireWrite()) return
         if (busy.value) return
-        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: run {
+            formError.value = "Sign in again before saving this inventory change."
+            return
+        }
         busy.value = true
         formError.value = null
         viewModelScope.launch {
@@ -939,6 +1228,8 @@ private fun mergeIngredients(
             reorderThreshold = row.reorderThreshold ?: matchedCache?.reorderThreshold ?: 0.0,
             reorderQty = row.reorderQty ?: matchedCache?.reorderQty ?: 0.0,
             avgCostMinor = matchedCache?.avgCostMinor ?: 0,
+            valuationMinor = matchedCache?.valuationMinor,
+            projectionBranchId = matchedCache?.projectionBranchId,
             pendingLocalId = if (row.state != IngredientWriteState.REJECTED) row.localId else null,
             rejectedError = if (row.state == IngredientWriteState.REJECTED) row.lastError else null,
             // Same REJECTED guard Phase 8 had to add to Staff after missing
@@ -957,6 +1248,7 @@ private fun mergeIngredients(
             id = c.id, sku = c.sku, name = c.name, baseUnit = c.baseUnit,
             currentQty = c.currentQty, reorderThreshold = c.reorderThreshold,
             reorderQty = c.reorderQty, avgCostMinor = c.avgCostMinor,
+            valuationMinor = c.valuationMinor, projectionBranchId = c.projectionBranchId,
         )
     }
     return result.sortedBy { it.name }

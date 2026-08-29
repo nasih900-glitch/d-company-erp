@@ -3,6 +3,7 @@ package cloud.dcompany.erp.core.db
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -59,6 +60,7 @@ class SettingsDaoRecoveryTest {
             localId = "stable-branch-create",
             name = "Second floor",
             code = "F2",
+            invoiceSeriesCode = "F2",
             address = null,
             timezone = "Asia/Kolkata",
             opensAt = "10:00",
@@ -73,7 +75,7 @@ class SettingsDaoRecoveryTest {
         dao.markBranchRejected(branch.localId, "Code already exists")
         assertEquals(1, dao.retryBranch(branch.localId))
         assertEquals(0, dao.retryBranch(branch.localId))
-        assertEquals(branch.localId, dao.pushableBranches().single().localId)
+        assertEquals(branch, dao.pushableBranches().single())
         assertEquals(0, dao.discardRejectedBranch(branch.localId))
         dao.markBranchRejected(branch.localId, "Code already exists")
         assertEquals(1, dao.discardRejectedBranch(branch.localId))
@@ -82,6 +84,7 @@ class SettingsDaoRecoveryTest {
             localId = "stable-terminal-create",
             branchId = "server-branch-id",
             name = "Counter 2",
+            purpose = TerminalPurpose.HYBRID,
             deviceId = "tablet-2",
             createdAtMillis = 200,
         )

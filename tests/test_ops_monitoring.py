@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ops.runtime_monitor import (
+    LOCAL_BACKUP_DIR,
     ContainerState,
     Issue,
     MonitorResult,
@@ -167,6 +168,108 @@ class RuntimeMonitorTest(unittest.TestCase):
         self.assertIsNotNone(age)
         self.assertEqual(
             {"backup_empty", "backup_stale"}, {issue.code for issue in issues}
+        )
+
+
+class BackupServiceInstallationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.repo = Path(__file__).resolve().parents[1]
+
+    def test_backup_and_monitor_use_snapshot_independent_storage(self) -> None:
+        backup_source = (self.repo / "ops/backup_to_b2.py").read_text()
+
+        self.assertEqual(Path("/var/lib/dcompany-erp/backups/auto"), LOCAL_BACKUP_DIR)
+        self.assertIn(
+            'LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")',
+            backup_source,
+        )
+
+    def test_backup_unit_uses_persistent_runtime_and_hardening(self) -> None:
+        service = (self.repo / "infra/systemd/dcompany-backup.service").read_text()
+
+        self.assertIn(
+            "ExecStart=/var/lib/dcompany-erp/backup-runtime/current/bin/python ",
+            service,
+        )
+        self.assertNotIn("/opt/d-company-erp/ops/venv", service)
+        for directive in (
+            "NoNewPrivileges=true",
+            "ProtectSystem=strict",
+            "PrivateTmp=true",
+            "CapabilityBoundingSet=",
+            "ReadWritePaths=/var/lib/dcompany-erp/backups",
+            "UMask=0077",
+        ):
+            self.assertIn(directive, service)
+
+    def test_backup_timer_preserves_live_schedule(self) -> None:
+        timer = (self.repo / "infra/systemd/dcompany-backup.timer").read_text()
+
+        self.assertIn("OnCalendar=*-*-* 22:00:00 UTC", timer)
+        self.assertIn("Persistent=true", timer)
+
+    def test_installer_bootstraps_locked_runtime_and_both_timers(self) -> None:
+        installer = (
+            self.repo / "infra/scripts/install-operations-monitor.sh"
+        ).read_text()
+
+        for contract in (
+            "ops/backup-requirements.lock",
+            "STATE_ROOT=/var/lib/dcompany-erp",
+            "--require-hashes",
+            "--only-binary=:all:",
+            "cp -p -n",
+            "dcompany-backup.service",
+            "systemctl enable --now dcompany-backup.timer",
+        ):
+            self.assertIn(contract, installer)
+
+        self.assertLess(
+            installer.index("systemctl enable --now dcompany-backup.timer"),
+            installer.index("systemctl start dcompany-runtime-monitor.service"),
+        )
+
+    def test_installer_seeds_only_missing_or_previously_failed_backup(self) -> None:
+        installer = (
+            self.repo / "infra/scripts/install-operations-monitor.sh"
+        ).read_text()
+
+        self.assertIn("has_usable_backup()", installer)
+        self.assertIn("-name '*.dump' -size +0c", installer)
+        self.assertIn(
+            'if ! has_usable_backup || [ "$backup_service_was_failed" -eq 1 ]; then',
+            installer,
+        )
+        self.assertEqual(1, installer.count("systemctl start dcompany-backup.service"))
+        self.assertLess(
+            installer.index("systemctl start dcompany-backup.service"),
+            installer.index("systemctl enable --now dcompany-backup.timer"),
+        )
+        self.assertLess(
+            installer.index("systemctl start dcompany-backup.service"),
+            installer.index("systemctl start dcompany-runtime-monitor.service"),
+        )
+
+    def test_backup_dependency_graph_is_fully_pinned_and_hashed(self) -> None:
+        requirements = (
+            (self.repo / "ops/backup-requirements.lock").read_text().splitlines()
+        )
+        package_lines = [
+            line for line in requirements if line and not line.startswith(("#", " "))
+        ]
+        hash_lines = [line.strip() for line in requirements if "--hash=" in line]
+
+        self.assertEqual(7, len(package_lines))
+        self.assertEqual(7, len(hash_lines))
+        self.assertTrue(
+            all("==" in line and line.endswith("\\") for line in package_lines)
+        )
+        self.assertTrue(
+            all(
+                line.startswith("--hash=sha256:") and len(line.split(":", 1)[1]) == 64
+                for line in hash_lines
+            )
         )
 
 

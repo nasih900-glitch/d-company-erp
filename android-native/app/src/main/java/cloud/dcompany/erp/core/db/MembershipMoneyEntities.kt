@@ -40,6 +40,20 @@ object MembershipPaymentActionKind {
     const val LEGACY_RESOLVE = "legacy_resolve"
 }
 
+/**
+ * Old-app attempts and any action already quarantined for evidence recovery
+ * belong to Audit Control. Operational co-owners may continue ordinary
+ * membership work, but must neither replay nor mutate these rows.
+ */
+fun membershipPaymentActionRequiresAuditControl(kind: String, state: String): Boolean =
+    kind in setOf(
+        MembershipPaymentActionKind.LEGACY_PROBE,
+        MembershipPaymentActionKind.LEGACY_RESOLVE,
+    ) || state in setOf(
+        MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
+        MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
+    )
+
 object MembershipPaymentTaskStatus {
     const val ACCEPTED_PAYMENT_DUE = "accepted_payment_due"
     const val CASH_COLLECTION_IN_PROGRESS = "cash_collection_in_progress"
@@ -182,6 +196,16 @@ object MembershipRefundActionKind {
     const val LEGACY_REGISTER = "legacy_register"
     const val LEGACY_RESOLVE = "legacy_resolve"
 }
+
+fun membershipRefundActionRequiresAuditControl(kind: String, state: String): Boolean =
+    kind in setOf(
+        MembershipRefundActionKind.LEGACY_RECONCILE_SERVER,
+        MembershipRefundActionKind.LEGACY_REGISTER,
+        MembershipRefundActionKind.LEGACY_RESOLVE,
+    ) || state in setOf(
+        MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
+        MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
+    )
 
 object MembershipRefundTaskStatus {
     const val ACCEPTED_CASH_DUE = "accepted_cash_due"

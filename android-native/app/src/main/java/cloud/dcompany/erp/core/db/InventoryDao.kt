@@ -207,19 +207,33 @@ interface InventoryDao {
     suspend fun deleteLocalSupplier(localId: String)
 
     // -------------------------------------------------------------- batch cache
-    @Query("SELECT * FROM batch_cache WHERE ingredientId = :ingredientId ORDER BY receivedAt ASC")
-    fun observeBatchesFor(ingredientId: String): Flow<List<BatchCacheEntity>>
+    @Query(
+        "SELECT * FROM batch_cache WHERE ingredientId = :ingredientId " +
+            "AND (:branchId IS NULL OR branchId = :branchId) ORDER BY receivedAt ASC",
+    )
+    fun observeBatchesFor(ingredientId: String, branchId: String?): Flow<List<BatchCacheEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertBatches(rows: List<BatchCacheEntity>)
 
-    @Query("DELETE FROM batch_cache WHERE ingredientId = :ingredientId AND id NOT IN (:keepIds)")
-    suspend fun deleteBatchesNotIn(ingredientId: String, keepIds: List<String>)
+    @Query(
+        "DELETE FROM batch_cache WHERE ingredientId = :ingredientId " +
+            "AND (:branchId IS NULL OR branchId = :branchId) AND id NOT IN (:keepIds)",
+    )
+    suspend fun deleteBatchesNotIn(
+        ingredientId: String,
+        branchId: String?,
+        keepIds: List<String>,
+    )
 
     @Transaction
-    suspend fun replaceBatchesFor(ingredientId: String, rows: List<BatchCacheEntity>) {
+    suspend fun replaceBatchesFor(
+        ingredientId: String,
+        branchId: String?,
+        rows: List<BatchCacheEntity>,
+    ) {
         upsertBatches(rows)
-        deleteBatchesNotIn(ingredientId, rows.map { it.id }.ifEmpty { listOf("") })
+        deleteBatchesNotIn(ingredientId, branchId, rows.map { it.id }.ifEmpty { listOf("") })
     }
 
     // -------------------------------------------------------------------- GRN

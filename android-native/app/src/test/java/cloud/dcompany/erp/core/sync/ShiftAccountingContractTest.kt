@@ -79,6 +79,10 @@ class ShiftAccountingContractTest {
               "pos_sales_minor": 83600,
               "membership_sales_minor": 10000,
               "gross_collections_minor": 93600,
+              "cash_collections_minor": 40000,
+              "card_collections_minor": 23600,
+              "upi_collections_minor": 30000,
+              "other_collections_minor": 0,
               "settled_pos_refunds_minor": 3600,
               "settled_membership_refunds_minor": 1000,
               "total_refunds_minor": 4600,
@@ -101,6 +105,10 @@ class ShiftAccountingContractTest {
         assertEquals(83_600L, accounting!!.posCollectionsMinor)
         assertEquals(10_000L, accounting.membershipCollectionsMinor)
         assertEquals(93_600L, accounting.grossCollectionsMinor)
+        assertEquals(40_000L, accounting.cashCollectionsMinor)
+        assertEquals(23_600L, accounting.cardCollectionsMinor)
+        assertEquals(30_000L, accounting.upiCollectionsMinor)
+        assertEquals(0L, accounting.otherCollectionsMinor)
         assertEquals(3_600L, accounting.settledPosRefundsMinor)
         assertEquals(1_000L, accounting.settledMembershipRefundsMinor)
         assertEquals(4_600L, accounting.totalRefundsMinor)
@@ -113,6 +121,10 @@ class ShiftAccountingContractTest {
             fetchedAtMillis = 2_000,
         )
         assertEquals(93_600L, historyCache.grossCollectionsMinor)
+        assertEquals(40_000L, historyCache.cashCollectionsMinor)
+        assertEquals(23_600L, historyCache.cardCollectionsMinor)
+        assertEquals(30_000L, historyCache.upiCollectionsMinor)
+        assertEquals(0L, historyCache.otherCollectionsMinor)
         assertEquals(89_000L, historyCache.netCollectionsMinor)
     }
 

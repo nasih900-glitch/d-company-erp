@@ -9,6 +9,7 @@ import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import cloud.dcompany.erp.core.net.CostingCoverage
 
 /**
  * Inventory endpoints, declared here rather than in the shared ErpApi so this
@@ -21,7 +22,7 @@ import retrofit2.http.Query
 interface InventoryApi {
 
     @GET("inventory/ingredients")
-    suspend fun ingredients(): List<Ingredient>
+    suspend fun ingredients(@Query("branch_id") branchId: String? = null): List<Ingredient>
 
     @POST("inventory/ingredients")
     suspend fun createIngredient(
@@ -82,7 +83,44 @@ interface InventoryApi {
     ): AdjustmentResult
 
     @GET("inventory/batches")
-    suspend fun batches(@Query("ingredient_id") ingredientId: String? = null): List<Batch>
+    suspend fun batches(
+        @Query("ingredient_id") ingredientId: String? = null,
+        @Query("branch_id") branchId: String? = null,
+    ): List<Batch>
+
+    @GET("insights/inventory/valuation")
+    suspend fun valuation(@Query("branch_id") branchId: String? = null): InventoryValuation
+
+    @GET("insights/inventory/costing-coverage")
+    suspend fun costingCoverage(): CostingCoverage
+
+    @GET("inventory/recipes")
+    suspend fun recipes(@Query("menu_item_id") menuItemId: String): List<Recipe>
+
+    @POST("inventory/recipes")
+    suspend fun createRecipe(@Body body: RecipeCreateBody): Recipe
+
+    @POST("inventory/recipes/{recipe_id}/lines")
+    suspend fun addRecipeLine(
+        @Path("recipe_id") recipeId: String,
+        @Body body: RecipeLineBody,
+    ): RecipeLine
+
+    @PATCH("inventory/recipes/{recipe_id}/lines/{line_id}")
+    suspend fun updateRecipeLine(
+        @Path("recipe_id") recipeId: String,
+        @Path("line_id") lineId: String,
+        @Body body: RecipeLineUpdateBody,
+    ): RecipeLine
+
+    @DELETE("inventory/recipes/{recipe_id}/lines/{line_id}")
+    suspend fun deleteRecipeLine(
+        @Path("recipe_id") recipeId: String,
+        @Path("line_id") lineId: String,
+    )
+
+    @DELETE("inventory/recipes/{recipe_id}")
+    suspend fun deleteRecipe(@Path("recipe_id") recipeId: String)
 
     /** Both GRN and adjustments are branch-scoped, so the picker needs this. */
     @GET("inventory/branches")

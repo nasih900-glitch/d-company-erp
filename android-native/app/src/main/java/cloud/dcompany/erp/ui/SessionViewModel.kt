@@ -19,6 +19,7 @@ import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.TerminalResolution
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.activateAndRememberTerminal
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
@@ -29,18 +30,32 @@ import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.Terminal
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 
 sealed interface AuthState {
     data object Loading : AuthState
+    /**
+     * A cached identity is available for display, but it is deliberately not
+     * writable until the bounded live authority check either succeeds or
+     * proves that the server cannot be reached. This closes the cold-start
+     * window where revoked permissions or an archived till could otherwise
+     * enqueue work before `/me` and the terminal list returned.
+     */
+    data class VerifyingCached(val me: MeResponse) : AuthState
+    data object SigningOut : AuthState
+    data class SignOutFailed(val message: String) : AuthState
     data object SignedOut : AuthState
     data class SignedIn(val me: MeResponse) : AuthState
     /** A branch has multiple tills and this tablet has no valid saved assignment. */
@@ -105,11 +120,16 @@ internal enum class RestoreFailureAction {
 
 /** Only a definitive authentication decision may discard a restored session. */
 internal fun restoreFailureAction(
-    cachedSessionActive: Boolean,
+    cachedIdentityAvailable: Boolean,
+    liveProfileVerified: Boolean = false,
     error: ApiException,
 ): RestoreFailureAction = when {
     error.status == 401 || error.status == 403 -> RestoreFailureAction.SIGN_OUT
-    cachedSessionActive -> RestoreFailureAction.KEEP_CACHED_SESSION
+    // Offline operation is allowed only when the server did not answer. An
+    // authoritative HTTP response (including 5xx/426) keeps the cache locked:
+    // it is not evidence that the last-known permissions or till remain valid.
+    cachedIdentityAvailable && !liveProfileVerified && error.status == null ->
+        RestoreFailureAction.KEEP_CACHED_SESSION
     else -> RestoreFailureAction.SHOW_UNREACHABLE
 }
 
@@ -131,23 +151,40 @@ private data class PendingTerminalSession(
 }
 
 /**
- * The ordering contract behind offline cold start: publish a locally verified
- * employee before beginning any potentially slow server refresh. Keeping this
- * tiny coordinator pure makes the no-network ordering deterministic in tests.
+ * The ordering contract behind cold start: cached identity may make the wait
+ * understandable, but cached write authority is not activated here. The
+ * remote verifier owns the later decision to activate a live or offline
+ * scope. Keeping this tiny coordinator pure makes the no-write verification
+ * window deterministic in tests.
  */
-internal suspend fun <T : Any> restoreCachedBeforeRemote(
+internal suspend fun <T : Any> verifyRemoteBeforeCachedActivation(
     cached: T?,
-    activateCached: suspend (T) -> Boolean,
-    publishCached: (T) -> Unit,
-    refreshRemote: suspend (cachedSessionActive: Boolean) -> Unit,
+    validateCachedIdentity: suspend (T) -> Boolean,
+    publishVerifying: (T) -> Unit,
+    refreshRemote: suspend (cachedIdentity: T?) -> Unit,
 ) {
-    var cachedSessionActive = false
-    if (cached != null) {
-        if (!activateCached(cached)) return
-        publishCached(cached)
-        cachedSessionActive = true
+    val cachedIdentity = cached?.takeIf { validateCachedIdentity(it) }
+    if (cached != null && cachedIdentity == null) return
+    if (cachedIdentity != null) publishVerifying(cachedIdentity)
+    refreshRemote(cachedIdentity)
+}
+
+/**
+ * A login cancellation is not allowed to leave its newly persisted token behind.
+ * The caller supplies the lineage-guarded rollback so a late cancellation can
+ * never clear a newer employee's explicit login.
+ */
+internal suspend fun <T : Any> rollbackCancelledLoginAndRethrow(
+    installedLogin: T?,
+    cancelled: CancellationException,
+    rollbackIfCurrent: suspend (T) -> Unit,
+): Nothing {
+    if (installedLogin != null) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            rollbackIfCurrent(installedLogin)
+        }
     }
-    refreshRemote(cachedSessionActive)
+    throw cancelled
 }
 
 class SessionViewModel(app: Application) : AndroidViewModel(app) {
@@ -211,6 +248,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = AuthState.Loading
             viewModelScope.launch {
                 cacheIsolation.deactivate()
+                sync.clearSessionFeedback()
                 cache.rememberProfile(null)
                 _state.value = AuthState.SignedOut
                 refreshSignedOutSafetyNotice()
@@ -242,10 +280,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             if (OutboxOwnerIdentity.from(current) != OutboxOwnerIdentity.from(previous)) return
 
             val authorityChanged = accessAuthorityChanged(previous, refreshed)
-            val gainedPos =
-                !EffectivePermissions.from(previous).has(ErpPermission.PosRead) &&
-                    EffectivePermissions.from(refreshed).has(ErpPermission.PosRead)
-            if (gainedPos && !activateResolvedTerminalOrRequestSelection(
+            val gainedOperationalWorkspace =
+                !EffectivePermissions.from(previous).requiresOperationalWorkspace() &&
+                    EffectivePermissions.from(refreshed).requiresOperationalWorkspace()
+            if (gainedOperationalWorkspace && !activateResolvedTerminalOrRequestSelection(
                     me = refreshed,
                     restoredSession = lease,
                 )
@@ -302,6 +340,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = AuthState.Loading
         restoreJob = viewModelScope.launch {
             cacheIsolation.deactivate()
+            sync.clearSessionFeedback()
             if (!tokens.hasSession()) {
                 cancelOperationalAlarms()
                 _state.value = AuthState.SignedOut
@@ -317,15 +356,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val cached = cache.cachedProfile()?.let {
                     runCatching { json.decodeFromString(MeResponse.serializer(), it) }.getOrNull()
                 }
-                val cachedActive = cached != null && activateCachedSession(restoreLease, cached)
-                if (cachedActive) {
-                    _state.value = AuthState.SignedIn(cached!!)
-                    sync.requestSync()
-                    realtime.connect()
-                }
-                if (tokens.currentAccessFor(restoreLease) != null) {
-                    refreshRestoredSession(restoreLease, cached?.takeIf { cachedActive })
-                }
+                verifyRemoteBeforeCachedActivation(
+                    cached = cached,
+                    validateCachedIdentity = { validateCachedIdentity(restoreLease, it) },
+                    publishVerifying = { _state.value = AuthState.VerifyingCached(it) },
+                    refreshRemote = { cachedIdentity ->
+                        if (tokens.currentAccessFor(restoreLease) != null) {
+                            refreshRestoredSession(restoreLease, cachedIdentity)
+                        }
+                    },
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -340,7 +380,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun activateCachedSession(
+    /** Validate display identity only; this must not grant a Room write lease. */
+    private suspend fun validateCachedIdentity(
         restoreLease: SessionRefreshLease,
         profile: MeResponse,
     ): Boolean {
@@ -352,15 +393,31 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             )
             return false
         }
+        return tokens.currentAccessFor(restoreLease) != null
+    }
+
+    private suspend fun activateCachedSession(
+        restoreLease: SessionRefreshLease,
+        profile: MeResponse,
+    ): Boolean {
+        if (!validateCachedIdentity(restoreLease, profile)) return false
         if (tokens.currentAccessFor(restoreLease) == null) return false
         val scope = runCatching { cachedScope(profile) }.getOrNull() ?: return false
         try {
             cacheIsolation.activateCached(scope)
+            sync.clearSessionFeedback()
         } catch (_: CacheScopeException) {
             return false
         }
         ApiClient.activateTerminalScope(scope.terminalId)
-        terminals.activateCachedValidated(scope.terminalId, scope.branchId)
+        val cachedTerminalValid = scope.terminalId == null ||
+            terminals.activateCachedValidated(scope.terminalId, scope.branchId)
+        if (!cachedTerminalValid) {
+            deactivateTerminalRuntime()
+            cacheIsolation.deactivate()
+            return false
+        }
+        if (scope.terminalId == null) terminals.deactivateValidatedDisplay()
         // Do not bind or attribute even a legacy local outbox until the
         // persisted user/company/branch/terminal cache scope is exact.
         if (!acceptAuthenticated(profile, restoredSession = restoreLease)) return false
@@ -377,6 +434,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         restoreLease: SessionRefreshLease,
         cachedProfile: MeResponse?,
     ) {
+        var liveProfileVerified = false
         try {
             val me = withTimeoutOrNull(RESTORE_SERVER_TIMEOUT_MILLIS) {
                 ApiClient.api.me()
@@ -393,7 +451,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 return
             }
-            if (cachedProfile != null) _state.value = AuthState.Loading
+            // From this point onward the server has authoritatively answered
+            // `/me`. If the later terminal/shift check loses connectivity, we
+            // must not fall back to the older cached permissions: the fresh
+            // profile may already have revoked a module or changed authority.
+            liveProfileVerified = true
+            // The cached profile is display-only while this check runs. No
+            // feature ViewModel or Room write lease exists until the live
+            // account and till below have been verified.
             if (!activateResolvedTerminalOrRequestSelection(
                     me = me,
                     restoredSession = restoreLease,
@@ -409,6 +474,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = AuthState.SignedIn(me)
             sync.requestSync()
             realtime.connect()
+            refreshReceiptHistoryAfterLogin(me)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: CacheScopeException) {
@@ -417,35 +483,62 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val message = e.message ?: "This tablet's terminal could not be verified."
             blockWorkspace(message)
         } catch (e: ApiException) {
-            when (restoreFailureAction(cachedProfile != null, e)) {
+            when (
+                restoreFailureAction(
+                    cachedIdentityAvailable = cachedProfile != null,
+                    liveProfileVerified = liveProfileVerified,
+                    error = e,
+                )
+            ) {
                 RestoreFailureAction.KEEP_CACHED_SESSION -> {
-                    if (cachedProfile != null && cacheIsolation.isReady()) {
+                    if (
+                        cachedProfile != null &&
+                        activateCachedSession(restoreLease, cachedProfile)
+                    ) {
                         _state.value = AuthState.SignedIn(cachedProfile)
+                        sync.requestSync()
+                        realtime.connect()
                     } else {
-                        _state.value = AuthState.Unreachable(e.message ?: "Could not reach the server.")
-                    }
-                }
-                RestoreFailureAction.SHOW_UNREACHABLE -> {
-                    if (tokens.currentAccessFor(restoreLease) != null) {
-                        _state.value = AuthState.Unreachable(
+                        lockRestoredWorkspaceAsUnreachable(
+                            restoreLease,
                             e.message ?: "Could not reach the server.",
                         )
                     }
+                }
+                RestoreFailureAction.SHOW_UNREACHABLE -> {
+                    lockRestoredWorkspaceAsUnreachable(
+                        restoreLease,
+                        e.message ?: "Could not reach the server.",
+                    )
                 }
                 RestoreFailureAction.SIGN_OUT -> {
                     rejectRestoredSession(restoreLease, message = null)
                 }
             }
         } catch (_: Exception) {
-            // A malformed/failed remote response is not proof that the cached
-            // employee or their pending Room work should be destroyed.
-            if (cachedProfile != null && cacheIsolation.isReady()) {
-                _state.value = AuthState.SignedIn(cachedProfile)
-            } else if (tokens.currentAccessFor(restoreLease) != null) {
-                _state.value = AuthState.Unreachable(
-                    "Could not verify the server session. Check the connection and try again.",
-                )
-            }
+            // A malformed response is not the same as being offline. Keep the
+            // cached write lease locked and give the employee a clear retry
+            // path instead of accepting possibly revoked authority.
+            lockRestoredWorkspaceAsUnreachable(
+                restoreLease,
+                "Could not verify the server session. Check the connection and try again.",
+            )
+        }
+    }
+
+    /** Revoke any partially activated live scope before exposing a retry UI. */
+    private suspend fun lockRestoredWorkspaceAsUnreachable(
+        restoreLease: SessionRefreshLease,
+        message: String,
+    ) {
+        if (tokens.currentAccessFor(restoreLease) == null) return
+        deactivateTerminalRuntime()
+        cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
+        cancelOperationalAlarms()
+        realtime.disconnect()
+        if (tokens.currentAccessFor(restoreLease) != null) {
+            _state.value = AuthState.Unreachable(message)
         }
     }
 
@@ -463,6 +556,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _loginError.value = null
         viewModelScope.launch {
             var installedLogin: LoginSessionLease? = null
+            // withContext has prompt cancellation on its return dispatch. Keep
+            // the lease as soon as the durable install completes so cleanup
+            // can still identify this lineage if cancellation wins that race.
+            val installedLoginCapture = AtomicReference<LoginSessionLease?>(null)
             try {
                 val pair = ApiClient.api.login(
                     LoginRequest(email = email.trim().lowercase(), password = password),
@@ -472,7 +569,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     _loginError.value = preflight.message
                     return@launch
                 }
-                installedLogin = tokens.installForLogin(pair.accessToken, pair.refreshToken)
+                installedLogin = withContext(Dispatchers.IO) {
+                    tokens.installForLogin(pair.accessToken, pair.refreshToken).also {
+                        installedLoginCapture.set(it)
+                    }
+                }
                 val me = ApiClient.api.me()
                 val tokenIdentity = AccessTokenIdentityParser.parse(pair.accessToken)
                 if (tokenIdentity == null || tokenIdentity != OutboxOwnerIdentity.from(me)) {
@@ -498,6 +599,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = AuthState.SignedIn(me)
                 sync.requestSync()
                 realtime.connect()
+                refreshReceiptHistoryAfterLogin(me)
+            } catch (cancelled: CancellationException) {
+                rollbackCancelledLoginAndRethrow(
+                    installedLogin = installedLogin ?: installedLoginCapture.get(),
+                    cancelled = cancelled,
+                    rollbackIfCurrent = { rollbackFailedLogin(it) },
+                )
             } catch (e: ApiException) {
                 rollbackFailedLogin(installedLogin)
                 _loginError.value = loginErrorMessage(e)
@@ -535,7 +643,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         restoredSession: SessionRefreshLease? = null,
     ): Boolean {
         pendingTerminalSession = null
-        val requiresTerminal = EffectivePermissions.from(me).has(ErpPermission.PosRead)
+        val requiresTerminal = EffectivePermissions.from(me).requiresOperationalWorkspace()
         if (!requiresTerminal) {
             activateValidatedScope(scopeFor(me, terminalId = null))
             return true
@@ -544,9 +652,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val branchId = me.branchId?.trim()?.takeIf(String::isNotEmpty)
         val available = if (branchId == null) emptyList() else ApiClient.api.terminals(branchId)
         val cachedId = terminals.terminalId()
-        val cachedStillValid = branchId != null && available.any {
-            it.id == cachedId && it.branchId == branchId
-        }
+        val singleHybridOnly = WorkspaceFeatureProfiles.Active.singleHybridTerminalOnly
+        val branchTerminals = available
+            .filter { it.id.isNotBlank() && it.branchId == branchId }
+            .distinctBy(Terminal::id)
+        val singleHybridTopologyValid = branchTerminals.size == 1 &&
+            branchTerminals.single().purpose == TerminalPurpose.HYBRID
+        val cachedStillValid = branchId != null &&
+            branchTerminals.any { it.id == cachedId } &&
+            (!singleHybridOnly || singleHybridTopologyValid)
         // The exact saved till is the only scope allowed to reopen unresolved
         // work. A clean install/reassignment must prove the queue is empty.
         val hasUnresolvedLocalWork = if (cachedStillValid) {
@@ -560,6 +674,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             availableTerminals = available,
             cachedTerminalId = cachedId,
             hasUnresolvedLocalWork = hasUnresolvedLocalWork,
+            singleHybridOnly = singleHybridOnly,
         )
 
         return when (resolution) {
@@ -580,6 +695,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // Revoke its lease and marker so a process restart cannot
                 // reopen that workspace offline while staff are choosing.
                 cacheIsolation.invalidate()
+                sync.clearSessionFeedback()
                 deactivateTerminalRuntime()
                 realtime.disconnect()
                 pendingTerminalSession = PendingTerminalSession(
@@ -596,6 +712,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // of a server-rejected branch/till assignment.
                 if (!hasUnresolvedLocalWork) {
                     cacheIsolation.invalidate()
+                    sync.clearSessionFeedback()
                     deactivateTerminalRuntime()
                 }
                 throw TerminalScopeException(resolution.message)
@@ -607,10 +724,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (_terminalChange.value !is TerminalChangeUiState.Idle) return
         val me = (_state.value as? AuthState.SignedIn)?.me ?: return
         val canRequest = me.protectedAccess &&
-            EffectivePermissions.from(me).has(ErpPermission.PosRead)
+            EffectivePermissions.from(me).requiresOperationalWorkspace()
         if (!canRequest) {
             _terminalChange.value = TerminalChangeUiState.Blocked(
-                "Only a protected owner with POS access can change this tablet's till.",
+                "Only a protected owner with operational access can change this tablet's workspace.",
             )
             return
         }
@@ -757,6 +874,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             throw TerminalScopeException(finalDecision.message)
         }
 
+        sync.clearSessionFeedback()
+
         // The final gate has revoked every feature lease, so no cart/shift or
         // outbox write can race the switch from this point onward.
         if (!isCurrentReassignmentSession(me, lease)) {
@@ -860,6 +979,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         ) return
         runCatching {
             cacheIsolation.activateCached(scopeFor(current, previous.terminalId))
+            sync.clearSessionFeedback()
             ApiClient.activateTerminalScope(previous.terminalId)
             terminals.activateCachedValidated(previous.terminalId, previous.branchId)
             reconcileOperationalAlarms()
@@ -941,6 +1061,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 reconcileOperationalAlarms()
                 sync.requestSync()
                 realtime.connect()
+                refreshReceiptHistoryAfterLogin(pending.me)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
@@ -1115,6 +1236,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 cacheIsolation.activateCached(scopeFor(pending.me, previous.terminalId))
+                sync.clearSessionFeedback()
                 ApiClient.activateTerminalScope(previous.terminalId)
                 if (!terminals.activateCachedValidated(previous.terminalId, previous.branchId)) {
                     deactivateTerminalRuntime()
@@ -1174,9 +1296,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun cachedScope(me: MeResponse): CacheScope {
-        val terminalId = if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
+        val terminalId = if (EffectivePermissions.from(me).requiresOperationalWorkspace()) {
             terminals.terminalId() ?: throw TerminalScopeException(
-                "Reconnect once to verify this tablet's POS terminal before opening cached data.",
+                "Reconnect once to verify this tablet's workspace before opening saved data.",
             )
         } else {
             null
@@ -1195,6 +1317,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun activateValidatedScope(scope: CacheScope) {
         terminals.deactivateValidatedDisplay()
         val activation = cacheIsolation.activateValidated(scope)
+        sync.clearSessionFeedback()
         ApiClient.activateTerminalScope(scope.terminalId)
         if (activation == CacheScopeActivation.PURGED) {
             // A route is scoped to the account/branch/till that issued its
@@ -1235,6 +1358,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         sync.refreshShiftAuthorityAtLogin()
     }
 
+    /** Receipt history is useful at login, but never belongs on the sign-in critical path. */
+    private fun refreshReceiptHistoryAfterLogin(me: MeResponse) {
+        if (!EffectivePermissions.from(me).has(ErpPermission.PosRead)) return
+        viewModelScope.launch { sync.refresh("receipts") }
+    }
+
     fun signOut() {
         terminalChangeJob?.cancel()
         terminalChangeGate.finish()
@@ -1255,19 +1384,95 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 outboxSafety.publishNotice(decision.message)
                 return@launch
             }
+            // Dispose the authenticated feature tree before any IO-backed
+            // credential cleanup suspends. Otherwise the old workspace stays
+            // tappable with an already-deactivated cache lease and actions can
+            // appear to do nothing during sign-out.
+            _state.value = AuthState.SigningOut
+            sync.clearSessionFeedback()
             deactivateTerminalRuntime()
+            realtime.disconnect()
+            PricingLock.lock()
             restoreJob?.cancel()
             pendingTerminalSession = null
             _accessChangeNotice.value = null
             cancelOperationalAlarms()
             (getApplication() as DCompanyApp).notificationRoutes.clearPending()
-            tokens.clear()
-            PricingLock.lock()
+            try {
+                withContext(Dispatchers.IO) { tokens.clear() }
+            } catch (_: Exception) {
+                _state.value = AuthState.SignOutFailed(
+                    "This tablet could not durably remove the secure session. Keep this screen open, " +
+                        "retry sign-out, and do not hand the tablet to another employee until it succeeds.",
+                )
+                return@launch
+            }
             // Must also drop the cached profile: leaving it would let the next
             // cold start reopen the till as the staff member who just signed out.
-            cache.rememberProfile(null)
+            try {
+                cache.rememberProfile(null)
+            } catch (_: Exception) {
+                // Credentials are already gone, so sign-out itself succeeded.
+                // Surface the local cleanup problem on Login rather than
+                // leaving the employee trapped behind an endless spinner.
+                _loginError.value =
+                    "Signed out, but this tablet could not clear its saved display profile. " +
+                        "Restart the app before the next employee signs in."
+            }
             _state.value = AuthState.SignedOut
-            realtime.disconnect()
+        }
+    }
+
+    /**
+     * A successful password reset increments the server auth version, so the
+     * current bearer is already revoked. Leave the operational workspace
+     * immediately instead of waiting for a later API call to discover that
+     * fact. Saved outbox ownership is deliberately retained so only this same
+     * employee can sign back in and finish any queued work.
+     */
+    fun expireAfterPasswordChange() {
+        terminalChangeJob?.cancel()
+        terminalChangeGate.finish()
+        _terminalChange.value = TerminalChangeUiState.Idle
+        _state.value = AuthState.SigningOut
+        sync.clearSessionFeedback()
+        deactivateTerminalRuntime()
+        realtime.disconnect()
+        PricingLock.lock()
+        restoreJob?.cancel()
+        pendingTerminalSession = null
+        _accessChangeNotice.value = null
+        cancelOperationalAlarms()
+        (getApplication() as DCompanyApp).notificationRoutes.clearPending()
+        viewModelScope.launch {
+            var cleanupWarning: String? = null
+            try {
+                cacheIsolation.deactivate()
+            } catch (_: Exception) {
+                cleanupWarning =
+                    "The previous workspace could not be fully deactivated; restart the app before another employee signs in."
+            }
+            try {
+                withContext(Dispatchers.IO) { tokens.clear() }
+            } catch (_: Exception) {
+                _state.value = AuthState.SignOutFailed(
+                    "Your password changed, but this tablet could not durably clear the old secure session. " +
+                        "Keep this screen open and restart the app before anyone else uses it.",
+                )
+                return@launch
+            }
+            try {
+                cache.rememberProfile(null)
+            } catch (_: Exception) {
+                cleanupWarning =
+                    "The saved display profile could not be cleared; restart the app before another employee signs in."
+            }
+            _loginError.value = buildString {
+                append("Password updated. Sign in again with the new password to continue.")
+                cleanupWarning?.let { append(" ").append(it) }
+            }
+            _state.value = AuthState.SignedOut
+            refreshSignedOutSafetyNotice()
         }
     }
 
@@ -1309,7 +1514,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         decision as OutboxGateResult.Blocked
         if (installedLogin == null) {
             if (restoredSession == null) {
-                tokens.clear()
+                withContext(Dispatchers.IO) { tokens.clear() }
                 PricingLock.lock()
                 deactivateTerminalRuntime()
                 cache.rememberProfile(null)
@@ -1327,12 +1532,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Clear only this failed login; a newer explicit login always wins. */
     private suspend fun rollbackFailedLogin(installedLogin: LoginSessionLease?): Boolean {
-        if (installedLogin == null || !tokens.rollbackLoginIfCurrent(installedLogin)) return false
+        if (
+            installedLogin == null ||
+            !withContext(Dispatchers.IO) { tokens.rollbackLoginIfCurrent(installedLogin) }
+        ) return false
         terminalChangeJob?.cancel()
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
         cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
         deactivateTerminalRuntime()
         cancelOperationalAlarms()
         cache.rememberProfile(null)
@@ -1355,7 +1564,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (activeAccess != null) {
             val current = tokens.refreshLease()
             if (current != null && current.accessToken == activeAccess) {
-                tokens.clearIfCurrent(current)
+                withContext(Dispatchers.IO) { tokens.clearIfCurrent(current) }
             }
         }
         if (tokens.hasSession()) return
@@ -1368,6 +1577,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         deactivateTerminalRuntime()
         cache.rememberProfile(null)
         cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
         cancelOperationalAlarms()
         message?.let {
             _loginError.value = it
@@ -1396,6 +1606,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         PricingLock.lock()
         deactivateTerminalRuntime()
         cacheIsolation.deactivate()
+        sync.clearSessionFeedback()
         cancelOperationalAlarms()
         realtime.disconnect()
         _state.value = AuthState.Blocked(message)

@@ -109,16 +109,45 @@ gunzip < ~/Downloads/dcompany-backup-YYYY-MM-DD.sql.gz | docker compose exec -T 
 
 This `gunzip | psql` restore only works for backups made with the plain-SQL command directly above. It will **not** work on the production off-site backups described below — those are a different (custom) dump format that `psql` can't read.
 
-### Production VPS (automated, already running)
+### Production VPS (automated)
 
-Real production doesn't need a cron job set up — it already has one. `ops/backup_to_b2.py` runs nightly via a systemd timer (`dcompany-backup.timer`) on the VPS and:
+`ops/backup_to_b2.py` runs nightly at 22:00 UTC via the tracked systemd timer
+`dcompany-backup.timer` and:
 
 - Runs `pg_dump -F c` (Postgres **custom format**, not plain SQL) inside the `postgres` container
 - Uploads the resulting `.dump` file to the Backblaze B2 bucket `dcompany-erp-backups` (S3-compatible endpoint `https://s3.us-east-005.backblazeb2.com`), named `dcompany-erp-<UTC timestamp>.dump` (e.g. `dcompany-erp-2026-08-08T020000Z.dump`)
-- Keeps 30 days of history both locally (`/opt/d-company-erp/backups/auto/`) and in B2, pruning anything older
+- Keeps 30 days of history both locally (`/var/lib/dcompany-erp/backups/auto/`) and in B2, pruning anything older
 - Emails the account-security address if a nightly run fails
 
 Because these are **custom-format** dumps, restoring them needs `pg_restore`, not `psql`/`gunzip` — `psql` cannot parse a `-F c` file at all.
+
+Install or repair the runtime monitor and backup timers after provisioning a
+VPS with:
+
+```bash
+cd /opt/d-company-erp
+sudo sh infra/scripts/install-operations-monitor.sh
+```
+
+The installer creates a pinned, hash-verified boto3 environment under
+`/var/lib/dcompany-erp/backup-runtime/`, outside the replaceable application
+snapshot. It also copies any legacy `.dump` files from
+`/opt/d-company-erp/backups/auto/` into the persistent backup directory without
+deleting or overwriting the originals. If no non-empty persistent restore point
+exists, or the previous backup unit failed, the installer runs
+`dcompany-backup.service` synchronously before it enables monitoring. This
+fails the repair visibly when either `pg_dump` or the B2 upload is still broken,
+while an existing healthy restore point is preserved without an extra backup.
+Because the timer is persistent, systemd may still immediately catch up a
+genuinely missed 22:00 UTC run when the timer is re-enabled.
+
+Verify the timer and the most recent run with:
+
+```bash
+systemctl status dcompany-backup.timer
+systemctl status dcompany-backup.service
+journalctl -u dcompany-backup.service -n 100 --no-pager
+```
 
 **To restore a production backup** (run on the VPS, from `/opt/d-company-erp`):
 

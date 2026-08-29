@@ -4,8 +4,8 @@ import { AlertCircle, Ban, BookOpen, Loader2, Plus, RefreshCw } from 'lucide-rea
 import Modal from '@/components/ui/Modal';
 import {
   finance,
-  settings,
-  type BranchDTO,
+  pos,
+  type BranchReferenceDTO,
   type ManualCollectionDTO,
   type ManualCollectionMethod,
 } from '@/lib/erp-api';
@@ -20,6 +20,7 @@ import {
   rupeesToMinor,
 } from '@/lib/manual-collections';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 // ============================================================================
 // MANUAL COLLECTIONS — auditable off-POS / legacy daily totals
@@ -27,33 +28,34 @@ import { useAuth } from '@/modules/auth/AuthContext';
 export default function ManualCollectionsTab() {
   const { me } = useAuth();
   const [rows, setRows] = useState<ManualCollectionDTO[]>([]);
-  const [branches, setBranches] = useState<BranchDTO[]>([]);
+  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [companyTimezone, setCompanyTimezone] = useState(DEFAULT_BUSINESS_TIMEZONE);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [voiding, setVoiding] = useState<ManualCollectionDTO | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setErr(null);
     try {
-      const [collections, branchRows, company] = await Promise.all([
+      const [collections, branchRows, receiptIdentity] = await Promise.all([
         finance.listManualCollections({ include_voided: true, limit: 500 }),
-        settings.listBranches(),
-        settings.getCompany(),
+        finance.listBranches(),
+        pos.receiptBusiness().catch(() => null),
       ]);
       setRows(collections);
       setBranches(branchRows);
-      setCompanyTimezone(company.timezone || DEFAULT_BUSINESS_TIMEZONE);
+      setCompanyTimezone(receiptIdentity?.timezone || DEFAULT_BUSINESS_TIMEZONE);
     } catch (error) {
       setErr((error as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   if (loading) {
     return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading manual collections…</div>;
@@ -89,7 +91,7 @@ export default function ManualCollectionsTab() {
           Immutable collection register · newest business date first
         </p>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load} aria-label="Refresh manual collections">
+          <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh manual collections">
             <RefreshCw size={14}/>
           </button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
@@ -100,7 +102,7 @@ export default function ManualCollectionsTab() {
 
       {!branches.length && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
-          Add a branch in <b>Settings → Branches</b> before recording a collection.
+          No shop is available for this collection. Ask the protected owner to check your shop access.
         </div>
       )}
       {err && <ErrorRow text={err}/>}
@@ -252,7 +254,7 @@ function ManualCollectionForm({
   onClose,
   onSuccess,
 }: {
-  branches: BranchDTO[];
+  branches: BranchReferenceDTO[];
   defaultBranchId: string;
   companyTimezone: string;
   onClose: () => void;

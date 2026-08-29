@@ -10,7 +10,7 @@ import pytest_asyncio
 from sqlalchemy import func, select, text
 
 from app.core.roles import PROTECTED_OWNER_ROLE
-from app.models import AuditLog, Role
+from app.models import AuditLog, Role, UserRole
 from app.services.audit.recorder import (
     clear_actor,
     clear_request_context,
@@ -32,7 +32,7 @@ async def test_authenticated_mutation_records_provenance_and_legacy_rows_remain_
     session,
     seed_owner,
 ) -> None:
-    role = (
+    public_owner_role = (
         await session.execute(
             select(Role).where(
                 Role.company_id == seed_owner["company"].id,
@@ -40,7 +40,24 @@ async def test_authenticated_mutation_records_provenance_and_legacy_rows_remain_
             )
         )
     ).scalar_one()
-    role.code = PROTECTED_OWNER_ROLE
+    protected_role = Role(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        code=PROTECTED_OWNER_ROLE,
+        name="Protected owner",
+        permissions=[],
+    )
+    session.add(protected_role)
+    await session.flush()
+    assignment = (
+        await session.execute(
+            select(UserRole).where(
+                UserRole.user_id == seed_owner["owner"].id,
+                UserRole.role_id == public_owner_role.id,
+            )
+        )
+    ).scalar_one()
+    assignment.role_id = protected_role.id
     await session.commit()
     install_audit_listeners()
 

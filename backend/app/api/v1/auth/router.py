@@ -6,7 +6,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -39,6 +39,7 @@ from app.services.auth.otp import (
     normalize_account_email,
 )
 from app.services.auth.rate_limit import enforce_login_rate_limit
+from app.services.realtime import manager as realtime_manager
 
 router = APIRouter()
 
@@ -193,17 +194,42 @@ async def _roles_and_branch(
 ) -> tuple[list[str], UUID | None]:
     rows = (
         await session.execute(
-            select(Role.code, UserRole.branch_id)
+            select(
+                Role.code,
+                Role.company_id.label("role_company_id"),
+                UserRole.branch_id,
+                Branch.company_id.label("branch_company_id"),
+                Branch.deleted_at.label("branch_deleted_at"),
+            )
             .join(UserRole, UserRole.role_id == Role.id)
+            .outerjoin(Branch, Branch.id == UserRole.branch_id)
             .where(UserRole.user_id == user.id)
             .order_by(UserRole.created_at.asc(), UserRole.id.asc())
         )
     ).all()
+    branch_ids: set[UUID] = set()
+    for row in rows:
+        if row.role_company_id != user.company_id:
+            raise AuthError(
+                "Account role assignment is invalid. Ask the protected owner to correct it."
+            )
+        if row.branch_id is not None:
+            if (
+                row.branch_company_id != user.company_id
+                or row.branch_deleted_at is not None
+            ):
+                raise AuthError(
+                    "Account branch assignment is invalid. "
+                    "Ask the protected owner to correct it."
+                )
+            branch_ids.add(row.branch_id)
+    if len(branch_ids) > 1:
+        raise AuthError(
+            "Account roles are assigned to multiple branches. "
+            "Ask the protected owner to select one branch."
+        )
     roles = [row.code for row in rows]
-    assigned_branch_id = next(
-        (row.branch_id for row in rows if row.branch_id is not None),
-        None,
-    )
+    assigned_branch_id = next(iter(branch_ids), None)
     return roles, assigned_branch_id or await _default_branch_id(session, user.company_id)
 
 
@@ -319,6 +345,7 @@ async def request_registration(
 async def confirm_registration(
     payload: RegistrationConfirm,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: SessionDep,
 ) -> AccountActionResponse:
     challenge = await consume_challenge(
@@ -390,6 +417,15 @@ async def confirm_registration(
             user_agent=audit_user_agent(request),
         )
     )
+    # This public confirmation has no bearer token for the generic realtime
+    # middleware to tenant-scope. Persist the audit fact first, then notify
+    # only the challenge's trusted company so an open owner console refreshes.
+    await session.commit()
+    background_tasks.add_task(
+        realtime_manager.broadcast,
+        challenge.company_id,
+        "audit",
+    )
     return AccountActionResponse(message="Login created. You can sign in now.")
 
 
@@ -435,6 +471,7 @@ async def request_password_reset(
 async def confirm_password_reset(
     payload: PasswordResetConfirm,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: SessionDep,
 ) -> AccountActionResponse:
     challenge = await consume_challenge(
@@ -478,6 +515,21 @@ async def confirm_password_reset(
             user_agent=audit_user_agent(request),
         )
     )
+    # Commit the auth-version change and audit row before waking connected
+    # clients. Audit refreshes the protected owner timeline; access_control
+    # makes native clients re-check /auth/me and evict the reset user's old
+    # session immediately rather than waiting for its next unrelated request.
+    await session.commit()
+    background_tasks.add_task(
+        realtime_manager.broadcast,
+        challenge.company_id,
+        "audit",
+    )
+    background_tasks.add_task(
+        realtime_manager.broadcast,
+        challenge.company_id,
+        "access_control",
+    )
     return AccountActionResponse(message="Password updated. You can sign in now.")
 
 
@@ -486,6 +538,7 @@ async def login(
     payload: LoginRequest,
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     session: SessionDep,
 ) -> TokenPair:
     settings = get_settings()
@@ -587,16 +640,29 @@ async def login(
         auth_version=user.auth_version,
     )
 
-    if _uses_cookie_session(request):
+    cookie_session = _uses_cookie_session(request)
+    if cookie_session:
         _set_refresh_cookie(response, refresh)
 
-    return TokenPair(
+    token_pair = TokenPair(
         access_token=access,
         # Same-origin web clients receive the refresh credential only through
         # the HttpOnly cookie. Native clients keep the existing JSON contract.
-        refresh_token="" if _uses_cookie_session(request) else refresh,
+        refresh_token="" if cookie_session else refresh,
         expires_in=settings.access_token_minutes * 60,
     )
+
+    # Login has no incoming bearer token, so the generic realtime middleware
+    # cannot safely derive a company id. Commit login_success first, then notify
+    # only this authenticated user's company. Failed-login branches above keep
+    # their 401 response and deliberately schedule no broadcast.
+    await session.commit()
+    background_tasks.add_task(
+        realtime_manager.broadcast,
+        user.company_id,
+        "audit",
+    )
+    return token_pair
 
 
 @router.post("/refresh", response_model=TokenPair)

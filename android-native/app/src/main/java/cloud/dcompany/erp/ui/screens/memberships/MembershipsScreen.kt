@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,12 +12,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,11 +30,17 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CardMembership
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.core.auth.MembershipAccess
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.MembershipMoneyActionState
 import cloud.dcompany.erp.core.db.MembershipPaymentActionKind
@@ -53,35 +59,58 @@ import cloud.dcompany.erp.core.db.MembershipRefundActionKind
 import cloud.dcompany.erp.core.db.MembershipRefundAttemptCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskCacheEntity
 import cloud.dcompany.erp.core.db.MembershipRefundTaskStatus
+import cloud.dcompany.erp.core.db.membershipPaymentActionRequiresAuditControl
+import cloud.dcompany.erp.core.db.membershipRefundActionRequiresAuditControl
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
+import cloud.dcompany.erp.ui.components.CompactStatCard
+import cloud.dcompany.erp.ui.components.ConfirmDialog
+import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.FormDialog
+import cloud.dcompany.erp.ui.components.LoadingSkeleton
+import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.PickerField
+import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
 
 /**
  * Memberships — greenfield screen. Tier browsing is read-only (create/edit
- * stays on web, per MembershipsApi's class doc). Subscribe/cancel are real
- * offline outbox writes — see MembershipsViewModel's class doc for why.
+ * stays on web, per MembershipsApi's class doc). Zero-value preparation and
+ * cancellation are real offline outbox writes; physical collection remains
+ * server-authorised and online-only — see MembershipsViewModel's class doc.
  */
 @Composable
-fun MembershipsScreen(canManage: Boolean) {
+fun MembershipsScreen(access: MembershipAccess) {
     val vm: MembershipsViewModel = viewModel()
-    val state by vm.state.collectAsState()
-    MembershipsContent(state, vm, canManage)
+    val state by vm.state.collectAsStateWithLifecycle()
+    MembershipsContent(state, vm, access)
 }
 
 @Composable
 private fun MembershipsContent(
     state: MembershipsUiState,
     vm: MembershipsViewModel,
-    canManage: Boolean,
+    access: MembershipAccess,
 ) {
-    Column(Modifier.fillMaxSize().background(Brand.Background)) {
-        Header(canManage)
+    val canManage = access.canManageMoney
+    Column(
+        Modifier.fillMaxSize().background(Brand.Background).padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        if (!canManage) {
+            ViewOnlyNotice("Membership changes are view only for this account.")
+        }
 
         if (canManage && state.notice != null) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                NoticeBanner(state.notice, vm::dismissNotice)
-            }
+            NoticeBanner(state.notice, vm::dismissNotice)
         }
         if (
             canManage && (
@@ -95,15 +124,19 @@ private fun MembershipsContent(
                     state.legacyRefundAttempts.isNotEmpty()
             )
         ) {
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                PendingMembershipChangesPanel(state, vm)
-            }
+            PendingMembershipChangesPanel(
+                state = state,
+                vm = vm,
+                canRecoverLegacyEvidence = access.canRecoverLegacyEvidence,
+            )
         }
 
+        MembershipSummary(state)
+
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             item { CustomerSearchPanel(state, vm) }
 
@@ -111,20 +144,16 @@ private fun MembershipsContent(
                 item { SelectedCustomerPanel(customer, state, vm, canManage) }
             }
 
-            item { SectionTitle("Tiers") }
-            if (state.tiers.isEmpty()) {
-                item {
-                    Text(
-                        "No tiers configured yet — add one from the web app's Settings → Memberships.",
-                        color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            } else {
-                items(state.tiers.sortedBy { it.sortOrder }, key = { it.id }) { tier -> TierCard(tier) }
-            }
+            item { MembershipPlansPanel(state) }
         }
 
-        when (val dialog = state.dialog.takeIf { canManage }) {
+        val visibleDialog = state.dialog?.takeIf { current ->
+            canManage && (
+                current !is MembershipsDialog.ResolveLegacyRefund ||
+                    access.canRecoverLegacyEvidence
+            )
+        }
+        when (val dialog = visibleDialog) {
             is MembershipsDialog.SubscribeForm -> SubscribeFormDialog(dialog.customer, state, vm)
             is MembershipsDialog.ConfirmCancel -> ConfirmDialog(
                 title = "Stop ${dialog.customer.name.orEmpty().ifBlank { dialog.customer.phone }}'s renewal?",
@@ -189,18 +218,43 @@ private fun MembershipsContent(
 }
 
 @Composable
-private fun Header(canManage: Boolean) {
-    Column {
-        Text(
-            "Memberships",
-            style = MaterialTheme.typography.headlineMedium, color = Brand.Foreground,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        )
-        Text(
-            if (canManage) "Tiers · subscribe · refund · renewal" else "Tiers and customer membership status · read only",
-            style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted,
-            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
-        )
+private fun MembershipSummary(state: MembershipsUiState) {
+    val pendingCount = state.pendingSubscriptions.size +
+        state.pendingCancellations.size +
+        state.pendingRefunds.size +
+        state.paymentTasks.size +
+        state.paymentActions.size +
+        state.refundTasks.size +
+        state.refundActions.size +
+        state.legacyRefundAttempts.size
+
+    AdaptiveStatGrid(count = 3) { index, modifier ->
+        when (index) {
+            0 -> CompactStatCard(
+                label = "Available plans",
+                value = state.tiers.size.toString(),
+                detail = "Configured membership tiers",
+                icon = Icons.Default.CardMembership,
+                tone = UiTone.Neutral,
+                modifier = modifier,
+            )
+            1 -> CompactStatCard(
+                label = "Search matches",
+                value = state.customers.size.toString(),
+                detail = if (state.search.isBlank()) "Enter a name or phone" else "Matching customers",
+                icon = Icons.Default.People,
+                tone = UiTone.Information,
+                modifier = modifier,
+            )
+            else -> CompactStatCard(
+                label = "Outstanding actions",
+                value = pendingCount.toString(),
+                detail = "Payment, refund or sync records",
+                icon = Icons.Default.SyncProblem,
+                tone = if (pendingCount > 0) UiTone.Warning else UiTone.Neutral,
+                modifier = modifier,
+            )
+        }
     }
 }
 
@@ -209,23 +263,50 @@ private fun Header(canManage: Boolean) {
 // ============================================================================
 @Composable
 private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewModel) {
-    Panel {
-        Text("Find a customer", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = state.search, onValueChange = vm::setSearch,
-            label = { Text("Name or phone") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+    SectionCard(
+        title = "Find a customer",
+        subtitle = "Membership actions always start from an existing customer profile",
+        icon = Icons.Default.Search,
+    ) {
+        ActionBar(
+            leading = {
+                SearchInput(
+                    value = state.search,
+                    onValueChange = vm::setSearch,
+                    placeholder = "Search by customer name or phone",
+                    modifier = Modifier.weight(1f),
+                )
+            },
+            trailing = if (state.search.isNotBlank()) {
+                {
+                    ErpButton(
+                        text = "Clear",
+                        onClick = { vm.setSearch("") },
+                        intent = ActionIntent.Quiet,
+                    )
+                }
+            } else null,
         )
         if (state.search.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
             if (state.customers.isEmpty()) {
-                Text("No matching customers.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+                DesignedEmptyState(
+                    title = "No matching customers",
+                    body = "Check the phone number or name. Customer profiles are created from the Customers screen or during billing.",
+                    icon = Icons.Default.People,
+                    secondaryLabel = "Clear search",
+                    onSecondary = { vm.setSearch("") },
+                )
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     state.customers.forEach { customer -> CustomerResultRow(customer, vm) }
                 }
             }
+        } else {
+            Text(
+                "Search to review a customer's current plan, payment evidence, renewal status, and receipt history.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
     }
 }
@@ -233,7 +314,7 @@ private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewMo
 @Composable
 private fun CustomerResultRow(customer: CustomerCacheEntity, vm: MembershipsViewModel) {
     Row(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised)
             .clickable { vm.selectCustomer(customer) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -258,12 +339,37 @@ private fun SelectedCustomerPanel(
     canManage: Boolean,
 ) {
     val membership = state.selectedMembership
-    Panel {
+    val activeNow = membership?.subscription?.isActiveAt() == true
+    val hasPendingAction = membership?.let {
+        it.pendingRefundTaskId != null ||
+            it.pendingPaymentTaskId != null ||
+            it.pendingSubscribeLocalId != null ||
+            it.pendingCancelLocalId != null ||
+            it.pendingRefundLocalId != null
+    } == true
+    SectionCard(
+        title = "Selected customer",
+        subtitle = "Membership status and financial workflow",
+        icon = Icons.Default.People,
+        elevated = true,
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(customer.name.orEmpty().ifBlank { "(no name)" }, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
                 Text(customer.phone, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
             }
+            OperationalStatusBadge(
+                label = when {
+                    hasPendingAction -> "Action pending"
+                    activeNow -> "Active member"
+                    else -> "No active plan"
+                },
+                tone = when {
+                    hasPendingAction -> UiTone.Warning
+                    activeNow -> UiTone.Success
+                    else -> UiTone.Neutral
+                },
+            )
             TextButton(onClick = vm::clearSelection) { Text("Change") }
         }
         Spacer(Modifier.height(10.dp))
@@ -306,7 +412,7 @@ private fun SelectedCustomerPanel(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            membership?.subscription != null && membership.subscription.isActive -> {
+            membership?.subscription != null && activeNow -> {
                 val sub = membership.subscription
                 val alreadyCancelled = sub.cancelledAt != null
                 Text(
@@ -382,13 +488,34 @@ private fun SelectedCustomerPanel(
                 }
             }
             else -> {
-                Text("No active membership.", color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
+                val ended = membership?.subscription?.takeIf { !activeNow }
+                Text(
+                    ended?.let {
+                        if (it.revokedAt != null) {
+                            "${it.tierName} ended ${it.revokedAt.take(10)}."
+                        } else {
+                            "${it.tierName} expired ${it.expiresAt.take(10)}."
+                        }
+                    }
+                        ?: "No active membership.",
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (ended != null) {
+                    Text(
+                        "Renewal creates a new paid term. The server rechecks the current plan price before any collection is authorised.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 if (canManage) {
                     Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = { vm.openSubscribeForm(customer) },
                         enabled = state.tiers.isNotEmpty(),
-                    ) { Text("Prepare membership payment") }
+                    ) {
+                        Text(if (ended == null) "Prepare membership payment" else "Renew membership")
+                    }
                 }
             }
         }
@@ -465,7 +592,7 @@ private fun SelectedCustomerPanel(
 // ============================================================================
 @Composable
 private fun TierCard(tier: MembershipTier) {
-    Panel {
+    SectionCard(elevated = true) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(tier.name, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
@@ -474,7 +601,7 @@ private fun TierCard(tier: MembershipTier) {
                 }
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(tier.monthlyPriceMinor.asRupees() + " /mo", style = MaterialTheme.typography.bodyLarge, color = Brand.Gold)
+                Text(tier.monthlyPriceMinor.asRupees() + " /mo", style = MaterialTheme.typography.bodyLarge, color = Brand.Foreground)
                 tier.annualPriceMinor?.let {
                     Text(it.asRupees() + " /yr", style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
                 }
@@ -496,6 +623,27 @@ private fun TierCard(tier: MembershipTier) {
     }
 }
 
+@Composable
+private fun MembershipPlansPanel(state: MembershipsUiState) {
+    SectionCard(
+        title = "Membership plans",
+        subtitle = "Configured pricing and benefits available to customers",
+        icon = Icons.Default.CardMembership,
+    ) {
+        when {
+            state.loading -> LoadingSkeleton(lines = 4)
+            state.tiers.isEmpty() -> DesignedEmptyState(
+                title = "No membership plans configured",
+                body = "Create and price plans in the web app under Settings → Memberships. This tablet will show them here after synchronisation.",
+                icon = Icons.Default.CardMembership,
+            )
+            else -> state.tiers.sortedBy { it.sortOrder }.forEach { tier ->
+                TierCard(tier)
+            }
+        }
+    }
+}
+
 // ============================================================================
 // SUBSCRIBE DIALOG
 // ============================================================================
@@ -507,9 +655,14 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
     var localError by remember { mutableStateOf<String?>(null) }
 
     val selectedTier = state.tiers.firstOrNull { it.id == tierId }
+    val isRenewal = state.membershipHistory.any { !it.isActiveAt() }
 
     FormDialog(
-        title = "Prepare payment for ${customer.name.orEmpty().ifBlank { customer.phone }}",
+        title = if (isRenewal) {
+            "Renew membership for ${customer.name.orEmpty().ifBlank { customer.phone }}"
+        } else {
+            "Prepare payment for ${customer.name.orEmpty().ifBlank { customer.phone }}"
+        },
         confirmLabel = "Prepare — no money yet",
         busy = state.busy,
         error = localError ?: state.formError,
@@ -546,6 +699,12 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
             color = Brand.GoldMuted,
             style = MaterialTheme.typography.labelSmall,
         )
+        Text(
+            "If the tablet is offline, only this zero-value preparation is queued. " +
+                "Reconnect and wait for the server to confirm the live price before collecting anything.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
         PickerField(
             "Paid via", paidVia.replaceFirstChar { it.uppercase() },
             listOf("cash" to "Cash", "card" to "Card", "upi" to "UPI"),
@@ -555,7 +714,7 @@ private fun SubscribeFormDialog(customer: CustomerCacheEntity, state: Membership
             price?.let {
                 Text(
                     "Amount: ${it.asRupees()}",
-                    style = MaterialTheme.typography.bodyMedium, color = Brand.Gold,
+                    style = MaterialTheme.typography.bodyMedium, color = Brand.Foreground,
                 )
             }
         }
@@ -594,7 +753,7 @@ private fun CompleteMembershipPaymentDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.tierName} · ${task.amountMinor.asRupees()}",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -702,7 +861,7 @@ private fun WithdrawMembershipPaymentDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone} · ${task.amountMinor.asRupees()} via ${task.paidVia.uppercase()}",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -813,7 +972,7 @@ private fun RefundFormDialog(
     ) {
         Text(
             "Full refund: ${sub.amountPaidMinor.asRupees()}. Benefits end after sync; the original term and payment remain in the audit trail.",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -875,7 +1034,7 @@ private fun CompleteMembershipRefundDialog(
     ) {
         Text(
             "${task.customerName ?: task.customerPhone ?: "Customer"} · ${task.amountMinor.asRupees()} via ${task.method.uppercase()}",
-            color = Brand.Gold,
+            color = Brand.Foreground,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -1169,13 +1328,71 @@ private fun WithdrawCashRefundDialog(
 // PENDING CHANGES
 // ============================================================================
 @Composable
-private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: MembershipsViewModel) {
+private fun MembershipAuditControlEscalation(recordCount: Int) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(Brand.Surface).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .background(Brand.SurfaceRaised).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text("Pending membership changes", style = MaterialTheme.typography.labelLarge, color = Brand.Foreground)
+        Text(
+            "Audit Control review required",
+            color = Brand.GoldMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            "$recordCount older-app recovery ${if (recordCount == 1) "record is" else "records are"} " +
+                "preserved but read only for this account. Ask the Audit Control owner to " +
+                "verify the original drawer/provider evidence. Do not repeat a collection or payout.",
+            color = Brand.ForegroundMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun PendingMembershipChangesPanel(
+    state: MembershipsUiState,
+    vm: MembershipsViewModel,
+    canRecoverLegacyEvidence: Boolean,
+) {
+    val pendingCount = state.pendingSubscriptions.size + state.pendingCancellations.size +
+        state.pendingRefunds.size + state.paymentTasks.size + state.paymentActions.size +
+        state.refundTasks.size + state.refundActions.size + state.legacyRefundAttempts.size
+    val restrictedPaymentActions = state.paymentActions.filter {
+        membershipPaymentActionRequiresAuditControl(it.kind, it.state)
+    }
+    val restrictedRefundActions = state.refundActions.filter {
+        membershipRefundActionRequiresAuditControl(it.kind, it.state)
+    }
+    val restrictedRecoveryCount = state.legacyRefundAttempts.size +
+        restrictedPaymentActions.size + restrictedRefundActions.size
+    var expanded by rememberSaveable { mutableStateOf(true) }
+
+    SectionCard(
+        title = "Pending membership changes",
+        subtitle = "$pendingCount payment, refund or sync ${if (pendingCount == 1) "record" else "records"} need review",
+        icon = Icons.Default.SyncProblem,
+        tone = UiTone.Warning,
+        elevated = true,
+        action = {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Collapse" else "Review")
+            }
+        },
+    ) {
+        if (!expanded) {
+            Text(
+                "Recovery records remain saved. Expand this panel before moving membership money or closing the shift.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            return@SectionCard
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
         state.refundTasks.forEach { task ->
             val legacyBlock = state.refundActions.firstOrNull { action ->
                 action.serverRefundId == task.id &&
@@ -1191,7 +1408,12 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                     },
             )
         }
-        state.legacyRefundAttempts.forEach { attempt ->
+        if (!canRecoverLegacyEvidence && restrictedRecoveryCount > 0) {
+            MembershipAuditControlEscalation(restrictedRecoveryCount)
+        }
+        state.legacyRefundAttempts.takeIf { canRecoverLegacyEvidence }
+            .orEmpty()
+            .forEach { attempt ->
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
                     .background(Brand.SurfaceRaised).padding(10.dp),
@@ -1204,7 +1426,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 )
                 Text(
                     "Do not repeat this payout. Verify the original drawer/customer or provider evidence.",
-                    color = Brand.GoldMuted,
+                    color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Button(onClick = { vm.openLegacyRefundResolution(attempt) }) {
@@ -1212,7 +1434,10 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 }
             }
         }
-        state.refundActions.forEach { action ->
+        state.refundActions.filter {
+            canRecoverLegacyEvidence ||
+                !membershipRefundActionRequiresAuditControl(it.kind, it.state)
+        }.forEach { action ->
             val recovery = action.state in setOf(
                 MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
                 MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
@@ -1251,11 +1476,18 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
         state.paymentTasks.forEach { task ->
             MembershipPaymentTaskCard(task, vm)
         }
-        state.paymentActions.forEach { action ->
+        state.paymentActions.filter {
+            canRecoverLegacyEvidence ||
+                !membershipPaymentActionRequiresAuditControl(it.kind, it.state)
+        }.forEach { action ->
             val recovery = action.state in setOf(
                 MembershipMoneyActionState.LEGACY_RECOVERY_REQUIRED,
                 MembershipMoneyActionState.LEGACY_PROVENANCE_MISSING,
             )
+            val discardableRejectedPreparation =
+                action.kind == MembershipPaymentActionKind.PREPARE &&
+                    action.state == MembershipMoneyActionState.REJECTED &&
+                    action.serverRequestId == null
             MembershipPendingRow(
                 text = when (action.kind) {
                     MembershipPaymentActionKind.PREPARE -> "Preparing membership payment"
@@ -1275,6 +1507,10 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 error = action.lastError,
                 onRetry = { vm.retryPaymentAction(action.actionId) },
                 retryEnabled = !recovery,
+                secondaryLabel = "Discard draft".takeIf { discardableRejectedPreparation },
+                onSecondary = if (discardableRejectedPreparation) {
+                    { vm.discardRejectedPreparation(action.actionId) }
+                } else null,
                 pendingText = when {
                     recovery -> action.lastError
                         ?: "Owner recovery required. Verify original drawer/provider evidence; never collect again to clear this row."
@@ -1311,7 +1547,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                     )
                     Text(
                         "No accounting entry has posted yet. Choose exactly what happened next.",
-                        color = Brand.GoldMuted,
+                        color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1337,6 +1573,7 @@ private fun PendingMembershipChangesPanel(state: MembershipsUiState, vm: Members
                 )
             }
         }
+        }
     }
 }
 
@@ -1347,6 +1584,8 @@ private fun MembershipPendingRow(
     error: String?,
     onRetry: () -> Unit,
     retryEnabled: Boolean = true,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
     pendingText: String = "Not synced yet",
 ) {
     Column(
@@ -1355,10 +1594,13 @@ private fun MembershipPendingRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text, color = Brand.Foreground, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (rejected && retryEnabled) TextButton(onClick = onRetry) { Text("Retry") }
+            if (secondaryLabel != null && onSecondary != null) {
+                TextButton(onClick = onSecondary) { Text(secondaryLabel) }
+            }
         }
         Text(
             if (rejected) "Could not sync: ${error ?: "unknown error"}" else pendingText,
-            color = if (rejected) Brand.Danger else Brand.GoldMuted,
+            color = if (rejected) Brand.Danger else Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
     }
@@ -1385,7 +1627,7 @@ private fun MembershipPaymentTaskCard(
         )
         Text(
             membershipPaymentStageMessage(task.status),
-            color = Brand.GoldMuted,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         when (task.status) {
@@ -1440,7 +1682,7 @@ private fun MembershipRefundTaskCard(
         )
         Text(
             membershipRefundStageMessage(task.status),
-            color = Brand.GoldMuted,
+            color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         if (!task.customerSpendReconciled || !task.providerEvidenceReconciled || task.evidenceTimeUntrusted) {
@@ -1506,120 +1748,5 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
 }
 
 // ============================================================================
-// SHARED PIECES — local copies, same shape as Inventory/Finance/Events'
-// own copies of these primitives (see EventsScreen's class doc).
+// SHARED DIALOG PIECES — business-sensitive money workflows remain local.
 // ============================================================================
-@Composable
-private fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg).background(Brand.Surface).padding(14.dp),
-        content = content,
-    )
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground, modifier = Modifier.padding(bottom = 2.dp))
-}
-
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    body: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm, enabled = !busy,
-                colors = ButtonDefaults.buttonColors(containerColor = Brand.Danger),
-            ) { Text(confirmLabel, color = Brand.Foreground) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun FormDialog(
-    title: String,
-    confirmLabel: String,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    AlertDialog(
-        containerColor = cloud.dcompany.erp.ui.theme.Brand.SurfaceOverlay,
-        shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
-        onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.width(480.dp),
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-                error?.let { Text(it, color = Brand.Danger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun PickerField(
-    label: String,
-    selectedLabel: String,
-    options: List<Pair<String, String>>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.ForegroundMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(Brand.SurfaceRaised)
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("▾", color = Brand.Gold)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onSelect(id) })
-                }
-            }
-        }
-    }
-}

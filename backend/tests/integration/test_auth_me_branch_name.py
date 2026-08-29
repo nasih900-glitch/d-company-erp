@@ -68,7 +68,7 @@ async def test_me_returns_no_branch_name_when_scope_has_no_branch(client, seed_o
 
 
 @pytest.mark.asyncio
-async def test_me_does_not_disclose_branch_name_from_another_company(
+async def test_me_rejects_branch_scope_from_another_company(
     client,
     session,
     seed_owner,
@@ -78,6 +78,7 @@ async def test_me_does_not_disclose_branch_name_from_another_company(
         id=uuid4(),
         company_id=other_company.id,
         name="Confidential Other Branch",
+        invoice_series_code="MN",
     )
     session.add_all([other_company, other_branch])
     await session.commit()
@@ -87,15 +88,20 @@ async def test_me_does_not_disclose_branch_name_from_another_company(
         headers=_headers(_token(seed_owner, branch_id=other_branch.id)),
     )
 
-    assert response.status_code == 200
-    assert response.json()["branch_id"] == str(other_branch.id)
-    assert response.json()["branch_name"] is None
+    assert response.status_code == 401
+    assert response.json()["error"]["message"] == "branch not found"
+    assert "Confidential Other Branch" not in response.text
 
 
 @pytest.mark.asyncio
 async def test_me_rejects_terminal_from_another_company(client, session, seed_owner) -> None:
     other_company = Company(id=uuid4(), name=f"Other-{uuid4().hex[:8]}")
-    other_branch = Branch(id=uuid4(), company_id=other_company.id, name="Other")
+    other_branch = Branch(
+        id=uuid4(),
+        company_id=other_company.id,
+        name="Other",
+        invoice_series_code="MN",
+    )
     other_terminal = Terminal(
         id=uuid4(),
         branch_id=other_branch.id,

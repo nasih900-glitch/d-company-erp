@@ -41,7 +41,12 @@ async def _seed_owner() -> dict:
     try:
         async with session_factory() as session:
             company = Company(id=uuid4(), name="RealtimeTestCo")
-            branch = Branch(id=uuid4(), company_id=company.id, name="Main")
+            branch = Branch(
+                id=uuid4(),
+                company_id=company.id,
+                name="Main",
+                invoice_series_code="MN",
+            )
             terminal = Terminal(
                 id=uuid4(),
                 branch_id=branch.id,
@@ -67,6 +72,8 @@ async def _seed_owner() -> dict:
             await session.flush()
             session.add(UserRole(id=uuid4(), user_id=owner.id, role_id=owner_role.id))
             await session.commit()
+            # Migration 0047 bumps auth_version for every role mutation.
+            await session.refresh(owner)
             return {"company": company, "branch": branch, "terminal": terminal, "owner": owner}
     finally:
         await engine.dispose()
@@ -78,6 +85,7 @@ def _token_for(seed: dict) -> str:
         company_id=seed["company"].id,
         roles=["owner"],
         branch_id=seed["branch"].id,
+        auth_version=seed["owner"].auth_version,
     )
 
 

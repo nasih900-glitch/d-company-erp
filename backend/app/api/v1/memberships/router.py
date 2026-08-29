@@ -608,7 +608,7 @@ async def list_tiers(
 async def create_tier(
     payload: TierCreate,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
     x_pricing_token: str | None = Header(default=None, alias="X-Pricing-Token"),
 ) -> TierRead:
     require_pricing_unlock(x_pricing_token, tenant)
@@ -627,7 +627,7 @@ async def update_tier(
     tier_id: UUID,
     payload: TierUpdate,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
     x_pricing_token: str | None = Header(default=None, alias="X-Pricing-Token"),
 ) -> TierRead:
     if payload.monthly_price_minor is not None or "annual_price_minor" in payload.model_fields_set:
@@ -1283,8 +1283,8 @@ async def _allocate_membership_receipt(
             "Cannot issue a membership receipt because the branch identity is invalid."
         )
     return await InvoiceNumberService(session).allocate(
+        company_id=company_id,
         branch_id=branch_id,
-        branch_code=branch.code or "MB",
         prefix="R" if refund else "M",
         series="membership_refund" if refund else "membership",
         at=occurred_at,
@@ -1398,7 +1398,7 @@ async def subscribe(
     payload: SubscribeRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> SubscriptionRead:
     if not tenant.protected_access:
         raise ForbiddenError(
@@ -1458,7 +1458,7 @@ async def prepare_membership_payment(
     payload: MembershipPaymentRequestCreate,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipPaymentRequestRead:
     """Validate and reserve a membership sale before staff collect money."""
     if not tenant.protected_access:
@@ -1709,7 +1709,7 @@ async def begin_membership_cash_collection(
     payload: MembershipPaymentCashCollectionRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipPaymentRequestRead:
     if not tenant.protected_access:
         raise ForbiddenError("Only a protected owner may collect membership cash.")
@@ -1837,7 +1837,7 @@ async def begin_membership_provider_payment(
     payload: MembershipPaymentProviderActionRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipPaymentRequestRead:
     """Persist ownership before staff approve an external payment."""
     if not tenant.protected_access:
@@ -1975,7 +1975,7 @@ async def settle_membership_payment(
     payload: MembershipPaymentSettlementRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipPaymentRequestRead:
     if not tenant.protected_access:
         raise ForbiddenError("Only a protected owner may settle membership payment.")
@@ -2225,7 +2225,7 @@ async def finalize_membership_payment(
     payload: MembershipPaymentFinalizationRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipPaymentRequestRead:
     """Post accounting only after a separately committed value-completion fact."""
     if not tenant.protected_access:
@@ -2446,7 +2446,7 @@ async def withdraw_membership_payment_request(
     payload: MembershipPaymentRequestWithdrawal,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipPaymentRequestRead:
     if not tenant.protected_access:
         raise ForbiddenError("Only a protected owner may withdraw membership payment.")
@@ -2723,7 +2723,7 @@ async def withdraw_membership_payment_request(
 async def list_membership_payment_requests(
     session: SessionDep,
     response: Response,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
     unresolved: bool = True,
     shift_id: UUID | None = None,
     request_id: UUID | None = None,
@@ -3007,10 +3007,17 @@ async def resolve_rejected_membership_payment_attempt(
 
     # Subscribe and recovery both acquire this exact shift first.  Whichever
     # wins determines the truth atomically: a posted payment blocks recovery;
-    # a recovery row blocks any later retry of the old payment action.
+    # a recovery row blocks any later retry of the old payment action. Company
+    # scope is applied before locking so a guessed foreign UUID cannot block on
+    # or lock another tenant's shift.
     shift = (
         await session.execute(
-            select(Shift).where(Shift.id == payload.shift_id).with_for_update()
+            select(Shift)
+            .where(
+                Shift.id == payload.shift_id,
+                Shift.company_id == tenant.company_id,
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if shift is None or shift.company_id != tenant.company_id:
@@ -3209,7 +3216,12 @@ async def register_rejected_membership_refund_attempt(
 
     source_shift = (
         await session.execute(
-            select(Shift).where(Shift.id == payload.source_shift_id).with_for_update()
+            select(Shift)
+            .where(
+                Shift.id == payload.source_shift_id,
+                Shift.company_id == tenant.company_id,
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if source_shift is None or source_shift.company_id != tenant.company_id:
@@ -3548,6 +3560,22 @@ async def resolve_rejected_membership_refund_attempt(
             .with_for_update()
         )
     ).scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    checked_at = existing.checked_at if existing is not None else now
+    evidence_occurred_at = None
+    evidence_time_untrusted = False
+    provider_evidence_reconciled = True
+    if payload.paid_via != "cash":
+        evidence_occurred_at, evidence_time_untrusted = _capture_financial_evidence(
+            request=request,
+            occurred_at=payload.evidence_occurred_at or recovery.captured_at,
+            shift=source_shift,
+            action_started_at=recovery.registered_at,
+            server_now=checked_at,
+        )
+        provider_evidence_reconciled = len(verification_reference or "") >= 3
+
     if existing is not None:
         same_fact = (
             existing.outcome == payload.outcome
@@ -3556,6 +3584,18 @@ async def resolve_rejected_membership_refund_attempt(
             and existing.provider_status == payload.provider_status
             and existing.verification_reference == verification_reference
             and existing.cash_handover_confirmed == payload.cash_handover_confirmed
+            and existing.provider_evidence_reconciled
+            == provider_evidence_reconciled
+            and existing.evidence_time_untrusted == evidence_time_untrusted
+            and (
+                existing.evidence_occurred_at is None
+                if evidence_occurred_at is None
+                else existing.evidence_occurred_at is not None
+                and abs(
+                    (existing.evidence_occurred_at - evidence_occurred_at).total_seconds()
+                )
+                <= 1
+            )
         )
         if not same_fact:
             raise BusinessRuleError(
@@ -3603,21 +3643,6 @@ async def resolve_rejected_membership_refund_attempt(
         or payment.amount_minor != recovery.expected_amount_minor
     ):
         raise BusinessRuleError("The immutable payment no longer matches this recovery task.")
-
-    now = datetime.now(timezone.utc)
-    checked_at = now
-    evidence_occurred_at = None
-    evidence_time_untrusted = False
-    provider_evidence_reconciled = True
-    if payload.paid_via != "cash":
-        evidence_occurred_at, evidence_time_untrusted = _capture_financial_evidence(
-            request=request,
-            occurred_at=payload.evidence_occurred_at or recovery.captured_at,
-            shift=source_shift,
-            action_started_at=recovery.registered_at,
-            server_now=now,
-        )
-        provider_evidence_reconciled = len(verification_reference or "") >= 3
 
     refund = None
     if financial_outcome:
@@ -3831,7 +3856,7 @@ async def refund_membership(
     payload: MembershipRefundRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Reverse one paid term in full and end its benefits immediately.
 
@@ -4103,7 +4128,7 @@ async def begin_cash_membership_refund_handoff(
     payload: MembershipRefundCashHandoffRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Persist the danger state immediately before cash leaves the drawer."""
     if not tenant.protected_access:
@@ -4283,7 +4308,7 @@ async def begin_provider_membership_refund(
     payload: MembershipRefundProviderActionRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Persist ownership before staff initiate an external refund."""
     if not tenant.protected_access:
@@ -4450,7 +4475,7 @@ async def settle_cash_membership_refund(
     payload: CashMembershipRefundSettlementRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Persist the physical cash handover before accounting finalization.
 
@@ -4729,7 +4754,7 @@ async def settle_provider_membership_refund(
     payload: ProviderMembershipRefundSettlementRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Persist provider payout evidence before accounting finalization."""
     if not tenant.protected_access:
@@ -5002,7 +5027,7 @@ async def finalize_membership_refund(
     payload: MembershipRefundFinalizationRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Post a previously committed payout completion exactly once."""
     if not tenant.protected_access:
@@ -5257,7 +5282,7 @@ async def withdraw_membership_refund(
     payload: MembershipRefundResolutionRequest,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> MembershipRefundRead:
     """Resolve an accepted refund without inventing or deleting money."""
     if not tenant.protected_access:
@@ -5631,7 +5656,7 @@ async def withdraw_membership_refund(
 async def list_membership_refund_tasks(
     session: SessionDep,
     response: Response,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
     unresolved: bool = True,
     shift_id: UUID | None = None,
     refund_id: UUID | None = None,
@@ -6044,7 +6069,7 @@ async def cancel_subscription(
     subscription_id: UUID,
     session: SessionDep,
     request: Request,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("memberships.manage")),
 ) -> SubscriptionRead:
     if not tenant.protected_access:
         raise ForbiddenError(

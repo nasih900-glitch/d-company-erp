@@ -54,6 +54,27 @@
         respond "Not found" 404
     }
 
+    # Controlled direct-distribution channel for signed Android packages.
+    # Only exact file paths are served (directory browsing is not enabled).
+    # Use versioned filenames in ANDROID_UPDATE_URL so a replacement can never
+    # be confused with a cached older binary. APKs are mounted read-only and
+    # are never generated or modified by the production application.
+    @android_apk path_regexp android_apk ^/downloads/android/[A-Za-z0-9][A-Za-z0-9._-]*\.apk$
+    handle @android_apk {
+        uri strip_prefix /downloads/android
+        root * /srv/releases/android
+        header {
+            Content-Type "application/vnd.android.package-archive"
+            Content-Disposition "attachment"
+            Cache-Control "public, max-age=31536000, immutable, no-transform"
+            X-Content-Type-Options "nosniff"
+        }
+        file_server
+    }
+    handle /downloads/android/* {
+        respond "Not found" 404
+    }
+
     # Backend API.
     handle /api/* {
         reverse_proxy backend:8000 {

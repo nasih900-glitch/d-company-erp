@@ -1,0 +1,186 @@
+package cloud.dcompany.erp.core.net
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+
+/**
+ * Server-authoritative receipt history shared by every client. These models
+ * deliberately remain separate from PosReceiptEntity: the latter is immutable
+ * evidence that this tablet captured a payment, while this projection is a
+ * replaceable, offline-readable cache of receipts created on any device.
+ */
+@Serializable
+data class CanonicalReceiptLine(
+    val id: String,
+    @SerialName("menu_item_id") val menuItemId: String,
+    @SerialName("menu_item_name") val menuItemName: String,
+    @SerialName("menu_item_type") val menuItemType: String,
+    @SerialName("variant_id") val variantId: String? = null,
+    @SerialName("variant_snapshot") val variantSnapshot: JsonObject? = null,
+    val modifiers: List<JsonObject> = emptyList(),
+    /** Exact decimal string from PostgreSQL; never round it through Double for accounting. */
+    val qty: String,
+    @SerialName("unit_price_minor") val unitPriceMinor: Long,
+    @SerialName("line_total_minor") val lineTotalMinor: Long,
+    @SerialName("discount_minor") val discountMinor: Long,
+    @SerialName("hsn_or_sac") val hsnOrSac: String? = null,
+    @SerialName("tax_rate") val taxRate: String,
+    @SerialName("taxable_value_minor") val taxableValueMinor: Long,
+    @SerialName("cgst_minor") val cgstMinor: Long,
+    @SerialName("sgst_minor") val sgstMinor: Long,
+    @SerialName("igst_minor") val igstMinor: Long,
+    @SerialName("cess_minor") val cessMinor: Long,
+    val note: String? = null,
+    @SerialName("voided_at") val voidedAt: String? = null,
+    @SerialName("voided_by") val voidedBy: String? = null,
+    @SerialName("voided_by_name") val voidedByName: String? = null,
+    @SerialName("void_reason") val voidReason: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class CanonicalReceiptPayment(
+    val id: String,
+    @SerialName("shift_id") val shiftId: String,
+    val method: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    @SerialName("tendered_minor") val tenderedMinor: Long? = null,
+    @SerialName("change_minor") val changeMinor: Long? = null,
+    val reference: String? = null,
+    @SerialName("paid_at") val paidAt: String,
+    @SerialName("recorded_by") val recordedBy: String? = null,
+    @SerialName("recorded_by_name") val recordedByName: String? = null,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class CanonicalReceiptRefund(
+    val id: String,
+    @SerialName("request_id") val requestId: String? = null,
+    @SerialName("company_id") val companyId: String? = null,
+    @SerialName("branch_id") val branchId: String? = null,
+    @SerialName("terminal_id") val terminalId: String? = null,
+    @SerialName("settlement_shift_id") val settlementShiftId: String? = null,
+    @SerialName("approved_by") val approvedBy: String,
+    @SerialName("approved_by_name") val approvedByName: String? = null,
+    @SerialName("manager_override_user_id") val managerOverrideUserId: String? = null,
+    @SerialName("manager_override_user_name") val managerOverrideUserName: String? = null,
+    @SerialName("reason_code") val reasonCode: String,
+    @SerialName("amount_minor") val amountMinor: Long,
+    val mode: String,
+    @SerialName("settlement_method") val settlementMethod: String? = null,
+    @SerialName("settled_at") val settledAt: String? = null,
+    @SerialName("settled_by") val settledBy: String? = null,
+    @SerialName("settled_by_name") val settledByName: String? = null,
+    @SerialName("external_reference") val externalReference: String? = null,
+    @SerialName("provider_settled_at") val providerSettledAt: String? = null,
+    @SerialName("client_occurred_at") val clientOccurredAt: String? = null,
+    @SerialName("captured_time_reconciled") val capturedTimeReconciled: Boolean? = null,
+    @SerialName("provider_evidence_reconciled") val providerEvidenceReconciled: Boolean? = null,
+    @SerialName("settlement_idempotency_key") val settlementIdempotencyKey: String? = null,
+    @SerialName("receipt_no") val receiptNo: String? = null,
+    @SerialName("receipt_fiscal_year") val receiptFiscalYear: String? = null,
+    @SerialName("receipt_issued_at") val receiptIssuedAt: String? = null,
+    @SerialName("customer_spend_reconciled") val customerSpendReconciled: Boolean? = null,
+    @SerialName("loyalty_reconciliation_state") val loyaltyReconciliationState: String? = null,
+    val note: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class CanonicalReceiptGamingSession(
+    val id: String,
+    @SerialName("station_id") val stationId: String,
+    @SerialName("station_code") val stationCode: String,
+    @SerialName("station_name") val stationName: String,
+    @SerialName("station_type") val stationType: String,
+    @SerialName("source_shift_id") val sourceShiftId: String,
+    @SerialName("started_by") val startedBy: String,
+    @SerialName("started_by_name") val startedByName: String? = null,
+    @SerialName("stopped_by") val stoppedBy: String? = null,
+    @SerialName("stopped_by_name") val stoppedByName: String? = null,
+    @SerialName("sent_to_pos_by") val sentToPosBy: String? = null,
+    @SerialName("sent_to_pos_by_name") val sentToPosByName: String? = null,
+    @SerialName("started_at") val startedAt: String,
+    @SerialName("stopped_at") val stoppedAt: String? = null,
+    @SerialName("sent_to_pos_at") val sentToPosAt: String? = null,
+    @SerialName("billing_mode") val billingMode: String,
+    @SerialName("rate_per_hour_minor") val ratePerHourMinor: Long,
+    @SerialName("package_id") val packageId: String? = null,
+    @SerialName("package_price_minor_snapshot") val packagePriceMinorSnapshot: Long? = null,
+    @SerialName("package_duration_minutes_snapshot") val packageDurationMinutesSnapshot: Int? = null,
+    @SerialName("package_variant_snapshot") val packageVariantSnapshot: String? = null,
+    @SerialName("timer_minutes") val timerMinutes: Int? = null,
+    @SerialName("paused_minutes") val pausedMinutes: Int,
+    @SerialName("billable_minutes") val billableMinutes: Int? = null,
+    @SerialName("amount_minor") val amountMinor: Long? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class CanonicalReceipt(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("company_id") val companyId: String,
+    @SerialName("branch_id") val branchId: String,
+    @SerialName("terminal_id") val terminalId: String,
+    @SerialName("shift_id") val shiftId: String,
+    @SerialName("shift_opened_by") val shiftOpenedBy: String? = null,
+    @SerialName("shift_opened_by_name") val shiftOpenedByName: String? = null,
+    @SerialName("shift_opened_at") val shiftOpenedAt: String? = null,
+    @SerialName("shift_closed_at") val shiftClosedAt: String? = null,
+    @SerialName("opened_by") val openedBy: String,
+    @SerialName("opened_by_name") val openedByName: String? = null,
+    @SerialName("invoice_no") val invoiceNo: String,
+    @SerialName("fiscal_year") val fiscalYear: String,
+    val status: String,
+    @SerialName("order_type") val orderType: String,
+    @SerialName("table_id") val tableId: String? = null,
+    @SerialName("subtotal_minor") val subtotalMinor: Long,
+    @SerialName("discount_minor") val discountMinor: Long,
+    @SerialName("manual_discount_minor") val manualDiscountMinor: Long,
+    @SerialName("points_redeemed_minor") val pointsRedeemedMinor: Long,
+    @SerialName("cgst_minor") val cgstMinor: Long,
+    @SerialName("sgst_minor") val sgstMinor: Long,
+    @SerialName("igst_minor") val igstMinor: Long,
+    @SerialName("cess_minor") val cessMinor: Long,
+    @SerialName("tax_minor") val taxMinor: Long,
+    @SerialName("round_off_minor") val roundOffMinor: Long,
+    @SerialName("tip_minor") val tipMinor: Long,
+    @SerialName("total_minor") val totalMinor: Long,
+    @SerialName("paid_minor") val paidMinor: Long,
+    @SerialName("refunded_minor") val refundedMinor: Long,
+    @SerialName("net_collected_minor") val netCollectedMinor: Long,
+    @SerialName("customer_name") val customerName: String? = null,
+    @SerialName("customer_phone") val customerPhone: String? = null,
+    @SerialName("customer_gstin") val customerGstin: String? = null,
+    @SerialName("customer_address") val customerAddress: String? = null,
+    @SerialName("customer_state_code") val customerStateCode: String? = null,
+    @SerialName("place_of_supply_state_code") val placeOfSupplyStateCode: String? = null,
+    @SerialName("is_reverse_charge") val isReverseCharge: Boolean,
+    val irn: String? = null,
+    @SerialName("irn_ack_no") val irnAckNo: String? = null,
+    @SerialName("irn_acknowledged_at") val irnAcknowledgedAt: String? = null,
+    @SerialName("e_invoice_qr") val eInvoiceQr: String? = null,
+    val notes: String? = null,
+    @SerialName("opened_at") val openedAt: String,
+    @SerialName("held_at") val heldAt: String? = null,
+    @SerialName("closed_at") val closedAt: String,
+    @SerialName("invoice_issued_at") val invoiceIssuedAt: String,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+    val lines: List<CanonicalReceiptLine> = emptyList(),
+    val payments: List<CanonicalReceiptPayment> = emptyList(),
+    val refunds: List<CanonicalReceiptRefund> = emptyList(),
+    @SerialName("gaming_sessions") val gamingSessions: List<CanonicalReceiptGamingSession> = emptyList(),
+)
+
+@Serializable
+data class CanonicalReceiptPage(
+    val items: List<CanonicalReceipt>,
+    @SerialName("next_cursor") val nextCursor: String? = null,
+    @SerialName("has_more") val hasMore: Boolean,
+)

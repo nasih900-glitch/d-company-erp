@@ -11,14 +11,20 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ForbiddenError, NotFoundError
 from app.core.permissions import ROLE_DESCRIPTIONS, requires, requires_any
-from app.core.roles import CO_OWNER_ROLE, FULL_ACCESS_ROLES, PROTECTED_OWNER_ROLE, public_roles
-from app.core.tenant import TenantContext
+from app.core.roles import (
+    CO_OWNER_ROLE,
+    OWNER_ROLE_CODES,
+    PROTECTED_OWNER_ROLE,
+    PUBLIC_OWNER_ROLE,
+    public_roles,
+)
+from app.core.tenant import TenantContext, TenantDep
 from app.models import Attendance, Branch, Role, User, UserRole
 
 router = APIRouter()
@@ -39,6 +45,16 @@ class UserUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=20)
     status: str | None = Field(default=None, pattern="^(active|suspended)$")
     role_code: str | None = None
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
 
 
 class PasswordChange(BaseModel):
@@ -72,16 +88,23 @@ class OnShiftRead(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
-async def _roles_for_user(session, user_id: UUID) -> list[str]:
-    return public_roles(await _raw_roles_for_user(session, user_id))
+async def _roles_for_user(session, user_id: UUID, company_id: UUID) -> list[str]:
+    return public_roles(await _raw_roles_for_user(session, user_id, company_id))
 
 
-async def _raw_roles_for_user(session, user_id: UUID) -> list[str]:
+async def _raw_roles_for_user(
+    session,
+    user_id: UUID,
+    company_id: UUID,
+) -> list[str]:
     rows = (
         await session.execute(
             select(Role.code)
             .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == user_id)
+            .where(
+                UserRole.user_id == user_id,
+                Role.company_id == company_id,
+            )
         )
     ).scalars().all()
     return list(rows)
@@ -90,13 +113,34 @@ async def _raw_roles_for_user(session, user_id: UUID) -> list[str]:
 async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: str) -> None:
     if role_code == PROTECTED_OWNER_ROLE:
         raise BusinessRuleError("protected owner access cannot be assigned from Staff")
-    if role_code == CO_OWNER_ROLE and not tenant.audit_access:
-        raise ForbiddenError("Only the protected owner can assign co-owner access.")
-    current_roles = set(await _raw_roles_for_user(session, user_id))
+    if role_code in {CO_OWNER_ROLE, PUBLIC_OWNER_ROLE} and not tenant.audit_access:
+        raise ForbiddenError("Only the protected owner can assign owner access.")
+    current_roles = set(await _raw_roles_for_user(session, user_id, tenant.company_id))
     if PROTECTED_OWNER_ROLE in current_roles:
         raise BusinessRuleError("protected owner role cannot be changed from Staff")
-    if CO_OWNER_ROLE in current_roles and not tenant.audit_access:
-        raise ForbiddenError("Only the protected owner can change co-owner access.")
+    if OWNER_ROLE_CODES.intersection(current_roles) and not tenant.audit_access:
+        raise ForbiddenError("Only the protected owner can change owner access.")
+    branch_ids = set(
+        (
+            await session.execute(
+                select(UserRole.branch_id)
+                .join(Role, Role.id == UserRole.role_id)
+                .where(
+                    UserRole.user_id == user_id,
+                    UserRole.branch_id.is_not(None),
+                    Role.company_id == tenant.company_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(branch_ids) > 1:
+        raise BusinessRuleError(
+            "account has role assignments in multiple branches; reconcile the "
+            "branch assignments before changing the role"
+        )
+    preserved_branch_id = next(iter(branch_ids), None)
     role = (
         await session.execute(
             select(Role).where(Role.company_id == tenant.company_id, Role.code == role_code)
@@ -111,7 +155,7 @@ async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: st
             id=uuid4(),
             user_id=user_id,
             role_id=role.id,
-            branch_id=None,
+            branch_id=preserved_branch_id,
             granted_by=tenant.user_id,
         )
     )
@@ -140,7 +184,7 @@ async def list_users(
                 name=u.name,
                 phone=u.phone,
                 status=u.status,
-                roles=await _roles_for_user(session, u.id),
+                roles=await _roles_for_user(session, u.id, tenant.company_id),
                 last_login_at=u.last_login_at,
             )
         )
@@ -158,7 +202,8 @@ async def get_user(
         raise NotFoundError("user not found")
     return UserRead(
         id=u.id, email=u.email, name=u.name, phone=u.phone, status=u.status,
-        roles=await _roles_for_user(session, u.id), last_login_at=u.last_login_at,
+        roles=await _roles_for_user(session, u.id, tenant.company_id),
+        last_login_at=u.last_login_at,
     )
 
 
@@ -181,26 +226,40 @@ async def update_user(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.write")),
 ) -> UserRead:
-    u = await session.get(User, user_id)
-    if not u or u.company_id != tenant.company_id or u.deleted_at:
+    # Role replacement is a delete-all + insert operation. Serialize every
+    # staff mutation on the durable User row so two managers cannot both read
+    # the old role, race their replacements, and leave the account with two
+    # active roles (and therefore the union of both permission sets).
+    u = (
+        await session.execute(
+            select(User)
+            .where(
+                User.id == user_id,
+                User.company_id == tenant.company_id,
+                User.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not u:
         raise NotFoundError("user not found")
     is_self = u.id == tenant.user_id
-    current_roles = await _raw_roles_for_user(session, u.id)
+    current_roles = await _raw_roles_for_user(session, u.id, tenant.company_id)
     is_protected_owner = PROTECTED_OWNER_ROLE in current_roles
-    is_internal_owner = bool(FULL_ACCESS_ROLES.intersection(current_roles))
+    is_owner = bool(OWNER_ROLE_CODES.intersection(current_roles))
     if is_self and (payload.role_code is not None or payload.status == "suspended"):
         raise BusinessRuleError("you cannot remove or suspend your own access")
     if is_protected_owner and payload.status == "suspended":
         raise BusinessRuleError("protected owner cannot be suspended from Staff")
     if (
-        is_internal_owner
+        is_owner
         and not tenant.audit_access
         and (payload.role_code is not None or payload.status is not None)
     ):
         raise ForbiddenError("Only the protected owner can change owner access.")
     if payload.name is not None:
         u.name = payload.name
-    if payload.phone is not None:
+    if "phone" in payload.model_fields_set:
         u.phone = payload.phone
     # auth_version evicts every live session for this user the instant it
     # changes (see tenant.py's auth_version check) — bump it only on a
@@ -214,11 +273,13 @@ async def update_user(
         u.auth_version += 1
     if payload.role_code is not None and payload.role_code not in current_roles:
         await _set_role(session, tenant, u.id, payload.role_code)
-        u.auth_version += 1
+        # 0047's user_roles trigger invalidates any already-issued tokens for
+        # every writer, including direct SQL. Do not increment here as well.
     await session.flush()
     return UserRead(
         id=u.id, email=u.email, name=u.name, phone=u.phone, status=u.status,
-        roles=await _roles_for_user(session, u.id), last_login_at=u.last_login_at,
+        roles=await _roles_for_user(session, u.id, tenant.company_id),
+        last_login_at=u.last_login_at,
     )
 
 
@@ -241,16 +302,31 @@ async def delete_user(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.write")),
 ):
-    u = await session.get(User, user_id)
-    if not u or u.company_id != tenant.company_id or u.deleted_at:
+    # Use the same per-user serialization boundary as update_user(). This
+    # prevents a concurrent role/status edit from being accepted against an
+    # account that another request has just removed.
+    u = (
+        await session.execute(
+            select(User)
+            .where(
+                User.id == user_id,
+                User.company_id == tenant.company_id,
+                User.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not u:
         raise NotFoundError("user not found")
     if u.id == tenant.user_id:
         raise BusinessRuleError("you cannot delete your own account")
-    target_roles = set(await _raw_roles_for_user(session, u.id))
+    target_roles = set(
+        await _raw_roles_for_user(session, u.id, tenant.company_id)
+    )
     if PROTECTED_OWNER_ROLE in target_roles:
         raise BusinessRuleError("protected owner cannot be deleted")
-    if CO_OWNER_ROLE in target_roles and not tenant.audit_access:
-        raise ForbiddenError("Only the protected owner can remove a co-owner.")
+    if OWNER_ROLE_CODES.intersection(target_roles) and not tenant.audit_access:
+        raise ForbiddenError("Only the protected owner can remove an owner.")
     u.deleted_at = datetime.now(timezone.utc)
     u.status = "suspended"
     u.auth_version += 1
@@ -264,7 +340,7 @@ async def list_roles(
 ) -> list[dict]:
     hidden_roles = {PROTECTED_OWNER_ROLE}
     if not tenant.audit_access:
-        hidden_roles.add(CO_OWNER_ROLE)
+        hidden_roles.update({CO_OWNER_ROLE, PUBLIC_OWNER_ROLE})
     rows = (
         (
             await session.execute(
@@ -296,10 +372,9 @@ class MyPasswordChange(BaseModel):
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_my_password(
     payload: MyPasswordChange,
-    session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.read")),  # any logged-in user
+    tenant: TenantDep,
 ):
-    del payload, session, tenant
+    del payload, tenant
     raise BusinessRuleError(
         "OTP approval is required. Use Reset password from Account settings."
     )
@@ -315,6 +390,10 @@ async def clock_in(
     branch = await session.get(Branch, payload.branch_id)
     if not branch or branch.company_id != tenant.company_id or branch.deleted_at:
         raise NotFoundError("branch not found")
+    if not tenant.in_branch(payload.branch_id):
+        raise ForbiddenError(
+            "Clock in at your assigned branch or sign in on that branch's terminal."
+        )
     # Serialize clock-ins per user: lock the user row first so a second
     # near-simultaneous request (double-tap, or a second device before the
     # UI re-syncs) blocks here until the first transaction commits its
@@ -361,6 +440,12 @@ async def clock_out(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.attendance.write")),
 ) -> dict:
+    # Serialize close attempts on the same durable parent row. Without this
+    # lock, two devices can both read the open Attendance row before either
+    # commits and both report a successful clock-out with different times.
+    await session.execute(
+        select(User).where(User.id == tenant.user_id).with_for_update()
+    )
     # Most recent still-open attendance row for this user in this company.
     # clock_in() guards against a second open row, but `.limit(1)` keeps
     # this safe regardless (e.g. against a row left over from before that

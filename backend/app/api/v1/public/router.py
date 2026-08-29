@@ -53,6 +53,11 @@ class ClientCompatibilityDTO(BaseModel):
     latest_version_code: int
     status: Literal["supported", "update_available", "update_required"]
     update_url: str | None
+    latest_version_name: str | None = None
+    release_notes: str | None = None
+    apk_sha256: str | None = None
+    apk_size_bytes: int | None = None
+    apk_signing_cert_sha256: str | None = None
     message: str
     checked_at: datetime
 
@@ -69,10 +74,20 @@ async def client_compatibility(
         minimum = settings.android_min_supported_version_code
         latest = settings.android_latest_version_code
         update_url = str(settings.android_update_url) if settings.android_update_url else None
+        latest_version_name = settings.android_latest_version_name
+        release_notes = settings.android_update_release_notes
+        apk_sha256 = settings.android_update_apk_sha256
+        apk_size_bytes = settings.android_update_apk_size_bytes
+        apk_signing_cert_sha256 = settings.android_update_signing_cert_sha256
     else:
         minimum = settings.ios_min_supported_version_code
         latest = settings.ios_latest_version_code
         update_url = str(settings.ios_update_url) if settings.ios_update_url else None
+        latest_version_name = None
+        release_notes = None
+        apk_sha256 = None
+        apk_size_bytes = None
+        apk_signing_cert_sha256 = None
 
     if version_code < minimum:
         compatibility_status = "update_required"
@@ -94,6 +109,11 @@ async def client_compatibility(
         latest_version_code=latest,
         status=compatibility_status,
         update_url=update_url,
+        latest_version_name=latest_version_name,
+        release_notes=release_notes,
+        apk_sha256=apk_sha256,
+        apk_size_bytes=apk_size_bytes,
+        apk_signing_cert_sha256=apk_signing_cert_sha256,
         message=(
             default_message
             if compatibility_status == "supported"

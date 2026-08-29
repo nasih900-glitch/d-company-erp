@@ -9,8 +9,9 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.0.1` |
-| Version code | `2` |
+| Version name | `3.1.2` |
+| Version code | `13` |
+| Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
@@ -22,12 +23,29 @@ build.
 
 ## Release status
 
-The app is a release candidate, not a declared production rollout. The current
-workflow has been exercised on an Android 15 tablet emulator, including login,
-shift handling, POS payments, Tables/KDS, gaming hand-off, process restart, and
-offline sale recovery. This repository does **not** yet contain acceptance
-evidence from the physical Redmi Pad 2, and the current Android acceptance work
-has not deployed anything to production.
+Version `3.1.2` (`13`) is the signed manual partner baseline for this rollout.
+It advances Room from 36 through 40 to protect the employee-owned Support
+outbox, immutable offline Gaming item actions, and the canonical receipt-history
+cache. It still requires exactly one server-confirmed Hybrid Gaming + POS
+workspace for the active shop. The signed code-`12` to code-`13` in-place
+upgrade and API-35 evidence preserve the supported upgrade path, but they do
+not replace the full authenticated workflow or physical Redmi Pad 2 acceptance.
+Nothing from Android release preparation deploys the backend or web ERP. Before
+the APK is manually handed to the partner, the coordinated production
+deployment must migrate the server database through Alembic revision `0057`
+and pass the production smoke test.
+
+Android client code `8` remains the minimum-compatible floor. Preserve the
+signed `3.1.1` (`12`) predecessor and the signed `3.1.2` (`13`) baseline as
+immutable artifacts. Code `13` must not be hosted, published, or advertised as
+a server update in this release; production retains the code-`8` latest-version
+defaults and blank direct-update metadata. The first server-driven update will
+instead be a newly signed `3.1.3` (`14`) immutable APK with a verified HTTPS
+URL, SHA-256, byte size, package, version, and expected signer. The server may
+advertise that future artifact only after its same-lineage upgrade and release
+gates pass. Android will still require the employee to approve installation.
+Do not raise the minimum to `14` until every active tablet has installed and
+accepted that future build.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
@@ -43,7 +61,9 @@ release check must not be described as GST or tax-compliance certification.
 The native app now supports the operational day rather than POS browsing only:
 
 - authenticated login, token refresh, password recovery, role-based navigation,
-  protected-owner step-up, and verified branch/terminal selection;
+  protected-owner step-up, and automatic one-shop workspace selection (the
+  backend still enforces its branch/terminal scope without exposing unnecessary
+  terminal controls when only one workspace is active);
 - shift open and close, opening float, staff opener identity, cash-denomination
   counting, collection/refund breakdown, variance, and shift history;
 - direct POS sales, quantities, authoritative checkout totals, cash/UPI/card,
@@ -54,11 +74,15 @@ The native app now supports the operational day rather than POS browsing only:
   acknowledgement, refresh/recovery controls, keep-screen-on, and `Exit KDS`;
 - PS5, VR, simulator, streaming, and shisha session timers, stop/cancel actions,
   alarm reminders, and unpaid `Send to POS` hand-off;
-- durable Room caches and outboxes, offline status/feedback, background retry,
-  reconnect reconciliation, and duplicate-payment guards;
+- durable Room caches and outboxes, offline status/feedback, automatic retry
+  while the app is running or when it is next reopened, reconnect
+  reconciliation, and duplicate-payment guards;
 - inventory, menu/pricing, customers, memberships, events, refunds, finance,
   reports, analytics, staff, settings, access control, and protected audit-log
-  screens, subject to the signed-in role's permissions.
+  screens, subject to the signed-in role's permissions; and
+- contextual **Help** from authenticated screens, with user-entered issue
+  details, allowlisted screen/action/error context, an explicitly selected and
+  privacy-reviewed screenshot, durable offline retry, and visible owner replies.
 
 Roles intentionally do not all receive the same navigation. A missing screen can
 be correct least-privilege behaviour; do not broaden a role merely to make its
@@ -66,8 +90,9 @@ menu resemble an owner's menu.
 
 ## Operational flow
 
-1. Sign in, confirm the branch and terminal/till, then open a shift with the
-   physical opening float.
+1. Sign in, confirm the single shop workspace, then open a shift with the
+   physical opening float. Internal branch/terminal ownership remains automatic
+   and is shown only when an operator needs to resolve a configuration problem.
 2. For seated service, take and customise rounds in **Tables**, send each round
    to **Kitchen**, progress it in **KDS**, then use **Send to POS** when the bill
    is ready.
@@ -91,7 +116,8 @@ The full staff procedure and recovery rules are in
   routine network failure.
 - Order and payment retries use stable identities and idempotency protection.
   A pending or ambiguous payment must be reconciled, not recreated.
-- Branch, terminal, user and company form the local cache scope. Terminal
+- Branch, terminal, user and company still form the internal local-cache scope,
+  even when the one-workspace UI hides redundant terminal controls. Workspace
   reassignment and sign-out are guarded when unresolved work could be stranded.
 - Shift resolution is terminal-specific. POS and gaming must not reuse an open
   shift from another branch or till.
@@ -136,15 +162,17 @@ debug API override as evidence that the production endpoint works.
 
 Android accepts an update only when its application ID and signing lineage
 match the installed app. This module deliberately retains
-`cloud.dcompany.erp`; any existing Capacitor/native installation signed with the
-D Company key must be updated with that same signing lineage.
+`cloud.dcompany.erp`; a previously installed supported native build must be
+updated with that same signing lineage. The archived Capacitor wrapper uses a
+different application ID and is not an upgrade source or release target.
 
 `keystore.properties` and the keystore are gitignored. Keep them outside source
 control and back them up securely. A local `assembleRelease` without the
 properties can produce an unsigned artifact; it is not distributable. The
 repository release workflow is the supported path because it runs release
 tests, lint, emulator instrumentation and signature verification before
-publishing the APK/AAB, checksums, and release manifest.
+staging the APK/AAB, checksums, and release manifest in a draft. Publication is
+a separate post-migration approval step.
 
 See [`docs/DISTRIBUTION.md`](../docs/DISTRIBUTION.md) for the signed GitHub
 release process and [`docs/PLAY_INTERNAL_TESTING.md`](../docs/PLAY_INTERNAL_TESTING.md)

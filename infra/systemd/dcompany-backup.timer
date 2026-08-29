@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the D Company ERP off-site backup nightly
+
+[Timer]
+OnCalendar=*-*-* 22:00:00 UTC
+AccuracySec=1min
+Persistent=true
+Unit=dcompany-backup.service
+
+[Install]
+WantedBy=timers.target

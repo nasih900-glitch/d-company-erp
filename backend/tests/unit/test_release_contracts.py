@@ -7,12 +7,18 @@ import pytest
 from pydantic import ValidationError
 from starlette.requests import Request
 
+from app import __version__
 from app.api.v1.events.router import _ticket_number
 from app.api.v1.gaming.router import BookingCreate
 from app.api.v1.pos.router import OrderCreate
 from app.api.v1.settings.router import BranchCreate
 from app.core.middleware import IdempotencyMiddleware
+from app.main import create_app
 from app.models import ExpenseCategory, IdempotencyKey, Order
+
+
+def test_fastapi_metadata_uses_the_package_release_version() -> None:
+    assert create_app().version == __version__ == "3.1.2"
 
 
 def _order_payload(**overrides):

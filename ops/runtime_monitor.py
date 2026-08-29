@@ -35,7 +35,7 @@ ROOT = Path(os.getenv("DCOMPANY_ROOT", "/opt/d-company-erp"))
 ENV_FILE = ROOT / ".env"
 COMPOSE_FILE = ROOT / "docker-compose.prod.yml"
 STATE_FILE = ROOT / "ops" / ".runtime_monitor_state.json"
-LOCAL_BACKUP_DIR = ROOT / "backups" / "auto"
+LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")
 DEFAULT_BASE_URL = "https://dcompany.duckdns.org"
 EXPECTED_SERVICES = frozenset(
     {"caddy", "postgres", "redis", "minio", "backend", "frontend"}

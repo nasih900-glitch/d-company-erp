@@ -11,6 +11,7 @@ import pytest
 from app.api.v1.kitchen.router import (
     StateUpdate,
     _next_ready_at,
+    _set_line_status,
     _state_from_lines,
     _validate_state_transition,
     kitchen_queue,
@@ -102,6 +103,7 @@ async def test_default_floor_is_created_on_the_current_branch_only() -> None:
         id=branch_id,
         company_id=tenant.company_id,
         name="Current Branch",
+        invoice_series_code="MN",
     )
     session = _Session(_Result(), entity=branch)
 
@@ -253,6 +255,56 @@ async def test_kitchen_queue_hides_orders_when_every_kitchen_line_is_served() ->
     )
 
     assert await kitchen_queue(session, tenant) == []
+
+
+@pytest.mark.asyncio
+async def test_served_history_uses_line_completion_not_order_open_date() -> None:
+    branch_id = uuid4()
+    tenant = _tenant(branch_id=branch_id)
+    order_id = uuid4()
+    now = datetime.now(UTC)
+    order = SimpleNamespace(
+        id=order_id,
+        invoice_no=None,
+        type="dine_in",
+        table_id=None,
+        customer_name=None,
+        opened_at=now - timedelta(days=1),
+        kitchen_state="served",
+        status="open",
+    )
+    line = SimpleNamespace(
+        id=uuid4(),
+        client_line_id=uuid4(),
+        order_id=order_id,
+        menu_item_id=uuid4(),
+        qty=1,
+        note="Crossed midnight",
+        kitchen_status="served",
+        kitchen_released_at=now - timedelta(minutes=10),
+        kitchen_served_at=now,
+        kitchen_round_no=1,
+        variant_snapshot=None,
+        modifiers=[],
+        voided_at=None,
+        created_at=now - timedelta(days=1),
+    )
+    item = SimpleNamespace(id=line.menu_item_id, name="Toast", type="food")
+    session = _Session(
+        _Result(scalar="Asia/Kolkata"),
+        _Result(rows=[order]),
+        _Result(rows=[(line, item)]),
+    )
+
+    history = await kitchen_queue(session, tenant, include_served=True)
+
+    assert [ticket.id for ticket in history] == [order_id]
+    assert history[0].kitchen_state == "served"
+    order_filter = str(session.statements[1].whereclause)
+    line_filter = str(session.statements[2].whereclause)
+    assert "order_lines.kitchen_served_at" in order_filter
+    assert "orders.opened_at" not in order_filter
+    assert "order_lines.kitchen_served_at" in line_filter
 
 
 @pytest.mark.asyncio
@@ -442,6 +494,7 @@ async def test_kitchen_transition_materializes_legacy_ready_lines_before_serving
     )
 
     assert legacy_line.kitchen_status == "served"
+    assert legacy_line.kitchen_served_at is not None
     assert result.kitchen_state == "served"
 
 
@@ -490,6 +543,21 @@ def test_ready_timestamp_is_idempotent_and_retained_after_service() -> None:
     assert _next_ready_at("preparing", "ready", None, first_ready_at) == first_ready_at
     assert _next_ready_at("ready", "ready", first_ready_at, retry_at) == first_ready_at
     assert _next_ready_at("ready", "served", first_ready_at, retry_at) == first_ready_at
+
+
+def test_served_line_timestamp_is_set_once_and_cleared_before_service() -> None:
+    first = datetime(2026, 7, 15, 10, tzinfo=UTC)
+    retry = first + timedelta(minutes=1)
+    line = SimpleNamespace(kitchen_status="ready", kitchen_served_at=None)
+
+    _set_line_status(line, "served", first)
+    _set_line_status(line, "served", retry)
+
+    assert line.kitchen_status == "served"
+    assert line.kitchen_served_at == first
+
+    _set_line_status(line, "ready", retry)
+    assert line.kitchen_served_at is None
 
 
 def test_pre_ready_states_clear_stale_ready_timestamp() -> None:

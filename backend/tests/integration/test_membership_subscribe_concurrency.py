@@ -705,27 +705,54 @@ async def test_money_task_lists_support_exact_recovery_and_truncation(
             recovery.json()["id"]
         ]
 
+        resolution_evidence_at = datetime.now(UTC).replace(microsecond=0)
+        resolution_payload = {
+            "original_client_action_id": recovery_action,
+            "customer_id": str(case.customer_id),
+            "membership_id": sale.json()["membership_id"],
+            "payment_id": sale.json()["payment_id"],
+            "source_shift_id": str(case.shift_id),
+            "reconciliation_shift_id": None,
+            "expected_amount_minor": case.amount_minor,
+            "paid_via": "upi",
+            "outcome": "no_payout",
+            "reason": "Provider search proved no refund was created",
+            "provider_status": "not_completed",
+            "verification_reference": f"NO-REFUND-{uuid4().hex}",
+            "evidence_occurred_at": resolution_evidence_at.isoformat(),
+            "cash_handover_confirmed": False,
+        }
         resolved = await client.post(
             "/api/v1/memberships/refund-attempts/resolve",
-            json={
-                "original_client_action_id": recovery_action,
-                "customer_id": str(case.customer_id),
-                "membership_id": sale.json()["membership_id"],
-                "payment_id": sale.json()["payment_id"],
-                "source_shift_id": str(case.shift_id),
-                "reconciliation_shift_id": None,
-                "expected_amount_minor": case.amount_minor,
-                "paid_via": "upi",
-                "outcome": "no_payout",
-                "reason": "Provider search proved no refund was created",
-                "provider_status": "not_completed",
-                "verification_reference": f"NO-REFUND-{uuid4().hex}",
-                "evidence_occurred_at": datetime.now(UTC).isoformat(),
-                "cash_handover_confirmed": False,
-            },
+            json=resolution_payload,
             headers=_headers(case, f"membership-list-recovery-resolve:{uuid4()}"),
         )
         assert resolved.status_code == 201, resolved.text
+
+        natural_key_replay = await client.post(
+            "/api/v1/memberships/refund-attempts/resolve",
+            json=resolution_payload,
+            headers=_headers(
+                case, f"membership-list-recovery-natural-replay:{uuid4()}"
+            ),
+        )
+        assert natural_key_replay.status_code == 201, natural_key_replay.text
+        assert natural_key_replay.json() == resolved.json()
+
+        conflicting_evidence = await client.post(
+            "/api/v1/memberships/refund-attempts/resolve",
+            json={
+                **resolution_payload,
+                "evidence_occurred_at": (
+                    resolution_evidence_at + timedelta(seconds=2)
+                ).isoformat(),
+            },
+            headers=_headers(
+                case, f"membership-list-recovery-evidence-conflict:{uuid4()}"
+            ),
+        )
+        assert conflicting_evidence.status_code == 422, conflicting_evidence.text
+        assert "different immutable evidence" in conflicting_evidence.text
 
         refund_action = f"membership-refund-request:{uuid4()}"
         refund = await client.post(
@@ -1008,6 +1035,179 @@ async def test_cash_reservation_retry_and_settlement_post_exactly_once(
                 "CustomerMembership",
                 "MembershipPayment",
             }
+    finally:
+        await _cleanup(case)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_expired_term_remains_in_history_and_can_be_renewed_once(
+    client, session, seed_owner
+) -> None:
+    """Expiry removes benefits without erasing history; renewal mints one new term."""
+    case = await _seed_case(session, seed_owner)
+    now = datetime.now(UTC).replace(microsecond=0)
+    expired = CustomerMembership(
+        id=uuid4(),
+        customer_id=case.customer_id,
+        tier_id=case.tier_id,
+        billing_cycle="monthly",
+        starts_at=now - timedelta(days=60),
+        expires_at=now - timedelta(days=30),
+        auto_renew=False,
+        amount_paid_minor=case.amount_minor,
+        notes="Expired renewal workflow fixture",
+    )
+    session.add(expired)
+    await session.commit()
+    try:
+        current_before = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}",
+            headers=_headers(case, f"membership-expiry-current:{uuid4()}"),
+        )
+        assert current_before.status_code == 200, current_before.text
+        assert current_before.json() is None
+
+        history_before = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}/history",
+            headers=_headers(case, f"membership-expiry-history:{uuid4()}"),
+        )
+        assert history_before.status_code == 200, history_before.text
+        assert [row["id"] for row in history_before.json()] == [str(expired.id)]
+        assert history_before.json()[0]["is_active"] is False
+
+        prepared = await _prepare(
+            client,
+            case,
+            method="upi",
+            key=f"membership-renew-prepare:{uuid4()}",
+        )
+        request_id = prepared["id"]
+        begun = await _begin(
+            client,
+            case,
+            request_id,
+            method="upi",
+            key=f"membership-renew-begin:{uuid4()}",
+        )
+        assert begun["status"] == "provider_action_in_progress"
+        settled = await _settle(
+            client,
+            case,
+            request_id,
+            method="upi",
+            key=f"membership-renew-settle:{uuid4()}",
+            external_reference=f"RENEW-{uuid4().hex}",
+        )
+        assert settled.status_code == 201, settled.text
+        assert settled.json()["status"] == "payment_completed_pending_posting"
+        finalized = await _finalize_payment(
+            client,
+            case,
+            request_id,
+            key=f"membership-renew-finalize:{uuid4()}",
+        )
+        assert finalized.status_code == 201, finalized.text
+        assert finalized.json()["status"] == "settled"
+
+        current_after = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}",
+            headers=_headers(case, f"membership-renew-current:{uuid4()}"),
+        )
+        assert current_after.status_code == 200, current_after.text
+        renewed = current_after.json()
+        assert renewed is not None
+        assert renewed["id"] != str(expired.id)
+        assert renewed["is_active"] is True
+        assert renewed["payment_receipt_no"].startswith("M/")
+
+        history_after = await client.get(
+            f"/api/v1/memberships/customer/{case.customer_id}/history",
+            headers=_headers(case, f"membership-renew-history:{uuid4()}"),
+        )
+        assert history_after.status_code == 200, history_after.text
+        rows = history_after.json()
+        assert len(rows) == 2
+        assert {row["id"] for row in rows} == {str(expired.id), renewed["id"]}
+        assert sum(bool(row["is_active"]) for row in rows) == 1
+
+        async with AsyncSessionLocal() as verify:
+            assert await verify.scalar(
+                select(func.count())
+                .select_from(CustomerMembership)
+                .where(CustomerMembership.customer_id == case.customer_id)
+            ) == 2
+            assert await verify.scalar(
+                select(func.count())
+                .select_from(MembershipPayment)
+                .where(MembershipPayment.request_id == UUID(request_id))
+            ) == 1
+    finally:
+        await _cleanup(case)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cancel_renewal_replays_and_keeps_paid_term_active_until_expiry(
+    client, session, seed_owner
+) -> None:
+    """Offline/retry cancellation converges without ending prepaid benefits."""
+    case = await _seed_case(session, seed_owner)
+    now = datetime.now(UTC).replace(microsecond=0)
+    membership = CustomerMembership(
+        id=uuid4(),
+        customer_id=case.customer_id,
+        tier_id=case.tier_id,
+        billing_cycle="monthly",
+        starts_at=now - timedelta(days=3),
+        expires_at=now + timedelta(days=27),
+        auto_renew=True,
+        amount_paid_minor=case.amount_minor,
+        notes="Auto-renew cancellation workflow fixture",
+    )
+    session.add(membership)
+    await session.commit()
+    key = f"membership-cancel:{uuid4()}"
+    try:
+        first = await client.post(
+            f"/api/v1/memberships/{membership.id}/cancel",
+            headers=_headers(case, key),
+        )
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["auto_renew"] is False
+        assert body["cancelled_at"] is not None
+        assert body["is_active"] is True
+
+        exact_retry = await client.post(
+            f"/api/v1/memberships/{membership.id}/cancel",
+            headers=_headers(case, key),
+        )
+        assert exact_retry.status_code == 200, exact_retry.text
+        assert exact_retry.json() == body
+
+        # A response-loss recovery generated with a new local cancellation row
+        # still converges to the same desired state and cannot shorten the term.
+        convergent_retry = await client.post(
+            f"/api/v1/memberships/{membership.id}/cancel",
+            headers=_headers(case, f"membership-cancel-recovery:{uuid4()}"),
+        )
+        assert convergent_retry.status_code == 200, convergent_retry.text
+        assert convergent_retry.json()["cancelled_at"] == body["cancelled_at"]
+        assert convergent_retry.json()["expires_at"] == body["expires_at"]
+        assert convergent_retry.json()["is_active"] is True
+
+        async with AsyncSessionLocal() as verify:
+            saved = await verify.get(CustomerMembership, membership.id)
+            assert saved is not None
+            assert saved.auto_renew is False
+            assert saved.cancelled_at is not None
+            assert saved.expires_at == membership.expires_at
+            assert await verify.scalar(
+                select(func.count())
+                .select_from(CustomerMembership)
+                .where(CustomerMembership.customer_id == case.customer_id)
+            ) == 1
     finally:
         await _cleanup(case)
 
@@ -1690,7 +1890,12 @@ async def test_legacy_cash_refund_attempt_is_quarantined_then_reconciled_once(
     reconciliation_shift_id = uuid4()
     reconciliation_opening = case.amount_minor + 75_000
     other_company = Company(id=uuid4(), name="Foreign membership tenant")
-    other_branch = Branch(id=uuid4(), company_id=other_company.id, name="Foreign branch")
+    other_branch = Branch(
+        id=uuid4(),
+        company_id=other_company.id,
+        name="Foreign branch",
+        invoice_series_code="MN",
+    )
     other_terminal = Terminal(
         id=uuid4(),
         branch_id=other_branch.id,
@@ -1787,20 +1992,61 @@ async def test_legacy_cash_refund_attempt_is_quarantined_then_reconciled_once(
         }
 
         # A protected owner from another company cannot adopt the immutable
-        # payment merely by knowing its UUIDs.
-        cross_tenant = await client.post(
-            "/api/v1/memberships/refund-attempts/register",
-            json=registration_payload,
-            headers={
-                "Authorization": f"Bearer {other_token}",
-                "X-Terminal-Id": str(other_terminal.id),
-                "Idempotency-Key": f"membership-foreign-register:{uuid4()}",
-                "X-Client-Action-Id": f"membership-foreign-register:{uuid4()}",
-                "X-Client-Platform": "android",
-                "X-Client-Version-Code": "21",
-            },
-        )
-        assert cross_tenant.status_code == 404, cross_tenant.text
+        # payment merely by knowing its UUIDs. Tenant scope must also be in the
+        # SELECT before FOR UPDATE: neither recovery endpoint may wait behind a
+        # lock held on another company's shift.
+        async with AsyncSessionLocal() as blocker:
+            await blocker.execute(
+                select(Shift).where(Shift.id == case.shift_id).with_for_update()
+            )
+            try:
+                foreign_register_key = f"membership-foreign-register:{uuid4()}"
+                cross_tenant = await asyncio.wait_for(
+                    client.post(
+                        "/api/v1/memberships/refund-attempts/register",
+                        json=registration_payload,
+                        headers={
+                            "Authorization": f"Bearer {other_token}",
+                            "X-Terminal-Id": str(other_terminal.id),
+                            "Idempotency-Key": foreign_register_key,
+                            "X-Client-Action-Id": foreign_register_key,
+                            "X-Client-Platform": "android",
+                            "X-Client-Version-Code": "21",
+                        },
+                    ),
+                    timeout=2,
+                )
+                assert cross_tenant.status_code == 404, cross_tenant.text
+
+                foreign_payment_key = f"membership-foreign-payment-resolve:{uuid4()}"
+                cross_tenant_payment = await asyncio.wait_for(
+                    client.post(
+                        "/api/v1/memberships/payment-attempts/resolve",
+                        json={
+                            "original_client_action_id": f"membership-subscribe:{uuid4()}",
+                            "customer_id": str(case.customer_id),
+                            "tier_id": str(case.tier_id),
+                            "shift_id": str(case.shift_id),
+                            "expected_amount_minor": case.amount_minor,
+                            "paid_via": "cash",
+                            "resolution": "payment_not_collected",
+                            "reason": "Foreign tenant lock-scope proof",
+                            "cash_return_confirmed": False,
+                        },
+                        headers={
+                            "Authorization": f"Bearer {other_token}",
+                            "X-Terminal-Id": str(other_terminal.id),
+                            "Idempotency-Key": foreign_payment_key,
+                            "X-Client-Action-Id": foreign_payment_key,
+                            "X-Client-Platform": "android",
+                            "X-Client-Version-Code": "21",
+                        },
+                    ),
+                    timeout=2,
+                )
+                assert cross_tenant_payment.status_code == 404, cross_tenant_payment.text
+            finally:
+                await blocker.rollback()
 
         register_key = f"membership-legacy-register:{uuid4()}"
         registered = await client.post(

@@ -17,6 +17,15 @@ data class IngredientCacheEntity(
     val reorderThreshold: Double,
     val reorderQty: Double,
     val avgCostMinor: Long,
+    /**
+     * Exact FIFO value returned by /insights/inventory/valuation for the
+     * projection in [projectionBranchId].  This must not be reconstructed as
+     * currentQty * avgCostMinor: integer average-cost rounding can make that
+     * materially disagree with the remaining batches.
+     */
+    val valuationMinor: Long?,
+    /** Null means the company-wide projection; otherwise this cache row is for one branch. */
+    val projectionBranchId: String?,
 )
 
 object IngredientWriteState {
@@ -111,6 +120,8 @@ data class LocalSupplierEntity(
 data class BatchCacheEntity(
     @PrimaryKey val id: String,
     val ingredientId: String,
+    /** Kept on-device so receipts from different branches can never look interchangeable. */
+    val branchId: String,
     val receivedAt: String,
     val expiresAt: String?,
     val qtyOnHand: Double,
@@ -139,6 +150,10 @@ data class LocalGrnEntity(
     val branchId: String,
     val supplierId: String,
     val supplierInvoiceNo: String?,
+    /** Supplier's stated document total, distinct from our computed line total. */
+    val supplierInvoiceAmountMinor: Long?,
+    /** Captured when the operator records the receipt, never replaced by retry time. */
+    val receivedAt: String,
     val notes: String?,
     val createdAtMillis: Long,
     val syncState: String = SyncState.PENDING,

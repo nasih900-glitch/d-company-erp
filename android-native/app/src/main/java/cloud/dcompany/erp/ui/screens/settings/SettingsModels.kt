@@ -1,5 +1,9 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import cloud.dcompany.erp.core.auth.TerminalPurpose
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.presentationPolicy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.ZoneId
@@ -19,16 +23,16 @@ internal data class SettingsConfirmation(
 internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsConfirmation = when (action) {
     DestructiveSettingsAction.DiscardCompanyEdits -> SettingsConfirmation(
         title = "Discard company changes?",
-        body = "Your unsaved company, tax, timezone and payment-QR edits will be lost.",
+        body = "Your unsaved company identity, timezone and payment-QR edits will be lost.",
         confirmLabel = "Discard changes",
     )
     is DestructiveSettingsAction.DiscardBranchForm -> SettingsConfirmation(
-        title = if (action.isNew) "Discard new branch?" else "Discard branch edits?",
+        title = if (action.isNew) "Discard new shop?" else "Discard shop edits?",
         body = if (action.isNew) {
-            "The unsaved branch setup for ${action.branchName.ifBlank { "this branch" }} will be lost."
+            "The unsaved shop setup for ${action.branchName.ifBlank { "this shop" }} will be lost."
         } else {
-            "Unsaved hours, licence, tax and address edits for " +
-                "${action.branchName.ifBlank { "this branch" }} will be lost."
+            "Unsaved hours, licence and address edits for " +
+                "${action.branchName.ifBlank { "this shop" }} will be lost."
         },
         confirmLabel = "Discard edits",
     )
@@ -45,7 +49,8 @@ internal fun settingsConfirmation(action: DestructiveSettingsAction): SettingsCo
  * guessed — a wrong name here fails at runtime, not compile time:
  *
  *   CompanyRead / CompanyUpdate / BranchRead / BranchCreate / BranchUpdate /
- *   TerminalRead / TerminalCreate   backend/app/api/v1/settings/router.py
+ *   TerminalRead / TerminalCreate / TerminalUpdate
+ *                                   backend/app/api/v1/settings/router.py
  *   OtpChallengeResponse / PasswordResetConfirm / AccountActionResponse
  *                                   backend/app/api/v1/auth/router.py
  *
@@ -98,6 +103,8 @@ data class BranchDto(
     val id: String,
     val name: String,
     val code: String? = null,
+    /** Stable fiscal-document namespace, separate from the editable display code. */
+    @SerialName("invoice_series_code") val invoiceSeriesCode: String = "",
     val address: String? = null,
     val timezone: String? = null,
     @SerialName("opens_at") val opensAt: String? = null,
@@ -113,6 +120,12 @@ data class BranchDto(
 data class BranchWriteBody(
     val name: String,
     val code: String? = null,
+    /**
+     * Nullable only for recovery of a pre-v3.0.4 queued branch. New forms
+     * always send this explicitly; the transition backend accepts omission
+     * only when [code] is itself exactly two alphanumeric characters.
+     */
+    @SerialName("invoice_series_code") val invoiceSeriesCode: String? = null,
     val address: String? = null,
     val timezone: String? = null,
     @SerialName("opens_at") val opensAt: String? = null,
@@ -128,6 +141,8 @@ data class TerminalDto(
     val id: String,
     @SerialName("branch_id") val branchId: String,
     val name: String,
+    /** Absent only on an older server; that legacy contract behaved as hybrid. */
+    val purpose: String = TerminalPurpose.HYBRID,
     @SerialName("device_id") val deviceId: String? = null,
     @SerialName("last_seen_at") val lastSeenAt: String? = null,
 )
@@ -136,8 +151,96 @@ data class TerminalDto(
 data class TerminalCreateBody(
     @SerialName("branch_id") val branchId: String,
     val name: String,
+    val purpose: String,
     @SerialName("device_id") val deviceId: String? = null,
 )
+
+@Serializable
+data class TerminalUpdateBody(
+    val name: String? = null,
+    val purpose: String? = null,
+    /** Empty string is intentional: the backend normalizes it to null/clear. */
+    @SerialName("device_id") val deviceId: String? = null,
+)
+
+data class TerminalEditForm(
+    val id: String,
+    val branchId: String,
+    val originalName: String,
+    val name: String,
+    val purpose: String,
+    val originalPurpose: String = purpose,
+    val deviceId: String,
+)
+
+fun TerminalDto.toEditForm() = TerminalEditForm(
+    id = id,
+    branchId = branchId,
+    originalName = name,
+    name = name,
+    purpose = purpose,
+    deviceId = deviceId.orEmpty(),
+)
+
+fun TerminalEditForm.validate(): String? {
+    if (name.isBlank()) return "Give the till a name."
+    if (name.trim().length > 100) return "Till name must be 100 characters or fewer."
+    if (!TerminalPurpose.isKnown(purpose)) return "Choose how this terminal will be used."
+    return terminalDeviceIdError(deviceId)
+}
+
+fun TerminalEditForm.toBody() = TerminalUpdateBody(
+    name = name.trim(),
+    purpose = purpose,
+    // Send blank explicitly so the backend clears a removed device binding.
+    deviceId = deviceId.trim(),
+)
+
+internal data class TerminalPurposeOption(
+    val id: String,
+    val label: String,
+    val description: String,
+)
+
+internal fun terminalPurposeOptions(
+    presentation: WorkspacePresentationPolicy,
+): List<TerminalPurposeOption> {
+    val hybrid = TerminalPurposeOption(
+        id = TerminalPurpose.HYBRID,
+        label = presentation.hybridTerminalLabel,
+        description = "Runs Gaming, POS, payments and one accountable shift in the same workspace.",
+    )
+    if (presentation.singleHybridTerminalOnly) return listOf(hybrid)
+    return listOf(
+        TerminalPurposeOption(
+            id = TerminalPurpose.CAFE_POS,
+            label = presentation.posOnlyTerminalLabel,
+            description = if (presentation.showsRestaurantOperations) {
+                "Takes food payments and receives bills from Gaming Area."
+            } else {
+                "Legacy POS-only till. Use only when a separate payment counter is genuinely required."
+            },
+        ),
+        TerminalPurposeOption(
+            id = TerminalPurpose.GAMING,
+            label = presentation.gamingTerminalLabel,
+            description = if (presentation.showsRestaurantOperations) {
+                "Starts gaming sessions and must hand completed bills to an open Cafe POS shift."
+            } else {
+                "Starts gaming sessions; completed bills require an open receiving POS shift."
+            },
+        ),
+        hybrid,
+    )
+}
+
+internal val terminalPurposeOptions: List<TerminalPurposeOption> =
+    terminalPurposeOptions(WorkspaceFeatureProfiles.FullHospitality.presentationPolicy())
+
+internal fun terminalPurposeLabel(
+    purpose: String,
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.FullHospitality.presentationPolicy(),
+): String = terminalPurposeOptions(presentation).firstOrNull { it.id == purpose }?.label ?: "Unknown purpose"
 
 @Serializable
 data class OtpChallengeDto(
@@ -169,11 +272,30 @@ data class AccountActionDto(val message: String = "")
  * round trip. A server that disagrees still wins: its 422 is shown verbatim.
  */
 private val ianaZoneIds: Set<String> by lazy { ZoneId.getAvailableZoneIds() }
+private val invoiceSeriesPattern = Regex("^[A-Z0-9]{2}$")
 
 /** Word-for-word the backend's own message, so both paths read identically. */
 const val TIMEZONE_MESSAGE = "timezone must be a valid IANA name like Asia/Kolkata"
 
 fun isIanaTimezone(value: String): Boolean = value.trim() in ianaZoneIds
+
+/** Same normalization and format accepted by BranchCreate/BranchUpdate. */
+internal fun normalizeInvoiceSeries(value: String): String = value.trim().uppercase()
+
+internal fun isValidInvoiceSeries(value: String): Boolean =
+    invoiceSeriesPattern.matches(normalizeInvoiceSeries(value))
+
+/**
+ * Recover only the exact backward-compatible case accepted by the server.
+ * Never truncate a longer operational code: doing so could silently choose
+ * the wrong legal invoice namespace.
+ */
+internal fun resolveQueuedInvoiceSeries(explicit: String?, operationalCode: String?): String? {
+    if (explicit != null) {
+        return normalizeInvoiceSeries(explicit).takeIf(::isValidInvoiceSeries)
+    }
+    return operationalCode?.let(::normalizeInvoiceSeries)?.takeIf(::isValidInvoiceSeries)
+}
 
 /** A handful of matches for the tablet keyboard — nobody types a tz list by hand. */
 fun timezoneSuggestions(typed: String, limit: Int = 6): List<String> {
@@ -269,6 +391,7 @@ data class BranchForm(
     val id: String? = null,
     val name: String = "",
     val code: String = "",
+    val invoiceSeriesCode: String = "",
     val address: String = "",
     val timezone: String = "Asia/Kolkata",
     val opensAt: String = "09:00",
@@ -285,6 +408,7 @@ fun BranchDto.toForm() = BranchForm(
     id = id,
     name = name,
     code = code.orEmpty(),
+    invoiceSeriesCode = invoiceSeriesCode,
     address = address.orEmpty(),
     timezone = timezone.orEmpty(),
     opensAt = opensAt.orEmpty(),
@@ -296,9 +420,12 @@ fun BranchDto.toForm() = BranchForm(
 )
 
 fun BranchForm.validate(): String? {
-    if (name.isBlank()) return "Branch name cannot be empty."
-    if (name.trim().length > 200) return "Branch name must be 200 characters or fewer."
+    if (name.isBlank()) return "Shop name cannot be empty."
+    if (name.trim().length > 200) return "Shop name must be 200 characters or fewer."
     if (code.trim().length > 10) return "Short code must be 10 characters or fewer."
+    if (!isValidInvoiceSeries(invoiceSeriesCode)) {
+        return "Invoice series must be exactly two letters or digits, for example MN."
+    }
     if (address.trim().length > 500) return "Address must be 500 characters or fewer."
     val tz = timezone.trim()
     if (tz.isNotEmpty() && !isIanaTimezone(tz)) return TIMEZONE_MESSAGE
@@ -323,7 +450,7 @@ fun BranchForm.validate(): String? {
     }
     val gstin = branchGstin.trim()
     if (gstin.isNotEmpty() && gstin.length != 15) {
-        return "Branch GSTIN must be exactly 15 characters."
+        return "Shop GSTIN must be exactly 15 characters."
     }
     return null
 }
@@ -331,6 +458,7 @@ fun BranchForm.validate(): String? {
 fun BranchForm.toBody() = BranchWriteBody(
     name = name.trim(),
     code = code.trim().uppercase().ifBlank { null },
+    invoiceSeriesCode = normalizeInvoiceSeries(invoiceSeriesCode),
     address = address.trim().ifBlank { null },
     timezone = timezone.trim().ifBlank { null },
     opensAt = opensAt.trim().ifBlank { null },

@@ -19,6 +19,7 @@ import { audit, type AuditEntryDTO, type AuditFacetsDTO } from '@/lib/erp-api';
 import { inr } from '@/lib/inr';
 import Modal from '@/components/ui/Modal';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 const ACTION_COLOR: Record<string, string> = {
   create: 'border-accent-good/40 text-accent-good',
@@ -92,9 +93,10 @@ export default function AuditScreen() {
     setView(null);
   }
 
-  async function load(token = auditToken) {
+  async function load(token = auditToken, silent = false) {
     if (!token) return;
-    setLoading(true); setErr(null);
+    if (!silent) setLoading(true);
+    setErr(null);
     try {
       const [r, f] = await Promise.all([
         audit.list({
@@ -115,11 +117,16 @@ export default function AuditScreen() {
         setAuditToken(null);
       }
     }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }
   // Unlocking loads once; search filters are intentionally submitted by the form.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auditToken) load(auditToken); }, [auditToken]);
+  useRealtimeRefresh({
+    resources: ['audit'],
+    enabled: Boolean(auditToken),
+    refresh: () => load(auditToken, true),
+  });
 
   const onSearch = (e: React.FormEvent) => { e.preventDefault(); load(); };
   const visibleRows = area ? rows.filter((e) => auditArea(e) === area) : rows;

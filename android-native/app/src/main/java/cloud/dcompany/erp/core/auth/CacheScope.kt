@@ -23,9 +23,14 @@ data class CacheScope(
 internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "menu_items",
     "menu_categories",
+    "menu_variants",
+    "menu_modifier_groups",
+    "menu_modifiers",
     "sync_meta",
     "gaming_stations",
+    "gaming_package_cache",
     "gaming_session_cache",
+    "gaming_session_addon_cache",
     "kitchen_order_cache",
     "cafe_floors",
     "cafe_tables",
@@ -33,6 +38,7 @@ internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "refund_order_cache",
     "report_snapshots",
     "customer_cache",
+    "customer_order_history_cache",
     "staff_cache",
     "on_shift_cache",
     "ingredient_cache",
@@ -55,6 +61,8 @@ internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "membership_payment_task_cache",
     "membership_refund_task_cache",
     "membership_refund_attempt_cache",
+    "canonical_pos_receipts",
+    "canonical_receipt_sync_state",
 )
 
 internal val LOCAL_DURABLE_TABLES = listOf(
@@ -64,6 +72,8 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_orders",
     "local_shifts",
     "local_gaming_sessions",
+    "local_gaming_package_extensions",
+    "local_gaming_session_addon_actions",
     "local_kitchen_advances",
     "local_table_orders",
     "local_cafe_actions",
@@ -93,6 +103,10 @@ internal val LOCAL_DURABLE_TABLES = listOf(
     "local_branches",
     "local_terminals",
     "local_held_order_payments",
+    // Support images precede their parent rows for FK-safe scope purging.
+    "local_bug_report_attachments",
+    "local_bug_reports",
+    "pos_receipts",
 )
 
 internal val ALL_SCOPE_TABLES = SERVER_DERIVED_CACHE_TABLES + LOCAL_DURABLE_TABLES
@@ -177,10 +191,16 @@ class CacheScopeException(message: String, cause: Throwable? = null) : Exception
 
 enum class CacheScopeActivation { RETAINED, PURGED }
 
+internal data class CachedScopeLeaseActivation(
+    val activation: CacheScopeActivation,
+    val lease: CacheScopeLease,
+)
+
 /**
  * Capability captured before a server request. A response may mutate a
  * replaceable cache only while this exact lease is still active.
  */
+@ConsistentCopyVisibility
 data class CacheScopeLease internal constructor(
     val scope: CacheScope,
     internal val generation: Long,
@@ -247,6 +267,13 @@ class CacheIsolationCoordinator internal constructor(
         deactivateLocked()
     }
 
+    /** Background bootstrap may revoke only the exact lease it created. */
+    internal suspend fun deactivateIfCurrent(lease: CacheScopeLease): Boolean = mutex.withLock {
+        if (activeLease != lease) return@withLock false
+        deactivateLocked()
+        true
+    }
+
     /**
      * Sign-out's final outbox recheck and lease revocation are one critical
      * section. A feature write therefore either lands first and blocks the
@@ -271,25 +298,31 @@ class CacheIsolationCoordinator internal constructor(
     }
 
     /** Offline restore may retain only a scope previously validated and committed online. */
-    suspend fun activateCached(scope: CacheScope): CacheScopeActivation = mutex.withLock {
-        val stored = try {
-            marker.current()
-        } catch (error: Exception) {
-            deactivateLocked()
-            throw CacheScopeException(
-                "The tablet could not verify the saved account scope. Connect and try again.",
-                error,
-            )
+    suspend fun activateCached(scope: CacheScope): CacheScopeActivation =
+        activateCachedWithLease(scope).activation
+
+    /** Atomic lease-returning form for a cold background worker. */
+    internal suspend fun activateCachedWithLease(scope: CacheScope): CachedScopeLeaseActivation =
+        mutex.withLock {
+            val stored = try {
+                marker.current()
+            } catch (error: Exception) {
+                deactivateLocked()
+                throw CacheScopeException(
+                    "The tablet could not verify the saved account scope. Connect and try again.",
+                    error,
+                )
+            }
+            if (stored != scope) {
+                deactivateLocked()
+                throw CacheScopeException(
+                    "Connect once to verify this account, branch, and terminal before opening cached data.",
+                )
+            }
+            val lease = newLease(scope)
+            activeLease = lease
+            CachedScopeLeaseActivation(CacheScopeActivation.RETAINED, lease)
         }
-        if (stored != scope) {
-            deactivateLocked()
-            throw CacheScopeException(
-                "Connect once to verify this account, branch, and terminal before opening cached data.",
-            )
-        }
-        activeLease = newLease(scope)
-        CacheScopeActivation.RETAINED
-    }
 
     /** A server-validated scope may replace another scope after an atomic full-data purge. */
     suspend fun activateValidated(scope: CacheScope): CacheScopeActivation = mutex.withLock {

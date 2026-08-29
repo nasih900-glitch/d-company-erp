@@ -7,6 +7,7 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.services.auth import otp as otp_service
 from app.services.email.mailer import Mailer
+from app.services.realtime import manager as realtime_manager
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -55,7 +56,15 @@ def configured_security_email(monkeypatch, seed_owner) -> list[dict[str, str]]:
 async def test_new_login_requires_single_use_central_email_otp(
     client,
     configured_security_email,
+    seed_owner,
+    monkeypatch,
 ) -> None:
+    broadcasts: list[tuple[object, str]] = []
+
+    async def capture_broadcast(company_id, resource: str) -> None:
+        broadcasts.append((company_id, resource))
+
+    monkeypatch.setattr(realtime_manager, "broadcast", capture_broadcast)
     email = f"new-{uuid4().hex[:10]}@test.local"
     requested = await client.post(
         "/api/v1/auth/register/request",
@@ -86,6 +95,7 @@ async def test_new_login_requires_single_use_central_email_otp(
         json={"challenge_id": challenge_id, "code": "123456"},
     )
     assert confirmed.status_code == 201
+    assert broadcasts == [(seed_owner["company"].id, "audit")]
 
     login = await client.post(
         "/api/v1/auth/login",
@@ -111,13 +121,21 @@ async def test_password_reset_replaces_old_password_only_after_otp(
     client,
     seed_owner,
     configured_security_email,
+    monkeypatch,
 ) -> None:
+    broadcasts: list[tuple[object, str]] = []
+
+    async def capture_broadcast(company_id, resource: str) -> None:
+        broadcasts.append((company_id, resource))
+
+    monkeypatch.setattr(realtime_manager, "broadcast", capture_broadcast)
     owner = seed_owner["owner"]
     existing_login = await client.post(
         "/api/v1/auth/login",
         json={"email": owner.email, "password": seed_owner["password"]},
     )
     assert existing_login.status_code == 200
+    broadcasts.clear()
     requested = await client.post(
         "/api/v1/auth/password-reset/request",
         json={"email": owner.email},
@@ -133,6 +151,10 @@ async def test_password_reset_replaces_old_password_only_after_otp(
         },
     )
     assert confirmed.status_code == 200
+    assert broadcasts == [
+        (seed_owner["company"].id, "audit"),
+        (seed_owner["company"].id, "access_control"),
+    ]
 
     expired_access = await client.get(
         "/api/v1/auth/me",
@@ -243,7 +265,7 @@ async def test_standard_owner_reaches_operational_modules_but_not_protected_admi
         assert response.status_code == 200, f"{path}: {response.text}"
 
     settings = await client.get("/api/v1/settings/company", headers=headers)
-    assert settings.status_code == 403
+    assert settings.status_code == 200
 
     audit = await client.post(
         "/api/v1/admin/audit/unlock",

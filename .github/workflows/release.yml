@@ -1,16 +1,32 @@
-# Builds the supported Android release on a tag push (e.g. v3.1.0) and attaches
-# the signed APK/AAB to a GitHub Release. Web production deploys are handled by
-# the existing VPS deployment workflow, not by this installer workflow.
+# Builds the supported Android release on a tag push (e.g. v3.1.1) and stages
+# the signed APK/AAB in a draft GitHub Release. An operator publishes that draft
+# only after the coordinated backend migration and production smoke test. Web
+# production deploys are handled by the existing VPS deployment workflow.
 #
 # Required GitHub secrets (set in repo → Settings → Secrets and variables → Actions):
 #   ANDROID_KEYSTORE_BASE64         — release.keystore
 #   ANDROID_KEYSTORE_PASSWORD
 #   ANDROID_KEY_ALIAS
 #   ANDROID_KEY_PASSWORD
-# Android signing secrets are mandatory. The Android job fails closed before
-# building if any are absent, so an unsigned APK/AAB can never reach a release.
+# Required GitHub Actions repository variable:
+#   ANDROID_EXPECTED_SIGNER_SHA256 — 64-hex SHA-256 certificate fingerprint
+#                                    from the established direct-install fleet
+# Android signing secrets are mandatory. The isolated signing job fails closed
+# if any are absent, and signed artifacts must match the independently configured
+# public certificate fingerprint.
 
 name: Release Android
+
+# Build and signing jobs only need to read source. The release job grants its own
+# narrow contents:write permission below when it publishes verified artifacts.
+permissions:
+  contents: read
+
+# A release tag names immutable, long-cacheable APK bytes. Serialize retries
+# for the same ref so two jobs cannot race to publish different assets.
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
 
 on:
   push:
@@ -18,12 +34,144 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ----------------------------------------------------------- Android (.apk / .aab)
+  # A tag can point to a commit whose branch CI never ran. Re-run the backend
+  # migration/tests and complete web gate here before any release is signed.
+  coordinated-release-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U erp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify coordinated release tag and versions
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_REF_TYPE" != "tag" ]; then
+            echo "Android releases must run from a v* Git tag, not a branch." >&2
+            exit 1
+          fi
+          python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
+          python3 -m unittest discover -s tests -p 'test_android_release*.py'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - name: Install and audit backend dependencies
+        run: |
+          python -m pip install -r backend/requirements.lock
+          python -m pip install pytest pytest-asyncio pytest-cov pip-audit
+          python -m pip_audit -r backend/requirements.lock
+      - name: Apply migrations to a fresh PostgreSQL database
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://erp:erp@localhost:5432/erp_test
+        run: alembic upgrade head
+      - name: Run complete backend suite
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://erp:erp@localhost:5432/erp_test
+          REDIS_URL: redis://localhost:6379/0
+        run: pytest
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install and audit production web dependencies
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit --omit=dev --audit-level=high
+      - name: Run complete web gates
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run test
+          npm run build
+
+  # Run third-party emulator automation in a separate, secretless job and on a
+  # separate runner. It must never share a workspace or Gradle cache with either
+  # the unsigned build or the isolated job that receives the release keystore.
+  android-instrumentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Reject non-tag release dispatches before emulator startup
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_REF_TYPE" != "tag" ]; then
+            echo "Android releases must run from a v* Git tag, not a branch." >&2
+            exit 1
+          fi
+          python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      - name: Enable KVM for Android emulator
+        run: |
+          test -c /dev/kvm
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+      - name: Run Android instrumentation tests
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          arch: x86_64
+          # Match CI and the production tablet class; the shared runner script
+          # then verifies the exact 1280x800dp logical viewport.
+          profile: pixel_c
+          disable-animations: true
+          script: bash scripts/run_android_instrumentation_ci.sh
+      - name: Upload Android instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-instrumentation-reports
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            android-native/app/build/reports/androidTests/
+            android-native/app/build/outputs/androidTest-results/
+            android-native/app/build/outputs/ci-diagnostics/
+
+  # --------------------------------------------- Android unsigned build (.apk / .aab)
   build-android:
+    needs: [coordinated-release-gates, android-instrumentation]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify Android tag and source version
         env:
           RELEASE_REF: ${{ github.ref_name }}
@@ -35,17 +183,170 @@ jobs:
             exit 1
           fi
           python3 scripts/verify_android_release_version.py --tag "$RELEASE_REF"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
-          cache-dependency-path: |
-            android-native/*.gradle.kts
-            android-native/gradle.properties
-            android-native/gradle/wrapper/gradle-wrapper.properties
-            android-native/app/*.gradle.kts
-      - uses: android-actions/setup-android@v3
+      # The unsigned-build job deliberately restores no Gradle cache written by
+      # another job. GitHub's hosted image supplies the Android SDK; Gradle's
+      # checksum-pinned wrapper resolves this job's dependencies from scratch.
+      - name: Verify hosted Android SDK
+        run: |
+          test -n "${ANDROID_SDK_ROOT:-}"
+          test -d "$ANDROID_SDK_ROOT"
+      # Compile, lint, and run JVM tests without signing material. No signing
+      # secret is available to this job at any point.
+      - name: Lint Play and direct Android releases
+        working-directory: android-native
+        run: >-
+          ./gradlew --no-daemon --max-workers=2 --stacktrace
+          lintRelease lintDirectRelease
+      - name: Run Play and direct Android release JVM tests
+        working-directory: android-native
+        run: >-
+          ./gradlew --no-daemon --max-workers=2 --stacktrace
+          testReleaseUnitTest testDirectReleaseUnitTest
+      # Compile distributable bytes before the long-lived signing key exists on
+      # the runner. Gradle plugins and dependency code must never be able to
+      # read or exfiltrate that key, even if an upstream repository is breached.
+      - name: Build unsigned Play and direct Android releases
+        run: |
+          set -euo pipefail
+          test ! -e android-native/keystore.properties
+          test ! -e android-native/dcompany-release.keystore
+          cd android-native
+          ./gradlew --no-daemon --max-workers=2 --stacktrace \
+            assembleRelease bundleRelease assembleDirectRelease
+      - name: Package unsigned artifacts for the isolated signer
+        run: |
+          set -euo pipefail
+          package_dir='android-native/app/build/outputs/unsigned-release-package'
+          play_dir='android-native/app/build/outputs/apk/release'
+          direct_dir='android-native/app/build/outputs/apk/directRelease'
+          play_metadata="$play_dir/output-metadata.json"
+          direct_metadata="$direct_dir/output-metadata.json"
+          play_manifest='android-native/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml'
+          direct_manifest='android-native/app/build/intermediates/merged_manifests/directRelease/processDirectReleaseManifest/AndroidManifest.xml'
+
+          metadata_output_file() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          elements = metadata.get("elements")
+          if not isinstance(elements, list) or len(elements) != 1:
+              raise SystemExit("Android APK metadata must contain exactly one element")
+          output = elements[0].get("outputFile")
+          if not isinstance(output, str) or not output.endswith(".apk") or Path(output).name != output:
+              raise SystemExit("Android APK metadata contains an unsafe output filename")
+          print(output)
+          PY
+          }
+
+          play_unsigned="$play_dir/$(metadata_output_file "$play_metadata")"
+          direct_unsigned="$direct_dir/$(metadata_output_file "$direct_metadata")"
+          aab='android-native/app/build/outputs/bundle/release/app-release.aab'
+          for path in \
+            "$play_unsigned" "$direct_unsigned" "$aab" \
+            "$play_metadata" "$direct_metadata" "$play_manifest" "$direct_manifest"
+          do
+            test -s "$path"
+          done
+          mkdir -p "$package_dir"
+          cp "$play_unsigned" "$package_dir/play-unsigned.apk"
+          cp "$direct_unsigned" "$package_dir/direct-unsigned.apk"
+          cp "$aab" "$package_dir/play-unsigned.aab"
+          cp "$play_metadata" "$package_dir/play-output-metadata.json"
+          cp "$direct_metadata" "$package_dir/direct-output-metadata.json"
+          cp "$play_manifest" "$package_dir/play-AndroidManifest.xml"
+          cp "$direct_manifest" "$package_dir/direct-AndroidManifest.xml"
+          (
+            cd "$package_dir"
+            sha256sum \
+              play-unsigned.apk direct-unsigned.apk play-unsigned.aab \
+              play-output-metadata.json direct-output-metadata.json \
+              play-AndroidManifest.xml direct-AndroidManifest.xml \
+              > UNSIGNED_SHA256SUMS
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-unsigned
+          if-no-files-found: error
+          retention-days: 1
+          path: android-native/app/build/outputs/unsigned-release-package/*
+      - name: Upload Android test and lint reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-release-reports
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            android-native/app/build/reports/lint-results-*.html
+            android-native/app/build/reports/tests/
+            android-native/app/build/test-results/
+
+  # The signing key exists only on this fresh runner. No Gradle process or
+  # third-party action ever runs in this job, so unsigned-build dependencies
+  # cannot persist code that later observes the key.
+  sign-android:
+    needs: build-android
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ANDROID_BUILD_TOOLS_VERSION: '35.0.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: android-native-unsigned
+          path: unsigned
+      - name: Verify unsigned handoff and release authority
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_REF_TYPE" != "tag" ]; then
+            echo "Android releases must run from a v* Git tag, not a branch." >&2
+            exit 1
+          fi
+          test -d unsigned
+          test ! -L unsigned
+          test "$(find unsigned -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 8
+          test -z "$(find unsigned -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          (
+            cd unsigned
+            sha256sum --check --strict UNSIGNED_SHA256SUMS
+          )
+          python3 scripts/verify_android_release_version.py \
+            --tag "$RELEASE_REF" \
+            --metadata unsigned/play-output-metadata.json
+          python3 scripts/verify_android_release_version.py \
+            --tag "$RELEASE_REF" \
+            --metadata unsigned/direct-output-metadata.json
+          test -n "${ANDROID_SDK_ROOT:-}"
+          test -d "$ANDROID_SDK_ROOT"
+          command -v apkanalyzer >/dev/null
+          test "$(apkanalyzer manifest application-id unsigned/play-unsigned.apk)" = 'cloud.dcompany.erp'
+          test "$(apkanalyzer manifest application-id unsigned/direct-unsigned.apk)" = 'cloud.dcompany.erp'
+          install_permission='android.permission.REQUEST_INSTALL_PACKAGES'
+          if apkanalyzer manifest permissions unsigned/play-unsigned.apk | grep -Fxq "$install_permission"; then
+            echo 'Play release APK unexpectedly requests package-install permission.' >&2
+            exit 1
+          fi
+          if grep -Fq 'android:name="android.permission.REQUEST_INSTALL_PACKAGES"' unsigned/play-AndroidManifest.xml; then
+            echo 'Play release/AAB merged manifest unexpectedly requests package-install permission.' >&2
+            exit 1
+          fi
+          apkanalyzer manifest permissions unsigned/direct-unsigned.apk | grep -Fxq "$install_permission"
+          grep -Fq 'android:name="android.permission.REQUEST_INSTALL_PACKAGES"' unsigned/direct-AndroidManifest.xml
       - name: Require Android signing secrets
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -61,159 +362,284 @@ jobs:
             ANDROID_KEY_ALIAS \
             ANDROID_KEY_PASSWORD
           do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
           done
           if [ "${#missing[@]}" -ne 0 ]; then
             printf 'Missing required Android signing secrets: %s\n' "${missing[*]}" >&2
             exit 1
           fi
-      - name: Decode keystore
+      - name: Decode signing keystore on isolated runner
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android-native/dcompany-release.keystore
-          cat > android-native/keystore.properties <<EOF
-          storeFile=dcompany-release.keystore
-          storePassword=$ANDROID_KEYSTORE_PASSWORD
-          keyAlias=$ANDROID_KEY_ALIAS
-          keyPassword=$ANDROID_KEY_PASSWORD
-          EOF
-          test -s android-native/dcompany-release.keystore
-      # Bound workers and separate compilation-heavy release work from tests so
-      # the hosted runner cannot start competing Kotlin compiler workloads.
-      - name: Build and lint signed Android release
-        working-directory: android-native
-        run: ./gradlew --no-daemon --max-workers=2 --stacktrace lintRelease assembleRelease bundleRelease
-      - name: Run Android release JVM tests
-        working-directory: android-native
-        run: ./gradlew --no-daemon --max-workers=2 --stacktrace testReleaseUnitTest
-      - name: Enable KVM for Android emulator
+          test ! -e "$RUNNER_TEMP/dcompany-release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/dcompany-release.keystore"
+          test -s "$RUNNER_TEMP/dcompany-release.keystore"
+      - name: Sign prebuilt APK and AAB artifacts
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          EXPECTED_ANDROID_SIGNER_SHA256: ${{ vars.ANDROID_EXPECTED_SIGNER_SHA256 }}
         run: |
-          test -c /dev/kvm
-          # The hosted runner already created /dev/kvm. Change that device
-          # directly: udevadm trigger is not reliable in the runner container
-          # and can exit 1 before applying an otherwise valid rule.
-          sudo chmod 0666 /dev/kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
-      - name: Run Android instrumentation tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          disable-animations: true
-          script: bash scripts/run_android_instrumentation_ci.sh
-      - name: Verify signatures and package release metadata
+          set -euo pipefail
+          umask 077
+          keystore="$RUNNER_TEMP/dcompany-release.keystore"
+          signed_dir="$RUNNER_TEMP/signed-android"
+          mkdir -p "$signed_dir"
+          build_tools="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          apksigner="$build_tools/apksigner"
+          test -x "$apksigner"
+          zipalign="$build_tools/zipalign"
+          test -x "$zipalign"
+
+          expected_signer_sha256="$(
+            printf '%s' "$EXPECTED_ANDROID_SIGNER_SHA256" |
+              tr -d ':[:space:]' |
+              tr '[:upper:]' '[:lower:]'
+          )"
+          if ! [[ "$expected_signer_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo 'ANDROID_EXPECTED_SIGNER_SHA256 must be a 64-hex repository Actions variable.' >&2
+            exit 1
+          fi
+          keystore_signer_sha256="$(
+            keytool -exportcert -rfc \
+              -keystore "$keystore" \
+              -storepass:env ANDROID_KEYSTORE_PASSWORD \
+              -alias "$ANDROID_KEY_ALIAS" |
+              openssl x509 -noout -fingerprint -sha256 |
+              cut -d= -f2 |
+              tr -d ':' |
+              tr '[:upper:]' '[:lower:]'
+          )"
+          if [ "$keystore_signer_sha256" != "$expected_signer_sha256" ]; then
+            echo 'Release keystore does not match ANDROID_EXPECTED_SIGNER_SHA256.' >&2
+            exit 1
+          fi
+
+          sign_apk() {
+            local input="$1"
+            local output="$2"
+            local stem="$3"
+            local aligned="$RUNNER_TEMP/$stem-aligned.apk"
+            "$zipalign" -f -p 4 "$input" "$aligned"
+            "$apksigner" sign \
+              --ks "$keystore" \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+              --key-pass env:ANDROID_KEY_PASSWORD \
+              --out "$output" \
+              "$aligned"
+            "$zipalign" -c -p 4 "$output"
+            "$apksigner" verify --verbose "$output"
+            rm -f "$aligned"
+          }
+
+          sign_apk unsigned/play-unsigned.apk "$signed_dir/app-release.apk" play-release
+          sign_apk unsigned/direct-unsigned.apk "$signed_dir/app-directRelease.apk" direct-release
+          jarsigner \
+            -keystore "$keystore" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD \
+            -keypass:env ANDROID_KEY_PASSWORD \
+            -signedjar "$signed_dir/app-release.aab" \
+            unsigned/play-unsigned.aab \
+            "$ANDROID_KEY_ALIAS"
+      - name: Remove Android signing material before artifact verification
+        if: always()
+        run: rm -f "$RUNNER_TEMP/dcompany-release.keystore"
+      - name: Verify signed artifacts and build release package
         env:
           RELEASE_REF: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
           RELEASE_RUN_ID: ${{ github.run_id }}
           RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_ANDROID_SIGNER_SHA256: ${{ vars.ANDROID_EXPECTED_SIGNER_SHA256 }}
         run: |
           set -euo pipefail
-          apk='android-native/app/build/outputs/apk/release/app-release.apk'
-          aab='android-native/app/build/outputs/bundle/release/app-release.aab'
-          metadata='android-native/app/build/outputs/apk/release/output-metadata.json'
-          package_dir='android-native/app/build/outputs/release-package'
+          signed_dir="$RUNNER_TEMP/signed-android"
+          play_apk="$signed_dir/app-release.apk"
+          direct_apk="$signed_dir/app-directRelease.apk"
+          aab="$signed_dir/app-release.aab"
+          play_metadata='unsigned/play-output-metadata.json'
+          direct_metadata='unsigned/direct-output-metadata.json'
+          package_dir='signed-package'
           safe_release_ref="$(printf '%s' "$RELEASE_REF" | sed 's/[^A-Za-z0-9._-]/-/g')"
-
-          test -s "$apk"
-          test -s "$aab"
-          test -s "$metadata"
+          direct_apk_filename="d-company-erp-${safe_release_ref}-direct.apk"
+          play_aab_filename="d-company-erp-${safe_release_ref}-play.aab"
+          for path in "$play_apk" "$direct_apk" "$aab" "$play_metadata" "$direct_metadata"; do
+            test -s "$path"
+          done
           test -n "$safe_release_ref"
 
-          python3 scripts/verify_android_release_version.py \
-            --tag "$RELEASE_REF" \
-            --metadata "$metadata"
-
-          apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          build_tools="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          apksigner="$build_tools/apksigner"
           test -x "$apksigner"
-          "$apksigner" verify --verbose "$apk"
+          "$apksigner" verify --verbose "$play_apk"
+          "$apksigner" verify --verbose "$direct_apk"
           jarsigner -verify "$aab" > "$RUNNER_TEMP/aab-signature-verification.txt"
           grep -q '^jar verified\.$' "$RUNNER_TEMP/aab-signature-verification.txt"
 
+          play_version_code="$(apkanalyzer manifest version-code "$play_apk")"
+          direct_version_code="$(apkanalyzer manifest version-code "$direct_apk")"
+          play_version_name="$(apkanalyzer manifest version-name "$play_apk")"
+          direct_version_name="$(apkanalyzer manifest version-name "$direct_apk")"
+          readarray -t expected_version < <(
+            python3 - "$direct_metadata" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as metadata_file:
+              metadata = json.load(metadata_file)
+          elements = metadata["elements"]
+          if not isinstance(elements, list) or len(elements) != 1:
+              raise SystemExit("Direct APK metadata must contain exactly one element")
+          print(elements[0]["versionCode"])
+          print(elements[0]["versionName"])
+          PY
+          )
+          test "${#expected_version[@]}" -eq 2
+          expected_version_code="${expected_version[0]}"
+          expected_version_name="${expected_version[1]}"
+          test "$play_version_code" = "$direct_version_code"
+          test "$play_version_name" = "$direct_version_name"
+          test "$play_version_code" = "$expected_version_code"
+          test "$direct_version_code" = "$expected_version_code"
+          test "$play_version_name" = "$expected_version_name"
+          test "$direct_version_name" = "$expected_version_name"
+
+          play_signer_sha256="$(
+            "$apksigner" verify --print-certs "$play_apk" |
+              sed -n 's/^Signer #1 certificate SHA-256 digest: //p' |
+              head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]'
+          )"
+          direct_signer_sha256="$(
+            "$apksigner" verify --print-certs "$direct_apk" |
+              sed -n 's/^Signer #1 certificate SHA-256 digest: //p' |
+              head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]'
+          )"
+          aab_signer_sha256="$(
+            keytool -J-Duser.language=en -J-Duser.country=US \
+              -printcert -rfc -jarfile "$aab" |
+              openssl x509 -noout -fingerprint -sha256 |
+              cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]'
+          )"
+          expected_signer_sha256="$(
+            printf '%s' "$EXPECTED_ANDROID_SIGNER_SHA256" |
+              tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]'
+          )"
+          test "$play_signer_sha256" = "$direct_signer_sha256"
+          test "$play_signer_sha256" = "$aab_signer_sha256"
+          test "$play_signer_sha256" = "$expected_signer_sha256"
+
           mkdir -p "$package_dir"
-          cp "$apk" "$package_dir/d-company-erp-${safe_release_ref}.apk"
-          cp "$aab" "$package_dir/d-company-erp-${safe_release_ref}.aab"
-          cp "$metadata" "$package_dir/output-metadata.json"
+          cp "$direct_apk" "$package_dir/$direct_apk_filename"
+          cp "$aab" "$package_dir/$play_aab_filename"
+          cp "$direct_metadata" "$package_dir/direct-output-metadata.json"
+          python3 - "$package_dir/direct-output-metadata.json" "$direct_apk_filename" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          metadata = json.loads(path.read_text(encoding="utf-8"))
+          metadata["elements"][0]["outputFile"] = sys.argv[2]
+          path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          PY
           (
             cd "$package_dir"
             sha256sum ./*.apk ./*.aab > SHA256SUMS
           )
-
-          export APK_PATH="$apk"
-          export METADATA_PATH="$metadata"
-          export MANIFEST_PATH="$package_dir/release-manifest.json"
-          export SIGNING_CERT_SHA256
-          SIGNING_CERT_SHA256="$(
-            "$apksigner" verify --print-certs "$apk" |
-              sed -n 's/^Signer #1 certificate SHA-256 digest: //p' |
-              head -1
-          )"
-          test -n "$SIGNING_CERT_SHA256"
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          metadata = json.loads(Path(os.environ["METADATA_PATH"]).read_text())
-          element = metadata["elements"][0]
-          manifest = {
-              "application_id": metadata["applicationId"],
-              "variant": metadata["variantName"],
-              "version_code": element["versionCode"],
-              "version_name": element["versionName"],
-              "git_sha": os.environ["RELEASE_SHA"],
-              "release_ref": os.environ["RELEASE_REF"],
-              "workflow_run_id": os.environ["RELEASE_RUN_ID"],
-              "workflow_run_attempt": os.environ["RELEASE_RUN_ATTEMPT"],
-              "api_base_url": "https://dcompany.duckdns.org/api/v1/",
-              "signing_certificate_sha256": os.environ["SIGNING_CERT_SHA256"],
-          }
-          Path(os.environ["MANIFEST_PATH"]).write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-          )
-          PY
-      - uses: actions/upload-artifact@v4
+          python3 scripts/build_android_release_manifest.py \
+            --apk "$direct_apk" \
+            --metadata "$package_dir/direct-output-metadata.json" \
+            --apk-filename "$direct_apk_filename" \
+            --signer-sha256 "$direct_signer_sha256" \
+            --release-ref "$RELEASE_REF" \
+            --git-sha "$RELEASE_SHA" \
+            --workflow-run-id "$RELEASE_RUN_ID" \
+            --workflow-run-attempt "$RELEASE_RUN_ATTEMPT" \
+            --output "$package_dir/release-manifest.json"
+          chmod 0644 "$package_dir"/*
+      - name: Remove Android signing material (final cleanup)
+        if: always()
+        run: rm -f "$RUNNER_TEMP/dcompany-release.keystore"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android-native-release
           if-no-files-found: error
           retention-days: 30
-          path: android-native/app/build/outputs/release-package/*
-      - name: Upload Android test and lint reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-native-release-reports
-          if-no-files-found: warn
-          retention-days: 30
-          path: |
-            android-native/app/build/reports/lint-results-*.html
-            android-native/app/build/reports/tests/
-            android-native/app/build/reports/androidTests/
-            android-native/app/build/test-results/
-            android-native/app/build/outputs/androidTest-results/
-            android-native/app/build/outputs/ci-diagnostics/
+          path: signed-package/*
 
   # -------------------------------------------------------- Release page
   release:
-    needs: build-android
+    needs: sign-android
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { path: artifacts }
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: 'D Company ERP ${{ github.ref_name }}'
-          generate_release_notes: true
-          files: |
-            artifacts/android-native-release/*
+      - name: Refuse to replace an existing GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; publish fixes under a higher version." >&2
+            exit 1
+          fi
+      - name: Verify downloaded release package
+        run: |
+          set -euo pipefail
+          package_dir='artifacts/android-native-release'
+          safe_release_ref="$(printf '%s' "$GITHUB_REF_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
+          direct_apk_filename="d-company-erp-${safe_release_ref}-direct.apk"
+          play_aab_filename="d-company-erp-${safe_release_ref}-play.aab"
+          test -d "$package_dir"
+          test ! -L "$package_dir"
+          test "$(find "$package_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          test -z "$(find "$package_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          test -s "$package_dir/$direct_apk_filename"
+          test -s "$package_dir/$play_aab_filename"
+          test -s "$package_dir/direct-output-metadata.json"
+          test -s "$package_dir/SHA256SUMS"
+          test -s "$package_dir/release-manifest.json"
+          (cd "$package_dir" && sha256sum --check --strict SHA256SUMS)
+          python3 - "$package_dir/release-manifest.json" "$package_dir/$direct_apk_filename" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest_path, apk_path = map(Path, sys.argv[1:])
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          digest = hashlib.sha256()
+          with apk_path.open("rb") as apk:
+              for chunk in iter(lambda: apk.read(1024 * 1024), b""):
+                  digest.update(chunk)
+          assert manifest["apk_filename"] == apk_path.name
+          assert manifest["apk_sha256"] == digest.hexdigest()
+          assert manifest["apk_size_bytes"] == apk_path.stat().st_size
+          PY
+      - name: Stage draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          package_dir='artifacts/android-native-release'
+          safe_release_ref="$(printf '%s' "$GITHUB_REF_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
+          release_files=(
+            "$package_dir/d-company-erp-${safe_release_ref}-direct.apk"
+            "$package_dir/d-company-erp-${safe_release_ref}-play.aab"
+            "$package_dir/direct-output-metadata.json"
+            "$package_dir/release-manifest.json"
+            "$package_dir/SHA256SUMS"
+          )
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "D Company ERP $GITHUB_REF_NAME" \
+            --generate-notes \
+            "${release_files[@]}"

@@ -29,6 +29,7 @@ class InventoryBatchRefreshCoverageTest {
     fun `selection batch pull uses resource feedback boundary`() {
         val source = readSource(mainSourceRoot().resolve(SYNC_ENGINE_PATH))
         val wrapper = source.bracedBlockAfter("suspend fun pullBatchesFor")
+        val cachePull = source.bracedBlockAfter("private suspend fun pullBatchesForAlreadyLocked")
         val inventoryViewModel = readSource(
             mainSourceRoot().resolve(
                 "cloud/dcompany/erp/ui/screens/inventory/InventoryViewModel.kt",
@@ -38,8 +39,18 @@ class InventoryBatchRefreshCoverageTest {
         assertTrue("selection pull is not serialized", "withResourceSerialisation(\"inventory\")" in wrapper)
         assertTrue("selection pull does not log and publish failures", "runAndRecordRefreshAlreadyLocked" in wrapper)
         assertTrue(
-            "closing inventory detail does not clear the retained realtime target",
-            "clearActiveBatchTarget(batchTargetId)" in inventoryViewModel,
+            "batch cache replacement is not branch scoped",
+            Regex("""replaceBatchesFor\(\s*ingredientId,\s*branchId,""")
+                .containsMatchIn(cachePull),
+        )
+        assertTrue(
+            "batch response branch is not validated before caching",
+            "rows.all { it.branchId == branchId }" in cachePull,
+        )
+        assertTrue(
+            "closing inventory detail does not clear another branch's retained realtime target",
+            "clearActiveBatchTarget(previousTarget.first, previousTarget.second)" in inventoryViewModel &&
+                "clearActiveBatchTarget(batchTargetKey?.first, batchTargetKey?.second)" in inventoryViewModel,
         )
     }
 

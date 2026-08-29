@@ -11,8 +11,8 @@ already uses for OTP mail — a silent backup failure is worse than no backup
 at all, since it creates false confidence.
 
 Requires:
-  - boto3 installed in /opt/d-company-erp/ops/venv (S3-compatible client
-    used to talk to Backblaze B2; no more Google service-account key)
+  - the pinned boto3 runtime installed by install-operations-monitor.sh under
+    /var/lib/dcompany-erp/backup-runtime (outside replaceable application code)
   - /opt/d-company-erp/.env (reused for SMTP + alert recipient), with
     B2_KEY_ID and B2_APPLICATION_KEY set to a Backblaze B2 application key
     that has read/write/delete access to the dcompany-erp-backups bucket
@@ -38,7 +38,7 @@ except ModuleNotFoundError:  # direct execution: python /opt/.../ops/backup_to_b
 ROOT = Path("/opt/d-company-erp")
 ENV_FILE = ROOT / ".env"
 COMPOSE_FILE = ROOT / "docker-compose.prod.yml"
-LOCAL_BACKUP_DIR = ROOT / "backups" / "auto"
+LOCAL_BACKUP_DIR = Path("/var/lib/dcompany-erp/backups/auto")
 B2_BUCKET = "dcompany-erp-backups"
 B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com"
 RETENTION_DAYS = 30
@@ -229,7 +229,7 @@ def main() -> int:
             f"Error: {detail}\n\n"
             "The ERP itself is unaffected — this only means last night's off-site backup "
             "didn't happen. Check systemctl status dcompany-backup.service on the server, "
-            "or ask Claude to look into it."
+            "or ask the system administrator to investigate."
         ),
     )
     return 1

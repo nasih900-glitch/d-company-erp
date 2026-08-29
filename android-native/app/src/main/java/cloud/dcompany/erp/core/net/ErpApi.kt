@@ -5,6 +5,8 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.HeaderMap
+import retrofit2.http.HTTP
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -50,6 +52,15 @@ interface ErpApi {
     @GET("pos/orders/{id}")
     suspend fun order(@Path("id") id: String): Order
 
+    @GET("pos/receipts")
+    suspend fun receiptHistory(
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int = 50,
+    ): CanonicalReceiptPage
+
+    @GET("pos/receipts/{order_id}")
+    suspend fun receipt(@Path("order_id") orderId: String): CanonicalReceipt
+
     /** Retrofit repeats `status` once per list entry — matches the backend's `list[str]` param. */
     @GET("pos/orders")
     suspend fun orders(
@@ -63,6 +74,37 @@ interface ErpApi {
         @Header("Idempotency-Key") idempotencyKey: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Order
+
+    @PATCH("pos/orders/{id}/customer")
+    suspend fun updateOrderCustomer(
+        @Path("id") id: String,
+        @Body body: OrderCustomerUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
+    @PATCH("pos/orders/{id}/discount")
+    suspend fun updateOrderDiscount(
+        @Path("id") id: String,
+        @Body body: OrderDiscountUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
+    @PATCH("pos/orders/{id}/points")
+    suspend fun updateOrderPoints(
+        @Path("id") id: String,
+        @Body body: OrderPointsRedemptionUpdateRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): Order
+
+    @HTTP(method = "DELETE", path = "pos/orders/{id}", hasBody = true)
+    suspend fun voidOrder(
+        @Path("id") id: String,
+        @Body body: VoidOrderRequest,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    )
 
     @POST("pos/orders/{id}/checkout-claim")
     suspend fun acquireCheckoutClaim(
@@ -90,7 +132,7 @@ interface ErpApi {
     suspend fun finalizeZeroTotalOrder(
         @Path("id") id: String,
         @Header("Idempotency-Key") idempotencyKey: String,
-        @Header("X-Checkout-Claim") checkoutClaimToken: String,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String?,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): ZeroTotalFinalizationResult
 

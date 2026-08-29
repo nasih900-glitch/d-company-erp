@@ -52,8 +52,12 @@ android {
         applicationId = "cloud.dcompany.erp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "3.0.1"
+        // Every Room schema change must ship under a strictly newer Android
+        // version code so an installed tablet upgrades in place instead of
+        // requiring an uninstall that would destroy its offline outbox.
+        versionCode = 13
+        versionName = "3.1.2"
+        buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
 
         // Single source of truth for the API base, mirroring how the
         // Capacitor build takes it from VITE_API_URL at build time.
@@ -85,6 +89,14 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        create("directRelease") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "true")
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {
@@ -101,6 +113,12 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    // MigrationTestHelper reads the same Room-generated history that ships in
+    // source control. Point instrumentation directly at that canonical folder
+    // so a new schema version cannot be generated successfully yet omitted
+    // from tests by a forgotten manual copy into src/androidTest/assets.
+    sourceSets.getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
 }
 
 // Room schema history — needed for MigrationTestHelper to replay old schemas
@@ -119,6 +137,7 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
 
@@ -149,7 +168,12 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // Critical cashier forms must be exercised as rendered Compose UI.  The
+    // database/sync instrumentation suite cannot prove that a staff member can
+    // focus a field, enter text, or complete a no-keyboard fallback flow.
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

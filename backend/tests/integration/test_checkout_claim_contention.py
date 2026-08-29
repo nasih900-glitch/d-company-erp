@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from app.api.v1.pos.router import claim_order_for_checkout
 from app.core.db import AsyncSessionLocal
@@ -29,6 +29,21 @@ from app.models import (
     Table,
     User,
 )
+
+
+async def _set_paid_source_cleanup_triggers(session, *, enabled: bool) -> None:
+    """Narrow test-only cleanup bypass; production exposes no bypass path."""
+    verb = "ENABLE" if enabled else "DISABLE"
+    for table_name, trigger_name in (
+        ("payments", "trg_payments_immutable"),
+        ("payments", "trg_payments_final_order_balance"),
+        ("orders", "trg_orders_paid_source_integrity"),
+        ("orders", "trg_orders_final_payment_balance"),
+        ("order_lines", "trg_order_lines_paid_source_integrity"),
+    ):
+        await session.execute(
+            text(f"ALTER TABLE {table_name} {verb} TRIGGER {trigger_name}")
+        )
 
 
 @pytest.mark.integration
@@ -415,6 +430,24 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
         "expected_order_total_minor": 2_500,
         "expected_due_minor": 2_500,
     }
+    missing_cash_tender = await client.post(
+        f"/api/v1/pos/orders/{order.id}/payments",
+        headers={**base_headers, "Idempotency-Key": f"missing-cash-tender-{uuid4()}"},
+        json={**payment_body, "method": "cash"},
+    )
+    assert missing_cash_tender.status_code == 422
+    assert missing_cash_tender.json()["error"]["code"] == "validation_error"
+    assert "cash tendered amount is required" in missing_cash_tender.json()["error"]["message"]
+
+    non_cash_tender = await client.post(
+        f"/api/v1/pos/orders/{order.id}/payments",
+        headers={**base_headers, "Idempotency-Key": f"non-cash-tender-{uuid4()}"},
+        json={**payment_body, "tendered_minor": 2_500},
+    )
+    assert non_cash_tender.status_code == 422
+    assert non_cash_tender.json()["error"]["code"] == "validation_error"
+    assert "only valid for cash payments" in non_cash_tender.json()["error"]["message"]
+
     missing_claim = await client.post(
         f"/api/v1/pos/orders/{order.id}/payments",
         headers={**base_headers, "Idempotency-Key": f"missing-{uuid4()}"},
@@ -444,7 +477,67 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
         json=payment_body,
     )
     assert paid.status_code == 201, paid.text
-    assert paid.json()["order_status"] == "paid"
+    receipt = paid.json()
+    assert receipt["order_id"] == str(order.id)
+    assert receipt["shift_id"] == str(shift.id)
+    assert receipt["method"] == "upi"
+    assert receipt["amount_minor"] == 2_500
+    assert receipt["bill_amount_minor"] == 2_500
+    assert receipt["tip_minor"] == 0
+    assert receipt["tendered_minor"] is None
+    assert receipt["change_minor"] is None
+    assert receipt["ref_external"] is None
+    assert receipt["paid_at"]
+    assert receipt["order_status"] == "paid"
+    assert receipt["invoice_no"]
+    assert receipt["invoice_issued_at"]
+
+    # A dropped 201 response is recovered by replaying the exact payment key.
+    # The checkout claim has already been consumed, so only the stored receipt
+    # can make this safe; a second Payment row must never be attempted.
+    replayed = await client.post(
+        f"/api/v1/pos/orders/{order.id}/payments",
+        headers={
+            **base_headers,
+            "Idempotency-Key": payment_key,
+            "X-Checkout-Claim": claim_body["claim_token"],
+        },
+        json=payment_body,
+    )
+    assert replayed.status_code == 201, replayed.text
+    assert replayed.json() == receipt
+
+    # Upgrade compatibility: releases before the typed receipt contract kept
+    # a shorter idempotency response. The exact same retry must reconstruct
+    # the receipt from the immutable Payment row and still avoid a new write.
+    async with AsyncSessionLocal() as downgrade_response:
+        stored = await downgrade_response.get(IdempotencyKey, payment_key)
+        assert stored is not None
+        stored.response_body = {
+            field: receipt[field]
+            for field in (
+                "id",
+                "amount_minor",
+                "tip_minor",
+                "order_status",
+                "invoice_no",
+                "fiscal_year",
+                "invoice_issued_at",
+            )
+        }
+        await downgrade_response.commit()
+
+    legacy_replayed = await client.post(
+        f"/api/v1/pos/orders/{order.id}/payments",
+        headers={
+            **base_headers,
+            "Idempotency-Key": payment_key,
+            "X-Checkout-Claim": claim_body["claim_token"],
+        },
+        json=payment_body,
+    )
+    assert legacy_replayed.status_code == 201, legacy_replayed.text
+    assert legacy_replayed.json() == receipt
 
     try:
         async with AsyncSessionLocal() as verify:
@@ -452,8 +545,13 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
             paid_order = await verify.get(Order, order.id)
             assert paid_order is not None
             assert paid_order.status == "paid"
+            payments = (
+                await verify.execute(select(Payment).where(Payment.order_id == order.id))
+            ).scalars().all()
+            assert len(payments) == 1
     finally:
         async with AsyncSessionLocal() as cleanup:
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=False)
             await cleanup.execute(delete(Payment).where(Payment.order_id == order.id))
             await cleanup.execute(
                 delete(OrderCheckoutClaim).where(OrderCheckoutClaim.order_id == order.id)
@@ -469,6 +567,7 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
             await cleanup.execute(
                 delete(IdempotencyKey).where(IdempotencyKey.key == payment_key)
             )
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=True)
             await cleanup.commit()
 
 
@@ -604,6 +703,7 @@ async def test_http_zero_total_finalization_requires_and_consumes_claim(
             assert paid_order.invoice_no
     finally:
         async with AsyncSessionLocal() as cleanup:
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=False)
             await cleanup.execute(
                 delete(OrderCheckoutClaim).where(OrderCheckoutClaim.order_id == order.id)
             )
@@ -620,4 +720,5 @@ async def test_http_zero_total_finalization_requires_and_consumes_claim(
                     IdempotencyKey.key.in_([missing_key, finalize_key])
                 )
             )
+            await _set_paid_source_cleanup_triggers(cleanup, enabled=True)
             await cleanup.commit()

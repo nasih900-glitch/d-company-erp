@@ -15,17 +15,27 @@ import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.FloorEntity
 import cloud.dcompany.erp.core.db.LocalCafeActionEntity
 import cloud.dcompany.erp.core.db.LocalCafeBillEntity
+import cloud.dcompany.erp.core.db.LocalModifierSelectionSnapshot
 import cloud.dcompany.erp.core.db.LocalTableOrderEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuModifierEntity
+import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
+import cloud.dcompany.erp.core.db.ResolvedOpenShift
+import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.TableOrderState
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.sync.CafeBillLineProjection
 import cloud.dcompany.erp.core.sync.CafeBillProjection
 import cloud.dcompany.erp.core.sync.projectCafeBills
+import cloud.dcompany.erp.ui.screens.CartModifierSelection
+import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -36,7 +46,22 @@ data class TableCartLine(
     val qty: Int,
     val note: String = "",
     val clientLineId: String = UUID.randomUUID().toString(),
-)
+    val variant: MenuVariantEntity? = null,
+    val modifiers: List<CartModifierSelection> = emptyList(),
+    val unitPriceMinor: Long = configuredUnitPriceMinor(item, variant, modifiers),
+) {
+    val lineTotalMinor: Long get() = unitPriceMinor * qty
+    val optionLabels: List<String>
+        get() = buildList {
+            variant?.name?.trim()?.takeIf(String::isNotEmpty)?.let(::add)
+            modifiers.forEach { selection ->
+                val name = selection.modifier.name.trim()
+                if (name.isNotEmpty()) {
+                    add(if (selection.qty > 1) "${selection.qty}× $name" else name)
+                }
+            }
+        }
+}
 
 data class BlockedCafeAction(
     val actionId: String,
@@ -55,6 +80,9 @@ data class TablesUiState(
     val tables: List<CafeTable> = emptyList(),
     val bills: List<CafeBillProjection> = emptyList(),
     val menu: List<MenuItemEntity> = emptyList(),
+    val variants: List<MenuVariantEntity> = emptyList(),
+    val modifierGroups: List<MenuModifierGroupEntity> = emptyList(),
+    val modifiers: List<MenuModifierEntity> = emptyList(),
     val selectedFloorId: String? = null,
     val selectedTable: CafeTable? = null,
     /** Pre-v24 screen compatibility; removed with the v24 Compose rewrite. */
@@ -74,7 +102,7 @@ data class TablesUiState(
     val visibleTables: List<CafeTable>
         get() = if (selectedFloorId == null) tables else tables.filter { it.floorId == selectedFloorId }
 
-    val estimateMinor: Long get() = cart.sumOf { it.item.basePriceMinor * it.qty }
+    val estimateMinor: Long get() = cart.sumOf(TableCartLine::lineTotalMinor)
 
     val blockingLoadError: String? get() = error ?: refreshError
 }
@@ -84,6 +112,13 @@ private data class TableCacheSnapshot(
     val tables: List<CafeTableEntity>,
     val bills: List<CafeBillProjection>,
     val actions: List<LocalCafeActionEntity>,
+)
+
+private data class TablesMenuSnapshot(
+    val items: List<MenuItemEntity>,
+    val variants: List<MenuVariantEntity>,
+    val modifierGroups: List<MenuModifierGroupEntity>,
+    val modifiers: List<MenuModifierEntity>,
 )
 
 private data class SelectionSnapshot(
@@ -116,7 +151,9 @@ class TablesViewModel : ViewModel() {
     private val app = DCompanyApp.instance
     private val db = app.db
     private val cafeDao = db.cafeOrderDao()
-    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(app.terminalStore.terminalIdFlow)
+    private val resolvedShift = db.shiftDao()
+        .observeResolvedOpenShift(app.terminalStore.terminalIdFlow)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val selectedFloorId = MutableStateFlow<String?>(null)
     private val selectedTableId = MutableStateFlow<String?>(null)
@@ -147,9 +184,18 @@ class TablesViewModel : ViewModel() {
         )
     }
 
+    private val menuSnapshot = combine(
+        db.menuDao().observeItems(),
+        db.menuDao().observeVariants(),
+        db.menuDao().observeModifierGroups(),
+        db.menuDao().observeModifiers(),
+    ) { items, variants, groups, modifiers ->
+        TablesMenuSnapshot(items, variants, groups, modifiers)
+    }
+
     val state: StateFlow<TablesUiState> = combine(
         cacheSnapshot,
-        db.menuDao().observeItems(),
+        menuSnapshot,
         combine(selectedFloorId, selectedTableId, draftingRound, cart) {
                 floorId, tableId, drafting, lines ->
             SelectionSnapshot(floorId, tableId, drafting, lines)
@@ -174,6 +220,7 @@ class TablesViewModel : ViewModel() {
                 statusOverride = when {
                     bill == null -> null
                     bill.blockedActionId != null -> "needs attention"
+                    bill.status == "voiding" -> "voiding bill"
                     bill.status == "sending_to_pos" -> "sending to pos"
                     bill.status == "held" -> "at pos"
                     bill.pendingActionCount > 0 -> "round syncing"
@@ -188,7 +235,10 @@ class TablesViewModel : ViewModel() {
             floors = cache.floors.map(FloorEntity::toFloor),
             tables = tableRows,
             bills = cache.bills,
-            menu = menu,
+            menu = menu.items,
+            variants = menu.variants,
+            modifierGroups = menu.modifierGroups,
+            modifiers = menu.modifiers,
             selectedFloorId = selection.floorId,
             selectedTable = selectedTable,
             openTable = selectedTable,
@@ -218,7 +268,8 @@ class TablesViewModel : ViewModel() {
                 },
             online = runtime.online,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TablesUiState())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TablesUiState())
 
     init {
         app.sync.requestSync()
@@ -296,10 +347,48 @@ class TablesViewModel : ViewModel() {
     fun add(item: MenuItemEntity) {
         if (!requireCreate() || busy.value) return
         cart.update { lines ->
-            val index = lines.indexOfFirst { it.item.id == item.id && it.note.isBlank() }
+            val index = lines.indexOfFirst {
+                it.item.id == item.id && it.variant == null &&
+                    it.modifiers.isEmpty() && it.note.isBlank()
+            }
             if (index < 0) lines + TableCartLine(item = item, qty = 1)
             else lines.toMutableList().also { mutable ->
                 mutable[index] = mutable[index].copy(qty = mutable[index].qty + 1)
+            }
+        }
+    }
+
+    fun addConfigured(
+        item: MenuItemEntity,
+        variant: MenuVariantEntity?,
+        modifiers: List<CartModifierSelection>,
+        note: String?,
+    ) {
+        if (!requireCreate() || busy.value) return
+        val cleanNote = note?.trim().orEmpty()
+        val sortedModifiers = modifiers.sortedBy { it.modifier.id }
+        val candidate = TableCartLine(
+            item = item,
+            qty = 1,
+            note = cleanNote,
+            variant = variant,
+            modifiers = sortedModifiers,
+        )
+        cart.update { lines ->
+            val index = lines.indexOfFirst { current ->
+                current.item.id == candidate.item.id &&
+                    current.variant?.id == candidate.variant?.id &&
+                    current.modifiers.map { it.modifier.id to it.qty } ==
+                    candidate.modifiers.map { it.modifier.id to it.qty } &&
+                    current.note == candidate.note &&
+                    current.unitPriceMinor == candidate.unitPriceMinor
+            }
+            if (index < 0) {
+                lines + candidate
+            } else {
+                lines.toMutableList().also { mutable ->
+                    mutable[index] = mutable[index].copy(qty = mutable[index].qty + 1)
+                }
             }
         }
     }
@@ -385,7 +474,19 @@ class TablesViewModel : ViewModel() {
                         name = line.item.name,
                         qty = line.qty,
                         note = line.note.trim().takeIf(String::isNotEmpty),
-                        estimateUnitMinor = line.item.basePriceMinor,
+                        estimateUnitMinor = line.unitPriceMinor,
+                        variantId = line.variant?.id,
+                        variantName = line.variant?.name,
+                        variantPriceDeltaMinor = line.variant?.priceDeltaMinor ?: 0L,
+                        modifiers = line.modifiers.map { selection ->
+                            LocalModifierSelectionSnapshot(
+                                modifierId = selection.modifier.id,
+                                modifierGroupId = selection.modifier.modifierGroupId,
+                                name = selection.modifier.name,
+                                priceDeltaMinor = selection.modifier.priceDeltaMinor,
+                                qty = selection.qty,
+                            )
+                        },
                     )
                 },
             ),
@@ -450,6 +551,50 @@ class TablesViewModel : ViewModel() {
         )
     }
 
+    /**
+     * Queue a terminal whole-bill void. This deliberately uses the same
+     * ordered outbox as rounds: an offline first round must be created with
+     * its stable identity before the idempotent DELETE can safely follow it.
+     */
+    fun requestBillCancellation(reason: String) {
+        val snapshot = state.value
+        val shift = resolvedShift.value
+        val profile = app.shiftCache.profile.value
+        val actor = profile?.let { ShiftActor(it.userId, it.protectedAccess) }
+        when (
+            val decision = validateBillCancellation(
+                canCancelItems = access.canCancelItems,
+                busy = busy.value,
+                bill = snapshot.selectedBill,
+                shiftAvailable = shift != null,
+                shiftAuthorized = shift?.canManageMoney(actor) == true,
+                shiftAuthorizationMessage = shift?.wholeBillVoidAccessMessage(actor),
+                rawReason = reason,
+            )
+        ) {
+            is BillCancellationDecision.Rejected -> {
+                notice.value = decision.message
+                return
+            }
+
+            is BillCancellationDecision.Accepted -> {
+                val bill = requireNotNull(snapshot.selectedBill)
+                captureExistingBillAction(
+                    billProjection = bill,
+                    kind = CafeActionKind.VOID_ORDER,
+                    payload = CafeActionPayload(reason = decision.reason),
+                    dedupeKey = "void-order:${bill.localBillId ?: bill.serverOrderId}",
+                    successMessage = billVoidSavedNotice(
+                        tableCode = snapshot.selectedTable?.code ?: bill.tableCode.orEmpty(),
+                        online = app.connectivity.online.value,
+                    ),
+                    duplicateMessage = "This whole-bill void is already saved, or the bill changed. " +
+                        "Refresh Tables before taking another action.",
+                )
+            }
+        }
+    }
+
     fun sendSelectedBillToPos() {
         if (!authorizeAction(access.canSendToPos) { notice.value = VIEW_ONLY_MESSAGE }) return
         val bill = state.value.selectedBill ?: return
@@ -488,6 +633,8 @@ class TablesViewModel : ViewModel() {
         payload: CafeActionPayload,
         dedupeKey: String,
         successMessage: String,
+        duplicateMessage: String =
+            "This action was already saved or the account changed. Refresh the bill before trying again.",
     ) {
         if (busy.value) return
         val table = state.value.selectedTable ?: return
@@ -529,7 +676,7 @@ class TablesViewModel : ViewModel() {
                     notice.value = successMessage
                     app.sync.requestSync()
                 } else {
-                    notice.value = "This action was already saved or the account changed. Refresh the bill before trying again."
+                    notice.value = duplicateMessage
                 }
             } catch (_: Exception) {
                 notice.value = "The action was not saved. Nothing was sent; review the bill and try again."
@@ -628,7 +775,9 @@ class TablesViewModel : ViewModel() {
     }
 
     private fun canRecover(kind: String): Boolean = when (kind) {
-        CafeActionKind.VOID_LINE -> access.canCancelItems
+        CafeActionKind.VOID_LINE,
+        CafeActionKind.VOID_ORDER,
+        -> access.canCancelItems
         CafeActionKind.SEND_TO_POS,
         CafeActionKind.LEGACY_CREATE_AND_SEND,
         -> access.canSendToPos
@@ -663,10 +812,111 @@ internal fun sendSavedNotice(tableCode: String, online: Boolean): String = if (o
     "Offline: Table $tableCode's bill handoff is saved, but POS cannot see it yet. It will send automatically after reconnect."
 }
 
+internal fun billVoidSavedNotice(tableCode: String, online: Boolean): String = if (online) {
+    "Table $tableCode's whole-bill void is saved and awaiting server confirmation. " +
+        "Kitchen cancellations and table availability will update after sync confirms it."
+} else {
+    "Offline: Table $tableCode's whole-bill void is saved on this tablet. The bill remains " +
+        "blocked and Kitchen will not see the cancellations until reconnect."
+}
+
+internal sealed interface BillCancellationDecision {
+    data class Accepted(val reason: String) : BillCancellationDecision
+    data class Rejected(val message: String) : BillCancellationDecision
+}
+
+/** Pure policy so reason, state and authority failures cannot regress silently. */
+internal fun validateBillCancellation(
+    canCancelItems: Boolean,
+    busy: Boolean,
+    bill: CafeBillProjection?,
+    shiftAvailable: Boolean,
+    shiftAuthorized: Boolean,
+    shiftAuthorizationMessage: String?,
+    rawReason: String,
+): BillCancellationDecision {
+    if (!canCancelItems) return BillCancellationDecision.Rejected(VIEW_ONLY_MESSAGE)
+    if (busy) {
+        return BillCancellationDecision.Rejected(
+            "Another table action is being saved. Wait for it to finish before voiding this bill.",
+        )
+    }
+    if (bill == null) {
+        return BillCancellationDecision.Rejected(
+            "Select an active table bill before requesting a whole-bill void.",
+        )
+    }
+    when {
+        bill.blockedActionId != null -> return BillCancellationDecision.Rejected(
+            "Resolve the saved table action before voiding this bill.",
+        )
+        bill.status == "voiding" -> return BillCancellationDecision.Rejected(
+            "This whole-bill void is already saved and waiting for server confirmation.",
+        )
+        bill.status == "sending_to_pos" -> return BillCancellationDecision.Rejected(
+            "This bill is already being sent to POS. Wait for confirmation and review it there.",
+        )
+        bill.status == "held" -> return BillCancellationDecision.Rejected(
+            "This bill is already at POS. Review it there before attempting a protected void.",
+        )
+        bill.status != "open" -> return BillCancellationDecision.Rejected(
+            "This bill is ${bill.status.replace('_', ' ')} and can no longer be voided from Tables.",
+        )
+    }
+    val activeLines = bill.lines.filterNot { it.voided }
+    if (activeLines.isEmpty()) {
+        return BillCancellationDecision.Rejected(
+            "This bill has no active items left to void. Refresh Tables and review its history.",
+        )
+    }
+    if (activeLines.any { it.kitchenStatus.equals("served", ignoreCase = true) }) {
+        return BillCancellationDecision.Rejected(
+            "At least one item was already served. Finish and bill the order, then use the protected refund workflow if needed.",
+        )
+    }
+    if (!shiftAvailable) {
+        return BillCancellationDecision.Rejected(
+            "No usable shift is open on this terminal. Reconnect or open a shift before voiding a bill.",
+        )
+    }
+    if (!shiftAuthorized) {
+        return BillCancellationDecision.Rejected(
+            shiftAuthorizationMessage
+                ?: "Only the shift opener or a protected owner can void this whole bill.",
+        )
+    }
+    val reason = rawReason.trim()
+    if (reason.isEmpty()) {
+        return BillCancellationDecision.Rejected(
+            "Enter why the whole bill is being voided. Kitchen and the audit history both need the reason.",
+        )
+    }
+    if (reason.length > 500) {
+        return BillCancellationDecision.Rejected("The void reason must be 500 characters or fewer.")
+    }
+    return BillCancellationDecision.Accepted(reason)
+}
+
+private fun ResolvedOpenShift.wholeBillVoidAccessMessage(actor: ShiftActor?): String? {
+    if (canManageMoney(actor)) return null
+    if (actor == null) {
+        return "The signed-in employee could not be verified. Reconnect before voiding a whole bill."
+    }
+    val opener = openedByName?.takeIf(String::isNotBlank)
+        ?: openedByEmail?.takeIf(String::isNotBlank)
+        ?: "another staff member"
+    return if (openedByUserId == null) {
+        "The shift opener has not been verified on this tablet. Reconnect before voiding a whole bill."
+    } else {
+        "Shift opened by $opener. Only that opener or a protected owner can void this whole bill."
+    }
+}
+
 private fun cafeActionLabel(kind: String): String = when (kind) {
     CafeActionKind.CREATE_ROUND -> "First service round"
     CafeActionKind.APPEND_ROUND -> "Later service round"
     CafeActionKind.VOID_LINE -> "Item cancellation"
+    CafeActionKind.VOID_ORDER -> "Whole-bill void"
     CafeActionKind.SEND_TO_POS -> "Send to POS"
     CafeActionKind.LEGACY_CREATE_AND_SEND -> "Legacy table handoff"
     else -> "Table action"

@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import cloud.dcompany.erp.core.net.CostingCoverage
 import retrofit2.http.GET
 import retrofit2.http.Query
 
@@ -15,6 +16,10 @@ import retrofit2.http.Query
  * the report on screen can never disagree.
  */
 interface ReportsApi {
+
+    /** Catalogue coverage behind COGS; loaded independently so P&L stays available if it fails. */
+    @GET("insights/inventory/costing-coverage")
+    suspend fun costingCoverage(): CostingCoverage
 
     /** P&L for one calendar day. `on_date` is ISO, e.g. 2026-08-12. */
     @GET("reports/daily")

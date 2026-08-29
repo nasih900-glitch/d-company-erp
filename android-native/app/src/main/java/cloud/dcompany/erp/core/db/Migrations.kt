@@ -1870,10 +1870,840 @@ val MIGRATION_25_26 = object : Migration(25, 26) {
     }
 }
 
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Preserve the server's locked session billing/ownership snapshot so
+        // rate edits and terminal changes cannot alter what Android displays
+        // or which operator actions it offers after a restart.
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `shiftId` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `ratePerHourMinor` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageId` TEXT")
+        db.execSQL(
+            "ALTER TABLE `gaming_session_cache` ADD COLUMN `extraControllers` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `ratePerHourMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageId` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_gaming_sessions` ADD COLUMN `extraControllers` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `gaming_package_cache` (
+                `id` TEXT NOT NULL,
+                `stationType` TEXT NOT NULL,
+                `variant` TEXT NOT NULL,
+                `kind` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `durationMinutes` INTEGER NOT NULL,
+                `priceMinor` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
+val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // New package starts persist their exact tap-time snapshot. Version 27
+        // had only packageId. Never reconstruct a financial request from the
+        // mutable current package cache: it may have changed after the employee
+        // tapped Start and a CAS against that newer value could silently accept
+        // a reprice. Unresolved pre-v28 package starts are retained for protected
+        // review and excluded from automatic replay.
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `billingMode` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packagePriceMinorSnapshot` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageDurationMinutesSnapshot` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageVariantSnapshot` TEXT")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `packageStationTypeSnapshot` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packagePriceMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageDurationMinutes` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageVariant` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `billingMode` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `packageStationTypeSnapshot` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyOriginalCapturedStartAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyOriginalCapturedStopAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolution` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionReason` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionReferenceOrderId` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionAttemptState` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionError` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionCapturedAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolvedAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolvedByUserId` TEXT")
+        db.execSQL("ALTER TABLE `local_gaming_sessions` ADD COLUMN `legacyResolutionReceiptId` INTEGER")
+        db.execSQL(
+            """
+            UPDATE `local_gaming_sessions`
+               SET `state` = 'start_rejected',
+                   `status` = 'start_failed',
+                   `legacyOriginalCapturedStartAtMillis` = `startedAtMillis`,
+                   `legacyOriginalCapturedStopAtMillis` = `endAtMillis`,
+                   `lastError` = '${LEGACY_PACKAGE_START_REVIEW_ERROR}'
+             WHERE `serverId` IS NULL
+               AND `packageId` IS NOT NULL
+               AND `state` IN ('start_pending', 'stop_pending', 'start_rejected')
+            """.trimIndent(),
+        )
+
+        // Paid extensions are financial writes. Keep their immutable request
+        // snapshot and UUID/idempotency identity across process death and
+        // ambiguous network outcomes instead of retrying from UI memory.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_gaming_package_extensions` (
+                `actionId` TEXT NOT NULL,
+                `serverSessionId` TEXT NOT NULL,
+                `localSessionId` TEXT,
+                `shiftId` TEXT,
+                `packageId` TEXT NOT NULL,
+                `expectedPackagePriceMinor` INTEGER NOT NULL,
+                `expectedPackageDurationMinutes` INTEGER NOT NULL,
+                `expectedPackageVariant` TEXT NOT NULL,
+                `expectedSessionTimerMinutes` INTEGER NOT NULL,
+                `expectedSessionAmountMinor` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `resolvedAtMillis` INTEGER,
+                `resolutionReason` TEXT,
+                PRIMARY KEY(`actionId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_gaming_package_extensions_state` " +
+                "ON `local_gaming_package_extensions` (`state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_gaming_package_extensions_serverSessionId` " +
+                "ON `local_gaming_package_extensions` (`serverSessionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_gaming_package_extensions_shiftId` " +
+                "ON `local_gaming_package_extensions` (`shiftId`)",
+        )
+        installShiftClosingWriteGuards(db)
+    }
+}
+
+val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `menu_variants` (
+                `id` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `priceDeltaMinor` INTEGER NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_variants_menuItemId` " +
+                "ON `menu_variants` (`menuItemId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `menu_modifier_groups` (
+                `id` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `minSelect` INTEGER NOT NULL,
+                `maxSelect` INTEGER NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_modifier_groups_menuItemId` " +
+                "ON `menu_modifier_groups` (`menuItemId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `menu_modifiers` (
+                `id` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `modifierGroupId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `priceDeltaMinor` INTEGER NOT NULL,
+                `maxQuantity` INTEGER NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_modifiers_menuItemId` " +
+                "ON `menu_modifiers` (`menuItemId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_menu_modifiers_modifierGroupId` " +
+                "ON `menu_modifiers` (`modifierGroupId`)",
+        )
+
+        // A POS cart and its server-pricing preparation are one recoverable
+        // lifecycle. Keep the stable order/payment identity and canonical
+        // checkout snapshot in the existing durable order header rather than
+        // relying on ViewModel/SavedState memory.
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `orderNote` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_orders` ADD COLUMN `manualDiscountMinor` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `discountRequestVersion` INTEGER")
+        db.execSQL(
+            "ALTER TABLE `local_orders` ADD COLUMN `revision` INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `capturedAmountMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverSubtotalMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverDiscountMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverTaxMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverRoundOffMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverDueMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `checkoutClaimToken` TEXT")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `checkoutClaimExpiresAtMillis` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `checkoutVersion` INTEGER")
+        db.execSQL(
+            "ALTER TABLE `local_orders` ADD COLUMN `updatedAtMillis` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            "UPDATE `local_orders` SET `updatedAtMillis` = `createdAtMillis` " +
+                "WHERE `updatedAtMillis` = 0",
+        )
+
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `clientLineId` TEXT")
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `variantId` TEXT")
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `variantName` TEXT")
+        db.execSQL(
+            "ALTER TABLE `local_order_lines` ADD COLUMN `variantPriceDeltaMinor` " +
+                "INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_order_lines` ADD COLUMN `modifierSelectionsJson` " +
+                "TEXT NOT NULL DEFAULT '[]'",
+        )
+        db.execSQL("ALTER TABLE `local_order_lines` ADD COLUMN `note` TEXT")
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_order_lines_clientLineId` " +
+                "ON `local_order_lines` (`clientLineId`)",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_held_order_payments` ADD COLUMN `requiresCheckoutClaim` " +
+                "INTEGER NOT NULL DEFAULT 1",
+        )
+
+        // Replace the older pending-only local-orders guard. Draft creation,
+        // server preparation and payment capture are all new work and must be
+        // refused once shift close has started.
+        db.execSQL("DROP TRIGGER IF EXISTS `guard_local_orders_while_shift_closing`")
+        db.execSQL("DROP TRIGGER IF EXISTS `guard_local_orders_update_while_shift_closing`")
+        installShiftClosingWriteGuards(db)
+    }
+}
+
+/** Durable server-confirmed receipts and reprint history. */
+val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `pos_receipts` (
+                `receiptId` TEXT NOT NULL,
+                `orderId` TEXT NOT NULL,
+                `paymentId` TEXT,
+                `shiftId` TEXT,
+                `sourceKind` TEXT NOT NULL,
+                `sourceLabel` TEXT,
+                `customerName` TEXT,
+                `customerPhone` TEXT,
+                `orderNote` TEXT,
+                `subtotalMinor` INTEGER NOT NULL,
+                `discountMinor` INTEGER NOT NULL,
+                `taxMinor` INTEGER NOT NULL,
+                `roundOffMinor` INTEGER NOT NULL,
+                `totalMinor` INTEGER NOT NULL,
+                `dueBeforePaymentMinor` INTEGER NOT NULL,
+                `method` TEXT NOT NULL,
+                `amountMinor` INTEGER NOT NULL,
+                `billAmountMinor` INTEGER NOT NULL,
+                `tipMinor` INTEGER NOT NULL,
+                `tenderedMinor` INTEGER,
+                `changeMinor` INTEGER,
+                `refExternal` TEXT,
+                `paidAt` TEXT,
+                `orderStatus` TEXT NOT NULL,
+                `invoiceNo` TEXT,
+                `fiscalYear` TEXT,
+                `invoiceIssuedAt` TEXT,
+                `linesJson` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `acknowledgedAtMillis` INTEGER,
+                PRIMARY KEY(`receiptId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_orderId` ON `pos_receipts` (`orderId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_paymentId` ON `pos_receipts` (`paymentId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_createdAtMillis` " +
+                "ON `pos_receipts` (`createdAtMillis`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_pos_receipts_acknowledgedAtMillis` " +
+                "ON `pos_receipts` (`acknowledgedAtMillis`)",
+        )
+    }
+}
+
+/** Server-authoritative shift payment-rail totals for live and historical reconciliation. */
+val MIGRATION_30_31 = object : Migration(30, 31) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        listOf(
+            "cashCollectionsMinor",
+            "cardCollectionsMinor",
+            "upiCollectionsMinor",
+            "otherCollectionsMinor",
+        ).forEach { column ->
+            db.execSQL(
+                "ALTER TABLE `server_open_shift_cache` ADD COLUMN `$column` INTEGER",
+            )
+            db.execSQL(
+                "ALTER TABLE `shift_history_cache` ADD COLUMN `$column` INTEGER",
+            )
+        }
+    }
+}
+
+/** Persist explainable POS points review and scoped customer purchase history. */
+val MIGRATION_31_32 = object : Migration(31, 32) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverPointsRedeemedMinor` INTEGER")
+        db.execSQL("ALTER TABLE `local_orders` ADD COLUMN `serverPointsRedeemed` INTEGER")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `customer_order_history_cache` (
+                `id` TEXT NOT NULL,
+                `customerId` TEXT NOT NULL,
+                `invoiceNo` TEXT,
+                `status` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `sourceLabel` TEXT,
+                `totalMinor` INTEGER NOT NULL,
+                `paidMinor` INTEGER NOT NULL,
+                `refundedMinor` INTEGER NOT NULL,
+                `pointsRedeemedMinor` INTEGER NOT NULL,
+                `itemsCount` INTEGER NOT NULL,
+                `paymentMethods` TEXT NOT NULL,
+                `createdAt` TEXT NOT NULL,
+                `invoiceIssuedAt` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_customer_order_history_cache_customerId` " +
+                "ON `customer_order_history_cache` (`customerId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_customer_order_history_cache_createdAt` " +
+                "ON `customer_order_history_cache` (`createdAt`)",
+        )
+    }
+}
+
+/**
+ * Preserve branch identity and authoritative FIFO valuation in the inventory
+ * read cache, and freeze the supplier-document provenance of offline GRNs.
+ */
+val MIGRATION_32_33 = object : Migration(32, 33) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `ingredient_cache` ADD COLUMN `valuationMinor` INTEGER")
+        db.execSQL("ALTER TABLE `ingredient_cache` ADD COLUMN `projectionBranchId` TEXT")
+        db.execSQL(
+            "ALTER TABLE `batch_cache` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT ''",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_grns` ADD COLUMN `supplierInvoiceAmountMinor` INTEGER",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_grns` ADD COLUMN `receivedAt` TEXT NOT NULL DEFAULT ''",
+        )
+        // Old queued receipts predate received-at capture. Their immutable
+        // local capture time is the only honest recovery timestamp available.
+        db.execSQL(
+            "UPDATE `local_grns` SET `receivedAt` = " +
+                "strftime('%Y-%m-%dT%H:%M:%fZ', createdAtMillis / 1000.0, 'unixepoch') " +
+                "WHERE `receivedAt` = ''",
+        )
+    }
+}
+
+/**
+ * Cache the server-owned fiscal invoice namespace without inventing one.
+ *
+ * A display branch code is deliberately not truncated here: v0046 may have
+ * backfilled a different two-character value from historical invoice
+ * evidence, so those cache rows stay null until the authoritative pull. The
+ * only safe recovery case is an already-exact two-character alphanumeric
+ * code, which is also the backend's explicit transition rule for old queued
+ * branch creates.
+ */
+val MIGRATION_33_34 = object : Migration(33, 34) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `branch_cache` ADD COLUMN `invoiceSeriesCode` TEXT")
+        db.execSQL("ALTER TABLE `local_branches` ADD COLUMN `invoiceSeriesCode` TEXT")
+        for (table in listOf("branch_cache", "local_branches")) {
+            db.execSQL(
+                "UPDATE `$table` SET `invoiceSeriesCode` = UPPER(TRIM(`code`)) " +
+                    "WHERE `code` IS NOT NULL AND LENGTH(TRIM(`code`)) = 2 " +
+                    "AND UPPER(TRIM(`code`)) NOT GLOB '*[^A-Z0-9]*'",
+            )
+        }
+    }
+}
+
+/**
+ * Preserve the server's exact refund rail, reservation and audit evidence.
+ *
+ * Existing financial rows remain intact. Nullable provenance deliberately
+ * stays unknown for older records instead of inventing an operator or a
+ * reconciliation outcome during migration.
+ */
+val MIGRATION_34_35 = object : Migration(34, 35) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `refund_order_cache` ADD COLUMN `pendingRefundMinor` INTEGER NOT NULL DEFAULT 0",
+        )
+        db.execSQL(
+            "ALTER TABLE `refund_order_cache` ADD COLUMN `paymentMethodsCsv` TEXT NOT NULL DEFAULT ''",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_refunds` ADD COLUMN `payoutConflict` INTEGER NOT NULL DEFAULT 0",
+        )
+        // Preserve contradictory legacy evidence instead of allowing a
+        // server withdrawal to make a locally captured payout disappear.
+        db.execSQL(
+            "UPDATE `local_refunds` SET `payoutConflict` = 1 " +
+                "WHERE `state` = 'withdrawn' AND (" +
+                "`settledAtMillis` IS NOT NULL OR `providerSettledAtMillis` IS NOT NULL " +
+                "OR TRIM(COALESCE(`externalReference`, '')) != '')",
+        )
+        val textColumns = listOf(
+            "acceptedByUserId",
+            "acceptedByName",
+            "cashHandoffStartedByUserId",
+            "cashHandoffStartedByName",
+            "cashHandedOverByUserId",
+            "cashHandedOverByName",
+            "providerPayoutStartedByUserId",
+            "providerPayoutStartedByName",
+            "providerCompletedByUserId",
+            "providerCompletedByName",
+            "settledByUserId",
+            "settledByName",
+            "withdrawnByUserId",
+            "withdrawnByName",
+            "providerVerificationStatus",
+            "providerVerificationReference",
+            "loyaltyReconciliationState",
+        )
+        val integerColumns = listOf(
+            "cashHandedOverAtMillis",
+            "cashHandedOverRecordedAtMillis",
+            "providerPayoutStartedAtMillis",
+            "providerCompletionRecordedAtMillis",
+            "clientOccurredAtMillis",
+            "capturedTimeReconciled",
+            "providerEvidenceReconciled",
+            "providerVerifiedAtMillis",
+            "customerSpendReconciled",
+        )
+        textColumns.forEach { column ->
+            db.execSQL("ALTER TABLE `local_refunds` ADD COLUMN `$column` TEXT")
+        }
+        integerColumns.forEach { column ->
+            db.execSQL("ALTER TABLE `local_refunds` ADD COLUMN `$column` INTEGER")
+        }
+    }
+}
+
+/**
+ * Add explicit operational purpose without reclassifying installed tills.
+ *
+ * `hybrid` exactly preserves the historical all-in-one Gaming/POS behavior.
+ * Owners can then deliberately mark separate Cafe POS and Gaming Area tills;
+ * no migration may infer financial routing from an editable terminal name.
+ */
+val MIGRATION_35_36 = object : Migration(35, 36) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `terminal_cache` ADD COLUMN `purpose` TEXT NOT NULL DEFAULT 'hybrid'",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_terminals` ADD COLUMN `purpose` TEXT NOT NULL DEFAULT 'hybrid'",
+        )
+    }
+}
+
+/**
+ * Durable, employee-owned support outbox. Unlike the older shared outboxes,
+ * every row carries its creator's tenant identity so a shared tablet cannot
+ * replay a report as the next person who signs in.
+ */
+val MIGRATION_36_37 = object : Migration(36, 37) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_bug_reports` (
+                `localId` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `requestJson` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `screen` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `serverId` TEXT,
+                `serverStatus` TEXT,
+                `serverCreatedAt` TEXT,
+                `attemptCount` INTEGER NOT NULL,
+                `lastAttemptAtMillis` INTEGER,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_reports_ownerCompanyId_ownerUserId_state` " +
+                "ON `local_bug_reports` (`ownerCompanyId`, `ownerUserId`, `state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_reports_createdAtMillis` " +
+                "ON `local_bug_reports` (`createdAtMillis`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_bug_report_attachments` (
+                `localId` TEXT NOT NULL,
+                `reportLocalId` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `filename` TEXT NOT NULL,
+                `contentType` TEXT NOT NULL,
+                `content` BLOB NOT NULL,
+                `byteSize` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `serverAttachmentId` TEXT,
+                `attemptCount` INTEGER NOT NULL,
+                `lastAttemptAtMillis` INTEGER,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_report_attachments_reportLocalId` " +
+                "ON `local_bug_report_attachments` (`reportLocalId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_report_attachments_ownerCompanyId_ownerUserId_state` " +
+                "ON `local_bug_report_attachments` (`ownerCompanyId`, `ownerUserId`, `state`)",
+        )
+    }
+}
+
+/**
+ * Bind every support screenshot to the same company and employee as its
+ * parent report. A corrupt orphan aborts the migration transaction rather
+ * than silently deleting private evidence. Cross-owner screenshot bytes can
+ * never be safely shown or retried by the parent owner, so a legacy mismatch
+ * is rebound only to satisfy the FK and its private bytes are discarded.
+ */
+val MIGRATION_37_38 = object : Migration(37, 38) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val orphanCount = db.query(
+            """
+            SELECT COUNT(*)
+              FROM local_bug_report_attachments attachment
+              LEFT JOIN local_bug_reports report ON report.localId = attachment.reportLocalId
+             WHERE report.localId IS NULL
+            """.trimIndent(),
+        ).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+        check(orphanCount == 0) {
+            "Support attachment migration found $orphanCount orphan row(s); recovery is required"
+        }
+
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                "`index_local_bug_reports_localId_ownerCompanyId_ownerUserId` " +
+                "ON `local_bug_reports` (`localId`, `ownerCompanyId`, `ownerUserId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_bug_report_attachments_new` (
+                `localId` TEXT NOT NULL,
+                `reportLocalId` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `filename` TEXT NOT NULL,
+                `contentType` TEXT NOT NULL,
+                `content` BLOB NOT NULL,
+                `byteSize` INTEGER NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `serverAttachmentId` TEXT,
+                `attemptCount` INTEGER NOT NULL,
+                `lastAttemptAtMillis` INTEGER,
+                `lastError` TEXT,
+                PRIMARY KEY(`localId`),
+                FOREIGN KEY(`reportLocalId`, `ownerCompanyId`, `ownerUserId`)
+                    REFERENCES `local_bug_reports`(`localId`, `ownerCompanyId`, `ownerUserId`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `local_bug_report_attachments_new` (
+                localId, reportLocalId, ownerCompanyId, ownerUserId, filename, contentType,
+                content, byteSize, createdAtMillis, state, serverAttachmentId, attemptCount,
+                lastAttemptAtMillis, lastError
+            )
+            SELECT attachment.localId,
+                   attachment.reportLocalId,
+                   report.ownerCompanyId,
+                   report.ownerUserId,
+                   attachment.filename,
+                   attachment.contentType,
+                   CASE
+                     WHEN attachment.ownerCompanyId != report.ownerCompanyId OR
+                          attachment.ownerUserId != report.ownerUserId
+                       THEN X''
+                     ELSE attachment.content
+                   END,
+                   attachment.byteSize,
+                   attachment.createdAtMillis,
+                   CASE
+                     WHEN attachment.ownerCompanyId != report.ownerCompanyId OR
+                          attachment.ownerUserId != report.ownerUserId
+                       THEN 'discarded'
+                     ELSE attachment.state
+                   END,
+                   attachment.serverAttachmentId,
+                   attachment.attemptCount,
+                   attachment.lastAttemptAtMillis,
+                   CASE
+                     WHEN attachment.ownerCompanyId != report.ownerCompanyId OR
+                          attachment.ownerUserId != report.ownerUserId
+                       THEN 'Image removed during a privacy-safe ownership repair; it cannot be retried.'
+                     ELSE attachment.lastError
+                   END
+              FROM local_bug_report_attachments attachment
+              JOIN local_bug_reports report ON report.localId = attachment.reportLocalId
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `local_bug_report_attachments`")
+        db.execSQL(
+            "ALTER TABLE `local_bug_report_attachments_new` " +
+                "RENAME TO `local_bug_report_attachments`",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_bug_report_attachments_reportLocalId` " +
+                "ON `local_bug_report_attachments` (`reportLocalId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_local_bug_report_attachments_ownerCompanyId_ownerUserId_state` " +
+                "ON `local_bug_report_attachments` (`ownerCompanyId`, `ownerUserId`, `state`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_local_bug_report_attachments_reportLocalId_ownerCompanyId_ownerUserId` " +
+                "ON `local_bug_report_attachments` " +
+                "(`reportLocalId`, `ownerCompanyId`, `ownerUserId`)",
+        )
+    }
+}
+
+/**
+ * Gaming-session food/drink/dessert staging.
+ *
+ * The server cache is replaceable. The action table is durable and captures a
+ * complete owner/workspace/request snapshot before any network attempt, so an
+ * account or terminal switch can never replay the command under new authority.
+ */
+val MIGRATION_38_39 = object : Migration(38, 39) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `gaming_session_addon_cache` (
+                `id` TEXT NOT NULL,
+                `gamingSessionId` TEXT NOT NULL,
+                `clientLineId` TEXT NOT NULL,
+                `menuItemId` TEXT NOT NULL,
+                `menuItemName` TEXT NOT NULL,
+                `menuItemType` TEXT NOT NULL,
+                `variantId` TEXT,
+                `variantSnapshotJson` TEXT,
+                `modifiersJson` TEXT NOT NULL,
+                `qty` INTEGER NOT NULL,
+                `catalogUnitPriceMinor` INTEGER NOT NULL,
+                `unitPriceMinor` INTEGER NOT NULL,
+                `lineTotalMinor` INTEGER NOT NULL,
+                `discountMinor` INTEGER NOT NULL,
+                `hsnOrSac` TEXT,
+                `taxRate` REAL NOT NULL,
+                `taxableValueMinor` INTEGER NOT NULL,
+                `cgstMinor` INTEGER NOT NULL,
+                `sgstMinor` INTEGER NOT NULL,
+                `igstMinor` INTEGER NOT NULL,
+                `cessMinor` INTEGER NOT NULL,
+                `note` TEXT,
+                `createdBy` TEXT NOT NULL,
+                `createdTerminalId` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `voidedAtMillis` INTEGER,
+                `voidedBy` TEXT,
+                `voidReason` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_gaming_session_addon_cache_gamingSessionId` " +
+                "ON `gaming_session_addon_cache` (`gamingSessionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_gaming_session_addon_cache_clientLineId` " +
+                "ON `gaming_session_addon_cache` (`clientLineId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_gaming_session_addon_actions` (
+                `actionId` TEXT NOT NULL,
+                `actionType` TEXT NOT NULL,
+                `ownerCompanyId` TEXT NOT NULL,
+                `ownerUserId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `terminalId` TEXT NOT NULL,
+                `localSessionId` TEXT,
+                `serverSessionId` TEXT,
+                `shiftId` TEXT NOT NULL,
+                `clientLineId` TEXT NOT NULL,
+                `serverAddonId` TEXT,
+                `menuItemId` TEXT NOT NULL,
+                `menuItemName` TEXT NOT NULL,
+                `menuItemType` TEXT NOT NULL,
+                `variantId` TEXT,
+                `modifierSelectionsJson` TEXT NOT NULL,
+                `qty` INTEGER NOT NULL,
+                `expectedUnitPriceMinor` INTEGER NOT NULL,
+                `note` TEXT,
+                `voidReason` TEXT,
+                `createdAtMillis` INTEGER NOT NULL,
+                `state` TEXT NOT NULL,
+                `lastError` TEXT,
+                `resolvedAtMillis` INTEGER,
+                `resolutionReason` TEXT,
+                PRIMARY KEY(`actionId`)
+            )
+            """.trimIndent(),
+        )
+        listOf(
+            "state",
+            "localSessionId",
+            "serverSessionId",
+            "shiftId",
+            "clientLineId",
+        ).forEach { column ->
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_local_gaming_session_addon_actions_$column` " +
+                    "ON `local_gaming_session_addon_actions` (`$column`)",
+            )
+        }
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_local_gaming_session_addon_actions_ownerCompanyId_ownerUserId_branchId_terminalId_state` " +
+                "ON `local_gaming_session_addon_actions` " +
+                "(`ownerCompanyId`, `ownerUserId`, `branchId`, `terminalId`, `state`)",
+        )
+        installShiftClosingWriteGuards(db)
+    }
+}
+
+/** Server-authoritative, cross-device receipt history cache. Local payment evidence stays separate. */
+val MIGRATION_39_40 = object : Migration(39, 40) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `canonical_pos_receipts` (
+                `orderId` TEXT NOT NULL,
+                `companyId` TEXT NOT NULL,
+                `branchId` TEXT NOT NULL,
+                `terminalId` TEXT NOT NULL,
+                `invoiceNo` TEXT NOT NULL,
+                `status` TEXT NOT NULL,
+                `orderType` TEXT NOT NULL,
+                `totalMinor` INTEGER NOT NULL,
+                `paidMinor` INTEGER NOT NULL,
+                `invoiceIssuedAt` TEXT NOT NULL,
+                `invoiceIssuedAtMillis` INTEGER NOT NULL,
+                `payloadJson` TEXT NOT NULL,
+                `fetchedAtMillis` INTEGER NOT NULL,
+                PRIMARY KEY(`orderId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS " +
+                "`index_canonical_pos_receipts_companyId_branchId_invoiceIssuedAtMillis` " +
+                "ON `canonical_pos_receipts` (`companyId`, `branchId`, `invoiceIssuedAtMillis`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_canonical_pos_receipts_invoiceNo` " +
+                "ON `canonical_pos_receipts` (`invoiceNo`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `canonical_receipt_sync_state` (
+                `id` INTEGER NOT NULL,
+                `nextCursor` TEXT,
+                `hasMore` INTEGER NOT NULL,
+                `loadedCount` INTEGER NOT NULL,
+                `fetchedAtMillis` INTEGER NOT NULL,
+                `unavailableMessage` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
     MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
     MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
-    MIGRATION_24_25, MIGRATION_25_26,
+    MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
+    MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
+    MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
+    MIGRATION_39_40,
 )

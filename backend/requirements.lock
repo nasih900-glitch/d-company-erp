@@ -28,6 +28,7 @@ MarkupSafe==3.0.3
 orjson==3.11.9
 packaging==26.2
 passlib==1.7.4
+pillow==12.3.0
 psycopg==3.3.4
 psycopg-binary==3.3.4
 pycparser==3.0

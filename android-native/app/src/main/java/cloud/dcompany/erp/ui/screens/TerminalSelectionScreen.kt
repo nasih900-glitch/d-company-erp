@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.net.Terminal
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.ui.theme.Brand
 
 /**
@@ -154,9 +155,13 @@ fun TerminalSelectionScreen(
                                     color = Brand.Foreground,
                                 )
                                 Text(
-                                    if (isReassignment) "Move this tablet here" else "Use for this tablet",
+                                    TerminalPurpose.displayLabel(terminal.purpose),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Brand.ForegroundMuted,
+                                    color = if (TerminalPurpose.isKnown(terminal.purpose)) {
+                                        Brand.ForegroundMuted
+                                    } else {
+                                        Brand.Warning
+                                    },
                                 )
                             }
                         }

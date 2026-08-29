@@ -38,11 +38,43 @@ class RefundTaskCopyTest {
     }
 
     @Test
+    fun providerStatesRequireAcceptanceAndAlwaysWarnAgainstDuplicatePayout() {
+        val accepted = copy(RefundState.ACCEPTED_PROVIDER_DUE)
+        assertTrue(accepted.contains("payout not started"))
+        assertTrue(accepted.contains("server-confirmed provider start"))
+
+        for (
+            state in listOf(
+                RefundState.PROVIDER_PAYOUT_IN_PROGRESS,
+                RefundState.PROVIDER_COMPLETION_PENDING,
+                RefundState.PROVIDER_COMPLETION_REJECTED,
+                RefundState.PROVIDER_COMPLETED_PENDING_ACCOUNTING,
+                RefundState.PROVIDER_FINALIZE_REJECTED,
+            )
+        ) {
+            val copy = copy(state)
+            assertTrue(copy.contains("do not start twice") || copy.contains("do not run the payout again"))
+        }
+    }
+
+    @Test
     fun legacyRowsAreQuarantinedInsteadOfBecomingCashDue() {
         val copy = copy(RefundState.LEGACY_RECONCILIATION_REQUIRED)
         assertTrue(copy.contains("quarantined"))
         assertTrue(copy.contains("do not pay again"))
         assertTrue(copy.contains("owner reconciliation"))
+    }
+
+    @Test
+    fun withdrawalConflictBlocksSecondPayoutAndRequiresOwnerReconciliation() {
+        val copy = refundTaskCopy(task(RefundState.WITHDRAWN).copy(payoutConflict = true))
+            .let { "${it.first} ${it.second}" }
+            .lowercase()
+
+        assertTrue(copy.contains("do not pay again"))
+        assertTrue(copy.contains("protected owner"))
+        assertTrue(copy.contains("server records no payout"))
+        assertTrue(copy.contains("drawer or provider"))
     }
 
     private fun copy(state: String): String = refundTaskCopy(task(state))
@@ -51,6 +83,7 @@ class RefundTaskCopyTest {
 
     private fun task(state: String) = RefundTask(
         localId = "refund-1",
+        orderId = "order-1",
         invoiceNo = "INV-1",
         amountMinor = 10_000,
         reasonCode = "billing_error",
@@ -62,8 +95,27 @@ class RefundTaskCopyTest {
         acceptedAtMillis = null,
         handoffStartedAtMillis = null,
         settledAtMillis = null,
+        localPayoutAtMillis = null,
         withdrawalAtMillis = null,
         receiptNo = null,
+        externalReference = null,
+        acceptedByUserId = null,
+        acceptedByName = null,
+        moneyStartedByUserId = null,
+        moneyStartedByName = null,
+        moneyCompletedByUserId = null,
+        moneyCompletedByName = null,
+        settledByUserId = null,
+        settledByName = null,
+        withdrawnByUserId = null,
+        withdrawnByName = null,
+        providerVerificationStatus = null,
+        providerVerificationReference = null,
+        customerSpendReconciled = null,
+        loyaltyReconciliationState = null,
+        capturedTimeReconciled = null,
+        providerEvidenceReconciled = null,
+        payoutConflict = false,
         error = null,
     )
 }

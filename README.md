@@ -106,21 +106,38 @@ D Company ERP currently has two supported clients backed by the same cloud API:
 - **Web** — the primary production client.
 - **Android** — the native Kotlin/Compose app in `android-native`, producing a
   signed `.apk` for direct installation and `.aab` for Play internal testing.
-The iOS project in `frontend/ios` and the Tauri macOS/Windows wrapper in
-`frontend/src-tauri` are outside the supported release scope. Do not describe
-them as distributable clients.
+The old Capacitor shells in `frontend/android` and `frontend/ios`, plus the
+Tauri macOS/Windows wrapper in `frontend/src-tauri`, are outside the supported
+release scope. Never build or distribute `frontend/android`: it is an archived,
+separately identified prototype, not another supported ERP app.
 
 - [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — Android signing, testing, and publishing setup.
 - [`docs/CLOUD_DEPLOY.md`](docs/CLOUD_DEPLOY.md) — backend hosting (Render / AWS / Fly.io).
 - [`frontend/TAURI.md`](frontend/TAURI.md) — desktop build commands.
-- [`frontend/CAPACITOR.md`](frontend/CAPACITOR.md) — mobile build commands.
+- [`frontend/CAPACITOR.md`](frontend/CAPACITOR.md) — archived-shell warning;
+  supported Android releases come only from `android-native`.
 - [`download/index.html`](download/index.html) — release-status landing page that
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
-Tagging a release that exactly matches the Android `versionName` (currently
-`git tag v3.0.1 && git push --follow-tags`) triggers
-`.github/workflows/release.yml`. It tests and signs the native Android build,
-then attaches only the verified signed Android artifacts to the GitHub Release.
+Tagging a release that exactly matches the Android `versionName` triggers
+`.github/workflows/release.yml`. The current release identity is `3.1.2` (`13`);
+Android code `8` remains the minimum-compatible floor. The signed `3.1.2`
+direct-release APK is the manual partner baseline for this rollout, but it may
+be handed to the partner only after the coordinated production deployment has
+reached Alembic revision `0057` and its production smoke test has passed. It
+must not be uploaded to the server release directory, published as a GitHub or
+Play release, or advertised by `/api/v1/app/android/update` in this release.
+Production must retain the existing code-`8` latest-version defaults and blank
+direct-update metadata.
+
+The immutable signed `3.1.1` (`12`) APK remains the predecessor used to prove
+the supported in-place upgrade to code `13`; neither signed identity may be
+rebuilt with different bytes. The first server-driven update from the manually
+installed code-`13` baseline will be a distinct `3.1.3` (`14`) release. It must
+be newly built and signed, hosted at an immutable HTTPS URL, verified against
+its exact SHA-256, byte size, package, version and expected signer, and then
+explicitly advertised by the server. Android still requires the employee to
+approve installation. Emulator evidence is not physical Redmi Pad 2 proof.
 
 ## License
 

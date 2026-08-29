@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
@@ -18,6 +18,7 @@ from app.core.permissions import (
     MODULE_PERMISSIONS,
     ROLE_DESCRIPTIONS,
     ROLE_PERMISSIONS,
+    _role_allows_permission,
     requires,
 )
 from app.core.roles import PROTECTED_OWNER_ROLE
@@ -81,7 +82,7 @@ AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
         "MembershipRefundResolution", "MembershipRefundSettlement", "Shift",
     ),
     "customers": ("Customer", "CustomerMembership", "MembershipTier"),
-    "staff": ("User", "UserRole", "Role"),
+    "staff": ("User", "UserRole", "Role", "Attendance"),
     "inventory": (
         "Ingredient",
         "Supplier",
@@ -114,7 +115,13 @@ AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
         "Partner",
         "CapitalEntry",
     ),
-    "menu": ("MenuCategory", "MenuItem"),
+    "menu": (
+        "MenuCategory",
+        "MenuItem",
+        "MenuModifierGroup",
+        "MenuModifier",
+        "MenuVariant",
+    ),
     "operations": (
         "Table",
         "Floor",
@@ -125,7 +132,7 @@ AUDIT_AREA_ENTITY_TYPES: dict[str, tuple[str, ...]] = {
         "Event",
         "EventTicket",
     ),
-    "system": ("AuditAccess", "PricingAccess"),
+    "system": ("AuditAccess", "PricingAccess", "RolePermissionOverride"),
 }
 
 
@@ -224,7 +231,7 @@ async def unlock_pricing(
     payload: AuditUnlockRequest,
     request: Request,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("admin.system")),
+    tenant: TenantContext = Depends(requires("settings.manage")),
 ) -> PricingUnlockResponse:
     """Require the current user's password before pricing can be changed."""
     user = (
@@ -394,6 +401,11 @@ class AccessCell(BaseModel):
     default_allowed: bool
     override: bool | None
     allowed: bool
+    default_access_level: Literal["blocked", "partial", "full"]
+    access_level: Literal["blocked", "partial", "full"]
+    effective_permissions: list[str]
+    unavailable_permissions: list[str]
+    ceiling_limited_permissions: list[str]
 
 
 class AccessControlDTO(BaseModel):
@@ -406,6 +418,81 @@ class AccessControlUpdate(BaseModel):
     role_code: str
     module: str
     allowed: bool | None  # null clears the override, reverting to the role default
+
+
+def _module_access(
+    *,
+    role_code: str,
+    module: str,
+    override: bool | None,
+) -> tuple[Literal["blocked", "partial", "full"], list[str], list[str]]:
+    """Resolve the exact permissions behind one coarse Access Control cell.
+
+    A module switch is intentionally coarser than the permission registry. An
+    allow override can expose ordinary permissions while immutable high-trust
+    ceilings still withhold refunds, role administration, or financial writes.
+    Returning that as a plain ``allowed=true`` would mislead an owner, so the
+    API reports both the effective permission set and its blocked remainder.
+    """
+    module_permissions = MODULE_PERMISSIONS[module]
+    effective = sorted(
+        permission
+        for permission in module_permissions
+        if _role_allows_permission(
+            role=role_code,
+            perm=permission,
+            module=module,
+            override=override,
+        )
+    )
+    unavailable = sorted(module_permissions - set(effective))
+    if not effective:
+        level: Literal["blocked", "partial", "full"] = "blocked"
+    elif unavailable:
+        level = "partial"
+    else:
+        level = "full"
+    return level, effective, unavailable
+
+
+def _access_cell(
+    *,
+    role_code: str,
+    module: str,
+    override: bool | None,
+) -> AccessCell:
+    default_level, _, _ = _module_access(
+        role_code=role_code,
+        module=module,
+        override=None,
+    )
+    level, effective, unavailable = _module_access(
+        role_code=role_code,
+        module=module,
+        override=override,
+    )
+    # These remain unavailable even when the coarse module switch is enabled.
+    # Keep them distinct from permissions that are merely disabled by the
+    # current default/override and may legitimately be enabled by the owner.
+    _, _, ceiling_limited = _module_access(
+        role_code=role_code,
+        module=module,
+        override=True,
+    )
+    return AccessCell(
+        role_code=role_code,
+        module=module,
+        default_allowed=default_level != "blocked",
+        override=override,
+        # Backward-compatible switch state for older clients. New clients must
+        # render ``access_level`` so partial access is never presented as full.
+        allowed=level != "blocked",
+        default_access_level=default_level,
+        access_level=level,
+        effective_permissions=effective,
+        unavailable_permissions=unavailable,
+        ceiling_limited_permissions=ceiling_limited,
+    )
 
 
 @router.get("/access-control", response_model=AccessControlDTO)
@@ -432,17 +519,13 @@ async def get_access_control(
     modules = sorted(MODULE_PERMISSIONS)
     cells: list[AccessCell] = []
     for role_code in role_codes:
-        role_perms = ROLE_PERMISSIONS.get(role_code, set())
         for module in modules:
-            default_allowed = bool(MODULE_PERMISSIONS[module] & role_perms)
             override = override_by_key.get((role_code, module))
             cells.append(
-                AccessCell(
+                _access_cell(
                     role_code=role_code,
                     module=module,
-                    default_allowed=default_allowed,
                     override=override,
-                    allowed=default_allowed if override is None else override,
                 )
             )
     return AccessControlDTO(
@@ -504,13 +587,8 @@ async def update_access_control(
         )
     await session.flush()
 
-    default_allowed = bool(
-        MODULE_PERMISSIONS[payload.module] & ROLE_PERMISSIONS.get(payload.role_code, set())
-    )
-    return AccessCell(
+    return _access_cell(
         role_code=payload.role_code,
         module=payload.module,
-        default_allowed=default_allowed,
         override=payload.allowed,
-        allowed=default_allowed if payload.allowed is None else payload.allowed,
     )

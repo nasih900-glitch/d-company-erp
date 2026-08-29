@@ -1,4 +1,4 @@
-"""Postgres proof for discount authority and immutable held-bill handoff."""
+"""Postgres proof for discount authority and versioned held-bill settlement."""
 
 from __future__ import annotations
 
@@ -11,7 +11,16 @@ from sqlalchemy import delete, select, text
 
 from app.core.db import AsyncSessionLocal
 from app.core.security import hash_password, issue_access_token
-from app.models import IdempotencyKey, Order, OrderCheckoutClaim, Role, Shift, User, UserRole
+from app.models import (
+    Customer,
+    IdempotencyKey,
+    Order,
+    OrderCheckoutClaim,
+    Role,
+    Shift,
+    User,
+    UserRole,
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -155,6 +164,10 @@ async def _cashier_order(session, seed_owner, *, manual_discount_minor: int = 0)
     )
     session.add(order)
     await session.commit()
+    # Migration 0047 invalidates existing credentials on every role-assignment
+    # mutation. Refresh the actor before minting the test token so it carries
+    # the authoritative version produced by the database trigger.
+    await session.refresh(cashier)
     return order, shift, cashier, cashier_role, assignment
 
 
@@ -194,22 +207,33 @@ async def _cleanup_cashier_order(
         await cleanup.commit()
 
 
-async def _cleanup(*, order_id, shift_id, idempotency_key: str) -> None:
+async def _cleanup(
+    *,
+    order_id,
+    shift_id,
+    idempotency_key: str | tuple[str, ...],
+    customer_id=None,
+) -> None:
+    idempotency_keys = (
+        idempotency_key if isinstance(idempotency_key, tuple) else (idempotency_key,)
+    )
     async with AsyncSessionLocal() as cleanup:
         await cleanup.execute(
             delete(OrderCheckoutClaim).where(OrderCheckoutClaim.order_id == order_id)
         )
         await cleanup.execute(delete(Order).where(Order.id == order_id))
         await cleanup.execute(delete(Shift).where(Shift.id == shift_id))
+        if customer_id is not None:
+            await cleanup.execute(delete(Customer).where(Customer.id == customer_id))
         await cleanup.execute(
-            delete(IdempotencyKey).where(IdempotencyKey.key == idempotency_key)
+            delete(IdempotencyKey).where(IdempotencyKey.key.in_(idempotency_keys))
         )
         await cleanup.commit()
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_held_order_discount_is_frozen_even_with_active_claim(
+async def test_active_claim_blocks_versioned_held_order_discount(
     client,
     session,
     seed_owner,
@@ -225,16 +249,16 @@ async def test_held_order_discount_is_frozen_even_with_active_claim(
         response = await client.patch(
             f"/api/v1/pos/orders/{order.id}/discount",
             headers=_headers(seed_owner, idempotency_key=key),
-            json={"manual_discount_minor": 500},
+            json={
+                "manual_discount_minor": 500,
+                "expected_checkout_version": order.checkout_version,
+            },
         )
 
-        assert response.status_code == 422, response.text
+        assert response.status_code == 409, response.text
         error = response.json()["error"]
-        assert error["code"] == "business_rule"
-        assert error["message"] == (
-            "This bill is frozen after Send to POS. Apply the discount before "
-            "sending it for payment."
-        )
+        assert error["code"] == "checkout_claim_conflict"
+        assert "checkout is in progress" in error["message"]
         async with AsyncSessionLocal() as verify:
             unchanged = await verify.get(Order, order.id)
             assert unchanged is not None
@@ -327,7 +351,7 @@ async def test_cashier_can_remove_an_existing_manual_discount(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_expired_claim_does_not_unfreeze_held_order(
+async def test_expired_claim_is_removed_before_versioned_held_order_discount(
     client,
     session,
     seed_owner,
@@ -342,21 +366,177 @@ async def test_expired_claim_does_not_unfreeze_held_order(
         response = await client.patch(
             f"/api/v1/pos/orders/{order.id}/discount",
             headers=_headers(seed_owner, idempotency_key=key),
-            json={"manual_discount_minor": 500},
+            json={
+                "manual_discount_minor": 500,
+                "expected_checkout_version": order.checkout_version,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["manual_discount_minor"] == 500
+        assert response.json()["total_minor"] == 12_000
+        assert response.json()["checkout_version"] > order.checkout_version
+        async with AsyncSessionLocal() as verify:
+            changed = await verify.get(Order, order.id)
+            assert changed is not None
+            assert changed.manual_discount_minor == 500
+            assert changed.total_minor == 12_000
+            assert await verify.get(OrderCheckoutClaim, claim.id) is None
+    finally:
+        await _cleanup(order_id=order.id, shift_id=shift.id, idempotency_key=key)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "message_fragment"),
+    [
+        ({"manual_discount_minor": 500}, "current checkout version is required"),
+        (
+            {"manual_discount_minor": 500, "expected_checkout_version": 999_999},
+            "This bill changed before changing its discount",
+        ),
+    ],
+)
+async def test_held_discount_rejects_missing_or_stale_checkout_version(
+    client,
+    session,
+    seed_owner,
+    payload,
+    message_fragment,
+) -> None:
+    order, shift, _claim = await _held_order_with_claim(
+        session,
+        seed_owner,
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    key = f"held-discount-version-{uuid4()}"
+    try:
+        response = await client.patch(
+            f"/api/v1/pos/orders/{order.id}/discount",
+            headers=_headers(seed_owner, idempotency_key=key),
+            json=payload,
         )
 
         assert response.status_code == 422, response.text
         error = response.json()["error"]
         assert error["code"] == "business_rule"
-        assert error["message"] == (
-            "This bill is frozen after Send to POS. Apply the discount before "
-            "sending it for payment."
-        )
+        assert message_fragment in error["message"]
+        assert error["details"]["current_checkout_version"] == order.checkout_version
         async with AsyncSessionLocal() as verify:
-            changed = await verify.get(Order, order.id)
-            assert changed is not None
-            assert changed.manual_discount_minor == 0
-            assert changed.total_minor == 12_500
-            assert await verify.get(OrderCheckoutClaim, claim.id) is not None
+            unchanged = await verify.get(Order, order.id)
+            assert unchanged is not None
+            assert unchanged.manual_discount_minor == 0
+            assert unchanged.total_minor == 12_500
     finally:
         await _cleanup(order_id=order.id, shift_id=shift.id, idempotency_key=key)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_held_settlement_metadata_can_change_then_claims_exact_snapshot(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """Customer, discount, points and reward are cashier-stage facts.
+
+    They may change a held bill before collection, but each mutation consumes
+    the exact version returned by the previous one. Only after those edits does
+    checkout acquire a lease over the resulting immutable money snapshot.
+    """
+    order, shift, claim = await _held_order_with_claim(
+        session,
+        seed_owner,
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    customer = Customer(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        name="Initial payer",
+        phone=f"9{uuid4().int % 10**9:09d}",
+        loyalty_points=100,
+        lifetime_gaming_points_earned=0,
+    )
+    session.add(customer)
+    order.customer_id = customer.id
+    order.customer_name = customer.name
+    order.customer_phone = customer.phone
+    await session.delete(claim)
+    await session.commit()
+    await session.refresh(order)
+
+    keys = tuple(
+        f"held-metadata-{name}-{uuid4()}"
+        for name in ("customer", "discount", "points", "reward")
+    )
+    try:
+        customer_response = await client.patch(
+            f"/api/v1/pos/orders/{order.id}/customer",
+            headers=_headers(seed_owner, idempotency_key=keys[0]),
+            json={
+                "customer_name": "Final payer",
+                "customer_phone": customer.phone,
+                "expected_checkout_version": order.checkout_version,
+            },
+        )
+        assert customer_response.status_code == 200, customer_response.text
+        current = customer_response.json()
+        assert current["customer_name"] == "Final payer"
+        assert current["checkout_version"] > order.checkout_version
+
+        discount_response = await client.patch(
+            f"/api/v1/pos/orders/{order.id}/discount",
+            headers=_headers(seed_owner, idempotency_key=keys[1]),
+            json={
+                "manual_discount_minor": 500,
+                "expected_checkout_version": current["checkout_version"],
+            },
+        )
+        assert discount_response.status_code == 200, discount_response.text
+        current = discount_response.json()
+        assert current["manual_discount_minor"] == 500
+        assert current["total_minor"] == 12_000
+
+        points_response = await client.patch(
+            f"/api/v1/pos/orders/{order.id}/points",
+            headers=_headers(seed_owner, idempotency_key=keys[2]),
+            json={
+                "points": 10,
+                "expected_checkout_version": current["checkout_version"],
+            },
+        )
+        assert points_response.status_code == 200, points_response.text
+        current = points_response.json()
+        assert current["points_redeemed"] == 10
+        assert current["total_minor"] == 11_900
+
+        reward_response = await client.patch(
+            f"/api/v1/pos/orders/{order.id}/reward",
+            headers=_headers(seed_owner, idempotency_key=keys[3]),
+            json={
+                "reward_key": "snack",
+                "expected_checkout_version": current["checkout_version"],
+            },
+        )
+        assert reward_response.status_code == 200, reward_response.text
+        current = reward_response.json()
+        assert current["points_redeemed"] == 60
+        assert current["manual_discount_minor"] == 500
+        assert current["total_minor"] == 8_000
+
+        claimed = await client.post(
+            f"/api/v1/pos/orders/{order.id}/checkout-claim",
+            headers=_headers(seed_owner, idempotency_key=f"unused-claim-{uuid4()}"),
+        )
+        assert claimed.status_code == 201, claimed.text
+        assert claimed.json()["order_version"] == current["checkout_version"]
+        assert claimed.json()["order_total_minor"] == 8_000
+        assert claimed.json()["due_minor"] == 8_000
+    finally:
+        await _cleanup(
+            order_id=order.id,
+            shift_id=shift.id,
+            idempotency_key=keys,
+            customer_id=customer.id,
+        )

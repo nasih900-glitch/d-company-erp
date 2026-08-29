@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -61,6 +62,8 @@ data class BranchCacheEntity(
     @PrimaryKey val id: String,
     val name: String,
     val code: String?,
+    /** Null only for a cache row migrated before the first v34 server refresh. */
+    val invoiceSeriesCode: String? = null,
     val address: String?,
     val timezone: String?,
     val opensAt: String?,
@@ -78,6 +81,8 @@ data class LocalBranchEntity(
     @PrimaryKey val localId: String,
     val name: String,
     val code: String?,
+    /** Null only for a branch create queued by a pre-v34 client. */
+    val invoiceSeriesCode: String? = null,
     val address: String?,
     val timezone: String?,
     val opensAt: String?,
@@ -96,6 +101,8 @@ data class TerminalCacheEntity(
     @PrimaryKey val id: String,
     val branchId: String,
     val name: String,
+    /** Pre-contract cache rows preserve the old all-in-one behavior. */
+    @ColumnInfo(defaultValue = "'hybrid'") val purpose: String,
     val deviceId: String?,
     val lastSeenAt: String?,
 )
@@ -109,6 +116,8 @@ data class LocalTerminalEntity(
     @PrimaryKey val localId: String,
     val branchId: String,
     val name: String,
+    /** Captured with the offline create; it must not be inferred from the editable name. */
+    @ColumnInfo(defaultValue = "'hybrid'") val purpose: String,
     val deviceId: String?,
     val createdAtMillis: Long,
     val syncState: String = SettingsWriteState.PENDING,

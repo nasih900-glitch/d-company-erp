@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.FinanceAccess
-import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.ExpenseCacheEntity
@@ -15,7 +14,10 @@ import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.db.cached
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.net.CostingCoverage
+import cloud.dcompany.erp.core.net.asRupees
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,8 +29,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.Serializable
+import java.time.LocalDate
 import java.util.UUID
 
 /** Shared by SyncEngine's serialized writer and this Room-observing screen. */
@@ -39,6 +43,10 @@ internal object FinanceSnapshotKeys {
     const val PARTNERS = "finance_partners"
     const val CATEGORIES = "finance_expense_categories"
     const val BRANCHES = "finance_branches"
+    const val COSTING = "finance_inventory_costing"
+    const val MANUAL_COLLECTIONS = "finance_manual_collections"
+    const val TIP_PAYOUTS = "finance_tip_payouts"
+    const val TRIAL_BALANCE = "finance_trial_balance"
     const val ROW_SCOPE = "finance_row_cache_scope"
 }
 
@@ -50,9 +58,11 @@ internal object FinanceSnapshotKeys {
 internal data class FinanceCacheScope(
     val companyId: String,
     val branchId: String?,
+    val companyWidePartnerFinance: Boolean = false,
 ) {
     fun key(base: String): String =
-        "$base|company=$companyId|branch=${branchId ?: "all"}"
+        "$base|company=$companyId|branch=${branchId ?: "all"}|" +
+            "partner_scope=${if (companyWidePartnerFinance) "company" else "none"}"
 
     companion object {
         fun from(profile: MeResponse?): FinanceCacheScope? = profile?.let {
@@ -60,6 +70,7 @@ internal data class FinanceCacheScope(
             if (companyId.isEmpty()) null else FinanceCacheScope(
                 companyId = companyId,
                 branchId = it.branchId?.trim()?.takeIf(String::isNotEmpty),
+                companyWidePartnerFinance = it.canViewCompanyWidePartnerFinance(),
             )
         }
     }
@@ -79,11 +90,28 @@ internal fun <T> visibleFinanceRows(
     return rows.filter { branchId(it) == assignedBranch }
 }
 
+/** Snapshot lists are already keyed by company/branch, but retain a second
+ * branch check before presentation so a malformed server response cannot
+ * expose another shop's financial register. */
+internal fun <T> visibleSnapshotFinanceRows(
+    rows: List<T>,
+    scope: FinanceCacheScope?,
+    branchId: (T) -> String,
+): List<T> {
+    val verifiedScope = scope ?: return emptyList()
+    val assignedBranch = verifiedScope.branchId ?: return rows
+    return rows.filter { branchId(it) == assignedBranch }
+}
+
 /** Which modal is up. Owned by the ViewModel so a rotation does not lose track of which form it was. */
 sealed interface FinanceDialog {
     data object ExpenseForm : FinanceDialog
     data object AssetForm : FinanceDialog
     data class CapitalEntryForm(val partner: Partner) : FinanceDialog
+    data object ManualCollectionForm : FinanceDialog
+    data object TipPayoutForm : FinanceDialog
+    data class VoidManualCollection(val row: ManualCollection) : FinanceDialog
+    data class VoidTipPayout(val row: TipPayout) : FinanceDialog
 }
 
 /** A queued-but-not-yet-synced expense, with its category name resolved for display. */
@@ -114,16 +142,26 @@ data class PendingCapitalEntryRow(
     val error: String? = null,
 )
 
-data class FinanceUiState(
+internal data class FinanceUiState(
     val loading: Boolean = true,
+    val online: Boolean = false,
+    val lastUpdatedAtMillis: Long? = null,
+    val costingCoverageUpdatedAtMillis: Long? = null,
     /** The server's own message, never an HTTP code. */
     val error: String? = null,
     val pl: ProfitAndLoss? = null,
     val metrics: BusinessMetrics? = null,
     val distributable: DistributableProfit? = null,
+    val costingCoverage: CostingCoverage? = null,
     val expenses: List<Expense> = emptyList(),
     val assets: List<Asset> = emptyList(),
+    val manualCollections: List<ManualCollection> = emptyList(),
+    val tipPayouts: List<TipPayout> = emptyList(),
+    val trialBalance: TrialBalance? = null,
     val partners: List<Partner> = emptyList(),
+    /** Partner ownership/capital has no branch attribution and is intentionally
+     * unavailable to a branch-bound role assignment. */
+    val companyWidePartnerDataAvailable: Boolean = false,
     val branches: List<Branch> = emptyList(),
     val categoryNames: Map<String, String> = emptyMap(),
     val pendingExpenses: List<PendingExpenseRow> = emptyList(),
@@ -133,11 +171,18 @@ data class FinanceUiState(
     val busy: Boolean = false,
     val formError: String? = null,
     val notice: String? = null,
+    /** A live write whose response was not safely resolved. This is a durable
+     * exact-request checkpoint, never an offline accounting queue. */
+    val pendingOnlineWrite: PendingFinanceOnlineWrite? = null,
 ) {
     /** True once a load has succeeded; the five report figures always arrive together. */
     val loaded: Boolean get() = pl != null
 
     val expenseTotalMinor: Long get() = expenses.sumOf { it.amountMinor }
+    val collectionTotals: ManualCollectionTotals get() =
+        manualCollectionTotals(manualCollections)
+    val tipPayoutTotalMinor: Long get() = tipPayoutTotal(tipPayouts)
+    val tipsPayableMinor: Long? get() = trialBalance?.tipsPayableMinor()
 
     /**
      * Nothing booked this period. Distinguished from "not loaded yet" so the
@@ -149,6 +194,18 @@ data class FinanceUiState(
             pl.revenueMinor == 0L && pl.membershipsMinor == 0L &&
             pl.cogsMinor == 0L && pl.expensesMinor == 0L &&
             pl.depreciationMinor == 0L && pl.netProfitMinor == 0L
+
+    /**
+     * Costing is safe to apply to the displayed P&L/distribution figures only
+     * when both snapshots came from the same successful server refresh. A
+     * newer P&L must never inherit an older green "complete" result after the
+     * costing endpoint failed.
+     */
+    val verifiedCostingCoverage: CostingCoverage?
+        get() = costingCoverage.takeIf {
+            lastUpdatedAtMillis != null &&
+                costingCoverageUpdatedAtMillis == lastUpdatedAtMillis
+        }
 
     fun categoryName(id: String): String = categoryNames[id] ?: "—"
 }
@@ -166,22 +223,32 @@ data class FinanceUiState(
  * shape.
  *
  * Recording an expense, a partner capital movement, or an asset is
- * create-only here: expense edit/delete, capital-entry void, and any change
- * at all to an asset stay in the web ERP, where that evidence-reference
- * discipline (and, for a void, a written reason) actually lives.
+ * create-only here. Corrections must use the separate authorised workflow so
+ * the original evidence and any reasoned void remain auditable.
  */
 class FinanceViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
+    private val onlineWriteExecutor: FinanceOnlineWriteExecutor =
+        RetrofitFinanceOnlineWriteExecutor()
+    private val writeRecoveryStore: FinanceWriteRecoveryStore =
+        SharedPreferencesFinanceWriteRecoveryStore(appCtx)
     @Volatile private var access = FinanceAccess()
 
     private val pl = MutableStateFlow<ProfitAndLoss?>(null)
     private val metrics = MutableStateFlow<BusinessMetrics?>(null)
     private val distributable = MutableStateFlow<DistributableProfit?>(null)
+    private val costingCoverage = MutableStateFlow<CostingCoverage?>(null)
+    private val lastUpdatedAtMillis = MutableStateFlow<Long?>(null)
+    private val costingCoverageUpdatedAtMillis = MutableStateFlow<Long?>(null)
     private val partners = MutableStateFlow<List<Partner>>(emptyList())
     private val branches = MutableStateFlow<List<Branch>>(emptyList())
     private val categoryNames = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val manualCollections = MutableStateFlow<List<ManualCollection>>(emptyList())
+    private val tipPayouts = MutableStateFlow<List<TipPayout>>(emptyList())
+    private val trialBalance = MutableStateFlow<TrialBalance?>(null)
+    private val pendingOnlineWrite = MutableStateFlow<PendingFinanceOnlineWrite?>(null)
     private val loading = MutableStateFlow(true)
     private val loadError = MutableStateFlow<String?>(null)
     private val activeScope = MutableStateFlow<FinanceCacheScope?>(null)
@@ -211,8 +278,41 @@ class FinanceViewModel : ViewModel() {
         val rowCacheScopeVerified: Boolean,
     )
 
-    val state: StateFlow<FinanceUiState> = combine(
-        combine(pl, metrics, distributable) { p, m, d -> Triple(p, m, d) },
+    private data class FinanceTotalsState(
+        val pl: ProfitAndLoss?,
+        val metrics: BusinessMetrics?,
+        val distributable: DistributableProfit?,
+        val costingCoverage: CostingCoverage?,
+        val lastUpdatedAtMillis: Long?,
+        val costingCoverageUpdatedAtMillis: Long?,
+    )
+
+    private data class OperationalMoneyState(
+        val manualCollections: List<ManualCollection>,
+        val tipPayouts: List<TipPayout>,
+        val trialBalance: TrialBalance?,
+        val pendingWrite: PendingFinanceOnlineWrite?,
+    )
+
+    private data class RestState(
+        val capitalEntries: List<LocalCapitalEntryEntity>,
+        val loadingAndError: Triple<Boolean, String?, Boolean>,
+        val form: FormState,
+        val operationalMoney: OperationalMoneyState,
+    )
+
+    internal val state: StateFlow<FinanceUiState> = combine(
+        combine(
+            pl,
+            metrics,
+            distributable,
+            costingCoverage,
+            combine(lastUpdatedAtMillis, costingCoverageUpdatedAtMillis) { figuresAt, costingAt ->
+                figuresAt to costingAt
+            },
+        ) { p, m, d, coverage, updatedAt ->
+            FinanceTotalsState(p, m, d, coverage, updatedAt.first, updatedAt.second)
+        },
         combine(
             db.financeDao().observeExpenseCache(),
             db.financeDao().observeLocalExpenses(),
@@ -230,13 +330,30 @@ class FinanceViewModel : ViewModel() {
         ) { p, b, c, scope, verified -> ReferenceState(p, b, c, scope, verified) },
         combine(
             db.financeDao().observeLocalCapitalEntries(),
-            combine(loading, loadError, financeRefreshError) { l, localError, refreshError ->
-                l to (localError ?: refreshError)
+            combine(
+                loading,
+                loadError,
+                financeRefreshError,
+                appCtx.connectivity.online,
+            ) { l, localError, refreshError, online ->
+                Triple(l, localError ?: refreshError, online)
             },
             combine(dialog, busy, formError, notice) { d, bs, fe, n -> FormState(d, bs, fe, n) },
-        ) { capitalEntries, loadingAndError, form -> Triple(capitalEntries, loadingAndError, form) },
+            combine(
+                manualCollections,
+                tipPayouts,
+                trialBalance,
+                pendingOnlineWrite,
+            ) { collections, payouts, balance, pending ->
+                OperationalMoneyState(collections, payouts, balance, pending)
+            },
+        ) { capitalEntries, loadingAndError, form, operationalMoney ->
+            RestState(capitalEntries, loadingAndError, form, operationalMoney)
+        },
     ) { plMetricsDistributable, expenseData, assetData, refData, rest ->
-        val (p, m, d) = plMetricsDistributable
+        val p = plMetricsDistributable.pl
+        val m = plMetricsDistributable.metrics
+        val d = plMetricsDistributable.distributable
         val (expenseCache, localExpenses) = expenseData
         val (assetCache, localAssets) = assetData
         val partnerList = refData.partners
@@ -244,15 +361,23 @@ class FinanceViewModel : ViewModel() {
         val catNames = refData.categoryNames
         val scope = refData.scope
         val cacheScopeVerified = refData.rowCacheScopeVerified
-        val (capitalEntries, loadingAndError, form) = rest
-        val (isLoading, err) = loadingAndError
+        val capitalEntries = rest.capitalEntries
+        val loadingAndError = rest.loadingAndError
+        val form = rest.form
+        val operationalMoney = rest.operationalMoney
+        val (isLoading, err, isOnline) = loadingAndError
 
         FinanceUiState(
             loading = isLoading,
+            online = isOnline,
+            lastUpdatedAtMillis = plMetricsDistributable.lastUpdatedAtMillis,
+            costingCoverageUpdatedAtMillis =
+                plMetricsDistributable.costingCoverageUpdatedAtMillis,
             error = err,
             pl = p,
             metrics = m,
             distributable = d,
+            costingCoverage = plMetricsDistributable.costingCoverage,
             expenses = visibleFinanceRows(
                 expenseCache,
                 scope,
@@ -265,7 +390,19 @@ class FinanceViewModel : ViewModel() {
                 cacheScopeVerified,
                 AssetCacheEntity::branchId,
             ).map { it.toAsset() },
+            manualCollections = visibleSnapshotFinanceRows(
+                operationalMoney.manualCollections,
+                scope,
+                ManualCollection::branchId,
+            ),
+            tipPayouts = visibleSnapshotFinanceRows(
+                operationalMoney.tipPayouts,
+                scope,
+                TipPayout::branchId,
+            ),
+            trialBalance = operationalMoney.trialBalance,
             partners = partnerList,
+            companyWidePartnerDataAvailable = scope?.companyWidePartnerFinance == true,
             branches = branchList,
             categoryNames = catNames,
             pendingExpenses = visibleFinanceRows(
@@ -280,7 +417,7 @@ class FinanceViewModel : ViewModel() {
                 scope != null,
                 LocalAssetEntity::branchId,
             ).map { it.toPendingRow() },
-            pendingCapitalEntries = if (scope == null) {
+            pendingCapitalEntries = if (scope?.companyWidePartnerFinance != true) {
                 emptyList()
             } else {
                 capitalEntries.map { it.toPendingRow(partnerList) }
@@ -289,23 +426,42 @@ class FinanceViewModel : ViewModel() {
             busy = form.busy,
             formError = form.formError,
             notice = form.notice,
+            pendingOnlineWrite = operationalMoney.pendingWrite,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FinanceUiState())
 
     init {
-        observeSnapshot<ProfitAndLoss>(FinanceSnapshotKeys.PNL) { pl.value = it }
-        observeSnapshot<BusinessMetrics>(FinanceSnapshotKeys.METRICS) { metrics.value = it }
-        observeSnapshot<DistributableProfit>(FinanceSnapshotKeys.DISTRIBUTABLE) {
-            distributable.value = it
+        observeSnapshot<ProfitAndLoss>(FinanceSnapshotKeys.PNL) { value, fetchedAt ->
+            pl.value = value
+            lastUpdatedAtMillis.value = fetchedAt
         }
-        observeSnapshot<List<Partner>>(FinanceSnapshotKeys.PARTNERS) {
-            partners.value = it.orEmpty()
+        observeSnapshot<BusinessMetrics>(FinanceSnapshotKeys.METRICS) { value, _ ->
+            metrics.value = value
         }
-        observeSnapshot<Map<String, String>>(FinanceSnapshotKeys.CATEGORIES) {
-            categoryNames.value = it.orEmpty()
+        observeSnapshot<DistributableProfit>(FinanceSnapshotKeys.DISTRIBUTABLE) { value, _ ->
+            distributable.value = value
         }
-        observeSnapshot<List<Branch>>(FinanceSnapshotKeys.BRANCHES) {
-            branches.value = it.orEmpty()
+        observeSnapshot<CostingCoverage>(FinanceSnapshotKeys.COSTING) { value, fetchedAt ->
+            costingCoverage.value = value
+            costingCoverageUpdatedAtMillis.value = fetchedAt
+        }
+        observeSnapshot<List<Partner>>(FinanceSnapshotKeys.PARTNERS) { value, _ ->
+            partners.value = value.orEmpty()
+        }
+        observeSnapshot<Map<String, String>>(FinanceSnapshotKeys.CATEGORIES) { value, _ ->
+            categoryNames.value = value.orEmpty()
+        }
+        observeSnapshot<List<Branch>>(FinanceSnapshotKeys.BRANCHES) { value, _ ->
+            branches.value = value.orEmpty()
+        }
+        observeSnapshot<List<ManualCollection>>(FinanceSnapshotKeys.MANUAL_COLLECTIONS) { value, _ ->
+            manualCollections.value = value.orEmpty()
+        }
+        observeSnapshot<List<TipPayout>>(FinanceSnapshotKeys.TIP_PAYOUTS) { value, _ ->
+            tipPayouts.value = value.orEmpty()
+        }
+        observeSnapshot<TrialBalance>(FinanceSnapshotKeys.TRIAL_BALANCE) { value, _ ->
+            trialBalance.value = value
         }
         viewModelScope.launch {
             appCtx.shiftCache.profile.collect { profile ->
@@ -315,6 +471,7 @@ class FinanceViewModel : ViewModel() {
                     rowCacheScopeVerified.value = false
                     clearSensitiveReadState()
                 }
+                pendingOnlineWrite.value = profile?.financeWriteScope()?.let(writeRecoveryStore::load)
             }
         }
         load()
@@ -337,6 +494,9 @@ class FinanceViewModel : ViewModel() {
             activeScope.value = requestedScope
             rowCacheScopeVerified.value = false
             clearSensitiveReadState()
+            pendingOnlineWrite.value = appCtx.shiftCache.profile.value
+                ?.financeWriteScope()
+                ?.let(writeRecoveryStore::load)
         }
         loading.value = true
         loadError.value = null
@@ -381,26 +541,32 @@ class FinanceViewModel : ViewModel() {
                     loading.value = false
                     // refresh() contains the diagnostic logging and publishes
                     // its sanitized, resource-scoped error separately.
-                    loadError.value = "Could not refresh Finance. Saved figures are still shown."
+                    loadError.value = financeLoadFailureMessage(
+                        hasSavedFigures = pl.value != null,
+                        online = appCtx.connectivity.online.value,
+                    )
                 }
             }
         }
     }
 
     /** Room is the sole delivery path for manual and realtime Finance reads. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private inline fun <reified T> observeSnapshot(
         baseKey: String,
-        crossinline publish: (T?) -> Unit,
+        crossinline publish: (T?, Long?) -> Unit,
     ) {
         viewModelScope.launch {
             activeScope.flatMapLatest { scope ->
                 if (scope == null) flowOf(null)
                 else db.reportSnapshotDao().observe(scope.key(baseKey))
             }.collect { row ->
-                val value = row?.let {
-                    runCatching { ApiClient.json.decodeFromString<T>(it.jsonBody) }.getOrNull()
+                val value = withContext(Dispatchers.Default) {
+                    row?.let {
+                        runCatching { ApiClient.json.decodeFromString<T>(it.jsonBody) }.getOrNull()
+                    }
                 }
-                publish(value)
+                publish(value, row?.fetchedAtMillis)
             }
         }
     }
@@ -418,31 +584,74 @@ class FinanceViewModel : ViewModel() {
         pl.value = null
         metrics.value = null
         distributable.value = null
+        costingCoverage.value = null
+        lastUpdatedAtMillis.value = null
+        costingCoverageUpdatedAtMillis.value = null
         partners.value = emptyList()
         branches.value = emptyList()
         categoryNames.value = emptyMap()
+        manualCollections.value = emptyList()
+        tipPayouts.value = emptyList()
+        trialBalance.value = null
+        pendingOnlineWrite.value = null
         loadError.value = null
         dialog.value = null
         formError.value = null
         notice.value = null
+        busy.value = false
     }
 
     // ------------------------------------------------------------- dialogs
 
     fun updateAccess(next: FinanceAccess) {
         access = next
+        val dialogStillAllowed = when (dialog.value) {
+            FinanceDialog.ExpenseForm -> next.canRecordExpenses
+            FinanceDialog.AssetForm -> next.canManageAssets
+            is FinanceDialog.CapitalEntryForm -> next.canRecordPartnerCapital
+            FinanceDialog.ManualCollectionForm,
+            FinanceDialog.TipPayoutForm,
+            is FinanceDialog.VoidManualCollection,
+            is FinanceDialog.VoidTipPayout,
+            -> next.canRecordExpenses
+            null -> true
+        }
+        if (!dialogStillAllowed) {
+            dialog.value = null
+            formError.value = null
+            notice.value = "Your Finance permission changed. The unsaved form was closed; nothing was queued."
+        }
     }
 
     private fun requireExpenseWrite(): Boolean = authorizeAction(access.canRecordExpenses) {
-        notice.value = VIEW_ONLY_MESSAGE
+        notice.value = "You can view Finance, but expense entry is not allowed for this role. Ask an owner or manager."
     }
 
     private fun requireAssetWrite(): Boolean = authorizeAction(access.canManageAssets) {
-        notice.value = VIEW_ONLY_MESSAGE
+        notice.value = "You can view Finance, but asset registration requires the dedicated asset permission. Ask a protected owner."
     }
 
     private fun requireCapitalWrite(): Boolean = authorizeAction(access.canRecordPartnerCapital) {
-        notice.value = VIEW_ONLY_MESSAGE
+        notice.value = "You can view Finance, but partner capital entry requires protected-owner permission."
+    }
+
+    private fun requireOperationalMoneyWrite(): Boolean = authorizeAction(access.canRecordExpenses) {
+        notice.value =
+            "You can view these registers, but manual collections and tip payouts require Finance write access."
+    }
+
+    private fun requireOnlineFinancialWrite(): Boolean {
+        if (appCtx.connectivity.online.value) return true
+        notice.value =
+            "This accounting action is online-only and was not saved. Reconnect, refresh Finance, then try again."
+        return false
+    }
+
+    private fun requireNoPendingOnlineWrite(): Boolean {
+        if (pendingOnlineWrite.value == null) return true
+        notice.value =
+            "Resolve the exact saved Finance request before starting another manual collection or tip payout."
+        return false
     }
 
     fun openExpenseForm() {
@@ -470,13 +679,289 @@ class FinanceViewModel : ViewModel() {
         dialog.value = FinanceDialog.CapitalEntryForm(partner)
     }
 
+    fun openManualCollectionForm() {
+        if (!requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite()
+        ) return
+        if (branches.value.isEmpty()) {
+            notice.value =
+                "No verified shop is available for this collection. Refresh Finance and check shop access."
+            return
+        }
+        dialog.value = FinanceDialog.ManualCollectionForm
+        formError.value = null
+    }
+
+    fun openTipPayoutForm() {
+        if (!requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite()
+        ) return
+        if (branches.value.isEmpty() || trialBalance.value == null) {
+            notice.value =
+                "The shop or live Tips Payable balance has not loaded. Refresh Finance before paying staff."
+            return
+        }
+        dialog.value = FinanceDialog.TipPayoutForm
+        formError.value = null
+    }
+
+    fun openVoidManualCollection(row: ManualCollection) {
+        if (row.isVoided || !requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite()
+        ) return
+        dialog.value = FinanceDialog.VoidManualCollection(row)
+        formError.value = null
+    }
+
+    fun openVoidTipPayout(row: TipPayout) {
+        if (row.isVoided || !requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite()
+        ) return
+        dialog.value = FinanceDialog.VoidTipPayout(row)
+        formError.value = null
+    }
+
     fun closeDialog() {
+        if (busy.value) return
         dialog.value = null
         formError.value = null
     }
 
     fun dismissNotice() {
         notice.value = null
+    }
+
+    // -------------------------------- manual collections and tip payouts
+
+    fun createManualCollection(
+        branchId: String,
+        businessDate: String,
+        method: String,
+        amountMinor: Long,
+        sourceRef: String,
+        note: String,
+    ) {
+        if (!requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite() || busy.value
+        ) return
+        val parsedDate = runCatching { LocalDate.parse(businessDate) }.getOrNull()
+        when {
+            branches.value.none { it.id == branchId } ->
+                formError.value = "Select the verified shop for this collection."
+            parsedDate == null -> formError.value = "Select a valid business date."
+            parsedDate > financeBusinessToday() ->
+                formError.value = "Business date cannot be in the future."
+            method !in FINANCE_PAYMENT_METHODS ->
+                formError.value = "Select Cash, UPI, Card or Bank transfer."
+            amountMinor <= 0 -> formError.value = "Enter an amount greater than ₹0."
+            sourceRef.trim().isEmpty() ->
+                formError.value =
+                    "Enter a reference that can be matched to the daily sheet or payment evidence."
+            else -> {
+                val scope = currentWriteScope() ?: return
+                executeNewOnlineWrite(
+                    pendingManualCollectionCreate(
+                        scope,
+                        ManualCollectionCreate(
+                            branchId = branchId,
+                            businessDate = businessDate,
+                            method = method,
+                            amountMinor = amountMinor,
+                            sourceRef = sourceRef.trim(),
+                            note = note.trim().ifBlank { null },
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun createTipPayout(
+        branchId: String,
+        method: String,
+        amountMinor: Long,
+        paidAt: String,
+        note: String,
+    ) {
+        if (!requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite() || busy.value
+        ) return
+        val liveTipsPayable = trialBalance.value?.tipsPayableMinor()
+        when {
+            branches.value.none { it.id == branchId } ->
+                formError.value = "Select the verified shop for this payout."
+            method !in FINANCE_PAYMENT_METHODS ->
+                formError.value = "Select Cash, UPI, Card or Bank transfer."
+            amountMinor <= 0 -> formError.value = "Enter an amount greater than ₹0."
+            liveTipsPayable == null ->
+                formError.value = "Refresh the live Tips Payable balance before paying staff."
+            amountMinor > liveTipsPayable ->
+                formError.value =
+                    "This exceeds the ${liveTipsPayable.asRupees()} currently owed to staff. Refresh and check the amount."
+            note.trim().length < 3 ->
+                formError.value =
+                    "Enter a note explaining how the payout was split (at least 3 characters)."
+            else -> {
+                val scope = currentWriteScope() ?: return
+                executeNewOnlineWrite(
+                    pendingTipPayoutCreate(
+                        scope,
+                        TipPayoutCreate(
+                            branchId = branchId,
+                            amountMinor = amountMinor,
+                            method = method,
+                            paidAt = paidAt,
+                            note = note.trim(),
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun voidManualCollection(row: ManualCollection, reason: String) {
+        val trimmed = reason.trim()
+        if (!requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite() || busy.value
+        ) return
+        if (trimmed.length < 3) {
+            formError.value = "Enter a void reason with at least 3 characters."
+            return
+        }
+        val scope = currentWriteScope() ?: return
+        executeNewOnlineWrite(pendingManualCollectionVoid(scope, row.id, trimmed))
+    }
+
+    fun voidTipPayout(row: TipPayout, reason: String) {
+        val trimmed = reason.trim()
+        if (!requireOperationalMoneyWrite() || !requireNoPendingOnlineWrite() ||
+            !requireOnlineFinancialWrite() || busy.value
+        ) return
+        if (trimmed.length < 3) {
+            formError.value = "Enter a void reason with at least 3 characters."
+            return
+        }
+        val scope = currentWriteScope() ?: return
+        executeNewOnlineWrite(pendingTipPayoutVoid(scope, row.id, trimmed))
+    }
+
+    fun retryPendingOnlineWrite() {
+        if (!requireOperationalMoneyWrite() || !requireOnlineFinancialWrite() || busy.value) return
+        val write = pendingOnlineWrite.value ?: return
+        if (currentWriteScope() != write.scope) {
+            notice.value =
+                "This saved request belongs to another signed-in Finance account. Sign back into that account to resolve it."
+            return
+        }
+        executeOnlineWrite(write, alreadyStored = true)
+    }
+
+    private fun currentWriteScope(): FinanceWriteScope? {
+        val scope = appCtx.shiftCache.profile.value?.financeWriteScope()
+        if (scope == null) {
+            formError.value =
+                "The signed-in Finance account could not be verified. Sign in again; nothing was sent."
+        }
+        return scope
+    }
+
+    private fun executeNewOnlineWrite(write: PendingFinanceOnlineWrite) {
+        executeOnlineWrite(write, alreadyStored = false)
+    }
+
+    private fun executeOnlineWrite(write: PendingFinanceOnlineWrite, alreadyStored: Boolean) {
+        busy.value = true
+        formError.value = null
+        viewModelScope.launch {
+            val stored = alreadyStored || withContext(Dispatchers.IO) {
+                writeRecoveryStore.save(write)
+            }
+            if (!stored) {
+                busy.value = false
+                formError.value =
+                    "Could not create the duplicate-protection checkpoint, so nothing was sent. Check tablet storage and try again."
+                return@launch
+            }
+            pendingOnlineWrite.value = write
+            try {
+                val result = onlineWriteExecutor.execute(write)
+                val cleared = withContext(Dispatchers.IO) { writeRecoveryStore.clear(write) }
+                if (appCtx.shiftCache.profile.value?.financeWriteScope() != write.scope) {
+                    busy.value = false
+                    dialog.value = null
+                    notice.value =
+                        "The signed-in account changed while the server processed Finance. Open Finance under the original account to verify the result."
+                    return@launch
+                }
+                if (!cleared) {
+                    busy.value = false
+                    dialog.value = null
+                    notice.value =
+                        "The server recorded this action, but the tablet could not clear its safety checkpoint. " +
+                            "Do not enter or pay it again; use Retry exact request to reconcile safely."
+                    return@launch
+                }
+                pendingOnlineWrite.value = null
+                publishOnlineWriteResult(result)
+                busy.value = false
+                dialog.value = null
+                formError.value = null
+                notice.value = when (write.kind) {
+                    FinanceOnlineWriteKind.MANUAL_COLLECTION_CREATE ->
+                        "Manual collection recorded and included in the server books."
+                    FinanceOnlineWriteKind.MANUAL_COLLECTION_VOID ->
+                        "Manual collection voided. The original record remains visible for audit."
+                    FinanceOnlineWriteKind.TIP_PAYOUT_CREATE ->
+                        "Tip payout recorded against Tips Payable."
+                    FinanceOnlineWriteKind.TIP_PAYOUT_VOID ->
+                        "Tip payout voided. The original record remains visible for audit."
+                }
+                appCtx.sync.refresh("finance")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val preserve = preserveFinanceWriteForRetry(error)
+                if (appCtx.shiftCache.profile.value?.financeWriteScope() != write.scope) {
+                    if (!preserve) {
+                        withContext(Dispatchers.IO) { writeRecoveryStore.clear(write) }
+                    }
+                    busy.value = false
+                    return@launch
+                }
+                if (preserve) {
+                    dialog.value = null
+                    formError.value = null
+                    notice.value = financeWriteFailureMessage(error, preserved = true)
+                } else {
+                    val cleared = withContext(Dispatchers.IO) { writeRecoveryStore.clear(write) }
+                    if (cleared) {
+                        pendingOnlineWrite.value = null
+                        val message = financeWriteFailureMessage(error, preserved = false)
+                        if (dialog.value == null) notice.value = message else formError.value = message
+                    } else {
+                        pendingOnlineWrite.value = write
+                        dialog.value = null
+                        notice.value =
+                            "The server rejected this request, but the tablet could not clear its safety checkpoint. " +
+                                "Do not create another entry; reopen Finance after checking tablet storage."
+                    }
+                }
+                busy.value = false
+            }
+        }
+    }
+
+    private fun publishOnlineWriteResult(result: FinanceOnlineWriteResult) {
+        when (result) {
+            is FinanceOnlineWriteResult.ManualCollectionResult -> {
+                manualCollections.value = listOf(result.row) +
+                    manualCollections.value.filterNot { it.id == result.row.id }
+            }
+            is FinanceOnlineWriteResult.TipPayoutResult -> {
+                tipPayouts.value = listOf(result.row) +
+                    tipPayouts.value.filterNot { it.id == result.row.id }
+            }
+        }
     }
 
     // -------------------------------------------------------------- expenses
@@ -490,7 +975,10 @@ class FinanceViewModel : ViewModel() {
         vendorName: String,
         invoiceNo: String,
         note: String,
-    ) = localMutate(access.canRecordExpenses) {
+    ) = localMutate(
+        allowed = access.canRecordExpenses,
+        deniedMessage = "Expense entry is not allowed for this role. Ask an owner or manager.",
+    ) {
         db.financeDao().insertLocalExpense(
             LocalExpenseEntity(
                 localId = UUID.randomUUID().toString(),
@@ -502,18 +990,26 @@ class FinanceViewModel : ViewModel() {
                 createdAtMillis = System.currentTimeMillis(),
             ),
         )
-        "Expense queued — will sync when back online."
+        financeWriteQueuedMessage("Expense", appCtx.connectivity.online.value)
     }
 
     fun retryExpense(localId: String) {
         if (!requireExpenseWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
-                    db.financeDao().retryExpense(localId)
-                }
-            ) return@launch
-            appCtx.sync.requestSync()
+                    retried = db.financeDao().retryExpense(localId) == 1
+                }) {
+                notice.value = "The signed-in account changed. This expense was not retried."
+                return@launch
+            }
+            notice.value = if (retried) {
+                "The same saved expense was queued for retry. Do not enter it again."
+            } else {
+                "This expense is no longer rejected. Refresh Finance to see its current state."
+            }
+            if (retried) appCtx.sync.requestSync()
         }
     }
 
@@ -528,7 +1024,10 @@ class FinanceViewModel : ViewModel() {
         usefulLifeMonths: Int,
         salvageMinor: Long,
         notesText: String,
-    ) = localMutate(access.canManageAssets) {
+    ) = localMutate(
+        allowed = access.canManageAssets,
+        deniedMessage = "Asset registration requires the dedicated asset permission. Ask a protected owner.",
+    ) {
         db.financeDao().insertLocalAsset(
             LocalAssetEntity(
                 localId = UUID.randomUUID().toString(),
@@ -539,18 +1038,26 @@ class FinanceViewModel : ViewModel() {
                 createdAtMillis = System.currentTimeMillis(),
             ),
         )
-        "Asset queued — will sync when back online."
+        financeWriteQueuedMessage("Asset", appCtx.connectivity.online.value)
     }
 
     fun retryAsset(localId: String) {
         if (!requireAssetWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
-                    db.financeDao().retryAsset(localId)
-                }
-            ) return@launch
-            appCtx.sync.requestSync()
+                    retried = db.financeDao().retryAsset(localId) == 1
+                }) {
+                notice.value = "The signed-in account changed. This asset was not retried."
+                return@launch
+            }
+            notice.value = if (retried) {
+                "The same saved asset was queued for retry. Do not register it again."
+            } else {
+                "This asset is no longer rejected. Refresh Finance to see its current state."
+            }
+            if (retried) appCtx.sync.requestSync()
         }
     }
 
@@ -564,7 +1071,10 @@ class FinanceViewModel : ViewModel() {
         settlementAccount: String,
         sourceRef: String,
         note: String,
-    ) = localMutate(access.canRecordPartnerCapital) {
+    ) = localMutate(
+        allowed = access.canRecordPartnerCapital,
+        deniedMessage = "Partner capital entry requires protected-owner permission.",
+    ) {
         db.financeDao().insertLocalCapitalEntry(
             LocalCapitalEntryEntity(
                 localId = UUID.randomUUID().toString(),
@@ -574,18 +1084,26 @@ class FinanceViewModel : ViewModel() {
                 createdAtMillis = System.currentTimeMillis(),
             ),
         )
-        "Capital entry queued — will sync when back online."
+        financeWriteQueuedMessage("Capital entry", appCtx.connectivity.online.value)
     }
 
     fun retryCapitalEntry(localId: String) {
         if (!requireCapitalWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         viewModelScope.launch {
+            var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
-                    db.financeDao().retryCapitalEntry(localId)
-                }
-            ) return@launch
-            appCtx.sync.requestSync()
+                    retried = db.financeDao().retryCapitalEntry(localId) == 1
+                }) {
+                notice.value = "The signed-in account changed. This capital entry was not retried."
+                return@launch
+            }
+            notice.value = if (retried) {
+                "The same saved capital entry was queued for retry. Do not enter it again."
+            } else {
+                "This capital entry is no longer rejected. Refresh Finance to see its current state."
+            }
+            if (retried) appCtx.sync.requestSync()
         }
     }
 
@@ -596,8 +1114,12 @@ class FinanceViewModel : ViewModel() {
      * the whole point is that this succeeds instantly offline too. Same shape
      * as InventoryViewModel.localMutate.
      */
-    private fun localMutate(allowed: Boolean, block: suspend () -> String) {
-        if (!authorizeAction(allowed) { notice.value = VIEW_ONLY_MESSAGE }) return
+    private fun localMutate(
+        allowed: Boolean,
+        deniedMessage: String,
+        block: suspend () -> String,
+    ) {
+        if (!authorizeAction(allowed) { notice.value = deniedMessage }) return
         if (busy.value) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
@@ -608,7 +1130,12 @@ class FinanceViewModel : ViewModel() {
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                         message = block()
                     }
-                ) return@launch
+                ) {
+                    busy.value = false
+                    formError.value =
+                        "The signed-in account changed before this entry was saved. Nothing was queued."
+                    return@launch
+                }
                 busy.value = false
                 dialog.value = null
                 formError.value = null
@@ -618,7 +1145,8 @@ class FinanceViewModel : ViewModel() {
                 throw e
             } catch (e: Exception) {
                 busy.value = false
-                formError.value = "Could not save this locally: ${e.message}"
+                formError.value =
+                    "Could not save this entry on the tablet. Nothing was queued. Check storage and try again."
             }
         }
     }

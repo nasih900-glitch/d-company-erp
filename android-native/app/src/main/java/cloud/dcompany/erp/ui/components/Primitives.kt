@@ -13,6 +13,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,8 +29,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -113,12 +116,17 @@ fun Panel(
         modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .fillMaxWidth()
+            .let { if (onClick != null) it.heightIn(min = 48.dp) else it }
             .clip(Radius.shapeLg)
             .background(bg)
             .border(1.dp, borderColor, Radius.shapeLg)
             .let {
                 if (onClick != null) {
-                    it.clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                    it.clickable(
+                        interactionSource = interaction,
+                        indication = LocalIndication.current,
+                        onClick = onClick,
+                    )
                 } else it
             }
             .padding(Spacing.lg),
@@ -146,6 +154,11 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
  * about to load so the layout doesn't jump when it arrives. */
 @Composable
 fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radius.shapeMd) {
+    ShimmerBlock(modifier, shape, rememberShimmerBrush())
+}
+
+@Composable
+private fun rememberShimmerBrush(): Brush {
     val transition = rememberInfiniteTransition(label = "shimmer")
     val translate by transition.animateFloat(
         initialValue = -400f,
@@ -153,40 +166,68 @@ fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radi
         animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart),
         label = "shimmerTranslate",
     )
-    val brush = Brush.linearGradient(
+    return Brush.linearGradient(
         colors = listOf(Brand.SurfaceRaised, Brand.SurfaceOverlay, Brand.SurfaceRaised),
         start = Offset(translate - 200f, 0f),
         end = Offset(translate + 200f, 200f),
     )
+}
+
+@Composable
+private fun ShimmerBlock(
+    modifier: Modifier,
+    shape: RoundedCornerShape,
+    brush: Brush,
+) {
     Box(modifier.clip(shape).background(brush))
 }
 
 @Composable
 fun LoadingSkeleton(modifier: Modifier = Modifier, lines: Int = 4) {
-    Column(modifier.fillMaxWidth().padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+    // One animation clock drives the whole placeholder. Starting a separate
+    // infinite transition for every row needlessly multiplies frame work on
+    // the tablet while a slow network response is already under pressure.
+    val brush = rememberShimmerBrush()
+    Column(
+        modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Loading content"
+                stateDescription = "In progress"
+                liveRegion = LiveRegionMode.Polite
+            }
+            .padding(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
         repeat(lines) { i ->
-            ShimmerBlock(Modifier.fillMaxWidth().height(if (i == 0) 28.dp else 18.dp))
+            ShimmerBlock(
+                Modifier.fillMaxWidth().height(if (i == 0) 28.dp else 18.dp),
+                Radius.shapeMd,
+                brush,
+            )
         }
     }
 }
 
 @Composable
 fun Loading(modifier: Modifier = Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
-    CircularProgressIndicator(color = Brand.Gold)
+    CircularProgressIndicator(
+        color = Brand.Gold,
+        modifier = Modifier.semantics {
+            contentDescription = "Loading"
+            stateDescription = "In progress"
+            liveRegion = LiveRegionMode.Polite
+        },
+    )
 }
 
 @Composable
 fun EmptyState(title: String, body: String, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), Alignment.Center) {
-        Column(
-            modifier = Modifier.width(420.dp).padding(Spacing.xl),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Brand.Foreground)
-            Text(body, color = Brand.ForegroundMuted, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
+    DesignedEmptyState(
+        title = title,
+        body = body,
+        modifier = modifier.fillMaxSize(),
+    )
 }
 
 // ============================================================================
@@ -221,7 +262,7 @@ fun PendingBanner(text: String, rejected: Boolean, onRetry: () -> Unit, modifier
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, color = if (rejected) Brand.Danger else Brand.GoldMuted, modifier = Modifier.weight(1f))
+        Text(text, color = if (rejected) Brand.Danger else Brand.Warning, modifier = Modifier.weight(1f))
         if (rejected) TextButton(onClick = onRetry) { Text("Retry") }
     }
 }
@@ -248,9 +289,14 @@ fun Chip(text: String, color: Color = Brand.SurfaceRaised, contentColor: Color =
 fun Field(
     label: String,
     value: String,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     singleLine: Boolean = true,
+    isError: Boolean = false,
+    supportingText: String? = null,
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
+    visualTransformation: androidx.compose.ui.text.input.VisualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
     onChange: (String) -> Unit,
 ) {
     OutlinedTextField(
@@ -259,10 +305,23 @@ fun Field(
         label = { Text(label) },
         singleLine = singleLine,
         enabled = enabled,
+        isError = isError,
         keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        visualTransformation = visualTransformation,
+        supportingText = supportingText?.let { message ->
+            {
+                Text(
+                    message,
+                    modifier = Modifier.semantics {
+                        if (isError) liveRegion = LiveRegionMode.Assertive
+                    },
+                )
+            }
+        },
         shape = Radius.shapeMd,
         colors = fieldColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     )
 }
 
@@ -286,6 +345,7 @@ fun PickerField(
     selectedLabel: String,
     options: List<Pair<String, String>>,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onSelect: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -302,21 +362,21 @@ fun PickerField(
                         contentDescription = "$label, $selectedLabel"
                         stateDescription = if (open) "Expanded" else "Collapsed"
                     }
-                    .clickable(enabled = options.isNotEmpty()) { open = true }
+                    .clickable(enabled = enabled && options.isNotEmpty()) { open = true }
                     .padding(horizontal = Spacing.md, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     selectedLabel,
-                    color = if (options.isEmpty()) Brand.ForegroundMuted else Brand.Foreground,
+                    color = if (!enabled || options.isEmpty()) Brand.Disabled else Brand.Foreground,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
-                    tint = Brand.Gold,
+                    tint = if (enabled) Brand.Gold else Brand.Disabled,
                     modifier = Modifier.graphicsLayer { rotationZ = rotation },
                 )
             }
@@ -330,24 +390,32 @@ fun PickerField(
 }
 
 @Composable
-fun DecimalField(value: String, onValueChange: (String) -> Unit, label: String) {
+fun DecimalField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    allowNegative: Boolean = false,
+) {
     Field(
         label = label,
         value = value,
-        onChange = { onValueChange(filterDecimal(it)) },
+        modifier = modifier,
+        onChange = { onValueChange(filterDecimal(it, allowNegative)) },
         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
         ),
     )
 }
 
-private fun filterDecimal(raw: String): String {
+private fun filterDecimal(raw: String, allowNegative: Boolean): String {
     val sb = StringBuilder()
     var dotSeen = false
-    for (c in raw) {
+    raw.forEachIndexed { index, c ->
         when {
             c.isDigit() -> sb.append(c)
             c == '.' && !dotSeen -> { dotSeen = true; sb.append(c) }
+            c == '-' && allowNegative && index == 0 -> sb.append(c)
         }
     }
     return sb.toString()
@@ -367,14 +435,14 @@ fun PrimaryButton(
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = Radius.shapePill,
+        shape = Radius.shapeMd,
         colors = ButtonDefaults.buttonColors(
             containerColor = Brand.Gold,
             contentColor = Brand.Background,
             disabledContainerColor = Brand.SurfaceRaised,
             disabledContentColor = Brand.ForegroundFaint,
         ),
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         content = content,
     )
 }
@@ -391,28 +459,40 @@ fun FormDialog(
     error: String?,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
-    width: androidx.compose.ui.unit.Dp = 480.dp,
+    width: androidx.compose.ui.unit.Dp = 520.dp,
+    confirmEnabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        modifier = Modifier.width(width),
+        modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
         title = { Text(title, color = Brand.Foreground) },
         text = {
             Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                modifier = Modifier.heightIn(max = 520.dp),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                content()
-                error?.let { Text(it, color = Brand.Danger) }
+                error?.let {
+                    Text(
+                        it,
+                        color = Brand.Danger,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    content()
+                }
             }
         },
         confirmButton = {
-            PrimaryButton(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "Working…" else confirmLabel)
+            PrimaryButton(onClick = onConfirm, enabled = confirmEnabled && !busy) {
+                Text(if (busy) "$confirmLabel…" else confirmLabel)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
@@ -432,23 +512,32 @@ fun ConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
+        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(0.92f).imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Brand.SurfaceOverlay,
         shape = Radius.shapeLg,
         title = { Text(title, color = Brand.Foreground) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text(body, color = Brand.ForegroundMuted)
-                error?.let { Text(it, color = Brand.Danger) }
+                error?.let {
+                    Text(
+                        it,
+                        color = Brand.Danger,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = onConfirm, enabled = !busy,
-                shape = Radius.shapePill,
+                shape = Radius.shapeMd,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (danger) Brand.Danger else Brand.Gold,
-                    contentColor = if (danger) Brand.Foreground else Brand.Background,
+                    contentColor = Brand.Background,
                 ),
+                modifier = Modifier.heightIn(min = 48.dp),
             ) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },

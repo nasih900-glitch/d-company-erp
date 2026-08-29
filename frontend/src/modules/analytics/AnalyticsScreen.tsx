@@ -5,7 +5,7 @@
  * inventory value, low-stock count, open gaming sessions, net profit).
  * Demo mode: HOURLY_REVENUE + TOP_ITEMS fixtures.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -18,8 +18,10 @@ import {
 
 import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
+import { isProfileRouteEnabled, profileMembershipMoneyLabel } from '@/lib/product-profile';
 import { analytics, type DashboardKPIsDTO } from '@/lib/erp-api';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 function todayISO(): string {
   const d = new Date();
@@ -33,20 +35,28 @@ export default function AnalyticsScreen() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load() {
-    setLoading(true); setErr(null);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    setErr(null);
     try {
       setData(await analytics.dashboard(todayISO()));
     } catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+    finally { if (!silent) setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({
+    resources: ['finance', 'gaming', 'inventory', 'shifts'],
+    refresh: () => load(true),
+  });
 
   const empty = data && data.orders_count === 0 && data.tickets_count === 0
     && data.revenue_total_minor === 0;
   // Gates the Audit quick-action below — admin.audit.read specifically, not
   // the broader protected_access (co_owner has that but not audit access).
   const canSeeProtected = Boolean(demo || me?.audit_access);
+  const membershipRevenueLabel = data
+    ? profileMembershipMoneyLabel('revenue', data.revenue_memberships_minor)
+    : null;
 
   return (
     <div>
@@ -54,10 +64,10 @@ export default function AnalyticsScreen() {
         <div>
           <h2 className="text-2xl font-bold">Analytics</h2>
           <p className="text-fg-muted text-sm">
-            Today's performance · live · refreshes on click
+            Today's performance · live · updates automatically
           </p>
         </div>
-        <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        <button className="btn btn-ghost" onClick={() => void load()}><RefreshCw size={14}/></button>
       </header>
 
       {loading ? (
@@ -122,8 +132,8 @@ export default function AnalyticsScreen() {
                     ? [{ name: 'Hookah', value: data.revenue_hookah_minor / 100 }]
                     : []),
                   { name: 'Events', value: data.revenue_events_minor / 100 },
-                  ...(data.revenue_memberships_minor > 0
-                    ? [{ name: 'Memberships', value: data.revenue_memberships_minor / 100 }]
+                  ...(membershipRevenueLabel
+                    ? [{ name: membershipRevenueLabel, value: data.revenue_memberships_minor / 100 }]
                     : []),
                   ...(data.revenue_manual_collections_minor > 0
                     ? [{ name: 'Manual', value: data.revenue_manual_collections_minor / 100 }]
@@ -179,17 +189,19 @@ function OwnerCommandCenter({
   ] as const;
 
   const actions = [
+    { to: '/gaming', label: 'Gaming', icon: <Gamepad2 size={15}/> },
     { to: '/pos', label: 'POS', icon: <Utensils size={15}/> },
     { to: '/reports', label: 'P&L', icon: <FileText size={15}/> },
+    { to: '/finance', label: 'Finance', icon: <Wallet size={15}/> },
     { to: '/customers', label: 'Customers', icon: <Users size={15}/> },
     { to: '/insights', label: 'Insights', icon: <Activity size={15}/> },
-    { to: '/inventory', label: 'Inventory', icon: <Boxes size={15}/> },
+    { to: '/inventory', label: 'Stock', icon: <Boxes size={15}/> },
     ...(canSeeProtected
       ? [
           { to: '/audit', label: 'Audit', icon: <ShieldCheck size={15}/> },
         ]
       : []),
-  ];
+  ].filter((action) => isProfileRouteEnabled(action.to));
 
   return (
     <section className="card mb-6">

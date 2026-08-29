@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui
 
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
+import cloud.dcompany.erp.core.auth.TerminalPurpose
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class TerminalReassignmentFacts(
@@ -101,11 +102,18 @@ internal fun workspaceLocationLabel(
         verifiedBranchName != null -> verifiedBranchName
         else -> "Assigned branch"
     }
-    if (!requiresTill) return "$branch · No till required"
+    if (!requiresTill) return branch
     val exact = activeTerminal?.takeIf { it.branchId == normalizedBranch }
+    // `hybrid` is the intentionally invisible one-counter setup: staff work
+    // in one shop/shift while the backend retains a terminal id for audit and
+    // idempotency. Explicit cafe/gaming terminals remain visible.
+    if (exact?.purpose == TerminalPurpose.HYBRID) return branch
     return if (exact == null) {
         "$branch · Till name pending verification"
     } else {
         "$branch · Till ${exact.terminalName}"
     }
 }
+
+internal fun usesAdvancedTerminalWorkflow(activeTerminal: ValidatedTerminalDisplay?): Boolean =
+    activeTerminal?.purpose in setOf(TerminalPurpose.CAFE_POS, TerminalPurpose.GAMING)

@@ -5,7 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -69,7 +79,14 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    code: Mapped[str | None] = mapped_column(String(10))  # short branch code for invoice numbering (e.g. "MN")
+    # Operational/display code. Invoice identity is deliberately separate:
+    # this value may be long or edited without silently starting a new fiscal
+    # receipt series.
+    code: Mapped[str | None] = mapped_column(String(10))
+    # Explicit two-character fiscal document namespace. It is unique only
+    # inside a company because invoice numbers belong to that legal tenant,
+    # not to the shared multi-tenant database as a whole.
+    invoice_series_code: Mapped[str] = mapped_column(String(2), nullable=False)
     address: Mapped[str | None] = mapped_column(String(500))
     timezone: Mapped[str | None] = mapped_column(String(64))
     opens_at: Mapped[str | None] = mapped_column(String(8))   # "09:00"
@@ -92,6 +109,15 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
 
     __table_args__ = (
         UniqueConstraint("company_id", "name", name="uq_branch_name_per_company"),
+        UniqueConstraint(
+            "company_id",
+            "invoice_series_code",
+            name="uq_branch_invoice_series_per_company",
+        ),
+        CheckConstraint(
+            "invoice_series_code ~ '^[A-Z0-9]{2}$'",
+            name="ck_branch_invoice_series_code_format",
+        ),
     )
 
 
@@ -106,8 +132,40 @@ class Terminal(Base, TimestampMixin):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Explicit operational capability. The active one-shop workspace is
+    # always ``hybrid`` so Gaming, POS, and Shift share one authoritative
+    # identity. Legacy split-purpose rows remain valid only while inactive so
+    # their historical shifts, orders, and audit references stay intact.
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="hybrid", server_default="hybrid"
+    )
+    # Historical till identities are accounting/audit evidence and must not be
+    # hard-deleted.  Inactive terminals remain referenceable by old shifts and
+    # orders but are excluded from new device assignment and operational writes.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     device_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     offline_seq_high_water: Mapped[int] = mapped_column(BigInteger, default=0)
 
     branch: Mapped[Branch] = relationship(back_populates="terminals")
+
+    __table_args__ = (
+        Index("ix_terminals_branch_active", "branch_id", "is_active"),
+        Index(
+            "uq_terminals_one_active_per_branch",
+            "branch_id",
+            unique=True,
+            postgresql_where=text("is_active IS TRUE"),
+            sqlite_where=text("is_active = 1"),
+        ),
+        CheckConstraint(
+            "purpose IN ('hybrid', 'cafe_pos', 'gaming')",
+            name="ck_terminals_purpose",
+        ),
+        CheckConstraint(
+            "is_active IS FALSE OR purpose = 'hybrid'",
+            name="ck_terminals_active_requires_hybrid",
+        ),
+    )

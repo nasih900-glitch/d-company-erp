@@ -8,7 +8,9 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import cloud.dcompany.erp.core.net.ApiClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
@@ -39,6 +41,10 @@ interface ReportSnapshotDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(entity: ReportSnapshotEntity)
+
+    /** A posted financial fact makes every aggregate period snapshot stale. */
+    @Query("DELETE FROM report_snapshots")
+    suspend fun invalidateAll()
 }
 
 /**
@@ -56,7 +62,10 @@ interface ReportSnapshotDao {
 suspend inline fun <reified T> ReportSnapshotDao.cached(key: String): Pair<T, Long>? {
     return try {
         val row = get(key) ?: return null
-        ApiClient.json.decodeFromString<T>(row.jsonBody) to row.fetchedAtMillis
+        val decoded = withContext(Dispatchers.Default) {
+            ApiClient.json.decodeFromString<T>(row.jsonBody)
+        }
+        decoded to row.fetchedAtMillis
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -73,7 +82,10 @@ suspend inline fun <reified T> ReportSnapshotDao.cached(key: String): Pair<T, Lo
  */
 suspend inline fun <reified T> ReportSnapshotDao.store(key: String, value: T) {
     try {
-        put(ReportSnapshotEntity(key, ApiClient.json.encodeToString(value), System.currentTimeMillis()))
+        val jsonBody = withContext(Dispatchers.Default) {
+            ApiClient.json.encodeToString(value)
+        }
+        put(ReportSnapshotEntity(key, jsonBody, System.currentTimeMillis()))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

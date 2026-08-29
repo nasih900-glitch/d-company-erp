@@ -18,7 +18,17 @@ export type TerminalResolution =
   | { kind: 'ready'; terminalId: string; source: 'stored' | 'single' }
   | { kind: 'missing_branch' }
   | { kind: 'no_terminals' }
+  | { kind: 'hybrid_required'; terminal: TerminalDTO }
+  | { kind: 'configuration_conflict'; terminals: TerminalDTO[] }
   | { kind: 'selection_required'; terminals: TerminalDTO[] };
+
+export interface TerminalResolutionPolicy {
+  mode: 'selectable' | 'single_hybrid';
+}
+
+const DEFAULT_TERMINAL_POLICY: Readonly<TerminalResolutionPolicy> = Object.freeze({
+  mode: 'selectable',
+});
 
 export type ShiftResolution =
   | { kind: 'ready'; shift: ShiftDTO; source: 'stored' | 'single' }
@@ -122,9 +132,30 @@ export function resolveTerminal(
   branchId: string | null,
   storedTerminalId: string | null,
   terminals: TerminalDTO[],
+  policy: Readonly<TerminalResolutionPolicy> = DEFAULT_TERMINAL_POLICY,
 ): TerminalResolution {
   if (!branchId) return { kind: 'missing_branch' };
-  const matching = terminals.filter((terminal) => terminal.branch_id === branchId);
+  // Inactive terminal rows remain useful audit history, but they must never
+  // become this browser's operational scope.
+  const matching = terminals.filter(
+    (terminal) => terminal.branch_id === branchId && terminal.is_active,
+  );
+
+  if (policy.mode === 'single_hybrid') {
+    if (matching.length === 0) return { kind: 'no_terminals' };
+    if (matching.length > 1) {
+      return { kind: 'configuration_conflict', terminals: matching };
+    }
+    if (matching[0].purpose !== 'hybrid') {
+      return { kind: 'hybrid_required', terminal: matching[0] };
+    }
+    return {
+      kind: 'ready',
+      terminalId: matching[0].id,
+      source: storedTerminalId === matching[0].id ? 'stored' : 'single',
+    };
+  }
+
   if (storedTerminalId && matching.some((terminal) => terminal.id === storedTerminalId)) {
     return { kind: 'ready', terminalId: storedTerminalId, source: 'stored' };
   }
@@ -174,7 +205,11 @@ export function terminalResolutionMessage(resolution: TerminalResolution): strin
     case 'missing_branch':
       return 'This account has no branch assigned. Assign a branch before using POS or Gaming.';
     case 'no_terminals':
-      return 'No POS terminal exists for this branch. Ask a protected owner to configure one before using POS or Gaming.';
+      return 'No active register is configured for this shop. Ask a protected owner to configure one Combined register before using Gaming, POS, or Shift.';
+    case 'hybrid_required':
+      return 'The active register is not in Combined mode. Ask a protected owner to change it to Combined so Gaming, POS, and Shift use the same workspace.';
+    case 'configuration_conflict':
+      return 'More than one active register is configured. This shop uses one shared Combined register; ask a protected owner to deactivate the extra register before continuing.';
     case 'selection_required':
       return 'Multiple POS terminals exist for this branch. Select the terminal used by this device.';
     case 'ready':
@@ -191,7 +226,7 @@ export function shiftResolutionMessage(resolution: ShiftResolution): string {
     case 'station_branch_mismatch':
       return 'This gaming station belongs to a different branch than the selected terminal.';
     case 'no_open_shift':
-      return 'No shift is open for this terminal. Open a shift from the Shifts tab before taking orders or starting sessions — whoever opens it is responsible for its cash and payment closing.';
+      return 'No shift is open. Open a shift from the Shift tab before taking orders or starting sessions — whoever opens it is responsible for its cash and payment closing.';
     case 'ambiguous_open_shifts':
       return 'More than one open shift exists for this terminal. Close the duplicate shift before continuing.';
     case 'ready':

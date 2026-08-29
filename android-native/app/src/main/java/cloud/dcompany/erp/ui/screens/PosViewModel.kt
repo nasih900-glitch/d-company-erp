@@ -2,6 +2,7 @@ package cloud.dcompany.erp.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.alarm.overdueHeldOrderIds
 import cloud.dcompany.erp.core.alarm.overdueHeldOrderFingerprint
@@ -13,35 +14,64 @@ import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
+import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
-import cloud.dcompany.erp.core.db.LocalOrderLineEntity
+import cloud.dcompany.erp.core.db.LocalOrderWithLines
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.db.MenuModifierEntity
+import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
+import cloud.dcompany.erp.core.db.MenuVariantEntity
+import cloud.dcompany.erp.core.db.PosReceiptSource
+import cloud.dcompany.erp.core.db.PosReceiptEntity
+import cloud.dcompany.erp.core.db.RECEIPT_HISTORY_PAGE_SIZE
 import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.SyncState
+import cloud.dcompany.erp.core.db.zeroTotalReceipt
+import cloud.dcompany.erp.core.db.decodedReceipt
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.db.shiftClosingMessageOr
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.CreateOrderRequest
+import cloud.dcompany.erp.core.net.ModifierSelectionRequest
+import cloud.dcompany.erp.core.net.OrderDiscountUpdateRequest
+import cloud.dcompany.erp.core.net.OrderLineRequest
+import cloud.dcompany.erp.core.net.OrderPointsRedemptionUpdateRequest
+import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
-data class CartLine(val item: MenuItemEntity, val qty: Int)
+/** Direct tablet carts are counter sales; table and gaming workflows retain their own server types. */
+internal const val DIRECT_COUNTER_SALE_ORDER_TYPE = "takeaway"
 
 data class PreparedHeldCheckout(
     val orderId: String,
@@ -54,6 +84,50 @@ data class PreparedHeldCheckout(
     val claimToken: String,
     val claimExpiresAtMillis: Long,
     val claimOrderVersion: Long,
+)
+
+internal fun subscriptionClock(
+    periodMillis: Long,
+    nowMillis: () -> Long = System::currentTimeMillis,
+): Flow<Long> {
+    require(periodMillis > 0L) { "Clock period must be positive" }
+    return flow {
+        emit(nowMillis())
+        while (currentCoroutineContext().isActive) {
+            delay(periodMillis)
+            emit(nowMillis())
+        }
+    }
+}
+
+data class PreparedDirectCheckout(
+    val localId: String,
+    /** Exact editable-cart revision that produced this authoritative bill. */
+    val revision: Long,
+    val orderId: String,
+    val shiftIdAtClaim: String,
+    val subtotalMinor: Long,
+    val discountMinor: Long,
+    val pointsRedeemedMinor: Long,
+    val pointsRedeemed: Int,
+    val taxMinor: Long,
+    val roundOffMinor: Long,
+    val totalMinor: Long,
+    val dueMinor: Long,
+    val claimToken: String?,
+    val claimExpiresAtMillis: Long,
+    val claimOrderVersion: Long,
+)
+
+/**
+ * Immutable payment confirmation rendered to the cashier. Passing this back
+ * to the ViewModel prevents a late cart edit or recomposition from changing
+ * the amount between confirmation and durable capture.
+ */
+data class DirectPaymentConfirmation(
+    val localId: String,
+    val revision: Long,
+    val dueMinor: Long,
 )
 
 data class RejectedDirectSale(
@@ -108,9 +182,26 @@ private data class CheckoutSnapshot(
     val heldSelectionBlocked: Boolean,
 )
 
+private data class PosMenuSnapshot(
+    val items: List<MenuItemEntity>,
+    val categories: List<MenuCategoryEntity>,
+    val variants: List<MenuVariantEntity>,
+    val modifierGroups: List<MenuModifierGroupEntity>,
+    val modifiers: List<MenuModifierEntity>,
+    val draft: LocalOrderWithLines?,
+    val customers: List<CustomerCacheEntity>,
+)
+
 data class PosUiState(
+    /** Full available catalogue retained for durable draft/retry reconstruction. */
     val categories: List<MenuCategoryEntity> = emptyList(),
     val items: List<MenuItemEntity> = emptyList(),
+    /** Release-profile subset offered for a brand-new counter sale. */
+    val operationalCategories: List<MenuCategoryEntity> = emptyList(),
+    val operationalItems: List<MenuItemEntity> = emptyList(),
+    val variants: List<MenuVariantEntity> = emptyList(),
+    val modifierGroups: List<MenuModifierGroupEntity> = emptyList(),
+    val modifiers: List<MenuModifierEntity> = emptyList(),
     val selectedCategoryId: String? = null,
     val cart: List<CartLine> = emptyList(),
     val online: Boolean = false,
@@ -128,6 +219,8 @@ data class PosUiState(
     val checkoutBusy: Boolean = false,
     val preparingHeldOrderId: String? = null,
     val preparedHeldCheckout: PreparedHeldCheckout? = null,
+    /** Exact server-priced direct sale; this—not the cached estimate—may be collected online. */
+    val preparedDirectCheckout: PreparedDirectCheckout? = null,
     /** Absorbs the second pointer-up after a held-order settlement confirmation. */
     val heldSelectionBlocked: Boolean = false,
     val notice: String? = null,
@@ -160,18 +253,30 @@ data class PosUiState(
     val overdueBannerMutedUntilMillis: Long = 0L,
     /** Notification/View focus is visual only and never starts a checkout claim. */
     val focusedHeldOrderId: String? = null,
+    /** The draft is stored in Room, so process death and navigation cannot erase an order. */
+    val draftState: String? = null,
+    val draftLocalId: String? = null,
+    val draftRevision: Long? = null,
+    val customerName: String? = null,
+    val customerPhone: String? = null,
+    /** Last synced display balance only; the backend authorises every redemption. */
+    val customerLoyaltyPoints: Int? = null,
+    val orderNote: String? = null,
+    val manualDiscountMinor: Long = 0,
 ) {
     val visibleItems: List<MenuItemEntity>
-        get() = if (selectedCategoryId == null) items
-            else items.filter { it.categoryId == selectedCategoryId }
+        get() = if (selectedCategoryId == null) operationalItems
+            else operationalItems.filter { it.categoryId == selectedCategoryId }
 
     /**
      * Cart-side estimate only. The server does the canonical pricing — tax,
      * membership discounts, rounding — and that figure is what actually gets
      * charged once the sale syncs.
      */
-    val estimateMinor: Long get() = cart.sumOf { it.item.basePriceMinor * it.qty }
+    val estimateMinor: Long get() = cart.sumOf { it.lineTotalMinor }
+    val estimatedDueMinor: Long get() = (estimateMinor - manualDiscountMinor).coerceAtLeast(0L)
     val cartCount: Int get() = cart.sumOf { it.qty }
+    val draftEditable: Boolean get() = draftState == null || draftState == SyncState.DRAFT
 }
 
 class PosViewModel : ViewModel() {
@@ -180,7 +285,6 @@ class PosViewModel : ViewModel() {
     private val db = app.db
 
     private val selectedCategory = MutableStateFlow<String?>(null)
-    private val cart = MutableStateFlow<List<CartLine>>(emptyList())
     private val notice = MutableStateFlow<String?>(null)
     private val checkoutBusy = MutableStateFlow(false)
     private val preparingHeldOrderId = MutableStateFlow<String?>(null)
@@ -189,7 +293,13 @@ class PosViewModel : ViewModel() {
     private val confirmingHeldOrderId = MutableStateFlow<String?>(null)
     private val retryingRejectedSaleIds = MutableStateFlow<Set<String>>(emptySet())
     private val retryingHeldPaymentIds = MutableStateFlow<Set<String>>(emptySet())
-    private val heldAlarmClock = MutableStateFlow(System.currentTimeMillis())
+    /**
+     * The overdue clock only exists while POS state has a UI subscriber. The
+     * session ViewModelStore deliberately survives route changes, so an init
+     * loop here otherwise woke every 30 seconds for the rest of the login even
+     * after the cashier left POS.
+     */
+    private val heldAlarmClock = subscriptionClock(periodMillis = 30_000L)
     private val focusedHeldOrderId = MutableStateFlow<String?>(null)
     private val heldBannerMute = MutableStateFlow(HeldBannerMute())
     private var capturedSaleOutcomeJob: Job? = null
@@ -198,12 +308,64 @@ class PosViewModel : ViewModel() {
     private var retriedHeldPaymentOutcomeJob: Job? = null
     private var heldSelectionGuardJob: Job? = null
     private var abandonHeldPreparation = false
+    private val cartMutationMutex = Mutex()
     @Volatile private var access = PosAccess()
     private val heldOrderRows = db.heldOrderDao().observeAll()
     private val confirmedHeldOrderIds = db.heldOrderDao().observeConfirmedTargetIds()
-    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(
-        app.terminalStore.terminalIdFlow,
-    ).stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
+        .map { it?.terminalId }
+        .distinctUntilChanged()
+    private val resolvedShift = db.shiftDao().observeResolvedOpenShift(confirmedTerminalId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val recentReceipts: StateFlow<List<PosReceiptEntity>> = db.posReceiptDao()
+        .observeRecent()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _receiptHistoryLoading = MutableStateFlow(false)
+    val receiptHistoryLoading: StateFlow<Boolean> = _receiptHistoryLoading.asStateFlow()
+
+    val receiptHistorySyncState: StateFlow<CanonicalReceiptSyncStateEntity?> =
+        db.canonicalReceiptDao().observeSyncState()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * Receipts from every web/Android till in the current company and branch.
+     * Invalid cached JSON is omitted rather than crashing POS; the next
+     * authoritative refresh replaces that order's projection.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val canonicalReceipts: StateFlow<List<CanonicalReceipt>> = combine(
+        app.shiftCache.profile,
+        receiptHistorySyncState,
+    ) { profile, syncState ->
+        profile to (syncState?.loadedCount ?: 0).coerceAtLeast(RECEIPT_HISTORY_PAGE_SIZE)
+    }.flatMapLatest { (profile, limit) ->
+        val branchId = profile?.branchId
+        if (profile == null || branchId == null) {
+            flowOf(emptyList())
+        } else {
+            db.canonicalReceiptDao().observeRecent(
+                companyId = profile.companyId,
+                branchId = branchId,
+                limit = limit,
+            )
+        }
+    }.map { rows -> rows.mapNotNull { it.decodedReceipt() } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val receiptHistoryError: StateFlow<String?> = combine(
+        receiptHistorySyncState,
+        app.sync.resourceRefreshErrors,
+    ) { state, errors ->
+        // A later network/auth/server failure is more current than a cached
+        // staged-rollout 404 notice and must not be hidden by it.
+        errors["receipts"] ?: state?.unavailableMessage
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val unacknowledgedReceipt: StateFlow<PosReceiptEntity?> = db.posReceiptDao()
+        .observeOldestUnacknowledged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**
      * The UI reads Room, never the network. That is what makes the screen work
@@ -213,9 +375,33 @@ class PosViewModel : ViewModel() {
      * with no live "am I on a shift" round trip of its own.
      */
     val state: StateFlow<PosUiState> = combine(
-        combine(db.menuDao().observeItems(), db.menuDao().observeCategories(), ::Pair),
         combine(
-            combine(selectedCategory, cart, notice, ::Triple),
+            db.menuDao().observeItems(),
+            db.menuDao().observeCategories(),
+            db.menuDao().observeVariants(),
+            combine(
+                db.menuDao().observeModifierGroups(),
+                db.menuDao().observeModifiers(),
+                ::Pair,
+            ),
+            combine(
+                db.orderDao().observeActiveDraft(),
+                db.customerDao().observeCache(),
+                ::Pair,
+            ),
+        ) { items, categories, variants, modifierConfig, draftAndCustomers ->
+            PosMenuSnapshot(
+                items,
+                categories,
+                variants,
+                modifierConfig.first,
+                modifierConfig.second,
+                draftAndCustomers.first,
+                draftAndCustomers.second,
+            )
+        },
+        combine(
+            combine(selectedCategory, notice, ::Pair),
             combine(
                 combine(
                     checkoutBusy,
@@ -287,15 +473,60 @@ class PosViewModel : ViewModel() {
             heldQueue.bannerMute.overdueFingerprint == overdueFingerprint
         val bannerMuted = muteMatchesCurrentWork &&
             heldQueue.bannerMute.untilMillis > heldQueue.nowMillis
+        val currentItems = menu.items.associateBy { it.id }
+        val categoryNames = menu.categories.associate { it.id to it.name }
+        val operationalItems = menu.items.filter { item ->
+            WorkspaceFeatureProfiles.Active.operationalCatalogPolicy.allows(
+                categoryName = categoryNames[item.categoryId],
+                itemType = item.type,
+                isAvailable = item.isAvailable,
+            )
+        }
+        val operationalCategoryIds = operationalItems.mapTo(linkedSetOf()) { it.categoryId }
+        val operationalCategories = menu.categories.filter { it.id in operationalCategoryIds }
+        val currentVariants = menu.variants.associateBy { it.id }
+        val currentModifiers = menu.modifiers.associateBy { it.id }
+        val draftOrder = menu.draft?.order
+        val directCheckout = draftOrder?.takeIf { it.syncState == SyncState.AWAITING_PAYMENT }
+            ?.let { draft ->
+                val serverOrderId = draft.serverOrderId ?: return@let null
+                val claimExpiresAt = draft.checkoutClaimExpiresAtMillis ?: return@let null
+                val claimVersion = draft.checkoutVersion ?: return@let null
+                PreparedDirectCheckout(
+                    localId = draft.localId,
+                    revision = draft.revision,
+                    orderId = serverOrderId,
+                    shiftIdAtClaim = draft.shiftId,
+                    subtotalMinor = draft.serverSubtotalMinor ?: 0L,
+                    discountMinor = draft.serverDiscountMinor ?: 0L,
+                    pointsRedeemedMinor = draft.serverPointsRedeemedMinor ?: 0L,
+                    pointsRedeemed = draft.serverPointsRedeemed ?: 0,
+                    taxMinor = draft.serverTaxMinor ?: 0L,
+                    roundOffMinor = draft.serverRoundOffMinor ?: 0L,
+                    totalMinor = draft.serverTotalMinor ?: return@let null,
+                    dueMinor = draft.serverDueMinor ?: return@let null,
+                    claimToken = draft.checkoutClaimToken,
+                    claimExpiresAtMillis = claimExpiresAt,
+                    claimOrderVersion = claimVersion,
+                )
+            }
         PosUiState(
-            items = menu.first,
-            categories = menu.second,
-            selectedCategoryId = uiValues.first,
-            cart = uiValues.second,
-            notice = uiValues.third,
+            items = menu.items,
+            categories = menu.categories,
+            operationalItems = operationalItems,
+            operationalCategories = operationalCategories,
+            variants = menu.variants,
+            modifierGroups = menu.modifierGroups,
+            modifiers = menu.modifiers,
+            selectedCategoryId = uiValues.first?.takeIf { it in operationalCategoryIds },
+            cart = menu.draft?.lines.orEmpty()
+                .sortedBy { it.rowId }
+                .map { it.toCartLine(currentItems, currentVariants, currentModifiers) },
+            notice = uiValues.second,
             checkoutBusy = checkout.busy,
             preparingHeldOrderId = checkout.preparingOrderId,
             preparedHeldCheckout = checkout.prepared,
+            preparedDirectCheckout = directCheckout,
             heldSelectionBlocked = checkout.heldSelectionBlocked,
             online = net.first,
             syncing = net.second,
@@ -307,7 +538,7 @@ class PosViewModel : ViewModel() {
             rejectedDirectSales = queue.rejected.map { row ->
                 RejectedDirectSale(
                     localId = row.localId,
-                    amountMinor = row.estimateMinor,
+                    amountMinor = row.capturedAmountMinor ?: row.estimateMinor,
                     paymentMethod = row.paymentMethod,
                     createdAtMillis = row.createdAtMillis,
                     error = row.lastError?.takeIf(String::isNotBlank)
@@ -329,7 +560,7 @@ class PosViewModel : ViewModel() {
                 )
             },
             retryingHeldPaymentIds = retries.heldPaymentIds,
-            menuEmpty = menu.first.isEmpty(),
+            menuEmpty = operationalItems.isEmpty(),
             everSynced = meta != null,
             heldOrders = visibleHeldOrders,
             overdueHeldOrderIds = overdueIds,
@@ -346,16 +577,21 @@ class PosViewModel : ViewModel() {
             },
             focusedHeldOrderId = heldQueue.focusedOrderId
                 ?.takeIf { focus -> visibleHeldOrders.any { it.id == focus } },
+            draftState = draftOrder?.syncState,
+            draftLocalId = draftOrder?.localId,
+            draftRevision = draftOrder?.revision,
+            customerName = draftOrder?.customerName,
+            customerPhone = draftOrder?.customerPhone,
+            customerLoyaltyPoints = draftOrder?.customerPhone?.let { phone ->
+                menu.customers.firstOrNull { it.phone == phone }?.loyaltyPoints
+            },
+            orderNote = draftOrder?.orderNote,
+            manualDiscountMinor = draftOrder?.manualDiscountMinor ?: 0L,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PosUiState())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PosUiState())
 
     init {
-        viewModelScope.launch {
-            while (isActive) {
-                delay(30_000L)
-                heldAlarmClock.value = System.currentTimeMillis()
-            }
-        }
         // Keep the dialog bound to one immutable order id. A cache reorder is
         // harmless; removal closes that exact dialog. If settlement is already
         // in flight, closure must not release its claim underneath the request
@@ -398,6 +634,7 @@ class PosViewModel : ViewModel() {
                     ?: "The menu could not be downloaded. Check the connection, then tap Download menu."
             }
             app.sync.refresh("orders")
+            app.sync.refresh("receipts")
         }
     }
 
@@ -410,6 +647,43 @@ class PosViewModel : ViewModel() {
                     ?: "The menu could not be downloaded. Check the connection, then try again."
             }
             app.sync.refresh("orders")
+            app.sync.refresh("receipts")
+        }
+    }
+
+    fun refreshReceiptHistory() {
+        if (_receiptHistoryLoading.value) return
+        viewModelScope.launch {
+            _receiptHistoryLoading.value = true
+            try {
+                app.sync.refresh("receipts")
+            } finally {
+                _receiptHistoryLoading.value = false
+            }
+        }
+    }
+
+    fun loadMoreReceiptHistory() {
+        if (_receiptHistoryLoading.value || receiptHistorySyncState.value?.hasMore != true) return
+        viewModelScope.launch {
+            _receiptHistoryLoading.value = true
+            try {
+                app.sync.loadMoreReceiptHistory()
+            } finally {
+                _receiptHistoryLoading.value = false
+            }
+        }
+    }
+
+    fun refreshReceiptHistoryDetail(orderId: String) {
+        if (orderId.isBlank() || _receiptHistoryLoading.value) return
+        viewModelScope.launch {
+            _receiptHistoryLoading.value = true
+            try {
+                app.sync.refreshReceiptHistoryDetail(orderId)
+            } finally {
+                _receiptHistoryLoading.value = false
+            }
         }
     }
 
@@ -446,119 +720,882 @@ class PosViewModel : ViewModel() {
 
     fun updateAccess(next: PosAccess) {
         access = next
-        if (!next.canCreateAndCollect) {
-            // A role/module change must not leave an editable cart from a
-            // formerly authorised composition on this shared tablet.
-            cart.value = emptyList()
-        }
+        // The cart is intentionally not erased here. It is a durable operational
+        // record bound to the scoped tablet/shift, not transient UI owned by the
+        // current composition. Revoked users simply lose every mutation action.
     }
 
     private fun requireWrite(): Boolean = authorizeAction(access.canCreateAndCollect) {
         notice.value = VIEW_ONLY_MESSAGE
     }
 
+    private fun requireVoid(): Boolean = authorizeAction(access.canVoid) {
+        notice.value = "Voiding a released bill requires POS void permission. Ask a manager."
+    }
+
     fun selectCategory(id: String?) { selectedCategory.value = id }
 
     fun add(item: MenuItemEntity) {
         if (!requireWrite()) return
-        cart.update { lines ->
-            if (checkoutBusy.value) return@update lines
-            val i = lines.indexOfFirst { it.item.id == item.id }
-            if (i >= 0) {
-                lines.toMutableList().also { it[i] = it[i].copy(qty = it[i].qty + 1) }
+        if (state.value.operationalItems.none { it == item }) {
+            notice.value = "This product is not available for a new Gaming Centre sale. Refresh Products."
+            return
+        }
+        mutateEditableCart { lines ->
+            val index = lines.indexOfFirst {
+                it.item.id == item.id && it.variant == null &&
+                    it.modifiers.isEmpty() && it.note == null
+            }
+            if (index < 0) {
+                lines + newCartLine(item)
             } else {
-                lines + CartLine(item, 1)
+                lines.toMutableList().also { rows ->
+                    rows[index] = rows[index].copy(qty = rows[index].qty + 1)
+                }
+            }
+        }
+    }
+
+    fun addConfigured(
+        item: MenuItemEntity,
+        variant: MenuVariantEntity?,
+        modifiers: List<CartModifierSelection>,
+        note: String?,
+    ) {
+        if (!requireWrite()) return
+        if (state.value.operationalItems.none { it == item }) {
+            notice.value = "This product is not available for a new Gaming Centre sale. Refresh Products."
+            return
+        }
+        val candidate = newCartLine(item, variant, modifiers, note)
+        mutateEditableCart { lines ->
+            val index = lines.indexOfFirst { current ->
+                current.item.id == candidate.item.id &&
+                    current.variant?.id == candidate.variant?.id &&
+                    current.modifiers.map { it.modifier.id to it.qty } ==
+                    candidate.modifiers.map { it.modifier.id to it.qty } &&
+                    current.note == candidate.note &&
+                    current.unitPriceMinor == candidate.unitPriceMinor
+            }
+            if (index < 0) {
+                lines + candidate
+            } else {
+                lines.toMutableList().also { rows ->
+                    rows[index] = rows[index].copy(qty = rows[index].qty + 1)
+                }
             }
         }
     }
 
     fun remove(item: MenuItemEntity) {
         if (!requireWrite()) return
-        cart.update { lines ->
-            if (checkoutBusy.value) return@update lines
-            val i = lines.indexOfFirst { it.item.id == item.id }
-            if (i < 0) return@update lines
-            val line = lines[i]
-            if (line.qty <= 1) {
-                lines.filterIndexed { idx, _ -> idx != i }
-            } else {
-                lines.toMutableList().also { it[i] = line.copy(qty = line.qty - 1) }
+        state.value.cart.lastOrNull { it.item.id == item.id }?.let { decrementLine(it.lineId) }
+    }
+
+    fun incrementLine(lineId: String) {
+        if (!requireWrite()) return
+        mutateEditableCart { lines ->
+            lines.map { line -> if (line.lineId == lineId) line.copy(qty = line.qty + 1) else line }
+        }
+    }
+
+    fun decrementLine(lineId: String) {
+        if (!requireWrite()) return
+        mutateEditableCart { lines ->
+            lines.mapNotNull { line ->
+                when {
+                    line.lineId != lineId -> line
+                    line.qty > 1 -> line.copy(qty = line.qty - 1)
+                    else -> null
+                }
+            }
+        }
+    }
+
+    fun updateLine(lineId: String, modifiers: List<CartModifierSelection>, note: String?) {
+        if (!requireWrite()) return
+        mutateEditableCart { lines ->
+            lines.map { line ->
+                if (line.lineId != lineId) line else line.copy(
+                    modifiers = modifiers.sortedBy { it.modifier.id },
+                    note = note?.trim()?.takeIf(String::isNotEmpty),
+                    unitPriceMinor = configuredUnitPriceMinor(line.item, line.variant, modifiers),
+                )
             }
         }
     }
 
     fun clearCart() {
         if (!requireWrite()) return
-        if (!checkoutBusy.value) cart.value = emptyList()
+        if (checkoutBusy.value) return
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            cartMutationMutex.withLock {
+                val current = db.orderDao().activeDraft() ?: return@withLock
+                if (current.order.syncState != SyncState.DRAFT) {
+                    notice.value = "This bill was already prepared by the server. Cancel that bill before clearing it."
+                    return@withLock
+                }
+                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.orderDao().deleteDraft(current.order.localId)
+                }
+            }
+        }
+    }
+
+    fun updateDraftDetails(
+        customerName: String?,
+        customerPhone: String?,
+        orderNote: String?,
+        manualDiscountMinor: Long,
+    ) {
+        if (!requireWrite()) return
+        if (manualDiscountMinor < 0L) {
+            notice.value = "Enter a discount of ₹0.00 or more."
+            return
+        }
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            cartMutationMutex.withLock {
+                val current = db.orderDao().activeDraft()
+                if (current == null || current.order.syncState != SyncState.DRAFT) {
+                    notice.value = "Add an item before saving customer, note, or discount details."
+                    return@withLock
+                }
+                val estimate = current.lines.sumOf { it.unitPriceMinor * it.qty }
+                if (manualDiscountMinor > estimate) {
+                    notice.value = "The discount cannot be greater than the cart subtotal."
+                    return@withLock
+                }
+                val now = System.currentTimeMillis()
+                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.orderDao().saveDraft(
+                        current.order.copy(
+                            customerName = customerName?.trim()?.takeIf(String::isNotEmpty),
+                            customerPhone = customerPhone?.filter(Char::isDigit)?.takeIf(String::isNotEmpty),
+                            orderNote = orderNote?.trim()?.takeIf(String::isNotEmpty),
+                            manualDiscountMinor = manualDiscountMinor,
+                            revision = current.order.revision + 1,
+                            updatedAtMillis = now,
+                        ),
+                        current.lines,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun mutateEditableCart(transform: (List<CartLine>) -> List<CartLine>) {
+        if (checkoutBusy.value) return
+        val shiftId = authorisedShiftId() ?: return
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            cartMutationMutex.withLock {
+                val current = db.orderDao().activeDraft()
+                if (current != null && current.order.syncState != SyncState.DRAFT) {
+                    notice.value = "This order is already prepared for payment. Finish or cancel it before editing items."
+                    return@withLock
+                }
+                if (current != null && current.order.shiftId != shiftId) {
+                    notice.value = "This saved cart belongs to a different shift. Ask a manager to review it before billing."
+                    return@withLock
+                }
+                val currentState = state.value
+                val itemsById = currentState.items.associateBy { it.id }
+                val variantsById = currentState.variants.associateBy { it.id }
+                val modifiersById = currentState.modifiers.associateBy { it.id }
+                val before = current?.lines.orEmpty().sortedBy { it.rowId }.map {
+                    it.toCartLine(itemsById, variantsById, modifiersById)
+                }
+                val after = transform(before)
+                val now = System.currentTimeMillis()
+                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (after.isEmpty()) {
+                        current?.let { db.orderDao().deleteDraft(it.order.localId) }
+                    } else {
+                        val localId = current?.order?.localId ?: UUID.randomUUID().toString()
+                        val order = (current?.order ?: LocalOrderEntity(
+                            localId = localId,
+                            shiftId = shiftId,
+                            type = DIRECT_COUNTER_SALE_ORDER_TYPE,
+                            estimateMinor = 0L,
+                            createdAtMillis = now,
+                            syncState = SyncState.DRAFT,
+                        )).copy(
+                            estimateMinor = after.sumOf { it.lineTotalMinor },
+                            revision = (current?.order?.revision ?: 0L) + 1L,
+                            updatedAtMillis = now,
+                            syncState = SyncState.DRAFT,
+                            lastError = null,
+                        )
+                        db.orderDao().saveDraft(order, after.map { it.toLocalOrderLine(localId) })
+                    }
+                }
+            }
+        }
     }
 
     fun dismissNotice() { notice.value = null }
 
+    fun acknowledgeReceipt(receiptId: String) {
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            app.cacheIsolation.commitIfCurrent(scopeLease) {
+                db.posReceiptDao().acknowledge(receiptId, System.currentTimeMillis())
+            }
+        }
+    }
+
     /**
-     * Persists one payment intent before sync so a timeout cannot turn a retry
-     * into a duplicate. A live connection is mandatory before staff collect:
-     * the cached menu total is not authoritative for discounts, benefits, or
-     * changes made elsewhere.
+     * Online checkout is a two-step boundary: create/recover and price the
+     * server bill first, then acquire an exclusive snapshot before showing the
+     * payment dialog. Staff never collect against the cached menu estimate.
      */
-    fun captureSale(method: String, tenderedMinor: Long) {
+    fun prepareDirectCheckout() {
         if (!requireWrite()) return
+        if (authorisedShiftId() == null) return
         if (!app.connectivity.online.value) {
-            notice.value =
-                "The connection was lost before payment. Nothing was recorded; keep the cart open and reconnect."
+            // Offline has its own provisional capture path. The screen may show
+            // the cached subtotal, but it must label it as provisional.
             return
         }
-        val shift = authorisedShiftId() ?: return
-        val lines = cart.value
-        if (lines.isEmpty()) return
-        if (checkoutBusy.value) return
+        if (checkoutBusy.value || preparedHeldCheckout.value != null) return
         val scopeLease = app.cacheIsolation.currentLease() ?: return
-        // Set before launching: two taps in the same frame cannot mint two
-        // UUID/idempotency keys for one customer payment.
         checkoutBusy.value = true
-
-        val localId = UUID.randomUUID().toString()
-        val order = LocalOrderEntity(
-            localId = localId,
-            shiftId = shift,
-            type = "dine_in",
-            estimateMinor = lines.sumOf { it.item.basePriceMinor * it.qty },
-            paymentMethod = method,
-            tenderedMinor = tenderedMinor,
-            createdAtMillis = System.currentTimeMillis(),
-            syncState = SyncState.PENDING,
-        )
-        val rows = lines.map {
-            LocalOrderLineEntity(
-                orderLocalId = localId,
-                menuItemId = it.item.id,
-                name = it.item.name,
-                qty = it.qty,
-                unitPriceMinor = it.item.basePriceMinor,
-            )
-        }
         viewModelScope.launch {
             try {
+                cartMutationMutex.withLock {
+                    val snapshot = db.orderDao().activeDraft()
+                        ?: throw IllegalStateException("Add at least one item before payment.")
+                    val local = snapshot.order
+                    if (snapshot.lines.isEmpty()) {
+                        throw IllegalStateException("Add at least one item before payment.")
+                    }
+                    if (local.syncState !in setOf(
+                            SyncState.DRAFT,
+                            SyncState.PREPARING,
+                            SyncState.AWAITING_PAYMENT,
+                        )
+                    ) {
+                        throw IllegalStateException("This order is no longer editable or payable from the cart.")
+                    }
+
+                    if (
+                        local.syncState == SyncState.AWAITING_PAYMENT &&
+                        local.checkoutClaimExpiresAtMillis?.let {
+                            HeldOrderClaimPolicy.hasConfirmationWindow(it, System.currentTimeMillis())
+                        } == true
+                    ) {
+                        return@withLock
+                    }
+
+                    val transitioned = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                        db.orderDao().updateDraftState(
+                            local.localId,
+                            SyncState.PREPARING,
+                            System.currentTimeMillis(),
+                        )
+                    }
+                    if (transitioned !is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                        return@withLock
+                    }
+
+                    val localShift = db.shiftDao().byLocalId(local.shiftId)
+                    if (localShift != null && localShift.serverShiftId == null) {
+                        app.sync.sync()
+                    }
+                    val serverShiftId = db.shiftDao().byLocalId(local.shiftId)?.serverShiftId
+                        ?: local.shiftId
+                    val currentResolvedShiftId = resolvedShift.value?.shiftId
+                    if (currentResolvedShiftId == null || currentResolvedShiftId !in setOf(
+                            local.shiftId,
+                            serverShiftId,
+                        )
+                    ) {
+                        throw IllegalStateException(
+                            "The open shift changed while this order was being prepared. Review the shift and try again.",
+                        )
+                    }
+
+                    val created = local.serverOrderId?.let { ApiClient.api.order(it) }
+                        ?: ApiClient.api.createOrder(
+                            CreateOrderRequest(
+                                type = local.type,
+                                shiftId = serverShiftId,
+                                lines = snapshot.lines.map { line ->
+                                    OrderLineRequest(
+                                        clientLineId = line.clientLineId,
+                                        menuItemId = line.menuItemId,
+                                        qty = line.qty,
+                                        variantId = line.variantId,
+                                        modifiers = cloud.dcompany.erp.core.db
+                                            .decodeModifierSelections(line.modifierSelectionsJson)
+                                            .map { selected ->
+                                                ModifierSelectionRequest(selected.modifierId, selected.qty)
+                                            },
+                                        note = line.note,
+                                    )
+                                },
+                                customerName = local.customerName,
+                                customerPhone = local.customerPhone,
+                                notes = local.orderNote,
+                            ),
+                            idempotencyKey = "order:${local.localId}",
+                        )
+                    check(created.id.isNotBlank() && created.status == "open") {
+                        "The server did not return an open bill for this cart."
+                    }
+                    val checkpointed = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                        db.orderDao().checkpointServerDraft(
+                            localId = local.localId,
+                            serverOrderId = created.id,
+                            serverShiftId = serverShiftId,
+                            subtotalMinor = created.subtotalMinor,
+                            discountMinor = created.discountMinor,
+                            pointsRedeemedMinor = created.pointsRedeemedMinor,
+                            pointsRedeemed = created.pointsRedeemed,
+                            taxMinor = created.taxMinor,
+                            roundOffMinor = created.roundOffMinor,
+                            totalMinor = created.totalMinor,
+                            dueMinor = created.dueMinor,
+                            checkoutVersion = created.checkoutVersion,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                    }
+                    if (checkpointed !is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed) {
+                        return@withLock
+                    }
+
+                    val priced = when {
+                        local.manualDiscountMinor <= 0L -> created
+                        // Recovery after an ambiguous response: the server
+                        // already committed the requested value, so issuing a
+                        // second body with a newer expected version would turn
+                        // a safe retry into an idempotency-hash conflict.
+                        created.manualDiscountMinor == local.manualDiscountMinor -> created
+                        else -> {
+                            val firstRequestVersion = local.discountRequestVersion
+                                ?: created.checkoutVersion
+                            val frozen = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                                db.orderDao().preserveDiscountRequestVersion(
+                                    localId = local.localId,
+                                    requestVersion = firstRequestVersion,
+                                    updatedAtMillis = System.currentTimeMillis(),
+                                )
+                            }
+                            check(
+                                frozen is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
+                                    frozen.value == 1,
+                            ) { "The discount request could not be secured for a safe retry." }
+                            val persistedRequestVersion = db.orderDao().withLines(local.localId)
+                                ?.order?.discountRequestVersion
+                                ?: throw IllegalStateException(
+                                    "The discount request version was not saved. No payment was recorded.",
+                                )
+                            ApiClient.api.updateOrderDiscount(
+                                id = created.id,
+                                body = OrderDiscountUpdateRequest(
+                                    manualDiscountMinor = local.manualDiscountMinor,
+                                    expectedCheckoutVersion = persistedRequestVersion,
+                                ),
+                                idempotencyKey = "order-discount:${local.localId}",
+                            )
+                        }
+                    }
+                    app.cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.orderDao().checkpointServerDraft(
+                            localId = local.localId,
+                            serverOrderId = priced.id,
+                            serverShiftId = serverShiftId,
+                            subtotalMinor = priced.subtotalMinor,
+                            discountMinor = priced.discountMinor,
+                            pointsRedeemedMinor = priced.pointsRedeemedMinor,
+                            pointsRedeemed = priced.pointsRedeemed,
+                            taxMinor = priced.taxMinor,
+                            roundOffMinor = priced.roundOffMinor,
+                            totalMinor = priced.totalMinor,
+                            dueMinor = priced.dueMinor,
+                            checkoutVersion = priced.checkoutVersion,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                    }
+
+                    // Direct POS orders remain `open` and deliberately do not
+                    // use held-order checkout claims. Exact expected total/due
+                    // fields on payment protect the final write. Keep a short
+                    // local review window, then refetch before staff collect.
+                    val verificationExpiresAt = System.currentTimeMillis() + 2L * 60L * 1_000L
+                    val prepared = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                        db.orderDao().markDraftPrepared(
+                            localId = local.localId,
+                            serverOrderId = priced.id,
+                            subtotalMinor = priced.subtotalMinor,
+                            discountMinor = priced.discountMinor,
+                            pointsRedeemedMinor = priced.pointsRedeemedMinor,
+                            pointsRedeemed = priced.pointsRedeemed,
+                            taxMinor = priced.taxMinor,
+                            roundOffMinor = priced.roundOffMinor,
+                            totalMinor = priced.totalMinor,
+                            dueMinor = priced.dueMinor,
+                            claimToken = null,
+                            claimExpiresAtMillis = verificationExpiresAt,
+                            checkoutVersion = priced.checkoutVersion,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                    }
+                    check(
+                        prepared is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
+                            prepared.value == 1,
+                    ) { "The prepared bill could not be saved on this tablet." }
+                    notice.value = "Live total verified. Review the bill, then choose the payment method."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                val current = db.orderDao().activeDraft()
+                current?.let {
+                    db.orderDao().updateDraftState(
+                        it.order.localId,
+                        SyncState.PREPARING,
+                        System.currentTimeMillis(),
+                        e.message,
+                    )
+                }
+                notice.value = directCheckoutPreparationNotice(e)
+            } finally {
+                checkoutBusy.value = false
+            }
+        }
+    }
+
+    fun dismissDirectCheckout() {
+        if (checkoutBusy.value) return
+        val prepared = state.value.preparedDirectCheckout ?: return
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        viewModelScope.launch {
+            app.cacheIsolation.commitIfCurrent(scopeLease) {
+                db.orderDao().updateDraftState(
+                    prepared.localId,
+                    SyncState.PREPARING,
+                    System.currentTimeMillis(),
+                )
+            }
+        }
+    }
+
+    /**
+     * Apply an absolute points amount to the exact server bill currently under
+     * review. The deterministic key includes the frozen optimistic version and
+     * body, so an ambiguous retry replays the same mutation rather than
+     * reserving points twice. The cache balance is display-only; the locked
+     * backend customer/order transaction is the authority.
+     */
+    fun redeemDirectPoints(points: Int) {
+        if (!requireWrite()) return
+        if (points < 0) {
+            notice.value = "Enter zero or more loyalty points."
+            return
+        }
+        val prepared = state.value.preparedDirectCheckout ?: run {
+            notice.value = "Verify the live bill before applying loyalty points."
+            return
+        }
+        if (state.value.customerPhone.isNullOrBlank()) {
+            notice.value = "Add the customer's phone number before using loyalty points."
+            return
+        }
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect before using loyalty points so the live balance can be reserved safely."
+            return
+        }
+        if (checkoutBusy.value) return
+        val currentShiftId = authorisedShiftId() ?: return
+        if (currentShiftId != prepared.shiftIdAtClaim) {
+            notice.value = "The open shift changed. Verify this bill again before using points."
+            prepareDirectCheckout()
+            return
+        }
+        if (!HeldOrderClaimPolicy.hasConfirmationWindow(
+                prepared.claimExpiresAtMillis,
+                System.currentTimeMillis(),
+            )
+        ) {
+            notice.value = "The verified total expired. Refreshing it before points are changed."
+            prepareDirectCheckout()
+            return
+        }
+        if (points == prepared.pointsRedeemed) return
+
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        checkoutBusy.value = true
+        viewModelScope.launch {
+            try {
+                val updated = ApiClient.api.updateOrderPoints(
+                    id = prepared.orderId,
+                    body = OrderPointsRedemptionUpdateRequest(
+                        points = points,
+                        expectedCheckoutVersion = prepared.claimOrderVersion,
+                    ),
+                    idempotencyKey = pointsRedemptionIdempotencyKey(
+                        localId = prepared.localId,
+                        orderId = prepared.orderId,
+                        checkoutVersion = prepared.claimOrderVersion,
+                        points = points,
+                    ),
+                )
+                check(updated.id == prepared.orderId && updated.status == "open") {
+                    "The server returned the wrong bill after applying points."
+                }
+                val verificationExpiresAt = System.currentTimeMillis() + 2L * 60L * 1_000L
+                val saved = app.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                    db.orderDao().markDraftPrepared(
+                        localId = prepared.localId,
+                        serverOrderId = updated.id,
+                        subtotalMinor = updated.subtotalMinor,
+                        discountMinor = updated.discountMinor,
+                        pointsRedeemedMinor = updated.pointsRedeemedMinor,
+                        pointsRedeemed = updated.pointsRedeemed,
+                        taxMinor = updated.taxMinor,
+                        roundOffMinor = updated.roundOffMinor,
+                        totalMinor = updated.totalMinor,
+                        dueMinor = updated.dueMinor,
+                        claimToken = null,
+                        claimExpiresAtMillis = verificationExpiresAt,
+                        checkoutVersion = updated.checkoutVersion,
+                        updatedAtMillis = System.currentTimeMillis(),
+                    )
+                }
+                check(
+                    saved is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
+                        saved.value == 1,
+                ) { "The points-adjusted bill could not be saved on this tablet." }
+                notice.value = if (updated.pointsRedeemed > 0) {
+                    "${updated.pointsRedeemed} points reserved for " +
+                        "${updated.pointsRedeemedMinor.asRupees()}. New total ${updated.totalMinor.asRupees()}."
+                } else {
+                    "Loyalty points removed. New total ${updated.totalMinor.asRupees()}."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: ApiException) {
+                notice.value = error.message
+                    ?: "The server could not reserve those points. No payment was recorded."
+            } catch (error: Exception) {
+                notice.value = error.message
+                    ?: "The points change could not be verified. No payment was recorded; try again."
+            } finally {
+                checkoutBusy.value = false
+            }
+        }
+    }
+
+    fun confirmDirectZero() {
+        if (!requireWrite()) return
+        val prepared = state.value.preparedDirectCheckout ?: return
+        if (prepared.dueMinor != 0L || prepared.totalMinor != 0L) {
+            notice.value = "Only an exact ₹0.00 bill can be completed without payment."
+            return
+        }
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect to complete this zero-total benefit and issue its receipt."
+            return
+        }
+        if (checkoutBusy.value) return
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        checkoutBusy.value = true
+        viewModelScope.launch {
+            try {
+                val result = ApiClient.api.finalizeZeroTotalOrder(
+                    id = prepared.orderId,
+                    idempotencyKey = HeldOrderClaimPolicy.zeroFinalizationIdempotencyKey(
+                        prepared.orderId,
+                        prepared.claimOrderVersion,
+                    ),
+                    checkoutClaimToken = prepared.claimToken,
+                )
+                check(
+                    result.orderId == prepared.orderId && result.amountMinor == 0L &&
+                        result.orderStatus == "paid" && !result.invoiceNo.isNullOrBlank(),
+                ) { "The server returned an invalid zero-total receipt." }
+                val finalOrder = ApiClient.api.order(prepared.orderId)
+                app.cacheIsolation.commitIfCurrent(scopeLease) {
+                    db.withTransaction {
+                        db.posReceiptDao().store(
+                            zeroTotalReceipt(
+                                order = finalOrder,
+                                result = result,
+                                sourceKind = PosReceiptSource.ZERO_DIRECT,
+                                shiftId = prepared.shiftIdAtClaim,
+                            ),
+                        )
+                        db.orderDao().deleteDraft(prepared.localId)
+                    }
+                }
+                notice.value = "Bill completed once · ${result.invoiceNo} · ₹0.00 due. No money was collected."
+                app.sync.refresh("orders")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: ApiException) {
+                if (!e.isAmbiguous) {
+                    prepared.claimToken?.let { releaseClaimBestEffort(prepared.orderId, it) }
+                    db.orderDao().updateDraftState(
+                        prepared.localId,
+                        SyncState.PREPARING,
+                        System.currentTimeMillis(),
+                        e.message,
+                    )
+                }
+                notice.value = e.message
+                    ?: "The zero-total bill is not confirmed yet. Do not collect money; retry the same completion."
+            } catch (e: Exception) {
+                notice.value = e.message
+                    ?: "The zero-total completion could not be verified. Do not collect money; retry."
+            } finally {
+                checkoutBusy.value = false
+            }
+        }
+    }
+
+    fun voidOrder(orderId: String, reason: String) {
+        if (!requireVoid()) return
+        val cleanReason = reason.trim()
+        if (cleanReason.isEmpty()) {
+            notice.value = "Select or enter a reason before voiding this bill."
+            return
+        }
+        if (!app.connectivity.online.value) {
+            notice.value = "Reconnect before voiding a released bill so the audit and linked cancellation are saved together."
+            return
+        }
+        if (checkoutBusy.value) return
+        val direct = state.value.preparedDirectCheckout?.takeIf { it.orderId == orderId }
+        val held = preparedHeldCheckout.value?.takeIf { it.orderId == orderId }
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        checkoutBusy.value = true
+        viewModelScope.launch {
+            try {
+                direct?.claimToken?.let { releaseClaimBestEffort(orderId, it) }
+                held?.let { releaseClaimBestEffort(it.orderId, it.claimToken) }
+                ApiClient.api.voidOrder(orderId, cloud.dcompany.erp.core.net.VoidOrderRequest(cleanReason))
+                if (held != null) preparedHeldCheckout.compareAndSet(held, null)
+                if (direct != null) {
+                    app.cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.orderDao().deleteDraft(direct.localId)
+                    }
+                }
+                notice.value = "Bill voided with reason: $cleanReason. The audit and linked cancellation are retained."
+                app.sync.refresh("orders")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                notice.value = if (e is ApiException) {
+                    e.message ?: "The bill could not be voided. It remains payable."
+                } else {
+                    "The bill could not be voided. It remains payable; check the connection and retry."
+                }
+            } finally {
+                checkoutBusy.value = false
+            }
+        }
+    }
+
+    /**
+     * The local insert is the one-way "money received" boundary. Direct and
+     * held bills share the same crash-safe settlement outbox and unique target
+     * constraint, so rapid taps or ambiguous responses cannot duplicate money.
+     */
+    fun captureSale(
+        method: String,
+        tenderedMinor: Long,
+        confirmation: DirectPaymentConfirmation,
+    ) {
+        if (!requireWrite()) return
+        if (!app.connectivity.online.value) {
+            captureOfflineSale(method, tenderedMinor, confirmation)
+            return
+        }
+        val prepared = state.value.preparedDirectCheckout
+        if (prepared == null) {
+            notice.value = "The live bill has not been verified yet. Wait for the exact server total before collecting."
+            prepareDirectCheckout()
+            return
+        }
+        if (
+            prepared.localId != confirmation.localId ||
+            prepared.revision != confirmation.revision ||
+            prepared.dueMinor != confirmation.dueMinor
+        ) {
+            notice.value = "The bill changed after the payment screen opened. Review the refreshed total before collecting."
+            prepareDirectCheckout()
+            return
+        }
+        if (checkoutBusy.value) return
+        val currentShiftId = authorisedShiftId() ?: return
+        if (currentShiftId != prepared.shiftIdAtClaim) {
+            notice.value = "The open shift changed after this total was verified. Review the bill again."
+            dismissDirectCheckout()
+            return
+        }
+        if (!HeldOrderClaimPolicy.hasConfirmationWindow(
+                prepared.claimExpiresAtMillis,
+                System.currentTimeMillis(),
+            )
+        ) {
+            notice.value = "The verified total expired. Refreshing it now; review before collecting."
+            prepareDirectCheckout()
+            return
+        }
+        if (method !in setOf("cash", "upi", "card")) {
+            notice.value = "Choose Cash, UPI, or Card."
+            return
+        }
+        if (prepared.dueMinor <= 0L || (method == "cash" && tenderedMinor < prepared.dueMinor)) {
+            notice.value = "Enter enough cash to cover the verified total."
+            return
+        }
+        val terminalId = app.terminalStore.confirmedTerminalId()
+        if (terminalId == null) {
+            notice.value = "This tablet's workspace is not verified. Sign in online before collecting."
+            return
+        }
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        checkoutBusy.value = true
+        startHeldSelectionTapGuard()
+        val payment = LocalHeldOrderPaymentEntity(
+            localId = prepared.localId,
+            targetOrderId = prepared.orderId,
+            method = method,
+            amountMinor = prepared.dueMinor,
+            tenderedMinor = tenderedMinor.takeIf { method == "cash" },
+            expectedTotalMinor = prepared.totalMinor,
+            expectedDueMinor = prepared.dueMinor,
+            claimToken = prepared.claimToken,
+            claimExpiresAtMillis = prepared.claimExpiresAtMillis,
+            claimOrderVersion = prepared.claimOrderVersion,
+            requiresCheckoutClaim = false,
+            shiftId = prepared.shiftIdAtClaim,
+            terminalId = terminalId,
+            createdAtMillis = System.currentTimeMillis(),
+        )
+        viewModelScope.launch {
+            try {
+                var inserted = -1L
+                var existing: LocalHeldOrderPaymentEntity? = null
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
-                        db.orderDao().capture(order, rows)
+                        db.withTransaction {
+                            inserted = db.heldOrderDao().insertPayment(payment)
+                            if (inserted == -1L) {
+                                existing = db.heldOrderDao().paymentForTarget(prepared.orderId)
+                            }
+                            db.orderDao().deleteDraft(prepared.localId)
+                        }
                     }
                 ) return@launch
-                // Edits are guarded while checkoutBusy, but compare anyway so
-                // a future caller cannot erase a newer cart accidentally.
-                if (cart.value == lines) cart.value = emptyList()
-                notice.value = if (app.connectivity.online.value) {
-                    "Payment saved once on this tablet. The server has not confirmed the " +
-                        "sale yet; confirming now. Do not collect it again."
+                if (inserted == -1L) {
+                    notice.value = duplicateHeldPaymentNotice(existing)
                 } else {
-                    "Payment saved once on this tablet, but the server has not confirmed it. " +
-                        "Do not collect it again. It will be sent, and the tax invoice number " +
-                        "issued, when the connection returns."
+                    notice.value = "Payment saved once. Confirming the same settlement with the server; do not collect again."
+                    watchCapturedHeldPaymentOutcome(payment.localId)
+                    requestHeldPaymentSyncAfterActivePass()
                 }
-                watchCapturedSaleOutcome(localId)
-                app.sync.requestSync()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 notice.value = e.shiftClosingMessageOr(
-                    "The sale was not saved. Your cart is still here; check tablet " +
-                        "storage and try again.",
+                    "The tablet could not save this payment. The bill remains open; do not collect again until a manager checks it.",
+                )
+            } finally {
+                checkoutBusy.value = false
+            }
+        }
+    }
+
+    private fun captureOfflineSale(
+        method: String,
+        tenderedMinor: Long,
+        confirmation: DirectPaymentConfirmation,
+    ) {
+        if (checkoutBusy.value) return
+        val shiftId = authorisedShiftId() ?: return
+        if (method !in setOf("cash", "upi", "card")) {
+            notice.value = "Choose Cash, UPI, or Card."
+            return
+        }
+        if (
+            confirmation.localId.isBlank() ||
+            confirmation.revision < 1L ||
+            confirmation.dueMinor <= 0L ||
+            (method == "cash" && tenderedMinor < confirmation.dueMinor)
+        ) {
+            notice.value = "Review the cart and enter enough cash before saving this offline payment."
+            return
+        }
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        checkoutBusy.value = true
+        viewModelScope.launch {
+            try {
+                cartMutationMutex.withLock {
+                    val current = db.orderDao().withLines(confirmation.localId)
+                        ?: throw IllegalStateException("The saved cart is no longer available.")
+                    if (
+                        current.order.shiftId != shiftId ||
+                        current.order.syncState != SyncState.DRAFT ||
+                        current.order.revision != confirmation.revision
+                    ) {
+                        throw IllegalStateException(
+                            "The cart or shift changed after the payment screen opened. Review it again before collecting.",
+                        )
+                    }
+                    if (current.order.customerPhone != null || current.order.manualDiscountMinor > 0L) {
+                        throw IllegalStateException(
+                            "Customer benefits and manual discounts need a live server total. Reconnect before payment.",
+                        )
+                    }
+                    val currentState = state.value
+                    val cart = current.lines.sortedBy { it.rowId }.map {
+                        it.toCartLine(
+                            currentState.items.associateBy { item -> item.id },
+                            currentState.variants.associateBy { variant -> variant.id },
+                            currentState.modifiers.associateBy { modifier -> modifier.id },
+                        )
+                    }
+                    cartPricingReviewReason(
+                        cart,
+                        currentState.items.associateBy { it.id },
+                        currentState.variants.associateBy { it.id },
+                        currentState.modifierGroups.associateBy { it.id },
+                        currentState.modifiers.associateBy { it.id },
+                    )?.let { reason -> throw IllegalStateException(reason) }
+                    val currentDue = (
+                        current.order.estimateMinor - current.order.manualDiscountMinor
+                    ).coerceAtLeast(0L)
+                    if (current.lines.isEmpty() || currentDue != confirmation.dueMinor) {
+                        throw IllegalStateException(
+                            "The amount changed after the payment screen opened. Review the cart before collecting.",
+                        )
+                    }
+                    var captured = 0
+                    if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
+                            captured = db.orderDao().captureOfflineDraft(
+                                localId = confirmation.localId,
+                                expectedRevision = confirmation.revision,
+                                expectedDueMinor = confirmation.dueMinor,
+                                method = method,
+                                tenderedMinor = tenderedMinor.takeIf { method == "cash" } ?: 0L,
+                                updatedAtMillis = System.currentTimeMillis(),
+                            )
+                        }
+                    ) return@withLock
+                    check(captured == 1) {
+                        "The cart changed before payment could be saved. Review it again; no payment was recorded."
+                    }
+                    notice.value = "Offline payment saved once as a provisional sale. Do not collect again; it will reconcile automatically after reconnecting."
+                    watchCapturedSaleOutcome(confirmation.localId)
+                    app.sync.requestSync()
+                }
+            } catch (e: Exception) {
+                notice.value = e.shiftClosingMessageOr(
+                    e.message ?: "The offline payment was not saved. Keep the cart and try again.",
                 )
             } finally {
                 checkoutBusy.value = false
@@ -776,13 +1813,13 @@ class PosViewModel : ViewModel() {
             }
             return
         }
-        val terminalIdAtConfirmation = app.terminalStore.terminalId()
+        val terminalIdAtConfirmation = app.terminalStore.confirmedTerminalId()
         if (terminalIdAtConfirmation == null) {
             preparedHeldCheckout.value = null
             viewModelScope.launch {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
-            notice.value = "This tablet no longer has a verified POS terminal. Nothing was saved; " +
+            notice.value = "This tablet's workspace is no longer verified. Nothing was saved; " +
                 "sign in online and review the bill again before collecting."
             return
         }
@@ -946,6 +1983,7 @@ class PosViewModel : ViewModel() {
         // Synchronous state is the ViewModel-level one-shot boundary. The
         // dialog has its own atomic gate, so rapid queued callbacks are also
         // rejected before they reach here.
+        val scopeLease = app.cacheIsolation.currentLease() ?: return
         confirmingHeldOrderId.value = prepared.orderId
         startHeldSelectionTapGuard()
         checkoutBusy.value = true
@@ -966,6 +2004,19 @@ class PosViewModel : ViewModel() {
                         result.orderStatus == "paid" &&
                         !result.invoiceNo.isNullOrBlank(),
                 ) { "zero-total finalization returned an invalid receipt identity" }
+                val finalOrder = ApiClient.api.order(prepared.orderId)
+                if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
+                        db.posReceiptDao().store(
+                            zeroTotalReceipt(
+                                order = finalOrder,
+                                result = result,
+                                sourceKind = PosReceiptSource.ZERO_HELD,
+                                sourceLabel = prepared.sourceLabel,
+                                shiftId = prepared.shiftIdAtClaim,
+                            ),
+                        )
+                    }
+                ) return@launch
                 preparedHeldCheckout.compareAndSet(prepared, null)
                 notice.value = "Member benefit completed once · ${result.invoiceNo} · ₹0.00 due. " +
                     "No money was collected."
@@ -1118,7 +2169,7 @@ class PosViewModel : ViewModel() {
     private fun authorisedShiftId(): String? {
         val resolved = resolvedShift.value
         if (resolved == null) {
-            notice.value = "No open shift on this terminal. Open a shift before billing."
+            notice.value = "No shift is open. Open Shift before billing."
             return null
         }
         val actor = app.shiftCache.profile.value?.let {
@@ -1138,6 +2189,18 @@ private inline fun <T> MutableStateFlow<T>.update(block: (T) -> T) {
     value = block(value)
 }
 
+/** Stable across an ambiguous retry, distinct for every versioned absolute set. */
+internal fun pointsRedemptionIdempotencyKey(
+    localId: String,
+    orderId: String,
+    checkoutVersion: Long,
+    points: Int,
+): String {
+    require(localId.isNotBlank() && orderId.isNotBlank())
+    require(checkoutVersion >= 1L && points >= 0)
+    return "order-points:$localId:$orderId:$checkoutVersion:$points"
+}
+
 /** Kept pure so confirmation/refusal wording is regression-testable on the JVM. */
 internal fun directSaleOutcomeNotice(order: LocalOrderEntity): String? = when (order.syncState) {
     SyncState.SYNCED -> {
@@ -1152,6 +2215,27 @@ internal fun directSaleOutcomeNotice(order: LocalOrderEntity): String? = when (o
             "Fix the cause, then use Retry after fix on this failed sale."
     }
     else -> null
+}
+
+/**
+ * Keep backend implementation failures out of the cashier workflow. A generic
+ * 5xx envelope such as "An unexpected error occurred" gives staff neither a
+ * recovery action nor the financially important confirmation that no payment
+ * was captured. Specific business-rule messages remain intact.
+ */
+internal fun directCheckoutPreparationNotice(error: Exception): String {
+    if (error is ApiException) {
+        val serverMessage = error.message?.trim().orEmpty()
+        val genericServerFailure = error.status?.let { it >= 500 } == true ||
+            serverMessage.equals("An unexpected error occurred.", ignoreCase = true) ||
+            serverMessage.equals("Internal server error", ignoreCase = true)
+        if (!genericServerFailure && serverMessage.isNotEmpty()) return serverMessage
+        return "The server could not prepare this bill. No payment was recorded. " +
+            "Try again; if it continues, ask a manager to check the POS connection."
+    }
+
+    return error.message?.trim()?.takeIf(String::isNotEmpty)
+        ?: "The bill could not be prepared. No payment was recorded; review it and try again."
 }
 
 /** Definitive feedback for money already captured against a shared held order. */

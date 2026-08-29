@@ -64,9 +64,14 @@ PERMISSIONS: dict[str, str] = {
     # Analytics
     "analytics.read": "View dashboards",
     "analytics.export": "Export data (Power BI / CSV)",
+    # Owner-level business administration. These are deliberately separate
+    # from admin.system so operational co-owners can manage the cafe without
+    # gaining Audit Log, Access Control, or the private bug-report inbox.
+    "settings.manage": "Manage company, branch, terminal, and pricing settings",
+    "memberships.manage": "Manage membership plans and protected membership workflows",
     # Admin
     "admin.audit.read": "Read audit logs",
-    "admin.system": "Tenant / company / branch admin",
+    "admin.system": "Protected support inbox and evidence-reconciliation controls",
 }
 
 # The self-registration signup path (no in-app role picker) assigns this role
@@ -158,6 +163,8 @@ MANAGER_ACCESS = {
 OWNER_ACCESS = MANAGER_ACCESS | {
     "finance.assets.write",
     "staff.payroll.write",
+    "settings.manage",
+    "memberships.manage",
 }
 
 # External CA / audit-firm title — true read-only access. Only the *.read
@@ -198,6 +205,8 @@ HIGH_TRUST_PERMISSIONS = {
     "finance.assets.write",
     "staff.write",
     "staff.payroll.write",
+    "settings.manage",
+    "memberships.manage",
 }
 
 ROLE_DESCRIPTIONS: dict[str, str] = {
@@ -230,10 +239,11 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 
 # Coarse feature groupings for the Access Control panel — one toggle per
 # module per role, rather than one per fine-grained permission string (too
-# granular to be a sane UI). Deliberately excludes admin.audit.read and
-# admin.system: those stay hardcoded to the static role defaults (in practice,
-# protected-owner-only) and are never shown as a togglable module — letting
-# them be overridden would let someone grant themselves audit access.
+# granular to be a sane UI). Deliberately excludes the owner-only
+# settings.manage/memberships.manage permissions and the protected-owner-only
+# admin.audit.read/admin.system permissions. None may be widened through a
+# coarse module toggle; in particular, audit/system access must never become
+# self-grantable.
 MODULE_PERMISSIONS: dict[str, set[str]] = {
     "pos": {
         "pos.read",
@@ -303,10 +313,11 @@ def _role_allows_permission(
 
 
 async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
-    # Audit and tenant administration are deliberately excluded from the
+    # Audit and protected system controls are deliberately excluded from the
     # protected_access blanket bypass. A co-owner may override operational
-    # gates, but only the designated protected owner (audit_access=True) can
-    # read audit data or change company/branch/terminal security settings.
+    # gates and receives dedicated settings/membership management, but only
+    # the designated protected owner (audit_access=True) can read Audit Log,
+    # Access Control, the support inbox, or evidence-reconciliation controls.
     if perm in {"admin.audit.read", "admin.system"}:
         return tenant.audit_access
     if tenant.protected_access:
@@ -406,6 +417,17 @@ async def require_permission(session, tenant: TenantContext, perm: str) -> None:
             f"missing permission: {perm}",
             details={"have": list(tenant.roles)},
         )
+
+
+async def has_permission(session, tenant: TenantContext, perm: str) -> bool:
+    """Resolve a permission for conditional route scoping without raising.
+
+    Most endpoints should use :func:`requires`. This narrow public predicate
+    is for mixed read routes such as terminal discovery: POS staff may inspect
+    only their current branch, while a settings manager may inspect any active
+    branch in the same company.
+    """
+    return await _has_permission(session, tenant, perm)
 
 
 def requires(*perms: str) -> Callable[[TenantContext], TenantContext]:

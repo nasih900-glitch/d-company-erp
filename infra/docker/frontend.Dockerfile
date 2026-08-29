@@ -5,7 +5,7 @@ ARG VITE_APP_VERSION=dev
 ENV VITE_API_URL=${VITE_API_URL} VITE_APP_VERSION=${VITE_APP_VERSION}
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY frontend/ .
 RUN npm run build
 

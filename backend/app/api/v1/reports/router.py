@@ -39,6 +39,7 @@ from app.services.reports import (
     PnLReport,
     ReportsAggregator,
     month_range,
+    parse_fiscal_year_start,
 )
 
 router = APIRouter()
@@ -94,6 +95,7 @@ class ExpenseLineDTO(BaseModel):
 
 class ReportDTO(BaseModel):
     accounting_basis: Literal["operational_receipt"] = "operational_receipt"
+    branch_id: UUID | None
     period: Literal["daily", "monthly", "quarterly", "yearly", "custom"]
     label: str
     period_start: date
@@ -141,6 +143,7 @@ class TaxComplianceIssueDTO(BaseModel):
 
 
 class TaxComplianceDTO(BaseModel):
+    branch_id: UUID
     period_start: date
     period_end: date
     company_gst_registered: bool
@@ -160,6 +163,7 @@ class TaxComplianceDTO(BaseModel):
 def _to_dto(r: PnLReport) -> ReportDTO:
     return ReportDTO(
         accounting_basis="operational_receipt",
+        branch_id=r.branch_id,
         period=r.period,
         label=r.label,
         period_start=r.period_start,
@@ -223,6 +227,12 @@ def _to_dto(r: PnLReport) -> ReportDTO:
 
 
 # ----------------------------- endpoints -----------------------------
+def _selected_branch_id(tenant: TenantContext) -> UUID:
+    if tenant.branch_id is None:
+        raise BusinessRuleError("a selected branch is required for this report")
+    return tenant.branch_id
+
+
 @router.get("/daily", response_model=ReportDTO)
 async def daily_report(
     session: SessionDep,
@@ -233,7 +243,11 @@ async def daily_report(
     timezone_name = await company_timezone(session, tenant.company_id)
     d = on_date or local_today(timezone_name)
     agg = ReportsAggregator(session)
-    rep = await agg.aggregate_daily(company_id=tenant.company_id, d=d)
+    rep = await agg.aggregate_daily(
+        company_id=tenant.company_id,
+        branch_id=_selected_branch_id(tenant),
+        d=d,
+    )
     return _to_dto(rep)
 
 
@@ -249,7 +263,11 @@ async def monthly_report(
     if len(yyyy_mm) != 7 or yyyy_mm[4] != "-":
         raise BusinessRuleError("yyyy_mm must look like '2026-06'")
     agg = ReportsAggregator(session)
-    rep = await agg.aggregate_monthly(company_id=tenant.company_id, yyyy_mm=yyyy_mm)
+    rep = await agg.aggregate_monthly(
+        company_id=tenant.company_id,
+        branch_id=_selected_branch_id(tenant),
+        yyyy_mm=yyyy_mm,
+    )
     return _to_dto(rep)
 
 
@@ -269,10 +287,14 @@ async def quarterly_report(
     q = q or current_q
     if q not in (1, 2, 3, 4):
         raise BusinessRuleError("q must be 1, 2, 3 or 4")
-    if len(fy) != 7 or fy[4] != "-":
-        raise BusinessRuleError("fy must look like '2026-27'")
+    parse_fiscal_year_start(fy)
     agg = ReportsAggregator(session)
-    rep = await agg.aggregate_quarterly(company_id=tenant.company_id, fy=fy, q=q)
+    rep = await agg.aggregate_quarterly(
+        company_id=tenant.company_id,
+        branch_id=_selected_branch_id(tenant),
+        fy=fy,
+        q=q,
+    )
     return _to_dto(rep)
 
 
@@ -285,10 +307,13 @@ async def yearly_report(
     """P&L for an Indian fiscal year. Defaults to the current fiscal year."""
     timezone_name = await company_timezone(session, tenant.company_id)
     fy = fy or _current_indian_fiscal_period(local_today(timezone_name))[0]
-    if len(fy) != 7 or fy[4] != "-":
-        raise BusinessRuleError("fy must look like '2026-27'")
+    parse_fiscal_year_start(fy)
     agg = ReportsAggregator(session)
-    rep = await agg.aggregate_yearly(company_id=tenant.company_id, fy=fy)
+    rep = await agg.aggregate_yearly(
+        company_id=tenant.company_id,
+        branch_id=_selected_branch_id(tenant),
+        fy=fy,
+    )
     return _to_dto(rep)
 
 
@@ -309,6 +334,7 @@ async def range_report(
         period_end=to_date,
         period="custom",
         label=f"{from_date.isoformat()} → {to_date.isoformat()}",
+        branch_id=_selected_branch_id(tenant),
     )
     return _to_dto(rep)
 
@@ -379,10 +405,12 @@ async def tax_compliance(
     )
     sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     company = await session.get(Company, tenant.company_id)
+    selected_branch_id = _selected_branch_id(tenant)
     branches = (
         await session.execute(
             select(Branch).where(
                 Branch.company_id == tenant.company_id,
+                Branch.id == selected_branch_id,
                 Branch.deleted_at.is_(None),
             )
         )
@@ -393,6 +421,7 @@ async def tax_compliance(
         await session.execute(
             select(Order).where(
                 Order.company_id == tenant.company_id,
+                Order.branch_id == selected_branch_id,
                 sale_at >= start_dt,
                 sale_at < end_dt,
                 Order.status.in_(("paid", "refunded")),
@@ -405,9 +434,12 @@ async def tax_compliance(
     if order_ids:
         line_rows = (
             await session.execute(
-                select(OrderLine, Order.delivery_via, MenuItem.type)
+                select(
+                    OrderLine,
+                    Order.delivery_via,
+                    OrderLine.menu_item_type_snapshot,
+                )
                 .join(Order, Order.id == OrderLine.order_id)
-                .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
                 .where(
                     OrderLine.order_id.in_(order_ids),
                     OrderLine.voided_at.is_(None),
@@ -451,6 +483,7 @@ async def tax_compliance(
                 .join(Event, Event.id == EventTicket.event_id)
                 .where(
                     Event.company_id == tenant.company_id,
+                    Event.branch_id == selected_branch_id,
                     EventTicket.order_id.is_(None),
                     EventTicket.created_at >= start_dt,
                     EventTicket.created_at < end_dt,
@@ -722,6 +755,7 @@ async def tax_compliance(
         )
 
     return TaxComplianceDTO(
+        branch_id=selected_branch_id,
         period_start=period_start,
         period_end=period_end,
         company_gst_registered=gst_registered,
@@ -794,6 +828,7 @@ async def _refund_adjustments_by_rate(
     start_at: datetime,
     end_exclusive: datetime,
     eco: bool,
+    branch_id: UUID | None = None,
 ) -> dict[float, dict[str, int]]:
     """Return positive tax/value amounts to subtract for refunds in the period."""
     delivery_filter = (
@@ -808,6 +843,7 @@ async def _refund_adjustments_by_rate(
             .join(Order, Order.id == Refund.order_id)
             .where(
                 Order.company_id == company_id,
+                *((Order.branch_id == branch_id,) if branch_id is not None else ()),
                 refund_at < end_exclusive,
                 *delivery_filter,
             )
@@ -889,9 +925,13 @@ async def gstr1_csv(
     sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
 
     company = await session.get(Company, tenant.company_id)
+    selected_branch_id = _selected_branch_id(tenant)
     branch = (
         await session.execute(
-            select(Branch).where(Branch.company_id == tenant.company_id).limit(1)
+            select(Branch).where(
+                Branch.company_id == tenant.company_id,
+                Branch.id == selected_branch_id,
+            )
         )
     ).scalar_one_or_none()
     state_name = "Kerala"  # display label
@@ -912,6 +952,7 @@ async def gstr1_csv(
             .join(Order, Order.id == OrderLine.order_id)
             .where(
                 Order.company_id == tenant.company_id,
+                Order.branch_id == selected_branch_id,
                 sale_at >= start_dt,
                 sale_at < end_dt,
                 Order.status.in_(("paid", "refunded")),
@@ -936,6 +977,7 @@ async def gstr1_csv(
     refund_adjustments = await _refund_adjustments_by_rate(
         session,
         company_id=tenant.company_id,
+        branch_id=selected_branch_id,
         start_at=start_dt,
         end_exclusive=end_dt,
         eco=False,
@@ -960,6 +1002,7 @@ async def gstr1_csv(
             .join(Order, Order.id == OrderLine.order_id)
             .where(
                 Order.company_id == tenant.company_id,
+                Order.branch_id == selected_branch_id,
                 sale_at >= start_dt,
                 sale_at < end_dt,
                 Order.status.in_(("paid", "refunded")),
@@ -976,6 +1019,7 @@ async def gstr1_csv(
     eco_refund_adjustments = await _refund_adjustments_by_rate(
         session,
         company_id=tenant.company_id,
+        branch_id=selected_branch_id,
         start_at=start_dt,
         end_exclusive=end_dt,
         eco=True,
@@ -1042,7 +1086,12 @@ async def gstr3b_csv(
     start_dt, end_dt = local_date_bounds_utc(start, end, timezone_name)
     sale_at = func.coalesce(Order.invoice_issued_at, Order.closed_at)
     agg = ReportsAggregator(session)
-    rep = await agg.aggregate_monthly(company_id=tenant.company_id, yyyy_mm=yyyy_mm)
+    selected_branch_id = _selected_branch_id(tenant)
+    rep = await agg.aggregate_monthly(
+        company_id=tenant.company_id,
+        branch_id=selected_branch_id,
+        yyyy_mm=yyyy_mm,
+    )
     company = await session.get(Company, tenant.company_id)
 
     normal_taxable_minor = int(
@@ -1052,6 +1101,7 @@ async def gstr3b_csv(
                 .join(Order, Order.id == OrderLine.order_id)
                 .where(
                     Order.company_id == tenant.company_id,
+                    Order.branch_id == selected_branch_id,
                     sale_at >= start_dt,
                     sale_at < end_dt,
                     Order.status.in_(("paid", "refunded")),
@@ -1065,6 +1115,7 @@ async def gstr3b_csv(
     normal_refund_adjustments = await _refund_adjustments_by_rate(
         session,
         company_id=tenant.company_id,
+        branch_id=selected_branch_id,
         start_at=start_dt,
         end_exclusive=end_dt,
         eco=False,
@@ -1079,6 +1130,7 @@ async def gstr3b_csv(
                 .join(Order, Order.id == OrderLine.order_id)
                 .where(
                     Order.company_id == tenant.company_id,
+                    Order.branch_id == selected_branch_id,
                     sale_at >= start_dt,
                     sale_at < end_dt,
                     Order.status.in_(("paid", "refunded")),
@@ -1093,6 +1145,7 @@ async def gstr3b_csv(
     eco_refund_adjustments = await _refund_adjustments_by_rate(
         session,
         company_id=tenant.company_id,
+        branch_id=selected_branch_id,
         start_at=start_dt,
         end_exclusive=end_dt,
         eco=True,

@@ -17,22 +17,23 @@ does not certify tax configuration.
 3. If Android asks, allow notifications. If the app shows an alarm-access card,
    open Android settings and allow the exact-alarm access used for gaming and
    overdue-bill reminders.
-4. Confirm the branch name and terminal/till shown in the app match the physical
-   location and device. Stop and ask a manager if either is wrong.
+4. Confirm the shop name shown in the app is correct. The active Gaming Centre
+   build uses one Hybrid workspace automatically, so it does not ask staff to
+   choose between POS and Gaming terminals. Stop and ask a manager if setup
+   verification fails.
 5. Read any offline, pending-sync, update-required, or access-changed notice
    before taking money.
 
-Never uninstall the app, clear its storage, or change its terminal assignment
-when work is waiting to sync.
+Never uninstall the app or clear its storage when work is waiting to sync.
 
 ## 2. Open the shift
 
 1. Open **Shift**. If a shift is already open, check **Opened by** and confirm it
-   is the intended shift for this till.
+   is the intended shift for this shop.
 2. If no shift is open, count the cash already in the drawer.
 3. Enter that amount as **Opening float** and tap **Open shift**.
-4. Wait for success or a clear saved-offline notice. POS and gaming money actions
-   must use this branch-and-terminal shift; never select or create a replacement
+4. Wait for success or a clear saved-offline notice. POS and Gaming money actions
+   use this same verified Hybrid-workspace shift; never create a replacement
    shift merely because the server is slow.
 
 ## 3. Take a seated food or shisha order
@@ -122,7 +123,7 @@ returns. Offline does not mean every action is unrestricted.
   tablet.
 - Never collect the same payment again because its invoice number has not yet
   appeared.
-- Do not sign out, switch account/branch/terminal, uninstall, clear storage, or
+- Do not sign out, switch account, uninstall, clear storage, or
   factory-reset the tablet with pending work.
 - When the connection returns, leave the app open until the waiting count clears
   and the server-confirmed outcome appears.
@@ -163,11 +164,11 @@ Then:
 Sign out only after the shift is server-confirmed closed and the pending-sync
 count is zero. The sign-out dialog correctly warns that signing out does not
 close an open shift. If another employee is taking over, follow the manager's
-shift/till handover procedure rather than sharing the current login.
+shift handover procedure rather than sharing the current login.
 
 ## When to stop and call a manager
 
-Stop taking new payments on that tablet when the branch/terminal is wrong, more
+Stop taking new payments on that tablet when the shop/workspace cannot be verified, more
 than one open shift is reported, a payment outcome is ambiguous or rejected,
 the app says access changed, totals do not match the intended bill, or saved work
 cannot sync. Keep the tablet and app data intact so the manager can reconcile the

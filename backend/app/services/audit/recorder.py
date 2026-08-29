@@ -47,6 +47,7 @@ from app.models import (
     Floor,
     GamingBooking,
     GamingSession,
+    GamingSessionExtension,
     GRNLine,
     Ingredient,
     JournalEntry,
@@ -74,6 +75,7 @@ from app.models import (
     MenuCategory,
     MenuItem,
     MenuModifier,
+    MenuModifierGroup,
     MenuVariant,
     OcrExtraction,
     OcrUpload,
@@ -97,10 +99,12 @@ from app.models import (
     RecipeLine,
     Refund,
     Reservation,
+    RolePermissionOverride,
     Shift,
     Station,
     StockMovement,
     Supplier,
+    SupplierPayment,
     Table,
     Terminal,
     TipPayout,
@@ -173,7 +177,7 @@ TRACKED: set[type] = {
     Batch, Branch, Company, Customer, CustomerMembership,
     Event, EventTicket,
     Expense, ExpenseCategory,
-    Floor, GRN, GRNLine, GamingBooking, GamingSession,
+    Floor, GRN, GRNLine, GamingBooking, GamingSession, GamingSessionExtension,
     Ingredient, JournalEntry, JournalLine,
     ManualCollection, MembershipBenefitReservation, MembershipCustomerSpendApplication,
     MembershipEvidenceReconciliation, MembershipPayment,
@@ -186,7 +190,7 @@ TRACKED: set[type] = {
     MembershipRefundCompletion,
     MembershipRefundProviderAction,
     MembershipRefundResolution, MembershipRefundSettlement, MembershipTier,
-    MenuCategory, MenuItem, MenuModifier, MenuVariant,
+    MenuCategory, MenuItem, MenuModifier, MenuModifierGroup, MenuVariant,
     OcrExtraction, OcrUpload, OcrVerification,
     Order, OrderCheckoutClaim, OrderLine, Partner, CapitalEntry,
     Payment, PayrollEntry, PosRefundCashHandoff, PosRefundCashHandoffCompletion,
@@ -196,7 +200,8 @@ TRACKED: set[type] = {
     PosRefundRequest, PosRefundWithdrawal,
     PurchaseOrder, PurchaseOrderLine,
     Recipe, RecipeLine, Refund, Reservation,
-    Shift, Station, StockMovement, Supplier,
+    RolePermissionOverride,
+    Shift, Station, StockMovement, Supplier, SupplierPayment,
     Table, Terminal, TipPayout, Tournament, User, UserRole,
 }
 
@@ -263,6 +268,11 @@ def _captured_diff(obj: Any) -> dict[str, dict]:
 
 
 def _entity_id(obj: Any) -> str:
+    if isinstance(obj, RolePermissionOverride):
+        # A random row UUID does not identify which access cell changed. The
+        # role/module pair is the stable operator-facing target and fits the
+        # audit_log entity_id limit (30 + separator + 30 characters).
+        return f"{obj.role_code}:{obj.module}"
     pk = getattr(obj, "id", None)
     if pk is None:
         return ""

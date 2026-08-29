@@ -8,7 +8,7 @@ Aggregates over a date range from these tables:
   - event_tickets   → operational attendance count only; financial truth comes
                       from paid POS orders
   - expenses        → expense buckets (by category)
-  - stock_movements → COGS approximation (sale-type movements × cost)
+  - batch movement subledger → exact FIFO COGS and inventory count variance
 
 Returns a fully-detailed `PnLReport` data class — same shape regardless of
 whether the range is one day or a whole fiscal year. The same object is
@@ -35,8 +35,6 @@ from app.core.errors import BusinessRuleError
 from app.core.timezone import company_timezone, local_date_bounds_utc
 from app.models import (
     Asset,
-    Batch,
-    Branch,
     Event,
     EventTicket,
     Expense,
@@ -44,14 +42,15 @@ from app.models import (
     ManualCollection,
     MembershipPayment,
     MembershipRefundSettlement,
-    MenuItem,
     Order,
     OrderLine,
     Payment,
     Refund,
-    StockMovement,
 )
 from app.services.accounting.depreciation import asset_depreciation_expense_minor
+from app.services.accounting.refund_allocation import cumulative_refunded_tip_minor
+from app.services.inventory.accounting import load_inventory_value_changes
+from app.services.reports.metrics import average_ticket_minor
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
 
@@ -69,15 +68,20 @@ def fiscal_year_for_date(d: date) -> str:
 def fiscal_quarter(d: date) -> int:
     """Indian fiscal quarter (1=Apr-Jun, 2=Jul-Sep, 3=Oct-Dec, 4=Jan-Mar)."""
     m = d.month
-    if 4 <= m <= 6: return 1
-    if 7 <= m <= 9: return 2
-    if 10 <= m <= 12: return 3
+    if 4 <= m <= 6:
+        return 1
+    if 7 <= m <= 9:
+        return 2
+    if 10 <= m <= 12:
+        return 3
     return 4
 
 
 def fy_quarter_range(fy: str, q: int) -> tuple[date, date]:
     """Return (start_date, end_date) for a given fiscal year + quarter."""
-    fy_start_year = int(fy.split("-")[0])
+    fy_start_year = parse_fiscal_year_start(fy)
+    if q not in (1, 2, 3, 4):
+        raise BusinessRuleError("q must be 1, 2, 3 or 4")
     month = {1: 4, 2: 7, 3: 10, 4: 1}[q]
     year_offset = 1 if q == 4 else 0
     start = date(fy_start_year + year_offset, month, 1)
@@ -96,8 +100,25 @@ def fy_quarter_range(fy: str, q: int) -> tuple[date, date]:
 
 def fy_full_range(fy: str) -> tuple[date, date]:
     """Return (start, end) for an Indian FY string like '2026-27'."""
-    fy_start_year = int(fy.split("-")[0])
+    fy_start_year = parse_fiscal_year_start(fy)
     return date(fy_start_year, 4, 1), date(fy_start_year + 1, 3, 31)
+
+
+def parse_fiscal_year_start(fy: str) -> int:
+    """Validate ``YYYY-YY`` and return its start year.
+
+    The suffix must be the actual following year. Accepting values such as
+    ``2026-99`` makes the label disagree with the selected transactions and is
+    therefore a reporting-integrity failure, not harmless formatting.
+    """
+    if len(fy) != 7 or fy[4] != "-" or not fy[:4].isdigit() or not fy[5:].isdigit():
+        raise BusinessRuleError("fy must look like '2026-27'")
+    start_year = int(fy[:4])
+    if start_year < 1 or start_year >= 9999:
+        raise BusinessRuleError("fy must look like '2026-27'")
+    if fy[5:] != str(start_year + 1)[-2:]:
+        raise BusinessRuleError("fy suffix must match the following year")
+    return start_year
 
 
 def month_range(yyyy_mm: str) -> tuple[date, date]:
@@ -228,6 +249,10 @@ class PnLReport:
     revenue: RevenueBreakdown
     tax_collected: TaxBreakdown
     payments_received: PaymentBreakdown
+    # NULL is reserved for explicitly consolidated internal Finance callers.
+    # Authenticated Reports/Analytics endpoints always populate the selected
+    # token branch so clients cannot mistake a branch view for company-wide.
+    branch_id: UUID | None = None
     # Paid/refunded legacy orders that have a settlement timestamp but no
     # immutable invoice timestamp. They remain in the operational report on
     # their closed_at cohort so payment/refund money is not silently omitted,
@@ -337,7 +362,7 @@ def _manual_collection_totals(
 # Aggregator
 # ---------------------------------------------------------------------------
 class ReportsAggregator:
-    """Computes a PnLReport over a date range, scoped to a company."""
+    """Compute a P&L for a company, optionally restricted to one branch."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -350,6 +375,7 @@ class ReportsAggregator:
         period_end: date,
         period: ReportPeriod = "custom",
         label: str | None = None,
+        branch_id: UUID | None = None,
     ) -> PnLReport:
         timezone_name = await company_timezone(self.session, company_id)
         start_at, end_at = local_date_bounds_utc(
@@ -368,6 +394,11 @@ class ReportsAggregator:
         # legacy close-time fallback above. A later full refund changes status
         # to "refunded"; filtering only "paid" would rewrite the denominator
         # of an already-closed historical report.
+        branch_filter = (
+            (lambda column: (column == branch_id,))
+            if branch_id is not None
+            else (lambda _column: ())
+        )
         orders_q = select(
             func.count(Order.id).label("n"),
             func.coalesce(func.sum(Order.total_minor), 0).label("gross"),
@@ -387,6 +418,7 @@ class ReportsAggregator:
             ).label("unissued"),
         ).where(
             Order.company_id == company_id,
+            *branch_filter(Order.branch_id),
             sale_at >= start_at,
             sale_at < end_at,
             Order.status.in_(("paid", "refunded")),
@@ -418,6 +450,7 @@ class ReportsAggregator:
             ).label("d")
         ).where(
             Order.company_id == company_id,
+            *branch_filter(Order.branch_id),
             sale_at >= start_at,
             sale_at < end_at,
             Order.status.in_(("paid", "refunded")),
@@ -435,6 +468,7 @@ class ReportsAggregator:
             )
         ).where(
             Order.company_id == company_id,
+            *branch_filter(Order.branch_id),
             sale_at >= start_at,
             sale_at < end_at,
             Order.status.in_(("paid", "refunded")),
@@ -469,6 +503,7 @@ class ReportsAggregator:
             ).label("expense"),
         ).where(
             Order.company_id == company_id,
+            *branch_filter(Order.branch_id),
             sale_at >= start_at,
             sale_at < end_at,
             Order.status.in_(("paid", "refunded")),
@@ -480,20 +515,20 @@ class ReportsAggregator:
         # Revenue by menu item type (excluding aggregator orders)
         type_q = (
             select(
-                MenuItem.type,
+                OrderLine.menu_item_type_snapshot.label("type"),
                 func.coalesce(func.sum(OrderLine.line_total_minor), 0).label("amount"),
             )
             .join(Order, Order.id == OrderLine.order_id)
-            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
             .where(
                 Order.company_id == company_id,
+                *branch_filter(Order.branch_id),
                 sale_at >= start_at,
                 sale_at < end_at,
                 Order.status.in_(("paid", "refunded")),
                 or_(Order.delivery_via.is_(None), Order.delivery_via == "inhouse"),
                 OrderLine.voided_at.is_(None),
             )
-            .group_by(MenuItem.type)
+            .group_by(OrderLine.menu_item_type_snapshot)
         )
         food_total = 0
         gaming_total = 0
@@ -505,7 +540,7 @@ class ReportsAggregator:
             amt = int(row.amount)
             if t in ("food", "drink", "dessert"):
                 food_total += amt
-            elif t == "gaming":
+            elif t in {"gaming", "streaming"}:
                 gaming_total += amt
             elif t == "hookah":
                 hookah_total += amt
@@ -529,6 +564,7 @@ class ReportsAggregator:
                     .join(Event, Event.id == EventTicket.event_id)
                     .where(
                         Event.company_id == company_id,
+                        *branch_filter(Event.branch_id),
                         EventTicket.created_at >= start_at,
                         EventTicket.created_at < end_at,
                         EventTicket.status.in_(("sold", "checked_in")),
@@ -546,35 +582,26 @@ class ReportsAggregator:
         )
 
         # ---------- Cost of goods sold ----------
-        movement_rows = (
-            await self.session.execute(
-                select(
-                    StockMovement.qty_delta,
-                    StockMovement.cost_per_unit_minor,
-                )
-                .join(Batch, Batch.id == StockMovement.batch_id)
-                .where(
-                    StockMovement.branch_id.in_(
-                        select(Branch.id).where(Branch.company_id == company_id)
-                    ),
-                    StockMovement.type.in_(("sale", "refund_restock")),
-                    StockMovement.created_at >= start_at,
-                    StockMovement.created_at < end_at,
-                )
-            )
-        ).all()
-        # Sale movements consume stock (negative delta) and count toward
-        # COGS; refund_restock movements reverse a prior sale (positive
-        # delta) and must net back out, or a refunded recipe-linked item
-        # permanently overstates COGS even though the stock came back.
-        cogs_minor = sum(
-            int(abs(Decimal(str(qty_delta))) * int(cost_per_unit_minor or 0))
-            for qty_delta, cost_per_unit_minor in movement_rows
-            if Decimal(str(qty_delta or 0)) < 0
-        ) - sum(
-            int(abs(Decimal(str(qty_delta))) * int(cost_per_unit_minor or 0))
-            for qty_delta, cost_per_unit_minor in movement_rows
-            if Decimal(str(qty_delta or 0)) > 0
+        inventory_changes = await load_inventory_value_changes(
+            self.session,
+            company_id=company_id,
+            start_at=start_at,
+            end_exclusive=end_at,
+            branch_id=branch_id,
+        )
+        # Sale consumption is a negative Inventory change and therefore
+        # positive COGS; refund restock is the exact reverse. The shared batch
+        # allocator carries fractional-paise residuals across movements, so
+        # this report and the general ledger use the same authoritative value.
+        cogs_minor = -sum(
+            change.inventory_delta_minor
+            for change in inventory_changes
+            if change.movement.type in {"sale", "refund_restock"}
+        )
+        inventory_variance_minor = -sum(
+            change.inventory_delta_minor
+            for change in inventory_changes
+            if change.movement.type in {"waste", "damage", "adjustment"}
         )
 
         revenue = RevenueBreakdown(
@@ -600,6 +627,7 @@ class ReportsAggregator:
             select(ManualCollection)
             .where(
                 ManualCollection.company_id == company_id,
+                *branch_filter(ManualCollection.branch_id),
                 ManualCollection.business_date >= period_start,
                 ManualCollection.business_date <= period_end,
                 ManualCollection.voided_at.is_(None),
@@ -633,6 +661,7 @@ class ReportsAggregator:
             )
             .where(
                 MembershipPayment.company_id == company_id,
+                *branch_filter(MembershipPayment.branch_id),
                 MembershipPayment.paid_at >= start_at,
                 MembershipPayment.paid_at < end_at,
             )
@@ -667,6 +696,7 @@ class ReportsAggregator:
             .join(Order, Order.id == Payment.order_id)
             .where(
                 Order.company_id == company_id,
+                *branch_filter(Order.branch_id),
                 Payment.paid_at >= start_at,
                 Payment.paid_at < end_at,
                 Order.status.in_(("paid", "refunded")),
@@ -677,13 +707,20 @@ class ReportsAggregator:
         for row in (await self.session.execute(pay_q)).all():
             m = row.method
             amt = int(row.amount)
-            if m == "cash":   cash = amt
-            elif m == "upi":  upi = amt
-            elif m == "card": card = amt
-            elif m == "bank": bank = amt
-            elif m == "qr":   qr = amt
-            elif m == "wallet": wallet = amt
-            else:             other_pay += amt
+            if m == "cash":
+                cash = amt
+            elif m == "upi":
+                upi = amt
+            elif m == "card":
+                card = amt
+            elif m == "bank":
+                bank = amt
+            elif m == "qr":
+                qr = amt
+            elif m == "wallet":
+                wallet = amt
+            else:
+                other_pay += amt
         payments = PaymentBreakdown(
             cash_minor=(
                 cash
@@ -716,6 +753,7 @@ class ReportsAggregator:
                 .join(Order, Order.id == Refund.order_id)
                 .where(
                     Order.company_id == company_id,
+                    *branch_filter(Order.branch_id),
                     refund_at >= start_at,
                     refund_at < end_at,
                 )
@@ -776,8 +814,16 @@ class ReportsAggregator:
             # excess beyond that (capped at order.tip_minor, since
             # total + tip_minor == order.total_minor) is tip.
             order_total = int(order.total_minor or 0)
-            tip_before = max(0, min(before, order_total) - total)
-            tip_after = max(0, min(after, order_total) - total)
+            tip_before = cumulative_refunded_tip_minor(
+                total_minor=order_total,
+                tip_minor=int(order.tip_minor or 0),
+                cumulative_refunded_minor=before,
+            )
+            tip_after = cumulative_refunded_tip_minor(
+                total_minor=order_total,
+                tip_minor=int(order.tip_minor or 0),
+                cumulative_refunded_minor=after,
+            )
             refunded_tip_delta = tip_after - tip_before
             refund_tips += refunded_tip_delta
             invoice_at = getattr(order, "invoice_issued_at", None) or getattr(
@@ -800,6 +846,7 @@ class ReportsAggregator:
                         func.coalesce(func.sum(MembershipRefundSettlement.amount_minor), 0)
                     ).where(
                         MembershipRefundSettlement.company_id == company_id,
+                        *branch_filter(MembershipRefundSettlement.branch_id),
                         MembershipRefundSettlement.settled_at >= start_at,
                         MembershipRefundSettlement.settled_at < end_at,
                     )
@@ -823,16 +870,10 @@ class ReportsAggregator:
         # less refunds issued in the same period for that same cohort. Manual
         # collections have no receipt denominator; refunds for older invoices
         # belong to net revenue/payment movement but not today's AOV.
-        net_invoiced_for_average = gross_total - cohort_refunds_for_average
-        avg_ticket = (
-            int(
-                (
-                    Decimal(max(0, net_invoiced_for_average))
-                    / Decimal(orders_count)
-                ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-            )
-            if orders_count
-            else 0
+        avg_ticket = average_ticket_minor(
+            gross_sale_cohort_minor=gross_total,
+            same_cohort_refunds_minor=cohort_refunds_for_average,
+            orders_count=orders_count,
         )
 
         # ---------- Depreciation ----------
@@ -849,6 +890,7 @@ class ReportsAggregator:
             await self.session.execute(
                 select(Asset).where(
                     Asset.company_id == company_id,
+                    *branch_filter(Asset.branch_id),
                     Asset.deleted_at.is_(None),
                 )
             )
@@ -871,9 +913,11 @@ class ReportsAggregator:
             .join(ExpenseCategory, ExpenseCategory.id == Expense.category_id)
             .where(
                 Expense.company_id == company_id,
+                *branch_filter(Expense.branch_id),
                 Expense.paid_at >= start_at,
                 Expense.paid_at < end_at,
                 Expense.deleted_at.is_(None),
+                Expense.voided_at.is_(None),
             )
             .group_by(ExpenseCategory.name)
             .order_by(func.sum(Expense.amount_minor).desc())
@@ -884,6 +928,14 @@ class ReportsAggregator:
             amt = int(row.amount)
             expense_lines.append(ExpenseLine(category=row.name, amount_minor=amt))
             expense_total += amt
+        if inventory_variance_minor:
+            expense_lines.append(
+                ExpenseLine(
+                    category="Inventory write-offs / count variance",
+                    amount_minor=inventory_variance_minor,
+                )
+            )
+            expense_total += inventory_variance_minor
 
         return PnLReport(
             period=period,
@@ -898,6 +950,7 @@ class ReportsAggregator:
             revenue=revenue,
             tax_collected=tax,
             payments_received=payments,
+            branch_id=branch_id,
             tips_collected_minor=int(orders_row.tips or 0),
             refunds_issued_minor=refunds_issued,
             settled_refunds_issued_minor=settled_refunds_issued,
@@ -909,26 +962,41 @@ class ReportsAggregator:
             depreciation_minor=int(depreciation_minor),
         )
 
-    async def aggregate_daily(self, *, company_id: UUID, d: date) -> PnLReport:
+    async def aggregate_daily(
+        self, *, company_id: UUID, d: date, branch_id: UUID | None = None
+    ) -> PnLReport:
         return await self.aggregate(
             company_id=company_id,
             period_start=d,
             period_end=d,
             period="daily",
             label=d.strftime("%d-%b-%Y"),
+            branch_id=branch_id,
         )
 
-    async def aggregate_monthly(self, *, company_id: UUID, yyyy_mm: str) -> PnLReport:
+    async def aggregate_monthly(
+        self,
+        *,
+        company_id: UUID,
+        yyyy_mm: str,
+        branch_id: UUID | None = None,
+    ) -> PnLReport:
         start, end = month_range(yyyy_mm)
         return await self.aggregate(
             company_id=company_id,
             period_start=start, period_end=end,
             period="monthly",
             label=start.strftime("%b %Y"),
+            branch_id=branch_id,
         )
 
     async def aggregate_quarterly(
-        self, *, company_id: UUID, fy: str, q: int
+        self,
+        *,
+        company_id: UUID,
+        fy: str,
+        q: int,
+        branch_id: UUID | None = None,
     ) -> PnLReport:
         start, end = fy_quarter_range(fy, q)
         return await self.aggregate(
@@ -936,13 +1004,17 @@ class ReportsAggregator:
             period_start=start, period_end=end,
             period="quarterly",
             label=f"{fy} Q{q}",
+            branch_id=branch_id,
         )
 
-    async def aggregate_yearly(self, *, company_id: UUID, fy: str) -> PnLReport:
+    async def aggregate_yearly(
+        self, *, company_id: UUID, fy: str, branch_id: UUID | None = None
+    ) -> PnLReport:
         start, end = fy_full_range(fy)
         return await self.aggregate(
             company_id=company_id,
             period_start=start, period_end=end,
             period="yearly",
             label=f"FY {fy}",
+            branch_id=branch_id,
         )

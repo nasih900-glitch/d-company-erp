@@ -5,8 +5,18 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin, _uuid_pk
@@ -68,10 +78,22 @@ class UserRole(Base, TimestampMixin):
 
 class Attendance(Base, TimestampMixin, TenantMixin):
     __tablename__ = "attendance"
+    __table_args__ = (
+        Index(
+            "uq_attendance_one_open_per_company_user",
+            "company_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("clock_out_at IS NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     user_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     branch_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("branches.id", ondelete="CASCADE"), nullable=False

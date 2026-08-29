@@ -25,7 +25,11 @@ from app.models import (
     Partner,
     User,
 )
-from app.models.finance import _guard_capital_entry_update
+from app.models.finance import (
+    _guard_capital_entry_update,
+    _guard_partner_delete,
+    _guard_partner_identity_update,
+)
 from app.services.accounting.accounts import (
     DEFAULT_CHART_OF_ACCOUNTS,
     DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
@@ -34,6 +38,7 @@ from app.services.accounting.accounts import (
 )
 from app.services.accounting.ledger import (
     _expense_account,
+    _expense_payment_account,
     _posted_journal_ledger_lines,
     _validate_account_code_meanings,
     build_operational_ledger,
@@ -215,6 +220,14 @@ def test_canonical_chart_and_expense_categories_have_one_meaning_per_code() -> N
         )
 
 
+def test_outgoing_card_and_upi_expenses_reduce_bank_not_customer_clearing() -> None:
+    assert _expense_payment_account("cash")[0] == "1000"
+    for rail in ("bank", "card", "upi"):
+        assert _expense_payment_account(rail)[0] == "1010"
+    with pytest.raises(BusinessRuleError, match="unsupported expense payment rail"):
+        _expense_payment_account("wallet")
+
+
 def test_capital_model_is_immutable_except_atomic_first_void() -> None:
     row = _capital()
     for field in (
@@ -247,6 +260,31 @@ def test_capital_model_is_immutable_except_atomic_first_void() -> None:
     row.void_reason = "Changed reason"
     with pytest.raises(ValueError, match="cannot be changed"):
         _guard_capital_entry_update(None, None, row)
+
+
+def test_partner_financial_identity_and_share_are_immutable() -> None:
+    row = _partner()
+    for field in (
+        "company_id",
+        "user_id",
+        "name",
+        "share_pct",
+        "joined_at",
+        "created_at",
+        "source_integrity_revision",
+    ):
+        set_committed_value(row, field, getattr(row, field))
+
+    row.share_pct = 40
+    with pytest.raises(ValueError, match="share_pct"):
+        _guard_partner_identity_update(None, None, row)
+
+    set_committed_value(row, "share_pct", 33.33)
+    row.notes = "Non-financial clarification"
+    _guard_partner_identity_update(None, None, row)
+
+    with pytest.raises(ValueError, match="cannot be deleted"):
+        _guard_partner_delete(None, None, row)
 
 
 @pytest.mark.asyncio

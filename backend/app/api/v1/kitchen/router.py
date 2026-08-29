@@ -32,6 +32,7 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import Floor, MenuItem, Order, OrderLine, Table
+from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
 
 router = APIRouter()
 
@@ -56,6 +57,8 @@ class KitchenLineDTO(BaseModel):
     name: str
     type: str  # food/drink/dessert only
     qty: float
+    variant_snapshot: OrderVariantSnapshotRead | None = None
+    modifiers: list[OrderModifierSnapshotRead] = Field(default_factory=list)
     notes: str | None = None
     released_at: datetime
     round_no: int
@@ -68,6 +71,8 @@ class KitchenCancellationDTO(BaseModel):
     name: str
     type: str
     qty: float
+    variant_snapshot: OrderVariantSnapshotRead | None = None
+    modifiers: list[OrderModifierSnapshotRead] = Field(default_factory=list)
     notes: str | None = None
     released_at: datetime
     round_no: int
@@ -198,6 +203,20 @@ def _round_no(line: OrderLine) -> int:
     return max(1, int(getattr(line, "kitchen_round_no", None) or 1))
 
 
+def _set_line_status(line: OrderLine, status: str, now: datetime) -> None:
+    """Keep the line state and its completion event timestamp inseparable."""
+    line.kitchen_status = status
+    if status == "served":
+        line.kitchen_served_at = (
+            getattr(line, "kitchen_served_at", None) or now
+        )
+    else:
+        # This is normally already NULL because the state machine is
+        # monotonic. Clearing it here also repairs pre-0042 in-memory fixtures
+        # before the database constraint sees them.
+        line.kitchen_served_at = None
+
+
 def _require_idempotency(request: Request) -> tuple[str, str]:
     key = getattr(request.state, "idempotency_key", None)
     request_hash = getattr(request.state, "idempotency_request_hash", None)
@@ -237,17 +256,6 @@ async def kitchen_queue(
     hookah, and event-only orders do not clutter the kitchen iPad.
     """
     branch_id = _current_branch_id(tenant)
-    released_kitchen_line = (
-        select(OrderLine.id)
-        .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
-        .where(
-            OrderLine.order_id == Order.id,
-            OrderLine.kitchen_released_at.is_not(None),
-            MenuItem.company_id == tenant.company_id,
-            MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
-        )
-        .exists()
-    )
     active_kitchen_work = (
         select(OrderLine.id)
         .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
@@ -285,6 +293,7 @@ async def kitchen_queue(
         )
         .order_by(Order.opened_at)
     )
+    history_bounds: tuple[datetime, datetime] | None = None
     if include_served:
         timezone_name = await company_timezone(session, tenant.company_id)
         today = local_today(timezone_name)
@@ -293,10 +302,24 @@ async def kitchen_queue(
             today,
             timezone_name,
         )
+        history_bounds = (today_start, tomorrow_start)
+        served_today_kitchen_line = (
+            select(OrderLine.id)
+            .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
+            .where(
+                OrderLine.order_id == Order.id,
+                OrderLine.kitchen_released_at.is_not(None),
+                OrderLine.voided_at.is_(None),
+                OrderLine.kitchen_status == "served",
+                OrderLine.kitchen_served_at >= today_start,
+                OrderLine.kitchen_served_at < tomorrow_start,
+                MenuItem.company_id == tenant.company_id,
+                MenuItem.type.in_(_KITCHEN_ITEM_TYPES),
+            )
+            .exists()
+        )
         stmt = stmt.where(
-            Order.opened_at >= today_start,
-            Order.opened_at < tomorrow_start,
-            released_kitchen_line,
+            served_today_kitchen_line,
         )
     else:
         # Never age live work or an unacknowledged cancellation out at midnight.
@@ -326,7 +349,16 @@ async def kitchen_queue(
         )
         .order_by(OrderLine.kitchen_released_at, OrderLine.created_at, OrderLine.id)
     )
-    if not include_served:
+    if include_served:
+        assert history_bounds is not None
+        today_start, tomorrow_start = history_bounds
+        line_stmt = line_stmt.where(
+            OrderLine.voided_at.is_(None),
+            OrderLine.kitchen_status == "served",
+            OrderLine.kitchen_served_at >= today_start,
+            OrderLine.kitchen_served_at < tomorrow_start,
+        )
+    else:
         line_stmt = line_stmt.where(
             or_(
                 and_(
@@ -434,6 +466,8 @@ async def kitchen_queue(
                         name=item.name,
                         type=item.type,
                         qty=float(line.qty),
+                        variant_snapshot=getattr(line, "variant_snapshot", None),
+                        modifiers=getattr(line, "modifiers", None) or [],
                         notes=line.note,
                         released_at=_released_at(line, o.opened_at),
                         round_no=_round_no(line),
@@ -448,6 +482,8 @@ async def kitchen_queue(
                         name=item.name,
                         type=item.type,
                         qty=float(line.qty),
+                        variant_snapshot=getattr(line, "variant_snapshot", None),
+                        modifiers=getattr(line, "modifiers", None) or [],
                         notes=line.note,
                         released_at=_released_at(line, o.opened_at),
                         round_no=_round_no(line),
@@ -506,12 +542,13 @@ async def set_kitchen_state(
         raise BusinessRuleError("order has no active or historical kitchen items")
 
     kitchen_lines = [line for line, _item in rows]
+    now = datetime.now(UTC)
     legacy_status = _legacy_batch_status(order, kitchen_lines)
     if legacy_status is not None:
         # We hold the order lock, so this safely converts the old batch before
         # any concurrent late append can acquire the same lock.
         for line in kitchen_lines:
-            line.kitchen_status = legacy_status
+            _set_line_status(line, legacy_status, now)
     active_lines = _active_lines(kitchen_lines)
     current = _state_from_lines(active_lines)
     _validate_state_transition(current, payload.state)
@@ -521,10 +558,9 @@ async def set_kitchen_state(
         current_status = _STATE_TO_LINE[current]
         for line in active_lines:
             if _line_status(line) == current_status:
-                line.kitchen_status = target_status
+                _set_line_status(line, target_status, now)
 
     resulting_state = _state_from_lines(_active_lines(kitchen_lines))
-    now = datetime.now(UTC)
     order.kitchen_state = resulting_state
     order.kitchen_ready_at = _next_ready_at(
         current,
@@ -576,6 +612,8 @@ async def set_kitchen_state(
                 name=mi.name,
                 type=mi.type,
                 qty=float(ol.qty),
+                variant_snapshot=getattr(ol, "variant_snapshot", None),
+                modifiers=getattr(ol, "modifiers", None) or [],
                 notes=ol.note,
                 released_at=_released_at(ol, order.opened_at),
                 round_no=_round_no(ol),

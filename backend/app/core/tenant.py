@@ -92,6 +92,23 @@ async def get_tenant_context(
     if auth_version != user.auth_version:
         raise AuthError("session expired")
 
+    # A signed token can outlive a branch being disabled or reveal a legacy
+    # cross-tenant role assignment. Validate the branch even when the client
+    # does not send a terminal header; terminal-bound requests perform the
+    # equivalent check in the joined lookup below.
+    if branch_id is not None and terminal_id is None:
+        valid_branch_id = (
+            await session.execute(
+                select(Branch.id).where(
+                    Branch.id == branch_id,
+                    Branch.company_id == company_id,
+                    Branch.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if valid_branch_id is None:
+            raise AuthError("branch not found")
+
     if terminal_id:
         terminal_row = (
             await session.execute(
@@ -99,6 +116,7 @@ async def get_tenant_context(
                 .join(Branch, Branch.id == Terminal.branch_id)
                 .where(
                     Terminal.id == terminal_id,
+                    Terminal.is_active.is_(True),
                     Branch.company_id == company_id,
                     Branch.deleted_at.is_(None),
                 )

@@ -2,7 +2,7 @@
  * Orders & Shifts — the operations history screen.
  *
  *  Tabs:
- *    Orders   — today's orders (newest first) · click for full receipt
+ *    Orders   — open/held operations plus canonical receipt history
  *    Shifts   — open shift cash reconciliation · close shift workflow
  *
  * Why this matters: at end of day the cashier needs to:
@@ -10,24 +10,35 @@
  *   2. Count the cash drawer
  *   3. Close the shift — variance is recorded
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertCircle, RefreshCw, Eye, Lock, ShieldCheck,
-  ClipboardList, X,
+  ClipboardList, X, Gamepad2, CreditCard, UserRound, ChevronDown,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
 import { inr } from '@/lib/inr';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import { resolveOpenShift, shiftResolutionMessage } from '@/lib/operational-context';
+import { profileMembershipMoneyLabel } from '@/lib/product-profile';
 import {
-  orders, shifts,
-  type OrderListItemDTO, type ShiftDTO,
+  orders, receipts, shifts,
+  type OrderListItemDTO, type ReceiptHistoryDTO, type ShiftDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { subscribeRealtime } from '@/lib/realtime';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import {
+  exactQuantityLabel,
+  orderTypeLabel,
+  paymentMethodLabel,
+  receiptLineCustomizationLabels,
+  receiptPaymentActorLabel,
+  receiptSourceLabel,
+  sessionDurationLabel,
+} from './receipt-history';
 
 type Tab = 'orders' | 'shifts';
 // Fallback only — real-time push (see subscribeRealtime below) is what
@@ -42,7 +53,7 @@ export default function OrdersAndShiftsScreen() {
       <header className="mb-6">
         <h2 className="text-2xl font-bold">Operations</h2>
         <p className="text-fg-muted text-sm">
-          Today's orders &amp; shift reconciliation
+          Live orders, receipt history &amp; shift reconciliation
         </p>
       </header>
 
@@ -61,165 +72,635 @@ export default function OrdersAndShiftsScreen() {
 }
 
 // ============================================================================
-// Orders today
+// Live orders and immutable receipt history
 // ============================================================================
 function OrdersTab() {
-  const [rows, setRows] = useState<OrderListItemDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [view, setView] = useState<OrderListItemDTO | null>(null);
+  const [operationalRows, setOperationalRows] = useState<OrderListItemDTO[]>([]);
+  const [receiptRows, setReceiptRows] = useState<ReceiptHistoryDTO[]>([]);
+  const [operationalLoading, setOperationalLoading] = useState(true);
+  const [receiptsLoading, setReceiptsLoading] = useState(true);
+  const [operationalError, setOperationalError] = useState<string | null>(null);
+  const [receiptsError, setReceiptsError] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
+  const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(null);
+  const operationalSequence = useRef(0);
+  const receiptSequence = useRef(0);
 
-  const load = useCallback(async () => {
-    if (!LIVE_MODE) { setLoading(false); return; }
-    setLoading(true); setErr(null);
-    try { setRows(await orders.list()); }
-    catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
+  const loadOperational = useCallback(async (showLoading: boolean) => {
+    if (!LIVE_MODE) { setOperationalLoading(false); return; }
+    const sequence = ++operationalSequence.current;
+    if (showLoading) setOperationalLoading(true);
+    setOperationalError(null);
+    try {
+      const result = await orders.list({ status: ['open', 'held'] });
+      if (sequence === operationalSequence.current) setOperationalRows(result);
+    } catch (error) {
+      if (sequence === operationalSequence.current) setOperationalError((error as Error).message);
+    } finally {
+      if (sequence === operationalSequence.current) setOperationalLoading(false);
+    }
   }, []);
-  useEffect(() => { void load(); }, [load]);
 
-  // Real-time push keeps this current the moment an order is billed from
-  // another device/login — quietly (no loading spinner). The interval is
-  // just a safety net for a missed push.
+  const loadReceipts = useCallback(async (showLoading: boolean) => {
+    if (!LIVE_MODE) { setReceiptsLoading(false); return; }
+    const sequence = ++receiptSequence.current;
+    // A first-page refresh supersedes any in-flight pagination request.
+    setLoadingMore(false);
+    if (showLoading) setReceiptsLoading(true);
+    setReceiptsError(null);
+    try {
+      const page = await receipts.list({ limit: 50 });
+      if (sequence !== receiptSequence.current) return;
+      setReceiptRows(page.items);
+      setNextCursor(page.next_cursor);
+      setHasMore(page.has_more);
+    } catch (error) {
+      if (sequence === receiptSequence.current) setReceiptsError((error as Error).message);
+    } finally {
+      if (sequence === receiptSequence.current) setReceiptsLoading(false);
+    }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadOperational(false), loadReceipts(false)]);
+  }, [loadOperational, loadReceipts]);
+
   useEffect(() => {
-    if (!LIVE_MODE) return;
-    const refresh = () => { orders.list().then(setRows).catch(() => {}); };
-    const unsubscribe = subscribeRealtime('orders', refresh);
-    const id = setInterval(refresh, OPERATIONS_POLL_MS);
-    return () => { unsubscribe(); clearInterval(id); };
-  }, []);
+    void Promise.all([loadOperational(true), loadReceipts(true)]);
+  }, [loadOperational, loadReceipts]);
+
+  useRealtimeRefresh({
+    resources: ['orders', 'receipts'],
+    refresh: refreshAll,
+    enabled: LIVE_MODE,
+  });
+
+  useEffect(() => {
+    if (!LIVE_MODE) return undefined;
+    const id = setInterval(() => { void refreshAll(); }, OPERATIONS_POLL_MS);
+    return () => clearInterval(id);
+  }, [refreshAll]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore || receiptsLoading) return;
+    const sequence = ++receiptSequence.current;
+    setLoadingMore(true);
+    setReceiptsError(null);
+    try {
+      const page = await receipts.list({ cursor: nextCursor, limit: 50 });
+      if (sequence !== receiptSequence.current) return;
+      setReceiptRows((current) => {
+        const known = new Set(current.map((receipt) => receipt.order_id));
+        return [...current, ...page.items.filter((receipt) => !known.has(receipt.order_id))];
+      });
+      setNextCursor(page.next_cursor);
+      setHasMore(page.has_more);
+    } catch (error) {
+      if (sequence === receiptSequence.current) setReceiptsError((error as Error).message);
+    } finally {
+      if (sequence === receiptSequence.current) setLoadingMore(false);
+    }
+  }, [loadingMore, nextCursor, receiptsLoading]);
 
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Order history is live-mode only.</div>;
-  if (loading) return <SkeletonCard />;
 
-  const total = rows.reduce((s, r) => s + r.total_minor, 0);
+  const refreshing = operationalLoading || receiptsLoading;
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
-        <p className="text-sm text-fg-muted">
-          {rows.length} order{rows.length === 1 ? '' : 's'} today · Total: <b>{inr(total)}</b>
-        </p>
-        <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+    <div className="space-y-5">
+      <div className="flex justify-between items-center flex-wrap gap-3">
+        <div>
+          <p className="text-sm font-semibold">Live operations and immutable receipts</p>
+          <p className="text-xs text-fg-muted">
+            Open work stays separate from finalized, server-authoritative billing history.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => { void Promise.all([loadOperational(true), loadReceipts(true)]); }}
+          disabled={refreshing}
+          aria-label="Refresh orders and receipt history"
+        >
+          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''}/>
+          Refresh
+        </button>
       </div>
 
-      {err && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
-        <AlertCircle size={14}/> {err}
-      </div>}
-
-      {!rows.length ? (
-        <div className="card text-fg-muted text-sm">
-          No orders today yet. Take your first order from <b>POS</b>.
+      <section className="card !p-0 overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-3">
+          <div>
+            <h3 className="font-semibold">Open &amp; held orders</h3>
+            <p className="text-xs text-fg-muted">Operational bills that have not been finalized.</p>
+          </div>
+          <span className="chip border-accent-gold/30 text-accent-gold">{operationalRows.length} active</span>
         </div>
-      ) : (
-        <div className="card !p-0 overflow-hidden">
-          <table className="hidden w-full text-sm md:table">
-            <thead className="bg-bg-raised">
-              <tr>
-                <th className="text-left p-3">Time</th>
-                <th className="text-left p-3">Invoice #</th>
-                <th className="text-left p-3">Type</th>
-                <th className="text-left p-3">Customer</th>
-                <th className="text-right p-3">Items</th>
-                <th className="text-right p-3">Total</th>
-                <th className="text-left p-3">Status</th>
-                <th className="p-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((o) => (
-                <tr key={o.id} className="border-b border-bg-border/60 last:border-0">
-                  <td className="p-3 font-mono text-xs">
-                    {new Date(o.created_at).toLocaleTimeString('en-IN', {
-                      hour: '2-digit', minute: '2-digit',
-                    })}
-                  </td>
-                  <td className="p-3 font-mono text-xs">{o.invoice_no || '—'}</td>
-                  <td className="p-3 text-fg-muted text-xs">{o.type}</td>
-                  <td className="p-3 text-fg-muted">{o.customer_name || '—'}</td>
-                  <td className="p-3 text-right font-mono text-xs">{o.items_count}</td>
-                  <td className="p-3 text-right font-mono font-medium">{inr(o.total_minor)}</td>
-                  <td className="p-3">
-                    <span className={`chip text-[10px] ${
-                      o.status === 'paid' ? 'border-accent-good/40 text-accent-good' :
-                      o.status === 'open' ? 'border-accent-gold/40 text-accent-gold' :
-                                            'border-fg-muted/40 text-fg-muted'
-                    }`}>{o.status}</span>
-                  </td>
-                  <td className="p-3">
-                    <button className="text-fg-muted hover:text-accent" onClick={() => setView(o)}>
-                      <Eye size={14}/>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mobile-card-list md:hidden">
-            {rows.map((o) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => setView(o)}
-                className="mobile-record-card w-full text-left active:bg-bg-raised/40"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-mono text-[11px] text-fg-muted">
-                      {new Date(o.created_at).toLocaleTimeString('en-IN', {
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </div>
-                    <div className="mt-1 truncate font-semibold">
-                      {o.invoice_no || `Order ${o.id.slice(0, 8)}`}
-                    </div>
-                    <div className="mt-1 text-xs text-fg-muted">
-                      {o.customer_name || 'Walk-in'} · {o.type}
-                    </div>
-                  </div>
-                  <span className={`chip shrink-0 text-[10px] ${
-                    o.status === 'paid' ? 'border-accent-good/40 text-accent-good' :
-                    o.status === 'open' ? 'border-accent-gold/40 text-accent-gold' :
-                                          'border-fg-muted/40 text-fg-muted'
-                  }`}>{o.status}</span>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <div className="text-fg-muted">Items</div>
-                    <div className="font-mono font-semibold">{o.items_count}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-fg-muted">Total</div>
-                    <div className="font-mono font-semibold">{inr(o.total_minor)}</div>
-                  </div>
-                </div>
-              </button>
-            ))}
+        {operationalError && <InlineLoadError message={operationalError} onRetry={() => { void loadOperational(true); }}/>}
+        {operationalLoading ? <div className="p-4"><SkeletonCard/></div> : !operationalRows.length && !operationalError ? (
+          <div className="px-4 py-8 text-center">
+            <Receipt className="mx-auto mb-2 text-fg-muted" size={24}/>
+            <p className="font-medium">No open bills</p>
+            <p className="mt-1 text-xs text-fg-muted">New POS and Gaming bills will appear here until payment.</p>
+          </div>
+        ) : operationalRows.length ? <OperationalOrderList rows={operationalRows} onView={setOperationalView}/> : null}
+      </section>
+
+      <section className="card !p-0 overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-3">
+          <div>
+            <h3 className="font-semibold">Receipt history</h3>
+            <p className="text-xs text-fg-muted">Finalized receipts from the shared server.</p>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-fg-muted">Server history</div>
+            <div className="font-mono text-sm font-semibold">{receiptRows.length} loaded</div>
           </div>
         </div>
-      )}
+        {receiptsError && <InlineLoadError message={receiptsError} onRetry={() => { void loadReceipts(true); }}/>}
+        {receiptsLoading ? <div className="p-4"><SkeletonCard/></div> : !receiptRows.length && !receiptsError ? (
+          <div className="px-4 py-10 text-center">
+            <Receipt className="mx-auto mb-2 text-fg-muted" size={26}/>
+            <p className="font-medium">No finalized receipts yet</p>
+            <p className="mt-1 text-xs text-fg-muted">A receipt appears here after a successful Cash, UPI or other payment.</p>
+          </div>
+        ) : receiptRows.length ? <ReceiptHistoryList rows={receiptRows} onView={setReceiptView}/> : null}
+        {hasMore && (
+          <div className="border-t border-bg-border p-3 text-center">
+            <button type="button" className="btn btn-ghost" onClick={() => { void loadMore(); }} disabled={loadingMore || receiptsLoading}>
+              {loadingMore ? <Loader2 className="animate-spin" size={14}/> : <ChevronDown size={14}/>} Load older receipts
+            </button>
+          </div>
+        )}
+      </section>
 
-      {view && <OrderViewModal order={view} onClose={() => setView(null)}/>}
+      {operationalView && <OperationalOrderModal order={operationalView} onClose={() => setOperationalView(null)}/>}
+      {receiptView && <ReceiptViewModal
+        orderId={receiptView.orderId}
+        invoiceNo={receiptView.invoiceNo}
+        onClose={() => setReceiptView(null)}
+      />}
     </div>
   );
 }
 
-function OrderViewModal({ order, onClose }: { order: OrderListItemDTO; onClose: () => void }) {
+function OperationalOrderList({ rows, onView }: {
+  rows: OrderListItemDTO[];
+  onView: (order: OrderListItemDTO) => void;
+}) {
+  return (
+    <div className="divide-y divide-bg-border/60">
+      {rows.map((order) => (
+        <button
+          key={order.id}
+          type="button"
+          onClick={() => onView(order)}
+          className="flex min-h-14 w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-bg-raised/40 active:bg-bg-raised/70"
+        >
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold">{order.source_label || orderTypeLabel(order.type)}</span>
+              <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-accent-gold' : 'border-fg-muted/40 text-fg-muted'}`}>
+                {order.status}
+              </span>
+            </div>
+            <div className="mt-1 text-xs text-fg-muted">
+              {formatDateTime(order.held_at || order.created_at)} · {order.items_count} line{order.items_count === 1 ? '' : 's'}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="font-mono font-semibold">{inr(order.total_minor)}</span>
+            <Eye className="text-fg-muted" size={15}/>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ReceiptHistoryList({ rows, onView }: {
+  rows: ReceiptHistoryDTO[];
+  onView: (receipt: { orderId: string; invoiceNo: string }) => void;
+}) {
+  return (
+    <>
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full text-sm">
+          <thead className="bg-bg-raised/60 text-xs text-fg-muted">
+            <tr>
+              <th className="p-3 text-left font-medium">Issued</th>
+              <th className="p-3 text-left font-medium">Invoice</th>
+              <th className="p-3 text-left font-medium">Source</th>
+              <th className="p-3 text-left font-medium">Payment</th>
+              <th className="p-3 text-left font-medium">Employee</th>
+              <th className="p-3 text-right font-medium">Total</th>
+              <th className="p-3 text-left font-medium">Status</th>
+              <th className="p-3"><span className="sr-only">Open receipt</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((receipt) => (
+              <tr key={receipt.order_id} className="border-t border-bg-border/60 transition hover:bg-bg-raised/30">
+                <td className="p-3 text-xs text-fg-muted">{formatDateTime(receipt.invoice_issued_at)}</td>
+                <td className="p-3 font-mono text-xs font-semibold">{receipt.invoice_no}</td>
+                <td className="p-3">{receiptSourceLabel(receipt.gaming_sessions, receipt.order_type)}</td>
+                <td className="p-3 text-xs text-fg-muted">{receiptPaymentLabels(receipt)}</td>
+                <td className="p-3 text-xs text-fg-muted">{receiptPaymentActorLabel(receipt.payments)}</td>
+                <td className="p-3 text-right">
+                  <div className="font-mono font-semibold">{inr(receipt.total_minor)}</div>
+                  {receipt.refunded_minor > 0 && (
+                    <div className="mt-0.5 text-[10px] text-fg-muted">Net {inr(receipt.net_collected_minor)}</div>
+                  )}
+                </td>
+                <td className="p-3"><ReceiptStatus status={receipt.status}/></td>
+                <td className="p-3 text-right">
+                  <button
+                    type="button"
+                    className="rounded-lg p-2 text-fg-muted transition hover:bg-bg-raised hover:text-accent"
+                    onClick={() => onView({ orderId: receipt.order_id, invoiceNo: receipt.invoice_no })}
+                    aria-label={`Open receipt ${receipt.invoice_no}`}
+                  ><Eye size={15}/></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="divide-y divide-bg-border/60 md:hidden">
+        {rows.map((receipt) => (
+          <button
+            key={receipt.order_id}
+            type="button"
+            onClick={() => onView({ orderId: receipt.order_id, invoiceNo: receipt.invoice_no })}
+            className="w-full p-4 text-left transition active:bg-bg-raised/60"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-mono text-sm font-semibold">{receipt.invoice_no}</div>
+                <div className="mt-1 truncate text-xs text-fg-muted">
+                  {receiptSourceLabel(receipt.gaming_sessions, receipt.order_type)} · {formatDateTime(receipt.invoice_issued_at)}
+                </div>
+              </div>
+              <ReceiptStatus status={receipt.status}/>
+            </div>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <div className="text-xs text-fg-muted">
+                {receiptPaymentLabels(receipt)} · {receiptPaymentActorLabel(receipt.payments)}
+              </div>
+              <div className="text-right">
+                <div className="font-mono font-semibold">{inr(receipt.total_minor)}</div>
+                {receipt.refunded_minor > 0 && (
+                  <div className="mt-0.5 text-[10px] text-fg-muted">Net {inr(receipt.net_collected_minor)}</div>
+                )}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function OperationalOrderModal({ order, onClose }: { order: OrderListItemDTO; onClose: () => void }) {
   return (
     <Modal open onClose={onClose} title={`Order ${order.invoice_no || order.id.slice(0, 8)}`}>
       <div className="space-y-2 text-sm">
-        <Row label="Type" value={order.type}/>
+        <Row label="Source" value={order.source_label || orderTypeLabel(order.type)}/>
         <Row label="Status" value={order.status}/>
         <Row label="Customer" value={order.customer_name || '—'}/>
-        <Row label="Time" value={new Date(order.created_at).toLocaleString('en-IN')}/>
+        <Row label="Opened" value={formatDateTime(order.created_at)}/>
+        {order.held_at && <Row label="Sent to POS" value={formatDateTime(order.held_at)}/>}
         <Row label="Items" value={order.items_count.toString()}/>
         <Row label="Total" value={inr(order.total_minor)} bold/>
-        <p className="text-xs text-fg-muted pt-2 border-t border-bg-border">
-          Full receipt printing &amp; refunds will land in the next iteration. For now this is a quick lookup view.
+        <p className="text-xs text-fg-muted pt-3 border-t border-bg-border">
+          This bill is still operational. Its immutable receipt will appear in Receipt history after payment succeeds.
         </p>
       </div>
     </Modal>
   );
+}
+
+function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
+  orderId: string;
+  invoiceNo: string;
+  onClose: () => void;
+}) {
+  const [receipt, setReceipt] = useState<ReceiptHistoryDTO | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
+
+  const load = useCallback(async () => {
+    const sequence = ++requestSequence.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await receipts.get(orderId);
+      if (sequence === requestSequence.current) setReceipt(result);
+    } catch (cause) {
+      if (sequence === requestSequence.current) setError((cause as Error).message);
+    } finally {
+      if (sequence === requestSequence.current) setLoading(false);
+    }
+  }, [orderId]);
+
+  useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['receipts'], refresh: load, enabled: LIVE_MODE });
+
+  return (
+    <Modal open onClose={onClose} title={`Receipt ${invoiceNo}`} size="lg">
+      {loading && !receipt ? <SkeletonCard/> : error && !receipt ? (
+        <InlineLoadError message={error} onRetry={() => { void load(); }}/>
+      ) : receipt ? (
+        <>
+          {error && <InlineLoadError message={error} onRetry={() => { void load(); }}/>}
+          <ReceiptDetail receipt={receipt} refreshing={loading}/>
+        </>
+      ) : null}
+    </Modal>
+  );
+}
+
+function ReceiptDetail({ receipt, refreshing }: { receipt: ReceiptHistoryDTO; refreshing: boolean }) {
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-bg-border bg-bg-raised/35 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <ReceiptStatus status={receipt.status}/>
+              {refreshing && <Loader2 className="animate-spin text-fg-muted" size={13}/>}
+            </div>
+            <h4 className="mt-2 font-mono text-xl font-bold tracking-tight">{receipt.invoice_no}</h4>
+            <p className="mt-1 text-xs text-fg-muted">Issued {formatDateTime(receipt.invoice_issued_at)} · FY {receipt.fiscal_year}</p>
+          </div>
+          <div className="text-right">
+            <div className="text-xs uppercase tracking-wider text-fg-muted">Receipt total</div>
+            <div className="font-mono text-2xl font-bold">{inr(receipt.total_minor)}</div>
+            <div className="mt-1 text-xs text-fg-muted">
+              {receipt.refunded_minor > 0
+                ? `Net collected ${inr(receipt.net_collected_minor)}`
+                : `Payments recorded ${inr(receipt.paid_minor)}`}
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 border-t border-bg-border pt-3 text-sm sm:grid-cols-3">
+          <InfoTile label="Source" value={receiptSourceLabel(receipt.gaming_sessions, receipt.order_type)}/>
+          <InfoTile label="Customer" value={receipt.customer_name || 'Walk-in'}/>
+          <InfoTile label="Payments recorded by" value={receiptPaymentActorLabel(receipt.payments)}/>
+        </div>
+      </section>
+
+      <ReceiptLines receipt={receipt}/>
+
+      <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+        <ReceiptPayments receipt={receipt}/>
+        <ReceiptTotals receipt={receipt}/>
+      </div>
+
+      {receipt.gaming_sessions.length > 0 && <GamingProvenance receipt={receipt}/>}
+
+      <section className="rounded-xl border border-bg-border p-4">
+        <SectionTitle icon={<UserRound size={16}/>} title="People & shift identity"/>
+        <div className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+          <Row label="Order opened by" value={actorLabel(receipt.opened_by_name, receipt.opened_by)}/>
+          <Row label="Shift opened by" value={actorLabel(receipt.shift_opened_by_name, receipt.shift_opened_by)}/>
+          <Row label="Shift opened" value={formatOptionalDateTime(receipt.shift_opened_at)}/>
+          <Row label="Shift closed" value={formatOptionalDateTime(receipt.shift_closed_at)}/>
+          <div className="sm:col-span-2"><Row label="Shift ID" value={receipt.shift_id}/></div>
+          <div className="sm:col-span-2"><Row label="Terminal ID" value={receipt.terminal_id}/></div>
+        </div>
+      </section>
+
+      {(receipt.customer_phone || receipt.customer_gstin || receipt.customer_address || receipt.notes) && (
+        <section className="rounded-xl border border-bg-border p-4 text-sm">
+          <h5 className="font-semibold">Customer & receipt notes</h5>
+          <div className="mt-3 space-y-1">
+            {receipt.customer_phone && <Row label="Phone" value={receipt.customer_phone}/>}
+            {receipt.customer_gstin && <Row label="GSTIN" value={receipt.customer_gstin}/>}
+            {receipt.customer_address && <Row label="Address" value={receipt.customer_address}/>}
+            {receipt.notes && <Row label="Notes" value={receipt.notes}/>}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function ReceiptLines({ receipt }: { receipt: ReceiptHistoryDTO }) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-bg-border">
+      <div className="border-b border-bg-border px-4 py-3">
+        <h5 className="font-semibold">Sold lines</h5>
+        <p className="text-xs text-fg-muted">Immutable names, prices, tax and customizations captured at sale.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[620px] text-sm">
+          <thead className="bg-bg-raised/50 text-xs text-fg-muted">
+            <tr>
+              <th className="p-3 text-left font-medium">Item</th>
+              <th className="p-3 text-right font-medium">Qty</th>
+              <th className="p-3 text-right font-medium">Unit</th>
+              <th className="p-3 text-right font-medium">Discount</th>
+              <th className="p-3 text-right font-medium">Line total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {receipt.lines.map((line) => {
+              const customizations = receiptLineCustomizationLabels(line);
+              return (
+                <tr key={line.id} className="border-t border-bg-border/60 align-top">
+                  <td className="p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={line.voided_at ? 'line-through text-fg-muted' : 'font-medium'}>{line.menu_item_name}</span>
+                      {line.voided_at && <span className="chip border-accent-bad/40 text-[10px] text-accent-bad">Voided</span>}
+                    </div>
+                    {customizations.length > 0 && <div className="mt-1 text-xs text-fg-muted">{customizations.join(' · ')}</div>}
+                    <div className="mt-1 text-[11px] text-fg-muted">
+                      {line.hsn_or_sac ? `HSN/SAC ${line.hsn_or_sac} · ` : ''}Tax {exactQuantityLabel(line.tax_rate)}%
+                    </div>
+                    {line.note && <div className="mt-1 text-xs text-fg-muted">Note: {line.note}</div>}
+                    {line.void_reason && (
+                      <div className="mt-1 text-xs text-accent-bad">
+                        Voided{line.voided_by_name ? ` by ${line.voided_by_name}` : ''}: {line.void_reason}
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-3 text-right font-mono">{exactQuantityLabel(line.qty)}</td>
+                  <td className="p-3 text-right font-mono">{inr(line.unit_price_minor)}</td>
+                  <td className="p-3 text-right font-mono">{line.discount_minor ? `−${inr(line.discount_minor)}` : '—'}</td>
+                  <td className="p-3 text-right font-mono font-semibold">{inr(line.line_total_minor)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ReceiptPayments({ receipt }: { receipt: ReceiptHistoryDTO }) {
+  return (
+    <section className="rounded-xl border border-bg-border p-4">
+      <SectionTitle icon={<CreditCard size={16}/>} title="Payments & refunds"/>
+      <div className="mt-3 space-y-3">
+        {!receipt.payments.length && (
+          <p className="rounded-lg bg-bg-raised/40 p-3 text-sm text-fg-muted">
+            No payment rail was required or recorded for this receipt.
+          </p>
+        )}
+        {receipt.payments.map((payment) => (
+          <div key={payment.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold">{paymentMethodLabel(payment.method)}</span>
+              <span className="font-mono font-bold">{inr(payment.amount_minor)}</span>
+            </div>
+            <div className="mt-2 space-y-1">
+              <Row label="Paid" value={formatDateTime(payment.paid_at)}/>
+              <Row label="Recorded by" value={actorLabel(payment.recorded_by_name, payment.recorded_by)}/>
+              {payment.tendered_minor !== null && <Row label="Cash tendered" value={inr(payment.tendered_minor)}/>}
+              {payment.change_minor !== null && <Row label="Change given" value={inr(payment.change_minor)}/>}
+              {payment.reference && <Row label="Reference" value={payment.reference}/>}
+              <Row label="Payment shift" value={payment.shift_id}/>
+            </div>
+          </div>
+        ))}
+        {receipt.refunds.map((refund) => (
+          <div key={refund.id} className="rounded-lg border border-accent-bad/25 bg-accent-bad/5 p-3 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <span className="font-semibold text-accent-bad">Refund</span>
+                {refund.receipt_no && <span className="ml-2 font-mono text-xs text-fg-muted">{refund.receipt_no}</span>}
+              </div>
+              <span className="font-mono font-bold text-accent-bad">−{inr(refund.amount_minor)}</span>
+            </div>
+            <div className="mt-2 space-y-1">
+              <Row label="Method" value={refund.settlement_method ? paymentMethodLabel(refund.settlement_method) : 'Not recorded'}/>
+              <Row label="Reason" value={orderTypeLabel(refund.reason_code)}/>
+              <Row label="Settled" value={formatOptionalDateTime(refund.settled_at)}/>
+              <Row label="Approved by" value={actorLabel(refund.approved_by_name, refund.approved_by)}/>
+              <Row label="Settled by" value={actorLabel(refund.settled_by_name, refund.settled_by)}/>
+              {refund.manager_override_user_id && (
+                <Row label="Manager override" value={actorLabel(refund.manager_override_user_name, refund.manager_override_user_id)}/>
+              )}
+              {refund.external_reference && <Row label="Reference" value={refund.external_reference}/>}
+              {refund.settlement_shift_id && <Row label="Settlement shift" value={refund.settlement_shift_id}/>}
+              {refund.note && <Row label="Note" value={refund.note}/>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ReceiptTotals({ receipt }: { receipt: ReceiptHistoryDTO }) {
+  return (
+    <section className="rounded-xl border border-bg-border p-4 text-sm">
+      <h5 className="font-semibold">Receipt totals</h5>
+      <div className="mt-3 space-y-1">
+        <Row label="Taxable value" value={inr(receipt.subtotal_minor)}/>
+        {receipt.cgst_minor > 0 && <Row label="CGST" value={inr(receipt.cgst_minor)}/>}
+        {receipt.sgst_minor > 0 && <Row label="SGST" value={inr(receipt.sgst_minor)}/>}
+        {receipt.igst_minor > 0 && <Row label="IGST" value={inr(receipt.igst_minor)}/>}
+        {receipt.cess_minor > 0 && <Row label="Cess" value={inr(receipt.cess_minor)}/>}
+        <Row label="Tax total" value={inr(receipt.tax_minor)}/>
+        {receipt.discount_minor > 0 && <Row label="Discounts (already applied)" value={inr(receipt.discount_minor)}/>}
+        {receipt.manual_discount_minor > 0 && <Row label="Includes manual discount" value={inr(receipt.manual_discount_minor)}/>}
+        {receipt.points_redeemed_minor > 0 && <Row label="Includes points redeemed" value={inr(receipt.points_redeemed_minor)}/>}
+        {receipt.round_off_minor !== 0 && <Row label="Round off" value={signedMoney(receipt.round_off_minor)}/>}
+        {receipt.tip_minor > 0 && <Row label="Tip" value={inr(receipt.tip_minor)}/>}
+        <Row label="Total" value={inr(receipt.total_minor)} bold/>
+        <Row label="Original payments" value={inr(receipt.paid_minor)} bold/>
+        {receipt.refunded_minor > 0 && <Row label="Refunded" value={`−${inr(receipt.refunded_minor)}`}/>}
+        {receipt.refunded_minor > 0 && <Row label="Net collected" value={inr(receipt.net_collected_minor)} bold/>}
+      </div>
+    </section>
+  );
+}
+
+function GamingProvenance({ receipt }: { receipt: ReceiptHistoryDTO }) {
+  return (
+    <section className="rounded-xl border border-bg-border p-4">
+      <SectionTitle icon={<Gamepad2 size={16}/>} title="Gaming session provenance"/>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        {receipt.gaming_sessions.map((session) => (
+          <article key={session.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">{session.station_name}</div>
+                <div className="text-xs text-fg-muted">{session.station_code} · {orderTypeLabel(session.station_type)}</div>
+              </div>
+              {session.amount_minor !== null && <div className="font-mono font-bold">{inr(session.amount_minor)}</div>}
+            </div>
+            <div className="mt-3 space-y-1">
+              <Row label="Billing" value={orderTypeLabel(session.billing_mode)}/>
+              <Row label="Rate" value={`${inr(session.rate_per_hour_minor)}/hr`}/>
+              <Row label="Billable time" value={sessionDurationLabel(session.billable_minutes)}/>
+              {session.paused_minutes > 0 && <Row label="Paused" value={sessionDurationLabel(session.paused_minutes)}/>}
+              <Row label="Started" value={formatDateTime(session.started_at)}/>
+              <Row label="Stopped" value={formatOptionalDateTime(session.stopped_at)}/>
+              <Row label="Started by" value={actorLabel(session.started_by_name, session.started_by)}/>
+              <Row label="Stopped by" value={actorLabel(session.stopped_by_name, session.stopped_by)}/>
+              <Row label="Sent to POS by" value={actorLabel(session.sent_to_pos_by_name, session.sent_to_pos_by)}/>
+              <Row label="Source shift" value={session.source_shift_id}/>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ReceiptStatus({ status }: { status: string }) {
+  return (
+    <span className={`chip text-[10px] ${status === 'paid' ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-accent-gold'}`}>
+      {status}
+    </span>
+  );
+}
+
+function InlineLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="m-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm text-accent-bad">
+      <div className="flex min-w-0 items-start gap-2"><AlertCircle className="mt-0.5 shrink-0" size={15}/><span>{message}</span></div>
+      <button type="button" className="btn btn-ghost" onClick={onRetry}><RefreshCw size={14}/> Retry</button>
+    </div>
+  );
+}
+
+function SectionTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
+  return <h5 className="flex items-center gap-2 font-semibold text-fg">{icon}{title}</h5>;
+}
+
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return <div><div className="text-[10px] uppercase tracking-wider text-fg-muted">{label}</div><div className="mt-0.5 font-medium">{value}</div></div>;
+}
+
+function receiptPaymentLabels(receipt: ReceiptHistoryDTO): string {
+  const labels = [...new Set(receipt.payments.map((payment) => paymentMethodLabel(payment.method)))];
+  return labels.length ? labels.join(' + ') : 'Payment not recorded';
+}
+
+function actorLabel(name: string | null, id: string | null): string {
+  if (name?.trim()) return name.trim();
+  return id ? `Employee ${id.slice(0, 8)}` : 'Legacy record — not recorded';
+}
+
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatOptionalDateTime(value: string | null): string {
+  return value ? formatDateTime(value) : 'Not recorded';
+}
+
+function signedMoney(value: number): string {
+  if (value === 0) return inr(0);
+  return `${value > 0 ? '+' : '−'}${inr(Math.abs(value))}`;
 }
 
 // ============================================================================
@@ -237,7 +718,7 @@ function ShiftsTab() {
     if (!LIVE_MODE) { setLoading(false); return; }
     if (!terminalReady || !terminalId) {
       setRows([]);
-      setErr('Select the POS terminal used by this device before managing shifts.');
+      setErr('The shared register could not be verified. Refresh; if the problem remains, ask a protected owner to check the Combined register setup.');
       setLoading(false);
       return;
     }
@@ -308,7 +789,16 @@ function ShiftsTab() {
         </div>
       ) : (
         <div className="space-y-3">
-          {rows.map((s) => (
+          {rows.map((s) => {
+            const legacyRevenueLabel = profileMembershipMoneyLabel(
+              'revenue',
+              s.membership_sales_minor ?? 0,
+            );
+            const legacyRefundLabel = profileMembershipMoneyLabel(
+              'refund',
+              s.settled_membership_refunds_minor ?? 0,
+            );
+            return (
             <div key={s.id} className="card">
               <div className="flex justify-between items-start gap-3 flex-wrap">
                 <div>
@@ -344,7 +834,9 @@ function ShiftsTab() {
 
               <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                 <Stat label="POS collections" value={inr(s.pos_sales_minor ?? 0)}/>
-                <Stat label="Memberships" value={inr(s.membership_sales_minor ?? 0)}/>
+                {legacyRevenueLabel && (
+                  <Stat label={legacyRevenueLabel} value={inr(s.membership_sales_minor ?? 0)}/>
+                )}
                 <Stat label="Gross collections" value={inr(s.gross_collections_minor ?? 0)}/>
               </div>
               <p className="mt-1 text-[10px] text-fg-muted">
@@ -352,7 +844,9 @@ function ShiftsTab() {
               </p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-bg-border/60">
                 <Stat label="POS refunds" value={inr(s.settled_pos_refunds_minor ?? 0)}/>
-                <Stat label="Membership refunds" value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+                {legacyRefundLabel && (
+                  <Stat label={legacyRefundLabel} value={inr(s.settled_membership_refunds_minor ?? 0)}/>
+                )}
                 <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
                 <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
               </div>
@@ -367,7 +861,8 @@ function ShiftsTab() {
                         Math.abs(s.variance_minor) < 5000 ? 'gold' : 'bad'}/>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -609,9 +1104,9 @@ function ErrorRow({ text }: { text: string }) {
 }
 function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
-    <div className={`flex justify-between py-1 ${bold ? 'font-bold border-t border-bg-border pt-2 mt-2' : ''}`}>
-      <span className="text-fg-muted">{label}</span>
-      <span className="font-mono">{value}</span>
+    <div className={`flex justify-between gap-4 py-1 ${bold ? 'font-bold border-t border-bg-border pt-2 mt-2' : ''}`}>
+      <span className="shrink-0 text-fg-muted">{label}</span>
+      <span className="min-w-0 break-words text-right font-mono">{value}</span>
     </div>
   );
 }

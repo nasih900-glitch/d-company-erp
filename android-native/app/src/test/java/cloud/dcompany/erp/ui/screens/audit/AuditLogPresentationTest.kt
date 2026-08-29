@@ -6,7 +6,9 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.http.Query
 
 class AuditLogPresentationTest {
 
@@ -82,6 +84,15 @@ class AuditLogPresentationTest {
     fun `membership acceptance settlement and withdrawal have truthful labels`() {
         assertEquals("Membership payment", auditEntityLabel("MembershipPayment"))
         assertEquals("Membership refund request", auditEntityLabel("MembershipRefund"))
+        assertEquals("POS refund request", auditEntityLabel("PosRefundRequest"))
+        assertEquals(
+            "POS cash refund handed over",
+            auditEntityLabel("PosRefundCashHandoffCompletion"),
+        )
+        assertEquals(
+            "POS provider refund completed",
+            auditEntityLabel("PosRefundProviderSettlement"),
+        )
         assertEquals(
             "Membership refund settlement",
             auditEntityLabel("MembershipRefundSettlement"),
@@ -90,5 +101,26 @@ class AuditLogPresentationTest {
             "Membership refund withdrawal",
             auditEntityLabel("MembershipRefundResolution"),
         )
+    }
+
+    @Test
+    fun `audit facets decode server driven filters`() {
+        val facets = json.decodeFromString<AuditFacets>(
+            """{"entity_types":["Attendance","Payment"],"actions":["clock_in","create"]}""",
+        )
+
+        assertEquals(listOf("Attendance", "Payment"), facets.entityTypes)
+        assertEquals(listOf("clock_in", "create"), facets.actions)
+    }
+
+    @Test
+    fun `audit API exposes all supported server filters and no fake export`() {
+        val listMethod = AuditLogApi::class.java.methods.single { it.name == "list" }
+        val queryNames = listMethod.parameterAnnotations
+            .flatMap { annotations -> annotations.filterIsInstance<Query>() }
+            .map(Query::value)
+
+        assertTrue(queryNames.containsAll(listOf("limit", "before_id", "area", "entity_type", "action", "q")))
+        assertFalse(AuditLogApi::class.java.methods.any { it.name.contains("export", ignoreCase = true) })
     }
 }
