@@ -1,79 +1,319 @@
-# D Company ERP Android design QA
+# D Company ERP Android 3.1.2 design QA
 
-> Evidence boundary: this document records the earlier `3.0.4` (`5`) Android
-> snapshot. Material fixes were made before the source identity moved through
-> the earlier schema-37 `3.0.8` (`9`) candidate to `3.0.9` (`10`), so none of
-> the older results below count as current-candidate acceptance evidence. The
-> code-`10` release gates and signed upgrades must be rerun. It still has no
-> physical Redmi Pad 2 acceptance proof and has not been deployed to production.
+## Scope and evidence boundary
 
-## Visual target and test environment
+This is a visual and interaction-hierarchy review of the Android `3.1.2`
+(`versionCode 13`) candidate on an API-35 emulator. It is not evidence that the
+candidate is deployed to production, connected to production data, accepted on
+a physical tablet, or ready for unrestricted cafe use.
 
-- Approved visual reference: `/tmp/codex-remote-attachments/019f6149-4483-7750-9466-b04063d78502/8D369ABB-4F08-47B5-ACA4-2FF03554B80F/1-Pasted-Image-1.jpg`
-- Combined reference/implementation comparison: `/tmp/d-company-erp-precision-2026-08-26/final-v304/reference-vs-gaming.png`
-- Baseline captures: `/tmp/d-company-erp-precision-2026-08-26/baseline/`
-- Final captures: `/tmp/d-company-erp-precision-2026-08-26/final-v304/`
-- Platform: Android API 35 emulator, 320 dpi, host-GPU renderer (`Google (Apple)`, Apple M4)
-- Viewports checked: 2560x1600 tablet landscape, 1920x1200 compact landscape, 1600x1000 smaller landscape, and 1600x2560 portrait
-- States checked: authenticated recovery after emulator reboot, data-filled operational screens, zero-data reports, command dialog with IME, offline banner, and reconnect recovery
+The selected image is an art-direction and workspace-layout target. Its sample
+station counts and billing states are illustrative; the implementation keeps
+server-authoritative data instead of manufacturing matching values. The two
+screens can therefore be compared for composition, hierarchy, density, colour,
+typography and action design, but not for pixel-identical business content.
 
-## Iterations completed
+## Comparison target
 
-1. Rebuilt shared tokens and operational components around layered dark surfaces, restrained brand gold, semantic state colours, tabular financial values, and 48 dp touch targets.
-2. Reworked the shell, sidebar, header, command search, action bars, cards, tabs, lists, empty states, and dialogs so the same hierarchy is used across modules.
-3. Kept a single dominant action per context and moved ordinary money values back to neutral text; green and red now communicate actual positive/negative or success/error states.
-4. Corrected dialog modifier ordering and width caps so form, confirmation, and command dialogs remain usable with the software keyboard and at smaller viewports.
-5. Corrected Tables filtering so reserved, cleaning, merged, and unknown states no longer inflate Open bills; focused regression tests cover the policy.
-6. Restored Reports tickets, profit margin, and cost ratio after the first visual refactor, including truthful zero states and regression tests.
-7. Refined Finance colour hierarchy so routine inflows/outflows remain neutral and only operating result uses semantic profit/loss colour.
-8. Verified all 18 accessible modules in landscape and portrait, then rechecked POS, Gaming, Shift, Reports, and Settings at 1600x1000.
-9. Verified the persistent Offline state, explanatory offline banner, saved-data wording, and automatic return to Online without making a business-data write.
-10. Rebooted the saved emulator under host GPU, confirmed authentication/session recovery, measured three cold launches at 252 ms, 224 ms, and 158 ms, and measured representative module navigation at 3.04% janky frames (21 of 690; 99th percentile 32 ms).
+- Source visual truth:
+  `/Users/mohammednasih/.codex/generated_images/019f6149-4483-7750-9466-b04063d78502/exec-e912a2ac-7753-475e-a6fa-9251ad67e4c0.png`
+- Available-state implementation:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-gaming-shift-open.png`
+- Active-state implementation:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-gaming-active.png`
+- Login implementation:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-login-local.png`
+- Full-view comparison:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/reference-vs-android-3.1.2.png`
+- Active-session comparison:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/reference-vs-android-3.1.2-active.png`
+- Payment-due Gaming state:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-gaming-payment-due.png`
+- Cash and UPI payment receipts:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-gaming-cash-receipt.png`
+  and
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-gaming-upi-receipt.png`
+- Canonical receipt history and server detail:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-canonical-receipt-history.png`
+  and
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-canonical-gaming-receipt-detail.png`
+- Drawer-count defect and corrected flow:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-before-close.png`,
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-latest-before-count.png`,
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-cash-count-dialog.png`,
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-cash-count-balanced-dialog.png`
+  and
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-balanced-before-close.png`
+- Shift-close confirmation, success and closed history:
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-close-confirmation.png`,
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-closed.png`
+  and
+  `/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-3.1.2-shift-closed-history.png`
 
-## Phase 1 completion gate — global UI
+## Viewport and normalization
 
-Status: **PASS** on the recorded Android `3.0.4` / code-5 source snapshot at the emulator proof layer.
+- Source pixels: `1586 x 992`.
+- Android capture pixels: `2560 x 1600`, API 35, 320 dpi.
+- Android logical viewport: `1280 x 800 dp` in tablet landscape.
+- Comparison images: the Android capture was proportionally normalized to
+  `1586 x 992`; the source and normalized implementation were then placed
+  together in a `3172 x 992` composite. There is no device bezel in either
+  comparison half.
+- This normalization preserves the shared 16:10 aspect ratio. Differences
+  caused only by the source's generated-image raster and Android's 2x density
+  are not treated as product defects.
 
-- Re-inspected every accessible module in the authenticated `3.0.4` / code-5 release build at 2560x1600 px / 320 dpi (1280x800 dp). The final captures are in `/tmp/d-company-erp-final-completion-2026-08-26/phase1-after/`.
-- Re-inspected Shift in portrait at 1600x2560 px / 320 dpi and confirmed all denomination controls and close-shift actions remain reachable.
-- Re-inspected Login at 1920x1200 px / 320 dpi (960x600 dp) with the software keyboard closed and open. Email/password inputs remain focusable, the form scrolls, the visible action area is reachable, and the password field has an IME Done submission path.
-- Corrected destructive-action contrast, warning/error connectivity semantics, neutral informational notices, normal-money colouring, tabular numerals, the undersized brand tagline, loading announcements, and busy-action feedback.
-- Consolidated the duplicated Events, Finance, Inventory, and Memberships form/confirmation/picker primitives into the shared UI system. Shared dialogs are width-capped, keyboard-aware, scrollable, and keep validation errors visible.
-- Code-5 snapshot validation: debug and Android-test Kotlin compilation, all JVM tests, signed release assembly, and release lint all passed together.
-- Code-5 focused instrumentation at 960x600 dp: 10/10 tests passed for money entry, touch-only numeric entry, void reasons, compact dialogs, visible validation, loading/busy semantics, and Gaming start/void dialog input reachability.
-- `git diff --check` is clean and no duplicate private `FormDialog`, `ConfirmDialog`, `PickerField`, or `DecimalField` definitions remain in screen files.
+## States inspected
 
-Accessibility boundary: automated Compose semantics and contrast checks passed, but TalkBack exploration with a blind/low-vision operator and physical-tablet OEM behaviour remain device acceptance work. They are not represented as emulator-certified.
+- Logged-out login screen with empty fields and disabled submit action.
+- Authenticated Gaming board with eight available stations and an open shift.
+- Authenticated Gaming board with one active timed session and an open shift.
+- Shift-required state with the start action disabled and a next-step label.
+- Alarm-permission warning state.
+- Offline state before and after an in-place app update, including one visible
+  item waiting to sync.
+- Payment-due station with a saved drink, clear combined amount, action-centre
+  summary, item-level Void and dominant Send to POS action.
+- Cash and UPI payment-success receipts, including line items, round-off, paid
+  total and cash tender/change where applicable.
+- Canonical receipt list and server receipt detail with Gaming provenance and
+  employee attribution.
+- Shift reconciliation before count, drawer-count dialog, balanced count,
+  irreversible-close confirmation, closed success and closed-shift history.
 
-## Phase 2 completion gate — Gaming
+## Full-view comparison findings
 
-Status: **PASS** on the recorded `3.0.4` / code-5 source snapshot, the disposable PostgreSQL/Redis backend, and the API-35 emulator at 1920x1200 px / 320 dpi (960x600 dp).
+No actionable P0, P1 or P2 visual defect is visible in the captured login,
+available-session or active-session states.
 
-- Payment-due cards use a neutral surface, compact amber state, white amount, restrained Void, and dominant gold Send to POS. Available cards use green state and a restrained start action. Active cards prioritise the timer and current estimate while keeping extension/transfer secondary and stop destructive.
-- Proved a timed hourly session, free timer extension, authoritative stop billing, Send-to-POS failure retention, same-owner recovery, and successful retry without losing or duplicating the session.
-- Proved a fixed-price package start, one paid package extension, station transfer with the original session/package snapshots intact, authoritative stop, and one held POS order for the final package total.
-- Proved an open-ended session, stop billing, Send to POS, custom-reason Void, original-amount audit retention, rapid repeated Stop protection, and zero active or unresolved sessions after cleanup.
-- Proved offline start and stop with a persistent pending state, explicit offline guidance, reconnect sync, one server session, one final bill, and no duplicate transaction.
-- Proved permission parity with a disposable cashier: eight stations remain readable, the app shows a view-only explanation and disables Start, and a direct backend Start request returns HTTP 403 for missing `gaming.write`.
-- Corrected already-stamped database compatibility with Alembic 0039. Complete 0038 databases remain a true no-op; legacy stamped databases missing `gaming_sessions.billing_mode` are repaired conservatively and idempotently.
-- The compact custom Void flow was visually inspected with Gboard open. Keyboard, Keep session, and Void session remain fully visible and tappable above the IME; the enabled Void action was completed without first dismissing the keyboard. Capture: `/tmp/dcompany-phase2-compact-keyboard.png`.
-- Focused Gaming instrumentation: 22/22 passed on `emulator-5556`. Focused Gaming presentation/reason JVM tests: 33/33 passed. Backend Phase 2 PostgreSQL contracts: 68/68 passed; related Gaming tests: 59/59 passed; 0038/0039 migration tests: 5/5 passed. Web tests/typecheck/lint/build also remained green after the shared Gaming changes.
-- Production, `emulator-5554`, and the physical-tablet boundary were not touched. Alarm delivery under lock screen/reboot/OEM battery optimisation remains a later physical-device acceptance item.
+- **Information architecture and layout:** the implementation carries the
+  reference's compact left navigation, slim page header, station workspace and
+  persistent command pane into a native tablet composition. The five-metric
+  strip and resource-type filters are intentional operational additions. The
+  selected station remains visually connected to its command pane through the
+  gold outline and matching title. No overlap, clipping or unintended
+  horizontal overflow is visible at `1280 x 800 dp`.
+- **Density and rhythm:** the station floor remains information-dense without
+  reducing touch targets. Three station columns plus the persistent command
+  pane give the selected task more space than the earlier four-column card
+  grid. The alarm notice can push the lower station row below the fold, but the
+  command action remains reachable and the board is visibly scrollable. The
+  payment-due state preserves this density while making the amount, saved item,
+  review banner and Send to POS path immediately scannable.
+- **Typography:** Android uses the native system family instead of copying the
+  concept's display face. Weight, size and line-height establish a clear order:
+  page title, section title, station identity, timer or `Ready`, then rate and
+  explanatory copy. Money and timers use tabular numerals locally rather than
+  applying them to every label. Text remains sharp and legible in the
+  `2560 x 1600` raster capture.
+- **Colour and tokens:** graphite/navy surfaces create depth through restrained
+  borders rather than gradients. Gold is limited to brand, selection and
+  primary emphasis. Green, amber and red are reserved for operational state,
+  attention and destructive action. Statuses pair colour with an icon and text
+  label inside the workspace; the compact online indicator also has an
+  accessibility description and expands into a persistent labelled banner when
+  connectivity fails.
+- **Image and icon quality:** the real D Company logo is used on login and in
+  the shell. Material icons are consistent in weight and scale. No placeholder
+  illustration, emoji, CSS drawing or recreated logo is visible. The source
+  does not require product photography or other custom raster assets.
+- **Copy and content:** `Gaming Centre`, `Station floor`, `Station command`,
+  `Open POS shift to start`, `Add drinks & snacks` and `Stop & calculate` state
+  the operational consequence of each action. The server-authority note beside
+  the live estimate correctly distinguishes a running estimate from final
+  billing.
+- **Action hierarchy:** available, active and shift-blocked states expose only
+  relevant controls. The active command pane gives add-ons the main neutral
+  action, extension and transfer secondary actions, and stop a labelled red
+  destructive action. The timer and current estimate remain above the actions.
+  In the payment-due state, Send to POS is the dominant gold action while a
+  blocked whole-session Void explains that the saved item must be handled
+  first.
+- **Receipts and history:** cash and UPI success dialogs distinguish confirmed
+  tender, sold lines, exact subtotal, round-off and final paid amount. The cash
+  receipt also exposes cash received and change. Canonical history keeps amount,
+  payment method, station and paid state aligned in scan-friendly rows; the
+  detail view separates Sale, Items, Gaming provenance and Payments rather than
+  compressing audit information into one card.
+- **Shift reconciliation:** expected drawer, gross/net collections and
+  cash/card/UPI/other rails remain visible before counting. The corrected
+  drawer-count flow moves all nine denominations into a focused dialog, keeps
+  expected, counted and difference pinned above them, and keeps Cancel/Use
+  drawer count reachable below the scrollable denomination list. Balanced state
+  is shown both before confirmation and in closed history.
 
-## Severity review
+The original-sized comparison is sufficiently legible to inspect navigation,
+tiles, typography, status pills and command actions, so no separate cropped
+comparison was required. The active-session composite provides the additional
+focused state comparison for the timer and command pane. The individually
+opened payment, receipt and Shift captures provide focused evidence for the
+workflow states that are not present in the art-direction image.
 
-- P0: none observed.
-- P1: none observed.
-- P2: Tables filter classification and Reports KPI regression were found, corrected, and retested.
-- Remaining platform limit: physical-tablet-specific alarm behaviour under OEM battery optimisation, lock screen, reboot, and permission denial cannot be certified from an emulator. This is a device acceptance item, not an unresolved visual defect.
+## Accessibility and interaction observations
 
-## Automated and rendered evidence
+- Header actions and the target-tablet compact shell use `48 dp` controls; the
+  station tiles and command actions are also comfortably touchable in the
+  capture.
+- Selected, available, active, blocked and destructive states use labels and
+  icons as well as colour. The selected tile also has a gold outline.
+- Login fields retain visible labels, large input surfaces and an explicit
+  password-visibility control. The disabled sign-in state is visually distinct.
+- The drawer dialog exposes large increment/decrement controls, editable count
+  fields, live expected/counted/difference feedback and anchored actions. Its
+  denomination content is scrollable instead of being compressed by the main
+  Shift card's remaining height.
+- The pre-drawer-fix automated evidence contained `3/3` premium-foundation
+  contract tests and `3/3` contrast-token tests inside a `712/712` JVM suite.
+  The earlier targeted Room run reported `4/4` tests passed. These checks
+  support, but do not replace, human accessibility testing, and the final
+  current-source suite still needs to be rerun after the drawer-dialog change.
+- No TalkBack exploration, large-font/text-scaling run, switch-access run or
+  colour-vision user test was captured for this candidate. No current keyboard-
+  open login/dialog screenshot is part of this visual evidence set.
 
-- JVM suite: 405 tests passed with no failures.
-- Android instrumentation: 116 tests reported OK; 114 executed and passed, with two environment-assumption skips for notification posting and exact-alarm deep-idle delivery.
-- Recorded code-5 Phase 1 focused instrumentation: 10 tests passed with no failures.
-- Release lint: no errors; baseline warnings remain documented.
-- Release build: successful for version 3.0.4 (versionCode 5).
-- Reference comparison and responsive capture sets were opened and visually inspected after the final implementation, not treated as screenshot-only evidence.
+## Comparison history
 
-passed
+### Baseline: Android 3.1.1
+
+Evidence:
+`/tmp/d-company-erp-release-3.0.1/design-qa-assets/dcompany-before-3.1.1.png`
+
+- **Earlier P1 - weak station-to-action focus:** the grid repeated full actions
+  across cards and did not keep a selected station command area visible.
+- **Earlier P2 - dense shell competing with operations:** the wide identity,
+  search and status clusters reduced the station workspace at this tablet
+  width.
+- **Earlier P2 - warning hierarchy was too aggressive:** the timer-permission
+  warning used a large danger-red surface even though billing remained safe.
+
+### 3.1.2 fixes and post-fix evidence
+
+- Replaced the repeated full-card workflow with selectable station tiles and a
+  persistent command pane.
+- Changed the target-width shell to a labelled compact rail and icon actions
+  while keeping accessible descriptions and full-size targets.
+- Rebalanced typography so the station name, state, timer and estimate scan in
+  operational order.
+- Changed the alarm warning to a restrained bordered attention surface and kept
+  the two recovery actions explicit.
+- Added a stable summary strip and clear type filters without introducing fake
+  metrics.
+
+Post-fix evidence:
+`reference-vs-android-3.1.2.png` and
+`reference-vs-android-3.1.2-active.png`. Reinspection found no remaining P0,
+P1 or P2 issue in the states those composites actually cover.
+
+### Operational E2E finding and correction
+
+- **P1 found - drawer denomination controls collapsed inside the Shift card.**
+  In `dcompany-3.1.2-shift-before-close.png`, the inline denomination region
+  inherited only the main card's remaining height. At the target landscape
+  size this compressed the count workflow, exposed only part of the
+  denomination set and made accurate close-of-shift entry unreliable.
+- **Root fix:** the main Shift card now presents one explicit `Count cash` or
+  `Edit cash count` action. It opens a dedicated, bounded dialog whose
+  denomination grid scrolls independently. Expected, counted and difference
+  remain visible above the grid; Cancel and Use drawer count stay anchored
+  below it. Counts are applied to the main screen only when the operator
+  confirms the dialog.
+- **Post-fix visual evidence:**
+  `dcompany-3.1.2-shift-latest-before-count.png`,
+  `dcompany-3.1.2-shift-cash-count-dialog.png`,
+  `dcompany-3.1.2-shift-cash-count-balanced-dialog.png` and
+  `dcompany-3.1.2-shift-balanced-before-close.png` show all denominations,
+  the exact balanced total and the applied main-screen state without clipping.
+- **Close retest:** `dcompany-3.1.2-shift-close-confirmation.png` shows the
+  counted amount and irreversible-action warning;
+  `dcompany-3.1.2-shift-closed.png` gives explicit balanced success; and
+  `dcompany-3.1.2-shift-closed-history.png` records the opener, count,
+  collection total and payment split.
+
+## Isolated Gaming-to-close E2E result
+
+The evidence was generated against the isolated emulator/backend environment,
+not production.
+
+1. PS5 Station 1 produced a `₹23.34` Gaming charge plus one `₹60.00` Cola Can.
+   The `₹83.34` subtotal rounded by `-₹0.34` to a `₹83.00` cash receipt with
+   `₹83.00` tendered and `₹0.00` change.
+2. PS5 Station 2 produced a `₹3.34` Gaming charge. It rounded by `-₹0.34` to a
+   `₹3.00` UPI receipt.
+3. Shift reconciliation showed `₹86.00` gross, `₹0.00` refunds and `₹86.00`
+   net: `₹83.00` cash, `₹0.00` card, `₹3.00` UPI and `₹0.00` other.
+4. The drawer was counted to the expected cash-only `₹83.00`, producing a zero
+   difference and `balanced` state. The shift then closed through an explicit
+   confirmation and success dialog.
+5. Post-close isolated assertions reported zero active Gaming sessions, zero
+   pending Gaming payments, zero unpaid orders and zero open shifts. The closed
+   history retained `₹86.00` net collections with the `₹83.00` cash and `₹3.00`
+   UPI split.
+
+The cash and UPI success dialogs plus the canonical history/detail captures
+show that the two sales remained individually itemised and retrievable rather
+than being merged into one receipt.
+
+## Upgrade evidence and final-artifact boundary
+
+- The known baseline was the signed package `cloud.dcompany.erp`, `3.1.1`
+  (`versionCode 12`). An earlier, pre-drawer-dialog `3.1.2`
+  (`versionCode 13`) build was installed over that package on `emulator-5554`
+  without uninstalling it. That exercise recorded a matching signer and a
+  retained `firstInstallTime`, so it is valid evidence for the upgrade
+  mechanism that existed at that point.
+- The visible `1 waiting` offline-work indicator is present immediately before
+  and after that earlier upgrade in
+  `dcompany-before-upgrade-3.1.1.png` and
+  `dcompany-after-upgrade-3.1.2-offline.png`, supporting preservation of local
+  app state at the UI layer.
+- The focused Room `39 -> 40` instrumentation test passed and explicitly covers
+  preservation of local evidence while adding the canonical receipt cache.
+
+The drawer-dialog correction changes the current source after that APK was
+produced. Therefore the earlier installation is not final-artifact proof for
+the current source. The final `3.1.2` APK SHA-256, byte size, signing-certificate
+verification, build timestamp, manifest version check and a fresh
+`versionCode 12 -> 13` in-place upgrade result are intentionally pending the
+final rebuild. Nothing in this section proves production deployment,
+server-advertised update delivery, recovery against a live backend, or a
+successful upgrade on a partner-owned tablet.
+
+## Open questions and residual evidence gaps
+
+- Rebuild the current source, rerun the complete current-source JVM,
+  instrumentation, lint and build checks, then record the final APK metadata,
+  signer verification and a clean baseline-to-final in-place upgrade. The
+  earlier upgrade evidence predates the drawer-dialog correction.
+- A future polish pass could make the compact online indicator discoverable to
+  sighted users without relying on a tap or accessibility service, while
+  keeping the header uncluttered.
+- Recent station activity is present in the visual target but absent from the
+  current active command pane. It is a P3 information-density enhancement, not
+  a blocker for starting, extending, transferring, adding products or stopping
+  a session.
+
+## Physical Redmi Pad 2 limitation
+
+No physical Redmi Pad 2 was available. The emulator used the same
+`2560 x 1600` pixel raster at 320 dpi, but that does not certify the tablet's
+actual font rasterization, panel scaling, refresh rate, frame pacing, touch
+latency, software-keyboard behaviour, TalkBack behaviour, lock-screen alarms,
+reboot recovery, notification denial or OEM battery-optimisation behaviour.
+Those remain physical-device acceptance work.
+
+## Result
+
+The captured `3.1.2` login, available-station, shift-blocked, alarm-warning,
+offline, active-session, payment-due, cash receipt, UPI receipt, canonical
+receipt history/detail, cash-count, balanced-close and closed-history states
+pass the scoped emulator visual and interaction-hierarchy review. The isolated
+Gaming-to-close evidence reconciles `₹83.00` cash plus `₹3.00` UPI to `₹86.00`
+net and finishes with zero active Gaming sessions, pending Gaming payments,
+unpaid orders and open shifts.
+
+This is a pass for the captured emulator UI and isolated workflow only. A final
+current-source APK rebuild, test run, artifact metadata, signed in-place
+upgrade retest and physical Redmi Pad 2 acceptance remain pending; none is
+represented as production proof or partner-device proof.
+
+final result: passed

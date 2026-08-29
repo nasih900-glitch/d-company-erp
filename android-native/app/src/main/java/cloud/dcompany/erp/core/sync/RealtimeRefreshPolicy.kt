@@ -22,6 +22,16 @@ internal object RealtimeRefreshPolicy {
         // A gaming handoff creates a held POS order. It has no cafe-table
         // relationship, so a tables refresh would only add unnecessary I/O.
         "gaming" to listOf("gaming", "orders"),
+        // Receipt history is server-authoritative. Keep the receipt resource
+        // in the chain for the canonical history projection and also refresh
+        // the existing order-history/held-order cache used by current builds.
+        // The latter prevents another terminal's settlement or refund from
+        // leaving Android's operational order views stale during rollout.
+        "receipts" to listOf("receipts", "orders"),
+        // Audit is an owner-web projection. Android must still tolerate the
+        // shared server event vocabulary, but it has no audit cache to pull
+        // and should not wake the durable financial outbox for this event.
+        "audit" to emptyList(),
     )
 
     /**
@@ -30,7 +40,7 @@ internal object RealtimeRefreshPolicy {
      * pulls; using the global drain would wake unrelated POS/finance work.
      */
     fun requiresBroadOutboxDrain(changedResource: String): Boolean =
-        changedResource != "kitchen"
+        changedResource != "kitchen" && changedResource != "audit"
 
     fun resourcesFor(changedResource: String): List<String> =
         affectedResources[changedResource] ?: listOf(changedResource)

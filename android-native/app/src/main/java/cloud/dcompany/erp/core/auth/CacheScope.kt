@@ -61,6 +61,8 @@ internal val SERVER_DERIVED_CACHE_TABLES = listOf(
     "membership_payment_task_cache",
     "membership_refund_task_cache",
     "membership_refund_attempt_cache",
+    "canonical_pos_receipts",
+    "canonical_receipt_sync_state",
 )
 
 internal val LOCAL_DURABLE_TABLES = listOf(
@@ -198,6 +200,7 @@ internal data class CachedScopeLeaseActivation(
  * Capability captured before a server request. A response may mutate a
  * replaceable cache only while this exact lease is still active.
  */
+@ConsistentCopyVisibility
 data class CacheScopeLease internal constructor(
     val scope: CacheScope,
     internal val generation: Long,

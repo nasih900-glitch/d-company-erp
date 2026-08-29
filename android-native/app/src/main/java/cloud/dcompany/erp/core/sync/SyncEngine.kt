@@ -22,6 +22,7 @@ import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.AssetCacheEntity
 import cloud.dcompany.erp.core.db.CafeTableEntity
 import cloud.dcompany.erp.core.db.CapitalEntryCacheEntity
+import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
 import cloud.dcompany.erp.core.db.EventCacheEntity
 import cloud.dcompany.erp.core.db.EventTicketCacheEntity
@@ -91,8 +92,10 @@ import cloud.dcompany.erp.core.db.MenuModifierEntity
 import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
 import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.db.PosReceiptSource
+import cloud.dcompany.erp.core.db.RECEIPT_HISTORY_PAGE_SIZE
 import cloud.dcompany.erp.core.db.decodeModifierSelections
 import cloud.dcompany.erp.core.db.paymentReceipt
+import cloud.dcompany.erp.core.db.toCacheEntity
 import cloud.dcompany.erp.core.db.OnShiftEntity
 import cloud.dcompany.erp.core.db.ReportSnapshotEntity
 import cloud.dcompany.erp.core.db.RefundOrderCacheEntity
@@ -112,6 +115,7 @@ import cloud.dcompany.erp.core.db.SyncMetaEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.core.net.BackendReachability
 import cloud.dcompany.erp.core.net.backendIsOnline
@@ -732,6 +736,57 @@ internal fun resourceRefreshFailureMessage(resource: String, failure: Throwable)
     }
 }
 
+internal fun receiptHistoryCompatibilityMessage(failure: ApiException): String? =
+    if (failure.status == 404) {
+        "Shared receipt history is waiting for the server update. " +
+            "Receipts created on this tablet are still available."
+    } else {
+        null
+    }
+
+internal data class ReceiptHistoryPageWindow<T>(
+    val items: List<T>,
+    val nextCursor: String?,
+    val hasMore: Boolean,
+)
+
+/**
+ * Reload at least the persisted visible receipt window. This prevents a
+ * realtime refund outside page one from staying stale after staff have
+ * explicitly loaded older pages.
+ */
+internal suspend fun <T> fetchReceiptHistoryWindow(
+    targetCount: Int,
+    fetchPage: suspend (cursor: String?) -> ReceiptHistoryPageWindow<T>,
+): ReceiptHistoryPageWindow<T> {
+    val requiredCount = targetCount.coerceAtLeast(RECEIPT_HISTORY_PAGE_SIZE)
+    val items = mutableListOf<T>()
+    var cursor: String? = null
+    while (true) {
+        val page = fetchPage(cursor)
+        require(!page.hasMore || !page.nextCursor.isNullOrBlank()) {
+            "Receipt history says more rows exist but did not provide a continuation cursor."
+        }
+        if (page.hasMore) {
+            require(page.items.isNotEmpty()) {
+                "Receipt history returned an empty page before its final cursor."
+            }
+            require(page.nextCursor != cursor) {
+                "Receipt history repeated its continuation cursor."
+            }
+        }
+        items += page.items
+        if (!page.hasMore || items.size >= requiredCount) {
+            return ReceiptHistoryPageWindow(
+                items = items,
+                nextCursor = page.nextCursor,
+                hasMore = page.hasMore,
+            )
+        }
+        cursor = page.nextCursor
+    }
+}
+
 /** The durable action UUID itself is the server idempotency identity; never derive a mutable key. */
 internal fun packageExtensionIdempotencyKey(action: LocalGamingPackageExtensionEntity): String =
     action.actionId
@@ -1047,6 +1102,10 @@ class SyncEngine(
         // same trigger for the same reason — a table sending an order to POS
         // hits this same path, so the till's queue updates the instant it does.
         "orders" to { pullRefundableOrders(); pullHeldOrders() },
+        // Canonical paid/refunded receipt history is a separate server read
+        // model. It must never replace this tablet's immutable local payment
+        // evidence, which still owns immediate acknowledgement and printing.
+        "receipts" to ::pullReceiptHistoryWindow,
         "customers" to ::pullCustomers,
         "staff" to ::pullStaff,
         "attendance" to ::pullOnShift,
@@ -1377,6 +1436,52 @@ class SyncEngine(
     suspend fun refreshAllOnDemand() {
         for (resource in onDemandPulls.keys) {
             refresh(resource)
+        }
+    }
+
+    /**
+     * Cursor continuation for the explicit receipt-history "Load more"
+     * action. It shares the same resource lock as first-page/realtime pulls,
+     * so an older continuation can never overwrite newer cursor metadata.
+     */
+    suspend fun loadMoreReceiptHistory(): ResourceRefreshResult {
+        val key = "receipts"
+        val sessionLease = captureSessionWorkLease()
+            ?: return ResourceRefreshResult.Skipped(key)
+        return sessionWorkGuard.withLease(sessionLease) {
+            withSessionResourceSerialisation(sessionLease, key) {
+                if (!currentResourceAccess().canPull(key)) {
+                    return@withSessionResourceSerialisation ResourceRefreshResult.Skipped(key)
+                }
+                val state = db.canonicalReceiptDao().syncState()
+                val cursor = state?.nextCursor?.takeIf { state.hasMore && it.isNotBlank() }
+                    ?: return@withSessionResourceSerialisation ResourceRefreshResult.Skipped(key)
+                runAndRecordRefreshAlreadyLocked(
+                    key = key,
+                    pull = { pullNextReceiptHistoryPage(state, cursor) },
+                    feedbackLease = sessionLease.cache,
+                )
+            }
+        }
+    }
+
+    /** Refresh one selected canonical receipt while its cached copy remains immediately readable. */
+    suspend fun refreshReceiptHistoryDetail(orderId: String): ResourceRefreshResult {
+        val key = "receipts"
+        if (orderId.isBlank()) return ResourceRefreshResult.Skipped(key)
+        val sessionLease = captureSessionWorkLease()
+            ?: return ResourceRefreshResult.Skipped(key)
+        return sessionWorkGuard.withLease(sessionLease) {
+            withSessionResourceSerialisation(sessionLease, key) {
+                if (!currentResourceAccess().canPull(key)) {
+                    return@withSessionResourceSerialisation ResourceRefreshResult.Skipped(key)
+                }
+                runAndRecordRefreshAlreadyLocked(
+                    key = key,
+                    pull = { pullReceiptHistoryDetail(orderId) },
+                    feedbackLease = sessionLease.cache,
+                )
+            }
         }
     }
 
@@ -3883,6 +3988,137 @@ class SyncEngine(
                 }
             },
         )
+    }
+
+    /** Reload every page the operator has already exposed, not page one only. */
+    private suspend fun pullReceiptHistoryWindow() {
+        val lease = cacheIsolation.currentLease() ?: return
+        val branchId = lease.scope.branchId
+            ?: throw IllegalStateException("Receipt history requires an assigned branch.")
+        val previous = db.canonicalReceiptDao().syncState()
+        val fetchedAtMillis = System.currentTimeMillis()
+        val window = try {
+            fetchReceiptHistoryWindow(previous?.loadedCount ?: RECEIPT_HISTORY_PAGE_SIZE) { cursor ->
+                val page = ApiClient.api.receiptHistory(
+                    cursor = cursor,
+                    limit = RECEIPT_HISTORY_PAGE_SIZE,
+                )
+                ReceiptHistoryPageWindow(page.items, page.nextCursor, page.hasMore)
+            }
+        } catch (failure: ApiException) {
+            if (!recordReceiptHistoryCompatibility(lease, previous, fetchedAtMillis, failure)) {
+                throw failure
+            }
+            return
+        }
+        val entities = receiptHistoryEntities(window.items, lease, branchId, fetchedAtMillis)
+        commitToCurrentScope(lease) {
+            db.canonicalReceiptDao().storePage(
+                receipts = entities,
+                syncState = CanonicalReceiptSyncStateEntity(
+                    nextCursor = window.nextCursor,
+                    hasMore = window.hasMore,
+                    loadedCount = window.items.size,
+                    fetchedAtMillis = fetchedAtMillis,
+                    unavailableMessage = null,
+                ),
+                expectedCompanyId = lease.scope.companyId,
+                expectedBranchId = branchId,
+            )
+        }
+    }
+
+    /** Append exactly one explicitly requested page to the persisted fresh window. */
+    private suspend fun pullNextReceiptHistoryPage(
+        previous: CanonicalReceiptSyncStateEntity,
+        cursor: String,
+    ) {
+        val lease = cacheIsolation.currentLease() ?: return
+        val branchId = lease.scope.branchId
+            ?: throw IllegalStateException("Receipt history requires an assigned branch.")
+        val fetchedAtMillis = System.currentTimeMillis()
+        val page = try {
+            ApiClient.api.receiptHistory(cursor = cursor, limit = RECEIPT_HISTORY_PAGE_SIZE)
+        } catch (failure: ApiException) {
+            if (!recordReceiptHistoryCompatibility(lease, previous, fetchedAtMillis, failure)) {
+                throw failure
+            }
+            return
+        }
+        require(!page.hasMore || !page.nextCursor.isNullOrBlank()) {
+            "Receipt history says more rows exist but did not provide a continuation cursor."
+        }
+        require(!page.hasMore || page.nextCursor != cursor) {
+            "Receipt history repeated its continuation cursor."
+        }
+        val entities = receiptHistoryEntities(page.items, lease, branchId, fetchedAtMillis)
+        commitToCurrentScope(lease) {
+            db.canonicalReceiptDao().storePage(
+                receipts = entities,
+                syncState = CanonicalReceiptSyncStateEntity(
+                    nextCursor = page.nextCursor,
+                    hasMore = page.hasMore,
+                    loadedCount = previous.loadedCount + page.items.size,
+                    fetchedAtMillis = fetchedAtMillis,
+                    unavailableMessage = null,
+                ),
+                expectedCompanyId = lease.scope.companyId,
+                expectedBranchId = branchId,
+            )
+        }
+    }
+
+    /** Exact-detail refresh updates one projection and never discards the cached offline copy. */
+    private suspend fun pullReceiptHistoryDetail(orderId: String) {
+        val lease = cacheIsolation.currentLease() ?: return
+        val branchId = lease.scope.branchId
+            ?: throw IllegalStateException("Receipt history requires an assigned branch.")
+        val fetchedAtMillis = System.currentTimeMillis()
+        val receipt = try {
+            ApiClient.api.receipt(orderId)
+        } catch (failure: ApiException) {
+            // During a staged rollout the old backend does not have this route.
+            // A 404 cannot invalidate the durable cached copy already on screen.
+            if (receiptHistoryCompatibilityMessage(failure) != null) return
+            throw failure
+        }
+        val entity = receiptHistoryEntities(listOf(receipt), lease, branchId, fetchedAtMillis).single()
+        commitToCurrentScope(lease) { db.canonicalReceiptDao().upsert(entity) }
+    }
+
+    private fun receiptHistoryEntities(
+        receipts: List<CanonicalReceipt>,
+        lease: CacheScopeLease,
+        branchId: String,
+        fetchedAtMillis: Long,
+    ) = receipts.map { receipt ->
+        require(receipt.companyId == lease.scope.companyId) {
+            "Receipt history returned data for another company."
+        }
+        require(receipt.branchId == branchId) {
+            "Receipt history returned data for another branch."
+        }
+        receipt.toCacheEntity(fetchedAtMillis)
+    }
+
+    private suspend fun recordReceiptHistoryCompatibility(
+        lease: CacheScopeLease,
+        previous: CanonicalReceiptSyncStateEntity?,
+        fetchedAtMillis: Long,
+        failure: ApiException,
+    ): Boolean {
+        val message = receiptHistoryCompatibilityMessage(failure) ?: return false
+        commitToCurrentScope(lease) {
+            db.canonicalReceiptDao().putSyncState(
+                (previous ?: CanonicalReceiptSyncStateEntity(
+                    fetchedAtMillis = fetchedAtMillis,
+                )).copy(
+                    fetchedAtMillis = fetchedAtMillis,
+                    unavailableMessage = message,
+                ),
+            )
+        }
+        return true
     }
 
     /**

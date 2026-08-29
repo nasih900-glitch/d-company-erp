@@ -58,6 +58,7 @@ import {
   GamingWriteOnly,
   type GamingWriteDispatcher,
 } from './gaming-write-controls';
+
 import {
   PaidExtensionPersistenceError,
   clearPaidExtensionAttempt,
@@ -103,6 +104,11 @@ import {
   type GamingAddonCreateLockManager,
   type GamingAddonCreateTerminalScope,
 } from './gaming-addon-create-attempt';
+
+async function loadGamingCentreAddonCatalog(): Promise<MenuItemDTO[]> {
+  const [items, categories] = await Promise.all([menuApi.items(), menuApi.categories()]);
+  return availableGamingAddonItems(items, categories);
+}
 
 const ICON: Record<StationDTO['type'], React.ReactNode> = {
   ps5:       <Gamepad2 size={22}/>,
@@ -259,10 +265,8 @@ export default function GamingScreen() {
   const [, setTick] = useState(0); // force overtime/countdown recompute every second
   const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
-  // Member phone attached at session start — carried through to the order
-  // created at send-to-pos so loyalty points accrue automatically without
-  // the cashier re-entering it at POS checkout (gaming/router.py already
-  // wires GamingSession.customer_phone -> order.customer_phone -> points).
+  // Customer phone attached at session start — carried through to the order
+  // created at send-to-pos so the cashier does not re-enter it at checkout.
   const [sessionPhone, setSessionPhone] = useState<Record<string, string>>({});
   const [packages, setPackages] = useState<GamingPackageDTO[]>([]);
   const [pickerVariant, setPickerVariant] = useState<Record<string, string>>({});
@@ -559,8 +563,8 @@ export default function GamingScreen() {
           gaming.listSessions('ended', { unbilledOnly: true, limit: 500 }),
           gaming.listPackages(),
           shiftContextPromise,
-          menuApi.items()
-            .then((items) => ({ items: availableGamingAddonItems(items), error: null }))
+          loadGamingCentreAddonCatalog()
+            .then((items) => ({ items, error: null }))
             .catch((cause: unknown) => ({
               items: [] as MenuItemDTO[],
               error: cause instanceof Error
@@ -1905,7 +1909,7 @@ export default function GamingScreen() {
 
   async function refreshAddonCatalog() {
     try {
-      setAddonCatalog(availableGamingAddonItems(await menuApi.items()));
+      setAddonCatalog(await loadGamingCentreAddonCatalog());
       setAddonCatalogError(null);
     } catch (cause) {
       setAddonCatalogError(
@@ -2753,7 +2757,7 @@ export default function GamingScreen() {
                   const showControllerStepper = st.type === 'ps5' && variant === 'dual';
                   return (
                     <>
-                      <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
+                      <input type="tel" placeholder="Customer phone (optional)"
                         className="input !py-1.5 text-xs w-full mb-2"
                         disabled={!canManageStations || !canStartOnSelectedTerminal}
                         value={phone}
@@ -2827,7 +2831,7 @@ export default function GamingScreen() {
                   );
                 })() : (
                   <>
-                    <input type="tel" placeholder="Member phone (optional) — points accrue automatically"
+                    <input type="tel" placeholder="Customer phone (optional)"
                       className="input !py-1.5 text-xs w-full mb-2"
                       disabled={!canManageStations || !canStartOnSelectedTerminal}
                       value={phone}

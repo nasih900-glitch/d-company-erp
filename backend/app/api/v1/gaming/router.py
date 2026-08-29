@@ -2991,6 +2991,7 @@ async def stop_session(
     # paid extensions) and never changes based on how long they actually
     # played — billable_minutes above is still recorded for the audit trail.
     gs.status = "ended"
+    gs.stopped_by = tenant.user_id
     response = session_read(gs)
     if idempotency_key is not None:
         await store_response(
@@ -3899,6 +3900,8 @@ async def resolve_legacy_gaming_outbox(
                 )
             if recovered_session.order_id is None:
                 recovered_session.order_id = reference_order.id
+                recovered_session.sent_to_pos_by = tenant.user_id
+                recovered_session.sent_to_pos_at = datetime.now(timezone.utc)
                 manual_order_linked_now = True
                 session.add(
                     AuditLog(
@@ -4532,6 +4535,8 @@ async def _create_session_pos_order(
     # snapshot trigger resolves an add-on through GamingSession.order_id; both
     # the link and every copied line remain atomic with this transaction.
     gaming_session.order_id = order.id
+    gaming_session.sent_to_pos_by = opened_by
+    gaming_session.sent_to_pos_at = now
     await session.flush()
 
     gaming_line = OrderLine(

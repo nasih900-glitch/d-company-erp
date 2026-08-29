@@ -2288,4 +2288,58 @@ class MigrationTest {
         assertTrue("A closing shift must reject a newly queued Gaming item", closingGuarded)
         migrated.close()
     }
+
+    @Test
+    fun migrate39To40PreservesLocalEvidenceAndAddsCanonicalReceiptCache() {
+        helper.createDatabase(dbName, 39).apply {
+            execSQL(
+                "INSERT INTO pos_receipts " +
+                    "(receiptId, orderId, paymentId, shiftId, sourceKind, sourceLabel, " +
+                    "customerName, customerPhone, orderNote, subtotalMinor, discountMinor, " +
+                    "taxMinor, roundOffMinor, totalMinor, dueBeforePaymentMinor, method, " +
+                    "amountMinor, billAmountMinor, tipMinor, tenderedMinor, changeMinor, " +
+                    "refExternal, paidAt, orderStatus, invoiceNo, fiscalYear, invoiceIssuedAt, " +
+                    "linesJson, createdAtMillis, acknowledgedAtMillis) VALUES " +
+                    "('payment-1', 'order-1', 'payment-1', 'shift-1', 'direct_pos', 'POS', " +
+                    "NULL, NULL, NULL, 10000, 0, 0, 0, 10000, 10000, 'cash', 10000, " +
+                    "10000, 0, 10000, 0, NULL, '2026-08-29T10:00:00Z', 'paid', 'INV-1', " +
+                    "'2026-27', '2026-08-29T10:00:00Z', '[]', 1000, NULL)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 40, true, MIGRATION_39_40)
+        migrated.query("SELECT orderId FROM pos_receipts WHERE receiptId = 'payment-1'").use { cursor ->
+            assertTrue("Local payment evidence must survive the cache migration", cursor.moveToFirst())
+            assertEquals("order-1", cursor.getString(0))
+        }
+        migrated.execSQL(
+            "INSERT INTO canonical_pos_receipts " +
+                "(orderId, companyId, branchId, terminalId, invoiceNo, status, orderType, " +
+                "totalMinor, paidMinor, invoiceIssuedAt, invoiceIssuedAtMillis, payloadJson, " +
+                "fetchedAtMillis) VALUES ('order-2', 'company-1', 'branch-1', 'terminal-1', " +
+                "'INV-2', 'paid', 'gaming', 12500, 12500, '2026-08-29T11:00:00Z', " +
+                "2000, '{}', 3000)",
+        )
+        migrated.execSQL(
+            "INSERT INTO canonical_receipt_sync_state " +
+                "(id, nextCursor, hasMore, loadedCount, fetchedAtMillis, unavailableMessage) VALUES " +
+                "(1, 'cursor-2', 1, 50, 3000, NULL)",
+        )
+        migrated.query(
+            "SELECT companyId, branchId, totalMinor FROM canonical_pos_receipts WHERE orderId = 'order-2'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("company-1", cursor.getString(0))
+            assertEquals("branch-1", cursor.getString(1))
+            assertEquals(12_500L, cursor.getLong(2))
+        }
+        migrated.query(
+            "SELECT loadedCount FROM canonical_receipt_sync_state WHERE id = 1",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(50, cursor.getInt(0))
+        }
+        migrated.close()
+    }
 }

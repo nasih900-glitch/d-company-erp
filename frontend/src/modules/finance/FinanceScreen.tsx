@@ -36,6 +36,7 @@ import { rupeesToMinor } from '@/lib/manual-collections';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { useNotifications } from '@/components/ui/Notifications';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 import AssetsTab from './AssetsTab';
 import ManualCollectionsTab from './ManualCollectionsTab';
 import TipPayoutsTab from './TipPayoutsTab';
@@ -95,8 +96,9 @@ function OverviewTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load() {
-    setLoading(true); setErr(null);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
+    setErr(null);
     try {
       const [receiptIdentity, daily, businessMetrics, costingCoverage] = await Promise.all([
         TAX_COMPLIANCE_UI_ENABLED ? pos.receiptBusiness().catch(() => null) : Promise.resolve(null),
@@ -109,9 +111,13 @@ function OverviewTab() {
       setCosting(costingCoverage);
       setGstRegistered(receiptIdentity?.gst_registration_type !== 'unregistered');
     } catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+  useRealtimeRefresh({
+    resources: ['finance', 'inventory'],
+    refresh: () => load(true),
+  });
 
   if (loading) {
     return <SkeletonCard />;
@@ -141,7 +147,7 @@ function OverviewTab() {
         <p className="text-xs text-fg-muted">
           Today · {data.orders_count} order{data.orders_count === 1 ? '' : 's'} · {data.tickets_count} ticket{data.tickets_count === 1 ? '' : 's'} · Avg {inr(data.avg_ticket_minor)}
         </p>
-        <button className="btn btn-ghost !min-h-[28px] !py-1 !px-2 text-xs" onClick={load}>
+        <button className="btn btn-ghost !min-h-[28px] !py-1 !px-2 text-xs" onClick={() => void load()}>
           <RefreshCw size={11}/>
         </button>
       </div>
@@ -339,8 +345,9 @@ function ExpensesTab() {
   const [deleteExpense, setDeleteExpense] = useState<ExpenseDTO | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  async function load() {
-    setLoading(true); setErr(null);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
+    setErr(null);
     try {
       const [r, c, b] = await Promise.all([
         finance.listExpenses(),
@@ -349,9 +356,10 @@ function ExpensesTab() {
       ]);
       setRows(r); setCats(c); setBranches(b);
     } catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   async function confirmDelete() {
     if (!deleteExpense || deleteBusy) return;
@@ -382,7 +390,7 @@ function ExpensesTab() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost" onClick={() => void load()}><RefreshCw size={14}/></button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)}
             disabled={!cats.length || !branches.length}>
             <Plus size={14}/> Add expense
@@ -621,8 +629,9 @@ function PartnersTab() {
   const [capPartner, setCapPartner] = useState<PartnerDTO | null>(null);
   const [ledgerPartner, setLedgerPartner] = useState<PartnerDTO | null>(null);
 
-  async function load() {
-    setLoading(true); setErr(null);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
+    setErr(null);
     try {
       const [partners, profitSplit, distributableProfit] = await Promise.all([
         finance.listPartners(),
@@ -634,9 +643,10 @@ function PartnersTab() {
       setDistributable(distributableProfit);
     }
     catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   const shareByPartnerId = new Map(split?.partners.map((p) => [p.partner_id, p.profit_share_minor]) ?? []);
   const distributableByPartnerId = new Map(
@@ -967,19 +977,20 @@ function LedgerModal({
   const [err, setErr] = useState<string | null>(null);
   const [voiding, setVoiding] = useState<CapitalEntryDTO | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setErr(null);
     try {
       setRows(await finance.listCapital(partner.id, true));
     } catch (error) {
       setErr((error as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [partner.id]);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   const activeBalance = rows.reduce((sum, row) => {
     if (row.is_voided) return sum;

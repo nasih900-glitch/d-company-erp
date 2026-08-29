@@ -5,7 +5,7 @@
  * inventory value, low-stock count, open gaming sessions, net profit).
  * Demo mode: HOURLY_REVENUE + TOP_ITEMS fixtures.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -21,6 +21,7 @@ import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { isProfileRouteEnabled, profileMembershipMoneyLabel } from '@/lib/product-profile';
 import { analytics, type DashboardKPIsDTO } from '@/lib/erp-api';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 function todayISO(): string {
   const d = new Date();
@@ -34,14 +35,19 @@ export default function AnalyticsScreen() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load() {
-    setLoading(true); setErr(null);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    setErr(null);
     try {
       setData(await analytics.dashboard(todayISO()));
     } catch (e) { setErr((e as Error).message); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+    finally { if (!silent) setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({
+    resources: ['finance', 'gaming', 'inventory', 'shifts'],
+    refresh: () => load(true),
+  });
 
   const empty = data && data.orders_count === 0 && data.tickets_count === 0
     && data.revenue_total_minor === 0;
@@ -58,10 +64,10 @@ export default function AnalyticsScreen() {
         <div>
           <h2 className="text-2xl font-bold">Analytics</h2>
           <p className="text-fg-muted text-sm">
-            Today's performance · live · refreshes on click
+            Today's performance · live · updates automatically
           </p>
         </div>
-        <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        <button className="btn btn-ghost" onClick={() => void load()}><RefreshCw size={14}/></button>
       </header>
 
       {loading ? (

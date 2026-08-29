@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui.screens.shift
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
@@ -160,5 +161,51 @@ class ShiftCompactUiTest {
         compose.onNodeWithText("Close shift")
             .performScrollTo()
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun drawerCountDialogKeepsEveryDenominationReachableAtTabletLandscapeSize() {
+        var applied: Map<Long, String>? = null
+
+        compose.setContent {
+            DCompanyTheme {
+                // A 1280 x 800dp app window leaves roughly this bounded dialog
+                // surface after system bars and the dialog's outer margin.
+                Box(Modifier.width(960.dp).height(680.dp)) {
+                    DrawerCountDialogContent(
+                        initialCounts = emptyMap(),
+                        expectedMinor = 50_200L,
+                        enabled = true,
+                        onDismiss = {},
+                        onApply = { applied = it },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+
+        DENOMINATIONS.forEach { note ->
+            compose.onNodeWithContentDescription("Count of ₹$note notes")
+                .performScrollTo()
+                .assertIsDisplayed()
+                .assertIsEnabled()
+        }
+
+        compose.onNodeWithContentDescription("Count of ₹500 notes")
+            .performScrollTo()
+            .performTextReplacement("1")
+        compose.onNodeWithContentDescription("Count of ₹1 notes")
+            .performScrollTo()
+            .performTextReplacement("2")
+        compose.onNodeWithText("Use drawer count")
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+
+        compose.runOnIdle {
+            assertEquals("1", applied?.get(500L))
+            assertEquals("2", applied?.get(1L))
+            assertEquals(50_200L, drawerCountedMinor(applied.orEmpty()))
+        }
     }
 }

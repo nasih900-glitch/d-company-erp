@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
@@ -48,6 +51,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.ShiftAccess
 import cloud.dcompany.erp.core.db.LocalShiftEntity
@@ -516,9 +521,7 @@ private fun CloseShiftCard(
     // shift must never inherit another shift's drawer count or confirmation;
     // continuing a rejected shift must also start a fresh recount.
     val counts = remember(shiftIdentity, closeBlocked) { mutableStateMapOf<Long, String>() }
-    val draftCountedMinor = DENOMINATIONS.sumOf { note ->
-        note * 100 * (counts[note]?.toLongOrNull() ?: 0L)
-    }
+    val draftCountedMinor = drawerCountedMinor(counts)
     val closePresentation = shiftClosePresentation(
         localState = shift.local?.state,
         savedCountedMinor = shift.local?.countedMinor,
@@ -530,6 +533,7 @@ private fun CloseShiftCard(
     }
     var confirmationGuardMessage by remember { mutableStateOf<String?>(null) }
     var accountingExpanded by remember(shiftIdentity) { mutableStateOf(false) }
+    var drawerCountOpen by remember(shiftIdentity, closeBlocked) { mutableStateOf(false) }
 
     val cardModifier = if (compactLayout) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
     Column(
@@ -789,16 +793,17 @@ private fun CloseShiftCard(
             if (!compactLayout) Spacer(Modifier.weight(1f))
         } else {
             Text("Count the drawer", color = Brand.Foreground, fontWeight = FontWeight.SemiBold)
-            DenominationCountGrid(
-                compactLayout = compactLayout,
-                counts = counts,
-                onCountChange = { note, value -> counts[note] = value },
+            Text(
+                "Count each note and coin in a focused view. Your total and difference stay visible here.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            ErpButton(
+                text = if (counts.isEmpty()) "Count cash" else "Edit cash count",
+                onClick = { drawerCountOpen = true },
                 enabled = closePresentation.canEditCount,
-                modifier = if (compactLayout) {
-                    Modifier.fillMaxWidth()
-                } else {
-                    Modifier.fillMaxWidth().weight(1f)
-                },
+                leadingIcon = Icons.Filled.AccountBalanceWallet,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
 
@@ -857,6 +862,22 @@ private fun CloseShiftCard(
         }
     }
 
+    if (drawerCountOpen && !closePresentation.usesSavedCount) {
+        DrawerCountDialog(
+            initialCounts = counts,
+            expectedMinor = state.expectedMinor,
+            enabled = closePresentation.canEditCount,
+            onDismiss = { drawerCountOpen = false },
+            onApply = { updatedCounts ->
+                counts.clear()
+                updatedCounts
+                    .filterValues(String::isNotBlank)
+                    .forEach { (note, value) -> counts[note] = value }
+                drawerCountOpen = false
+            },
+        )
+    }
+
     val activeConfirmation = confirmation?.takeIf {
         it.isFor(shiftIdentity) && !closeBlocked
     }
@@ -910,6 +931,161 @@ private fun CloseShiftCard(
     }
 }
 
+internal fun drawerCountedMinor(counts: Map<Long, String>): Long =
+    DENOMINATIONS.sumOf { note ->
+        note * 100 * (counts[note]?.toLongOrNull() ?: 0L)
+    }
+
+@Composable
+internal fun DrawerCountDialog(
+    initialCounts: Map<Long, String>,
+    expectedMinor: Long?,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    onApply: (Map<Long, String>) -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        DrawerCountDialogContent(
+            initialCounts = initialCounts,
+            expectedMinor = expectedMinor,
+            enabled = enabled,
+            onDismiss = onDismiss,
+            onApply = onApply,
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.9f)
+                .widthIn(max = 960.dp)
+                .heightIn(min = 480.dp, max = 720.dp),
+        )
+    }
+}
+
+@Composable
+internal fun DrawerCountDialogContent(
+    initialCounts: Map<Long, String>,
+    expectedMinor: Long?,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    onApply: (Map<Long, String>) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val draftCounts = remember {
+        mutableStateMapOf<Long, String>().apply { putAll(initialCounts) }
+    }
+    val countedMinor = drawerCountedMinor(draftCounts)
+    val differenceMinor = expectedMinor?.let { countedMinor - it }
+
+    Surface(
+        color = Brand.SurfaceOverlay,
+        shape = Radius.shapeXl,
+        tonalElevation = 0.dp,
+        modifier = modifier
+            .border(1.dp, Brand.Border, Radius.shapeXl)
+            .semantics { contentDescription = "Drawer count dialog" },
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        "Count the drawer",
+                        color = Brand.Foreground,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "Enter how many of each note or coin is physically in the drawer.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        DENOMINATIONS.forEach { draftCounts.remove(it) }
+                    },
+                    enabled = enabled && draftCounts.isNotEmpty(),
+                ) {
+                    Text("Clear all")
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+            ) {
+                CollectionMetric(
+                    label = "Expected",
+                    value = expectedMinor?.asRupees() ?: "Unavailable",
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (expectedMinor == null) Brand.Warning else Brand.Foreground,
+                )
+                CollectionMetric(
+                    label = "Counted",
+                    value = countedMinor.asRupees(),
+                    modifier = Modifier.weight(1f),
+                )
+                CollectionMetric(
+                    label = "Difference",
+                    value = when {
+                        differenceMinor == null -> "Unavailable"
+                        differenceMinor == 0L -> "Balanced"
+                        differenceMinor > 0 -> "Over ${differenceMinor.asRupees()}"
+                        else -> "Short ${(-differenceMinor).asRupees()}"
+                    },
+                    modifier = Modifier.weight(1f),
+                    valueColor = when {
+                        differenceMinor == null -> Brand.ForegroundMuted
+                        differenceMinor == 0L -> Brand.Good
+                        else -> Brand.Danger
+                    },
+                )
+            }
+
+            PanelDivider()
+            DenominationCountGrid(
+                compactLayout = false,
+                counts = draftCounts,
+                onCountChange = { note, value -> draftCounts[note] = value },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            PanelDivider()
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+                ErpButton(
+                    text = "Use drawer count",
+                    onClick = {
+                        onApply(
+                            DENOMINATIONS.associateWith { note -> draftCounts[note].orEmpty() },
+                        )
+                    },
+                    enabled = enabled,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 internal fun DenominationCountGrid(
     compactLayout: Boolean,
@@ -918,10 +1094,10 @@ internal fun DenominationCountGrid(
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    if (compactLayout) {
-        BoxWithConstraints(modifier.fillMaxWidth()) {
-            val columnCount = denominationColumnCount(maxWidth)
-            val denominationRows = DENOMINATIONS.chunked(columnCount)
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val columnCount = denominationColumnCount(maxWidth)
+        val denominationRows = DENOMINATIONS.chunked(columnCount)
+        if (compactLayout) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 denominationRows.forEach { rowNotes ->
                     DenominationCountRow(
@@ -933,21 +1109,20 @@ internal fun DenominationCountGrid(
                     )
                 }
             }
-        }
-    } else {
-        val denominationRows = DENOMINATIONS.chunked(3)
-        LazyColumn(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(denominationRows) { rowNotes ->
-                DenominationCountRow(
-                    rowNotes = rowNotes,
-                    columnCount = 3,
-                    counts = counts,
-                    onCountChange = onCountChange,
-                    enabled = enabled,
-                )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(denominationRows) { rowNotes ->
+                    DenominationCountRow(
+                        rowNotes = rowNotes,
+                        columnCount = columnCount,
+                        counts = counts,
+                        onCountChange = onCountChange,
+                        enabled = enabled,
+                    )
+                }
             }
         }
     }

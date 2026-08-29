@@ -12,6 +12,7 @@ import { canViewMemberships } from '@/modules/memberships/membership-policy';
 import {
   canManageGamingCentreProducts,
   GAMING_CENTRE_FEATURES,
+  webLandingRouteFor,
   WEB_PRODUCT_PROFILE,
   type WebFeature,
 } from '@/lib/product-profile';
@@ -114,6 +115,13 @@ function ProductManagementOnly({ children }: { children: ReactNode }) {
   return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
 }
 
+function ProfileLanding() {
+  const { me, demo } = useAuth();
+  if (demo) return <Navigate to="/analytics" replace />;
+  if (!me) return <Navigate to="/login" replace />;
+  return <Navigate to={webLandingRouteFor(me)} replace />;
+}
+
 function WorkspaceUnavailable() {
   return (
     <div className="card mx-auto mt-8 max-w-xl text-center">
@@ -181,7 +189,7 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />} />
+        <Route index element={<ProfileLanding />} />
         <Route path="/workspace-unavailable" element={<WorkspaceUnavailable />} />
         <Route path="/pos" element={
           <FeatureOnly feature="pos"><ModuleAccessOnly module="pos"><Screen>{LIVE_MODE ? <LivePOSScreen /> : <POSScreen />}</Screen></ModuleAccessOnly></FeatureOnly>

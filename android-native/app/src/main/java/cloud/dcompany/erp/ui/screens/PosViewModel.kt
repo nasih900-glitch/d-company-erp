@@ -15,6 +15,7 @@ import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.CustomerCacheEntity
+import cloud.dcompany.erp.core.db.CanonicalReceiptSyncStateEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
 import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
 import cloud.dcompany.erp.core.db.LocalOrderEntity
@@ -26,9 +27,11 @@ import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
 import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.db.PosReceiptSource
 import cloud.dcompany.erp.core.db.PosReceiptEntity
+import cloud.dcompany.erp.core.db.RECEIPT_HISTORY_PAGE_SIZE
 import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.db.zeroTotalReceipt
+import cloud.dcompany.erp.core.db.decodedReceipt
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.db.shiftClosingMessageOr
 import cloud.dcompany.erp.core.net.ApiClient
@@ -38,7 +41,9 @@ import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.core.net.OrderDiscountUpdateRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.OrderPointsRedemptionUpdateRequest
+import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -48,12 +53,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
@@ -185,8 +193,12 @@ private data class PosMenuSnapshot(
 )
 
 data class PosUiState(
+    /** Full available catalogue retained for durable draft/retry reconstruction. */
     val categories: List<MenuCategoryEntity> = emptyList(),
     val items: List<MenuItemEntity> = emptyList(),
+    /** Release-profile subset offered for a brand-new counter sale. */
+    val operationalCategories: List<MenuCategoryEntity> = emptyList(),
+    val operationalItems: List<MenuItemEntity> = emptyList(),
     val variants: List<MenuVariantEntity> = emptyList(),
     val modifierGroups: List<MenuModifierGroupEntity> = emptyList(),
     val modifiers: List<MenuModifierEntity> = emptyList(),
@@ -253,8 +265,8 @@ data class PosUiState(
     val manualDiscountMinor: Long = 0,
 ) {
     val visibleItems: List<MenuItemEntity>
-        get() = if (selectedCategoryId == null) items
-            else items.filter { it.categoryId == selectedCategoryId }
+        get() = if (selectedCategoryId == null) operationalItems
+            else operationalItems.filter { it.categoryId == selectedCategoryId }
 
     /**
      * Cart-side estimate only. The server does the canonical pricing — tax,
@@ -309,6 +321,47 @@ class PosViewModel : ViewModel() {
     val recentReceipts: StateFlow<List<PosReceiptEntity>> = db.posReceiptDao()
         .observeRecent()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _receiptHistoryLoading = MutableStateFlow(false)
+    val receiptHistoryLoading: StateFlow<Boolean> = _receiptHistoryLoading.asStateFlow()
+
+    val receiptHistorySyncState: StateFlow<CanonicalReceiptSyncStateEntity?> =
+        db.canonicalReceiptDao().observeSyncState()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * Receipts from every web/Android till in the current company and branch.
+     * Invalid cached JSON is omitted rather than crashing POS; the next
+     * authoritative refresh replaces that order's projection.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val canonicalReceipts: StateFlow<List<CanonicalReceipt>> = combine(
+        app.shiftCache.profile,
+        receiptHistorySyncState,
+    ) { profile, syncState ->
+        profile to (syncState?.loadedCount ?: 0).coerceAtLeast(RECEIPT_HISTORY_PAGE_SIZE)
+    }.flatMapLatest { (profile, limit) ->
+        val branchId = profile?.branchId
+        if (profile == null || branchId == null) {
+            flowOf(emptyList())
+        } else {
+            db.canonicalReceiptDao().observeRecent(
+                companyId = profile.companyId,
+                branchId = branchId,
+                limit = limit,
+            )
+        }
+    }.map { rows -> rows.mapNotNull { it.decodedReceipt() } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val receiptHistoryError: StateFlow<String?> = combine(
+        receiptHistorySyncState,
+        app.sync.resourceRefreshErrors,
+    ) { state, errors ->
+        // A later network/auth/server failure is more current than a cached
+        // staged-rollout 404 notice and must not be hidden by it.
+        errors["receipts"] ?: state?.unavailableMessage
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val unacknowledgedReceipt: StateFlow<PosReceiptEntity?> = db.posReceiptDao()
         .observeOldestUnacknowledged()
@@ -421,6 +474,16 @@ class PosViewModel : ViewModel() {
         val bannerMuted = muteMatchesCurrentWork &&
             heldQueue.bannerMute.untilMillis > heldQueue.nowMillis
         val currentItems = menu.items.associateBy { it.id }
+        val categoryNames = menu.categories.associate { it.id to it.name }
+        val operationalItems = menu.items.filter { item ->
+            WorkspaceFeatureProfiles.Active.operationalCatalogPolicy.allows(
+                categoryName = categoryNames[item.categoryId],
+                itemType = item.type,
+                isAvailable = item.isAvailable,
+            )
+        }
+        val operationalCategoryIds = operationalItems.mapTo(linkedSetOf()) { it.categoryId }
+        val operationalCategories = menu.categories.filter { it.id in operationalCategoryIds }
         val currentVariants = menu.variants.associateBy { it.id }
         val currentModifiers = menu.modifiers.associateBy { it.id }
         val draftOrder = menu.draft?.order
@@ -450,10 +513,12 @@ class PosViewModel : ViewModel() {
         PosUiState(
             items = menu.items,
             categories = menu.categories,
+            operationalItems = operationalItems,
+            operationalCategories = operationalCategories,
             variants = menu.variants,
             modifierGroups = menu.modifierGroups,
             modifiers = menu.modifiers,
-            selectedCategoryId = uiValues.first,
+            selectedCategoryId = uiValues.first?.takeIf { it in operationalCategoryIds },
             cart = menu.draft?.lines.orEmpty()
                 .sortedBy { it.rowId }
                 .map { it.toCartLine(currentItems, currentVariants, currentModifiers) },
@@ -495,7 +560,7 @@ class PosViewModel : ViewModel() {
                 )
             },
             retryingHeldPaymentIds = retries.heldPaymentIds,
-            menuEmpty = menu.items.isEmpty(),
+            menuEmpty = operationalItems.isEmpty(),
             everSynced = meta != null,
             heldOrders = visibleHeldOrders,
             overdueHeldOrderIds = overdueIds,
@@ -569,6 +634,7 @@ class PosViewModel : ViewModel() {
                     ?: "The menu could not be downloaded. Check the connection, then tap Download menu."
             }
             app.sync.refresh("orders")
+            app.sync.refresh("receipts")
         }
     }
 
@@ -581,6 +647,43 @@ class PosViewModel : ViewModel() {
                     ?: "The menu could not be downloaded. Check the connection, then try again."
             }
             app.sync.refresh("orders")
+            app.sync.refresh("receipts")
+        }
+    }
+
+    fun refreshReceiptHistory() {
+        if (_receiptHistoryLoading.value) return
+        viewModelScope.launch {
+            _receiptHistoryLoading.value = true
+            try {
+                app.sync.refresh("receipts")
+            } finally {
+                _receiptHistoryLoading.value = false
+            }
+        }
+    }
+
+    fun loadMoreReceiptHistory() {
+        if (_receiptHistoryLoading.value || receiptHistorySyncState.value?.hasMore != true) return
+        viewModelScope.launch {
+            _receiptHistoryLoading.value = true
+            try {
+                app.sync.loadMoreReceiptHistory()
+            } finally {
+                _receiptHistoryLoading.value = false
+            }
+        }
+    }
+
+    fun refreshReceiptHistoryDetail(orderId: String) {
+        if (orderId.isBlank() || _receiptHistoryLoading.value) return
+        viewModelScope.launch {
+            _receiptHistoryLoading.value = true
+            try {
+                app.sync.refreshReceiptHistoryDetail(orderId)
+            } finally {
+                _receiptHistoryLoading.value = false
+            }
         }
     }
 
@@ -634,6 +737,10 @@ class PosViewModel : ViewModel() {
 
     fun add(item: MenuItemEntity) {
         if (!requireWrite()) return
+        if (state.value.operationalItems.none { it == item }) {
+            notice.value = "This product is not available for a new Gaming Centre sale. Refresh Products."
+            return
+        }
         mutateEditableCart { lines ->
             val index = lines.indexOfFirst {
                 it.item.id == item.id && it.variant == null &&
@@ -656,6 +763,10 @@ class PosViewModel : ViewModel() {
         note: String?,
     ) {
         if (!requireWrite()) return
+        if (state.value.operationalItems.none { it == item }) {
+            notice.value = "This product is not available for a new Gaming Centre sale. Refresh Products."
+            return
+        }
         val candidate = newCartLine(item, variant, modifiers, note)
         mutateEditableCart { lines ->
             val index = lines.indexOfFirst { current ->

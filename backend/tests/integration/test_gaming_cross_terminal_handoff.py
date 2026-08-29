@@ -161,3 +161,5 @@ async def test_archived_legacy_till_is_excluded_and_hybrid_workspace_bills_local
     assert order.shift_id == workspace_shift.id
     assert order.terminal_id == workspace.id
     assert order.branch_id == branch.id
+    assert gaming_session.sent_to_pos_by == owner.id
+    assert gaming_session.sent_to_pos_at == order.held_at

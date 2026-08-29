@@ -474,6 +474,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = AuthState.SignedIn(me)
             sync.requestSync()
             realtime.connect()
+            refreshReceiptHistoryAfterLogin(me)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: CacheScopeException) {
@@ -598,6 +599,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = AuthState.SignedIn(me)
                 sync.requestSync()
                 realtime.connect()
+                refreshReceiptHistoryAfterLogin(me)
             } catch (cancelled: CancellationException) {
                 rollbackCancelledLoginAndRethrow(
                     installedLogin = installedLogin ?: installedLoginCapture.get(),
@@ -1059,6 +1061,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 reconcileOperationalAlarms()
                 sync.requestSync()
                 realtime.connect()
+                refreshReceiptHistoryAfterLogin(pending.me)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
@@ -1353,6 +1356,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // An older GET therefore cannot repopulate stale authority between
         // this login reset and its replacement read.
         sync.refreshShiftAuthorityAtLogin()
+    }
+
+    /** Receipt history is useful at login, but never belongs on the sign-in critical path. */
+    private fun refreshReceiptHistoryAfterLogin(me: MeResponse) {
+        if (!EffectivePermissions.from(me).has(ErpPermission.PosRead)) return
+        viewModelScope.launch { sync.refresh("receipts") }
     }
 
     fun signOut() {

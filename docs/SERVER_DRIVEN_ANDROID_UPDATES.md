@@ -25,14 +25,14 @@ be newest on the hosted runner.
 
 ## One-time bootstrap boundary
 
-Version `3.1.0` (code `11`) is the first build containing the verified in-app
-direct updater. An already-installed `3.0.9` or older app cannot acquire new
-installer code from the server. Install the signed `3.1.0` APK once through
-Android's normal package installer and prove that its local database/outbox is
-preserved. Server-delivered verified APK updates are available only for later
-versions installed over that `3.1.0` baseline.
-Version `3.1.1` (code `12`) is the next immutable update identity; never
-overwrite the already signed code-`11` APK with changed bytes.
+Version `3.1.0` (code `11`) first introduced the verified in-app direct updater.
+An already-installed `3.0.9` or older app cannot acquire new installer code
+from the server. The already signed `3.1.1` (code `12`) partner APK is now the
+preserved manual-install, update-capable baseline. Never overwrite either
+signed identity with changed bytes, and do not advertise code `12` as a server
+update. Version `3.1.2` (code `13`) is the first later candidate intended to be
+advertised to that baseline through the server. It is not currently signed,
+published, deployed, or advertised.
 
 The repository and Compose defaults deliberately keep
 `ANDROID_LATEST_VERSION_CODE=8`. Building a newer APK is not authority to
@@ -76,37 +76,42 @@ installation path.
 
 ## Safe rollout
 
-Assume the currently installed production build has version code `8`; a test
-tablet may instead hold the earlier schema-37 code-`9` candidate or the signed
-`3.1.0` updater bootstrap at code `11`. The new signed release has version code
-`12`.
+Assume the partner tablet has the exact signed `3.1.1` baseline at code `12`,
+installed manually through Android's package installer. Older supported clients
+may remain at code `8`, code `9`, or the signed `3.1.0` code `11`; none is proof
+that the code-`12` partner baseline was installed successfully. The candidate
+server-delivered release has version code `13`.
 
-1. Produce and verify the signed version-code-12 APK before changing the server.
-2. Publish the APK on the controlled HTTPS release channel.
-3. Confirm its signing-certificate fingerprint matches the installed app.
-4. Configure the backend initially as:
+1. Confirm the installed code-`12` baseline has the expected signer, no pending
+   offline work, and a working update check.
+2. Produce and verify the signed version-code-13 APK without changing the
+   server's update metadata.
+3. Publish the immutable APK on the controlled HTTPS release channel and
+   confirm its signing-certificate fingerprint matches code `12`.
+4. Only after the artifact and complete manifest are verified, configure the
+   backend initially as:
 
    ```dotenv
    ANDROID_MIN_SUPPORTED_VERSION_CODE=8
-   ANDROID_LATEST_VERSION_CODE=12
-   ANDROID_LATEST_VERSION_NAME=3.1.1
-   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.1.apk
+   ANDROID_LATEST_VERSION_CODE=13
+   ANDROID_LATEST_VERSION_NAME=3.1.2
+   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.2.apk
    ANDROID_UPDATE_APK_SHA256=<64-hex APK digest from release-manifest.json>
    ANDROID_UPDATE_APK_SIZE_BYTES=<exact byte size from release-manifest.json>
    ANDROID_UPDATE_SIGNING_CERT_SHA256=<64-hex signer digest from release-manifest.json>
    ANDROID_UPDATE_RELEASE_NOTES=Gaming Centre reliability update
    ```
 
-   Version 8 remains operational and sees an optional update. Version 12 is
-   current.
+   Code `12` sees an optional update while the minimum-compatible floor remains
+   code `8`. Code `13` is current only after this configuration is deployed.
 
 5. Let every tablet sync its offline queue, install the update, sign in and
    complete the smoke test.
-6. Only when every active tablet is on version 12 may the minimum be raised:
+6. Only when every active tablet is on version 13 may the minimum be raised:
 
    ```dotenv
-   ANDROID_MIN_SUPPORTED_VERSION_CODE=12
-   ANDROID_LATEST_VERSION_CODE=12
+   ANDROID_MIN_SUPPORTED_VERSION_CODE=13
+   ANDROID_LATEST_VERSION_CODE=13
    ```
 
 ## What the employee experiences

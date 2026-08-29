@@ -15,7 +15,7 @@ internal class SyncResourceAccess private constructor(
     private val permissions: EffectivePermissions?,
 ) {
     fun canPull(resource: String): Boolean = when (resource) {
-        "shifts", "orders", "customers", "memberships" ->
+        "shifts", "orders", "receipts", "customers", "memberships" ->
             permissions?.has(ErpPermission.PosRead) == true
         "gaming", "events" -> permissions?.has(ErpPermission.GamingRead) == true
         "kitchen" -> permissions?.has(ErpPermission.KitchenRead) == true

@@ -33,11 +33,31 @@ class RealtimeRefreshPolicyTest {
     }
 
     @Test
+    fun `receipt change refreshes canonical history and existing order projections`() {
+        assertEquals(
+            listOf("receipts", "orders"),
+            RealtimeRefreshPolicy.resourcesFor("receipts"),
+        )
+    }
+
+    @Test
+    fun `owner audit invalidation is ignored by Android without waking its outbox`() {
+        assertEquals(emptyList<String>(), RealtimeRefreshPolicy.resourcesFor("audit"))
+        assertFalse(RealtimeRefreshPolicy.requiresBroadOutboxDrain("audit"))
+    }
+
+    @Test
+    fun `finance and inventory broadcasts keep their server resource boundary`() {
+        assertEquals(listOf("finance"), RealtimeRefreshPolicy.resourcesFor("finance"))
+        assertEquals(listOf("inventory"), RealtimeRefreshPolicy.resourcesFor("inventory"))
+    }
+
+    @Test
     fun `unrelated resources keep their existing narrow refresh`() {
         assertEquals(
-            listOf("inventory"),
-            RealtimeRefreshPolicy.resourcesFor("inventory"),
+            listOf("settings"),
+            RealtimeRefreshPolicy.resourcesFor("settings"),
         )
-        assertTrue(RealtimeRefreshPolicy.requiresBroadOutboxDrain("inventory"))
+        assertTrue(RealtimeRefreshPolicy.requiresBroadOutboxDrain("settings"))
     }
 }

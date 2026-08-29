@@ -33,6 +33,7 @@ import {
 import { pushToSheet, type SinkKind } from '@/lib/google-sheets';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { useNotifications } from '@/components/ui/Notifications';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
 type HalfYear = 'H1' | 'H2';
@@ -171,9 +172,9 @@ export default function ReportsScreen() {
   const [quarter, setQuarter] = useState<number>(currentFiscalQuarter(todayAsDate));
   const [halfYear, setHalfYear] = useState<HalfYear>(currentFiscalHalf(todayAsDate));
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!timezoneReady) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     setTaxError(null);
     try {
@@ -201,11 +202,16 @@ export default function ReportsScreen() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [canViewCosting, halfYear, month, onDate, period, quarter, timezoneReady, weekDate, year]);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({
+    resources: ['finance', 'inventory', 'orders', 'shifts'],
+    refresh: () => load(true),
+    enabled: timezoneReady,
+  });
 
   useEffect(() => {
     if (!LIVE_MODE) return;

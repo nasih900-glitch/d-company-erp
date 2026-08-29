@@ -2099,6 +2099,179 @@ export interface OrderListItemDTO {
   payment_methods: Array<'cash' | 'card' | 'upi' | 'qr' | 'wallet'>;
 }
 
+export type PosPaymentMethodDTO = 'cash' | 'card' | 'upi' | 'qr' | 'wallet';
+
+export interface ReceiptLineHistoryDTO {
+  id: string;
+  menu_item_id: string;
+  menu_item_name: string;
+  menu_item_type: string;
+  variant_id: string | null;
+  variant_snapshot: Record<string, unknown> | null;
+  modifiers: Array<Record<string, unknown>>;
+  /** Exact server decimal; do not coerce this into floating-point money math. */
+  qty: string;
+  unit_price_minor: number;
+  line_total_minor: number;
+  discount_minor: number;
+  hsn_or_sac: string | null;
+  /** Exact server decimal percentage. */
+  tax_rate: string;
+  taxable_value_minor: number;
+  cgst_minor: number;
+  sgst_minor: number;
+  igst_minor: number;
+  cess_minor: number;
+  note: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  voided_by_name: string | null;
+  void_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReceiptPaymentHistoryDTO {
+  id: string;
+  shift_id: string;
+  method: PosPaymentMethodDTO;
+  amount_minor: number;
+  tendered_minor: number | null;
+  change_minor: number | null;
+  reference: string | null;
+  paid_at: string;
+  recorded_by: string | null;
+  recorded_by_name: string | null;
+  created_at: string;
+}
+
+export interface ReceiptRefundHistoryDTO {
+  id: string;
+  request_id: string | null;
+  company_id: string | null;
+  branch_id: string | null;
+  terminal_id: string | null;
+  settlement_shift_id: string | null;
+  approved_by: string;
+  approved_by_name: string | null;
+  manager_override_user_id: string | null;
+  manager_override_user_name: string | null;
+  reason_code: string;
+  amount_minor: number;
+  mode: string;
+  settlement_method: PosPaymentMethodDTO | null;
+  settled_at: string | null;
+  settled_by: string | null;
+  settled_by_name: string | null;
+  external_reference: string | null;
+  provider_settled_at: string | null;
+  client_occurred_at: string | null;
+  captured_time_reconciled: boolean | null;
+  provider_evidence_reconciled: boolean | null;
+  settlement_idempotency_key: string | null;
+  receipt_no: string | null;
+  receipt_fiscal_year: string | null;
+  receipt_issued_at: string | null;
+  customer_spend_reconciled: boolean | null;
+  loyalty_reconciliation_state: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReceiptGamingSessionHistoryDTO {
+  id: string;
+  station_id: string;
+  station_code: string;
+  station_name: string;
+  station_type: string;
+  source_shift_id: string;
+  started_by: string;
+  started_by_name: string | null;
+  stopped_by: string | null;
+  stopped_by_name: string | null;
+  sent_to_pos_by: string | null;
+  sent_to_pos_by_name: string | null;
+  started_at: string;
+  stopped_at: string | null;
+  sent_to_pos_at: string | null;
+  billing_mode: string;
+  rate_per_hour_minor: number;
+  package_id: string | null;
+  package_price_minor_snapshot: number | null;
+  package_duration_minutes_snapshot: number | null;
+  package_variant_snapshot: string | null;
+  timer_minutes: number | null;
+  paused_minutes: number;
+  billable_minutes: number | null;
+  amount_minor: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Immutable, server-authoritative receipt shared by web and native clients. */
+export interface ReceiptHistoryDTO {
+  order_id: string;
+  company_id: string;
+  branch_id: string;
+  terminal_id: string;
+  shift_id: string;
+  shift_opened_by: string | null;
+  shift_opened_by_name: string | null;
+  shift_opened_at: string | null;
+  shift_closed_at: string | null;
+  opened_by: string;
+  opened_by_name: string | null;
+  invoice_no: string;
+  fiscal_year: string;
+  status: string;
+  order_type: string;
+  table_id: string | null;
+  subtotal_minor: number;
+  discount_minor: number;
+  manual_discount_minor: number;
+  points_redeemed_minor: number;
+  cgst_minor: number;
+  sgst_minor: number;
+  igst_minor: number;
+  cess_minor: number;
+  tax_minor: number;
+  round_off_minor: number;
+  tip_minor: number;
+  total_minor: number;
+  paid_minor: number;
+  refunded_minor: number;
+  net_collected_minor: number;
+  customer_name: string | null;
+  customer_phone: string | null;
+  customer_gstin: string | null;
+  customer_address: string | null;
+  customer_state_code: string | null;
+  place_of_supply_state_code: string | null;
+  is_reverse_charge: boolean;
+  irn: string | null;
+  irn_ack_no: string | null;
+  irn_acknowledged_at: string | null;
+  e_invoice_qr: string | null;
+  notes: string | null;
+  opened_at: string;
+  held_at: string | null;
+  closed_at: string;
+  invoice_issued_at: string;
+  created_at: string;
+  updated_at: string;
+  lines: ReceiptLineHistoryDTO[];
+  payments: ReceiptPaymentHistoryDTO[];
+  refunds: ReceiptRefundHistoryDTO[];
+  gaming_sessions: ReceiptGamingSessionHistoryDTO[];
+}
+
+export interface ReceiptHistoryPageDTO {
+  items: ReceiptHistoryDTO[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface ShiftDTO {
   id: string;
   branch_id: string;
@@ -2131,6 +2304,13 @@ export const orders = {
   }) =>
     api.get<OrderListItemDTO[]>('/pos/orders', { params }).then((r) => r.data),
   get: (id: string) => api.get<OrderDTO>(`/pos/orders/${id}`).then((r) => r.data),
+};
+
+export const receipts = {
+  list: (params?: { cursor?: string; limit?: number }) =>
+    api.get<ReceiptHistoryPageDTO>('/pos/receipts', { params }).then((r) => r.data),
+  get: (orderId: string) =>
+    api.get<ReceiptHistoryDTO>(`/pos/receipts/${orderId}`).then((r) => r.data),
 };
 
 export const shifts = {

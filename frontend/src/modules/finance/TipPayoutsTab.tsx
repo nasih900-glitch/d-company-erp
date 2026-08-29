@@ -12,6 +12,7 @@ import {
 import { inr, inrShort } from '@/lib/inr';
 import { manualCollectionMethodLabel, MANUAL_COLLECTION_METHODS, rupeesToMinor } from '@/lib/manual-collections';
 import { useAuth } from '@/modules/auth/AuthContext';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 // Ledger account code for Tips Payable — see backend/app/services/accounting/accounts.py.
 const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
@@ -29,8 +30,8 @@ export default function TipPayoutsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [voiding, setVoiding] = useState<TipPayoutDTO | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setErr(null);
     try {
       const [payouts, branchRows, trialBalance] = await Promise.all([
@@ -45,11 +46,12 @@ export default function TipPayoutsTab() {
     } catch (error) {
       setErr((error as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   if (loading) {
     return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading tip payouts…</div>;
@@ -91,7 +93,7 @@ export default function TipPayoutsTab() {
           Immutable payout register · newest first
         </p>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load} aria-label="Refresh tip payouts">
+          <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh tip payouts">
             <RefreshCw size={14}/>
           </button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>

@@ -189,7 +189,7 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "The verified update could not be handed to Android.", Toast.LENGTH_LONG).show()
             return
         }
-        val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(contentUri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
@@ -556,6 +556,13 @@ private fun AppRoot(
                                 val pos: PosViewModel = viewModel()
                                 val posState by pos.state.collectAsStateWithLifecycle()
                                 val recentPosReceipts by pos.recentReceipts.collectAsStateWithLifecycle()
+                                val canonicalPosReceipts by pos.canonicalReceipts.collectAsStateWithLifecycle()
+                                val receiptHistorySyncState by
+                                    pos.receiptHistorySyncState.collectAsStateWithLifecycle()
+                                val receiptHistoryLoading by
+                                    pos.receiptHistoryLoading.collectAsStateWithLifecycle()
+                                val receiptHistoryError by
+                                    pos.receiptHistoryError.collectAsStateWithLifecycle()
                                 val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
                                 val heldFocus = operationalFocus
                                     as? OperationalNotificationTarget.HeldOrder
@@ -565,6 +572,10 @@ private fun AppRoot(
                                 PosScreen(
                                     state = posState,
                                     recentReceipts = recentPosReceipts,
+                                    canonicalReceipts = canonicalPosReceipts,
+                                    receiptHistoryHasMore = receiptHistorySyncState?.hasMore == true,
+                                    receiptHistoryLoading = receiptHistoryLoading,
+                                    receiptHistoryError = receiptHistoryError,
                                     unacknowledgedReceipt = unacknowledgedPosReceipt,
                                     access = permissions.posAccess(),
                                     onAccessChanged = pos::updateAccess,
@@ -591,6 +602,9 @@ private fun AppRoot(
                                     onDismissHeldOrder = pos::dismissHeldOrderCheckout,
                                     onDismissNotice = pos::dismissNotice,
                                     onAcknowledgeReceipt = pos::acknowledgeReceipt,
+                                    onRefreshReceiptHistory = pos::refreshReceiptHistory,
+                                    onLoadMoreReceiptHistory = pos::loadMoreReceiptHistory,
+                                    onOpenCanonicalReceipt = pos::refreshReceiptHistoryDetail,
                                     onFocusOldestOverdue = pos::focusOldestOverdueOrder,
                                     onSnoozeOverdue = pos::snoozeOverdueBanner,
                                     onUnmuteOverdue = pos::unmuteOverdueBanner,

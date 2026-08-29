@@ -83,13 +83,93 @@ export const GAMING_CENTRE_TERMINAL_POLICY = Object.freeze({
   allowCrossTerminalPosHandoff: false,
 });
 
+export interface ProfileCatalogCategory {
+  id: string;
+  name: string;
+}
+
+export interface ProfileCatalogItem {
+  category_id: string;
+  type: string;
+  is_available: boolean;
+}
+
+export interface ProfileOperationalCatalogRule {
+  categoryName: string;
+  itemTypes: readonly string[];
+}
+
+/**
+ * Temporary release-profile taxonomy until the menu API exposes an explicit
+ * sales-channel field. It avoids fragile individual item-name checks and fails
+ * closed when an owner renames or mis-types a category.
+ *
+ * This policy governs only products offered for a *new* operational sale.
+ * Product management, saved payment retries, receipts and reports keep the
+ * complete catalogue/history.
+ */
+export const GAMING_CENTRE_OPERATIONAL_CATALOG_POLICY:
+ReadonlyArray<ProfileOperationalCatalogRule> = Object.freeze([
+  Object.freeze({ categoryName: 'Soft Drinks', itemTypes: Object.freeze(['drink']) }),
+  Object.freeze({ categoryName: 'Drinks & Snacks', itemTypes: Object.freeze(['drink', 'food']) }),
+  Object.freeze({ categoryName: 'Snacks', itemTypes: Object.freeze(['food']) }),
+  Object.freeze({ categoryName: 'Crisps', itemTypes: Object.freeze(['food']) }),
+]);
+
+function normalizeCatalogValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function profileOperationalCatalogItems<T extends ProfileCatalogItem>(
+  items: readonly T[],
+  categories: readonly ProfileCatalogCategory[],
+  policy: ReadonlyArray<ProfileOperationalCatalogRule> =
+    GAMING_CENTRE_OPERATIONAL_CATALOG_POLICY,
+): T[] {
+  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  const typesByCategoryName = new Map(policy.map((rule) => [
+    normalizeCatalogValue(rule.categoryName),
+    new Set(rule.itemTypes.map(normalizeCatalogValue)),
+  ]));
+
+  return items.filter((item) => {
+    if (!item.is_available) return false;
+    const categoryName = categoryNames.get(item.category_id);
+    if (!categoryName) return false;
+    return typesByCategoryName
+      .get(normalizeCatalogValue(categoryName))
+      ?.has(normalizeCatalogValue(item.type)) === true;
+  });
+}
+
 export const WEB_PRODUCT_PROFILE = Object.freeze({
   id: 'gaming-centre',
   label: 'Gaming Centre',
   defaultRoute: '/gaming',
   features: GAMING_CENTRE_FEATURES,
   terminalPolicy: GAMING_CENTRE_TERMINAL_POLICY,
+  operationalCatalogPolicy: GAMING_CENTRE_OPERATIONAL_CATALOG_POLICY,
 });
+
+export interface WebLandingProfile {
+  protected_access: boolean;
+  accessible_modules: readonly string[];
+}
+
+/**
+ * The web is the owner control plane while the Android tablet is the daily
+ * station console. Protected owners therefore open on the live money and
+ * operations dashboard; ordinary staff open on Gaming. This is presentation
+ * only—both clients still use the same backend records and permissions.
+ */
+export function webLandingRouteFor(profile: WebLandingProfile): string {
+  if (profile.protected_access && GAMING_CENTRE_FEATURES.dashboard) return '/analytics';
+  if (GAMING_CENTRE_FEATURES.gaming && profile.accessible_modules.includes('gaming')) {
+    return '/gaming';
+  }
+  if (GAMING_CENTRE_FEATURES.pos && profile.accessible_modules.includes('pos')) return '/pos';
+  return '/workspace-unavailable';
+}
 
 export type MembershipMoneyKind = 'revenue' | 'refund' | 'discount' | 'allowance';
 

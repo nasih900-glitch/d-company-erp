@@ -126,6 +126,33 @@ class GamingCentreFeatureProfileTest {
     }
 
     @Test
+    fun `gaming centre catalog exposes only packaged drinks and crisps categories`() {
+        val focused = WorkspaceFeatureProfiles.GamingCentre.operationalCatalogPolicy
+
+        assertTrue(focused.allows("Soft Drinks", "drink", isAvailable = true))
+        assertTrue(focused.allows("Drinks & Snacks", "drink", isAvailable = true))
+        assertTrue(focused.allows("drinks & snacks", "food", isAvailable = true))
+        assertTrue(focused.allows(" snacks ", "FOOD", isAvailable = true))
+        assertTrue(focused.allows("CRISPS", "food", isAvailable = true))
+
+        assertFalse(focused.allows("Coffee", "drink", isAvailable = true))
+        assertFalse(focused.allows("Food", "food", isAvailable = true))
+        assertFalse(focused.allows("Soft Drinks", "food", isAvailable = true))
+        assertFalse(focused.allows("Snacks", "dessert", isAvailable = true))
+        assertFalse(focused.allows("Soft Drinks", "drink", isAvailable = false))
+        assertFalse(focused.allows(null, "drink", isAvailable = true))
+    }
+
+    @Test
+    fun `full hospitality catalog retains every available operational item`() {
+        val full = WorkspaceFeatureProfiles.FullHospitality.operationalCatalogPolicy
+
+        assertTrue(full.allows("Coffee", "drink", isAvailable = true))
+        assertTrue(full.allows(null, "dessert", isAvailable = true))
+        assertFalse(full.allows("Coffee", "drink", isAvailable = false))
+    }
+
+    @Test
     fun `hidden or restored route cannot bypass active allowlist`() {
         val staff = profile(
             roles = listOf("cashier"),

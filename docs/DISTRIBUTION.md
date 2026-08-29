@@ -10,7 +10,7 @@ VPS/Docker Compose procedure in `docs/DEPLOY_LIVE.md`. An Android GitHub Release
 does not deploy the web application.
 
 ```
-git tag v3.1.1
+git tag v3.1.2
         │
         ▼
 GitHub Actions: backend + web + Android gates
@@ -21,7 +21,7 @@ native Android .apk + .aab (tested and signed)
         ▼
 draft GitHub Release (private and unadvertised)
         │
-        ▼ after migration 0056 + production smoke
+        ▼ after migrations 0056–0057 + production smoke
 operator publishes the verified draft
         │
         ▼
@@ -84,7 +84,7 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently:
 
 ```bash
-NEW_VERSION=3.1.1
+NEW_VERSION=3.1.2
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName and a new versionCode)
@@ -119,7 +119,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor and the 3.1.1 candidate
+## Version-code-8 floor, code-12 baseline, and the 3.1.2 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -127,47 +127,54 @@ handoff. Older Android clients do not understand that contract and can select
 the wrong local shift or attempt an invalid local handoff, so code `8` remains
 the minimum-supported compatibility floor.
 
-The current unreleased candidate is `3.1.1` with version code `12`. It retains
-the internal tenant/branch/terminal safety model while presenting the current
-one-shop installation as exactly one server-confirmed Hybrid workspace. Gaming,
-POS, payments and Shift use that same internal identity without exposing
-routine terminal selection. It retains the Gaming Centre profile, durable
-offline session add-ons, combined POS billing, contextual Support, and verified
-direct updates. The complete release gates and signed upgrade from the signed
-`3.1.0` code-`11` bootstrap must pass for code `12`. It has not passed physical Redmi Pad 2 acceptance,
-been uploaded to Play, or been rolled out to production.
+The already signed `3.1.1` APK with version code `12` is the preserved manual
+partner baseline. It retains the Gaming Centre profile, one server-confirmed
+Hybrid workspace, durable offline session add-ons, combined POS billing,
+contextual Support, and the verified direct updater. Keep its exact bytes and
+signing lineage; do not rebuild it under the same identity and do not advertise
+it through the server update API.
 
-Code `11` is also the first build with the verified in-app direct updater.
-Install it once through Android's normal installer; only later builds can use
-that new in-app path. Version `3.1.1` is the first follow-up candidate intended
-to exercise that path. The production template must continue advertising the
-last actually published build until the code-`12` APK and all manifest fields
-are published.
+The current source candidate is `3.1.2` with version code `13`. It keeps the
+same internal tenant/branch/terminal safety model while adding the refined
+Gaming command workspace, canonical receipt history, reliable real-time refresh,
+and Room schema 40. The complete release gates and a signed in-place upgrade
+from the code-`12` partner baseline must pass. Code `13` has not passed physical
+Redmi Pad 2 acceptance, been uploaded to Play, been deployed, or been advertised
+by the server.
+
+Code `11` was the first build with the verified in-app direct updater. The
+signed code-`12` partner build is the manual update-capable baseline for the
+current rollout, and code `13` is the first later candidate intended to exercise
+server-driven delivery from it. The production template must continue
+advertising the last actually published build until the code-`13` APK and every
+manifest field are published and verified.
 
 Treat the app and backend as one coordinated release:
 
-1. Produce, sign, and verify the version-code-12 artifact before changing the
-   server or advertising it to installed clients.
-2. While the old backend is still active, bring every installed older app
-   online and confirm its offline queue is empty. Do not uninstall an app with
-   pending work.
-3. Stage the version-12 APK privately without advertising or installing it;
-   staff must remain on the compatible existing client until migration `0056`
-   and the one-Hybrid production smoke test pass.
+1. Preserve the exact signed version-code-12 partner APK and verify its signer.
+   Never replace or rebuild that immutable manual baseline.
+2. While the old backend is still active, bring the manually installed code-12
+   app online and confirm its offline queue is empty. Do not uninstall an app
+   with pending work.
+3. Produce, sign, and stage the version-code-13 APK privately without
+   advertising it. Staff must remain on the compatible code-12 baseline until
+   migration `0056`, migration `0057`, and the production smoke test pass.
 4. Back up the database and follow the `0056` maintenance sequence below:
    stop writers, upgrade only through `0055`, review and apply the explicit
    terminal consolidation, and only then upgrade to `0056`/head. Verify the
-   database reaches revision `0056` before starting the backend. Deploy with
+   database crosses revision `0056` safely and reaches head revision `0057`
+   before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
    `REQUIRE_NATIVE_VERSION_HEADERS=true`, and the last already-published
-   Android version/update metadata. Do not advertise code `12` yet.
-5. Install the privately staged version `12` package on the controlled test
+   Android version/update metadata. Do not advertise code `13` yet.
+5. Install the privately staged version `13` package over the signed code-12
+   baseline on the controlled test
    device and run shift open/close, Gaming start/add item/stop/Send-to-POS,
    cash and UPI settlement, offline retry, finance reconciliation, and Support
    submission. Verify version `7` and older receive HTTP 426 before a write
    handler and version `8` remains compatible. Only after those checks pass,
    publish the draft release and update the server's latest-version metadata to
-   code `12` with the verified public HTTPS URL, checksum, size, and signer.
+   code `13` with the verified public HTTPS URL, checksum, size, and signer.
 
 ### Required production order for migration 0056
 
@@ -348,13 +355,14 @@ order instead:
     Verify health, then smoke-test login, shift open, Gaming
     start/stop, add-on, Send to POS, cash and UPI settlement, receipt, Finance,
     sync recovery, and shift close on the retained Hybrid workspace using the
-    privately staged code-`12` APK. Only after that succeeds, publish the draft
-    GitHub Release, set the code-`12` update manifest values in production, and
+    privately staged code-`13` APK installed over the signed code-`12` baseline.
+    Only after that succeeds, publish the draft GitHub Release, set the code-`13`
+    update manifest values in production, and
     recreate the backend:
 
     ```bash
-    gh release edit v3.1.1 --repo <owner>/<repository> --draft=false
-    # Set ANDROID_LATEST_VERSION_CODE=12 plus the verified public URL,
+    gh release edit v3.1.2 --repo <owner>/<repository> --draft=false
+    # Set ANDROID_LATEST_VERSION_CODE=13 plus the verified public URL,
     # SHA-256, byte size, signer SHA-256, version name and release notes in .env.
     docker compose -f docker-compose.prod.yml up -d --force-recreate backend
     ```
@@ -364,9 +372,9 @@ order instead:
     as a draft and keep the previously published update metadata.
 
 Do not lower the minimum to keep an older APK operating against this backend.
-If version 12 is not ready to distribute, do not advertise it as latest or
+If version 13 is not ready to distribute, do not advertise it as latest or
 deploy the matching production compatibility configuration. Do not raise the
-minimum to `12` until every active tablet is upgraded and accepted.
+minimum to `13` until every active tablet is upgraded and accepted.
 
 ## Android artifacts
 

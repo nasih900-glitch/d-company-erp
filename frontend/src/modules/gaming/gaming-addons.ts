@@ -3,10 +3,10 @@ import type {
   GamingSessionAddonCreateDTO,
   GamingSessionAddonDTO,
   GamingSessionAddonModifierSelectionDTO,
+  MenuCategoryDTO,
   MenuItemDTO,
 } from '@/lib/erp-api';
-
-const ADDON_ITEM_TYPES = new Set(['food', 'drink', 'dessert']);
+import { profileOperationalCatalogItems } from '@/lib/product-profile';
 
 export type GamingAddonDraft = Omit<GamingSessionAddonCreateDTO, 'client_line_id'>;
 
@@ -23,9 +23,11 @@ export interface GamingAddonVoidAttempt {
   reason: string;
 }
 
-export function availableGamingAddonItems(items: readonly MenuItemDTO[]): MenuItemDTO[] {
-  return items
-    .filter((item) => item.is_available && ADDON_ITEM_TYPES.has(item.type))
+export function availableGamingAddonItems(
+  items: readonly MenuItemDTO[],
+  categories: readonly MenuCategoryDTO[],
+): MenuItemDTO[] {
+  return profileOperationalCatalogItems(items, categories)
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -96,8 +98,9 @@ export function catalogUnitPriceMinor(
 export function validateGamingAddonDraft(
   item: MenuItemDTO | undefined,
   draft: GamingAddonDraft,
+  eligibleItemIds: ReadonlySet<string>,
 ): string | null {
-  if (!item || !item.is_available || !ADDON_ITEM_TYPES.has(item.type)) {
+  if (!item || !item.is_available || !eligibleItemIds.has(item.id)) {
     return 'Select an available drink or snack.';
   }
   if (!Number.isInteger(draft.qty) || draft.qty < 1 || draft.qty > 100) {

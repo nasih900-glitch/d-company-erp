@@ -56,6 +56,7 @@ class SyncResourceAccessTest {
 
         assertTrue(access.canPull("shifts"))
         assertTrue(access.canPull("orders"))
+        assertTrue(access.canPull("receipts"))
         assertFalse(access.canPull("finance"))
         assertFalse(access.canPull("settings"))
     }

@@ -40,6 +40,20 @@ class ShiftClosePresentationTest {
     }
 
     @Test
+    fun `drawer total is derived only from supported denomination counts`() {
+        assertEquals(
+            50_200L,
+            drawerCountedMinor(
+                mapOf(
+                    500L to "1",
+                    1L to "2",
+                    999L to "99",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `pending close displays durable saved count instead of empty draft`() {
         val presentation = shiftClosePresentation(
             localState = ShiftState.CLOSE_PENDING,

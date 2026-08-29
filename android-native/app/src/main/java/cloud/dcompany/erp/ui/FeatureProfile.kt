@@ -42,6 +42,13 @@ data class WorkspaceFeatureProfile(
     val managementOnly: Set<WorkspaceFeature> = emptySet(),
     /** Hide terminal choice/setup and require one server-confirmed hybrid identity. */
     val singleHybridTerminalOnly: Boolean = false,
+    /**
+     * Limits products offered for a new operational sale. This deliberately
+     * does not filter Products management, saved carts, receipts, or reports:
+     * those surfaces must retain the full catalogue and historical evidence.
+     */
+    val operationalCatalogPolicy: OperationalCatalogPolicy =
+        OperationalCatalogPolicy.AllowEveryAvailableItem,
 ) {
     init {
         require(id.isNotBlank())
@@ -59,6 +66,51 @@ data class WorkspaceFeatureProfile(
     fun requiresManagement(destination: Destination): Boolean =
         DESTINATION_FEATURES.getValue(destination) in managementOnly
 }
+
+/**
+ * A release-profile bridge until the backend exposes an explicit sales-channel
+ * field on menu categories. Category taxonomy is less fragile than matching
+ * individual product names, and the rule fails closed if a category is renamed
+ * or assigned an incompatible item type.
+ */
+data class OperationalCatalogPolicy(
+    private val allowedTypesByCategoryName: Map<String, Set<String>>,
+    private val allowEveryAvailableItem: Boolean = false,
+) {
+    init {
+        require(allowEveryAvailableItem || allowedTypesByCategoryName.isNotEmpty())
+        require(allowedTypesByCategoryName.keys.all(String::isNotBlank))
+        require(allowedTypesByCategoryName.values.all(Set<String>::isNotEmpty))
+    }
+
+    fun allows(
+        categoryName: String?,
+        itemType: String,
+        isAvailable: Boolean,
+    ): Boolean {
+        if (!isAvailable) return false
+        if (allowEveryAvailableItem) return true
+        val allowedTypes = allowedTypesByCategoryName[normalizeCatalogValue(categoryName)]
+            ?: return false
+        return normalizeCatalogValue(itemType) in allowedTypes
+    }
+
+    companion object {
+        val AllowEveryAvailableItem = OperationalCatalogPolicy(
+            allowedTypesByCategoryName = emptyMap(),
+            allowEveryAvailableItem = true,
+        )
+
+        fun restricted(rules: Map<String, Set<String>>): OperationalCatalogPolicy =
+            OperationalCatalogPolicy(
+                allowedTypesByCategoryName = rules.mapKeys { (name, _) ->
+                    normalizeCatalogValue(name)
+                }.mapValues { (_, types) -> types.mapTo(linkedSetOf(), ::normalizeCatalogValue) },
+            )
+    }
+}
+
+private fun normalizeCatalogValue(value: String?): String = value.orEmpty().trim().lowercase()
 
 /** One centralized destination-to-capability registry for sidebar, command
  * search, restored routes, notification routes and future deep links. */
@@ -132,6 +184,18 @@ object WorkspaceFeatureProfiles {
         ),
         managementOnly = setOf(WorkspaceFeature.Menu),
         singleHybridTerminalOnly = true,
+        operationalCatalogPolicy = OperationalCatalogPolicy.restricted(
+            mapOf(
+                // The current server import creates this category for cans.
+                "Soft Drinks" to setOf("drink"),
+                // Existing Gaming Centre catalogues use one combined shelf
+                // category for cans and packaged crisps.
+                "Drinks & Snacks" to setOf("drink", "food"),
+                // Either owner-facing taxonomy is accepted for packaged crisps.
+                "Snacks" to setOf("food"),
+                "Crisps" to setOf("food"),
+            ),
+        ),
     )
 
     /** Dormant reference profile proving hidden hospitality code is retained. */

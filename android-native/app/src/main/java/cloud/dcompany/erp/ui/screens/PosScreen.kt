@@ -101,6 +101,7 @@ import cloud.dcompany.erp.core.checkout.OneShotHeldPaymentConfirmation
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
@@ -134,6 +135,10 @@ import java.util.Locale
 fun PosScreen(
     state: PosUiState,
     recentReceipts: List<PosReceiptEntity>,
+    canonicalReceipts: List<CanonicalReceipt>,
+    receiptHistoryHasMore: Boolean,
+    receiptHistoryLoading: Boolean,
+    receiptHistoryError: String?,
     unacknowledgedReceipt: PosReceiptEntity?,
     access: PosAccess,
     onAccessChanged: (PosAccess) -> Unit,
@@ -165,6 +170,9 @@ fun PosScreen(
     onDismissHeldOrder: () -> Unit,
     onDismissNotice: () -> Unit,
     onAcknowledgeReceipt: (String) -> Unit,
+    onRefreshReceiptHistory: () -> Unit,
+    onLoadMoreReceiptHistory: () -> Unit,
+    onOpenCanonicalReceipt: (String) -> Unit,
     onFocusOldestOverdue: () -> Unit,
     onSnoozeOverdue: () -> Unit,
     onUnmuteOverdue: () -> Unit,
@@ -179,12 +187,13 @@ fun PosScreen(
     var voidTarget by remember { mutableStateOf<PosVoidTarget?>(null) }
     var selectedReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var hiddenAutomaticReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showReceiptHistory by rememberSaveable { mutableStateOf(false) }
     var menuQuery by rememberSaveable { mutableStateOf("") }
     val latestDismissHeldOrder by rememberUpdatedState(onDismissHeldOrder)
-    val categoryItems = remember(state.items, state.selectedCategoryId) {
+    val categoryItems = remember(state.operationalItems, state.selectedCategoryId) {
         state.selectedCategoryId?.let { selected ->
-            state.items.filter { it.categoryId == selected }
-        } ?: state.items
+            state.operationalItems.filter { it.categoryId == selected }
+        } ?: state.operationalItems
     }
     val searchedItems = remember(categoryItems, menuQuery) {
         filterPosMenuItems(categoryItems, menuQuery)
@@ -196,11 +205,15 @@ fun PosScreen(
         state.heldOrders.mapTo(mutableSetOf()) { it.id }
     }
     val hasOperationalAlerts = hasPosOperationalAlerts(state)
-    val configuringItem = state.items.firstOrNull { it.id == configuringItemId }
+    val configuringItem = state.operationalItems.firstOrNull { it.id == configuringItemId }
     val heldOrderBlockReason = heldOrderSelectionBlockReason(state, access)
-    val visibleReceipt = unacknowledgedReceipt
-        ?.takeUnless { it.receiptId == hiddenAutomaticReceiptId }
-        ?: selectedReceiptId?.let { id -> recentReceipts.firstOrNull { it.receiptId == id } }
+    val visibleReceipt = if (showReceiptHistory) {
+        null
+    } else {
+        unacknowledgedReceipt
+            ?.takeUnless { it.receiptId == hiddenAutomaticReceiptId }
+            ?: selectedReceiptId?.let { id -> recentReceipts.firstOrNull { it.receiptId == id } }
+    }
     val addOrConfigure: (MenuItemEntity) -> Unit = { item ->
         val configurable = state.variants.any { it.menuItemId == item.id && it.isActive } ||
             state.modifierGroups.any { it.menuItemId == item.id && it.isActive }
@@ -283,9 +296,8 @@ fun PosScreen(
             state = state,
             onOpenStatus = { showStatusDetails = true },
             onOpenHeldOrders = { showHeldOrders = true },
-            onOpenLastReceipt = recentReceipts.firstOrNull()?.let { receipt ->
-                { selectedReceiptId = receipt.receiptId }
-            },
+            receiptCount = canonicalReceipts.size,
+            onOpenReceipts = { showReceiptHistory = true },
         )
 
         if (state.menuEmpty) {
@@ -309,8 +321,8 @@ fun PosScreen(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     ProductCatalogPanel(
-                        categories = state.categories,
-                        items = state.items,
+                        categories = state.operationalCategories,
+                        items = state.operationalItems,
                         selectedCategoryId = state.selectedCategoryId,
                         visibleItems = searchedItems,
                         query = menuQuery,
@@ -338,8 +350,8 @@ fun PosScreen(
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     ProductCatalogPanel(
-                        categories = state.categories,
-                        items = state.items,
+                        categories = state.operationalCategories,
+                        items = state.operationalItems,
                         selectedCategoryId = state.selectedCategoryId,
                         visibleItems = searchedItems,
                         query = menuQuery,
@@ -629,6 +641,24 @@ fun PosScreen(
         )
     }
 
+    if (showReceiptHistory) {
+        CanonicalReceiptHistoryDialog(
+            receipts = canonicalReceipts,
+            hasMore = receiptHistoryHasMore,
+            loading = receiptHistoryLoading,
+            error = receiptHistoryError,
+            hasLocalReceipt = recentReceipts.isNotEmpty(),
+            onOpenLastLocalReceipt = {
+                selectedReceiptId = recentReceipts.firstOrNull()?.receiptId
+                showReceiptHistory = false
+            },
+            onRefresh = onRefreshReceiptHistory,
+            onLoadMore = onLoadMoreReceiptHistory,
+            onOpenReceipt = onOpenCanonicalReceipt,
+            onDismiss = { showReceiptHistory = false },
+        )
+    }
+
     visibleReceipt?.let { receipt ->
         PosReceiptDialog(
             receipt = receipt,
@@ -640,7 +670,7 @@ fun PosScreen(
         )
     }
 
-    state.notice?.takeIf { visibleReceipt == null }?.let { message ->
+    state.notice?.takeIf { visibleReceipt == null && !showReceiptHistory }?.let { message ->
         AlertDialog(
             onDismissRequest = onDismissNotice,
             containerColor = Brand.SurfaceOverlay,
@@ -955,7 +985,8 @@ private fun PosContextBar(
     state: PosUiState,
     onOpenStatus: () -> Unit,
     onOpenHeldOrders: () -> Unit,
-    onOpenLastReceipt: (() -> Unit)?,
+    receiptCount: Int,
+    onOpenReceipts: () -> Unit,
 ) {
     val urgent = state.rejectedCount > 0 || state.rejectedDirectSales.isNotEmpty() ||
         state.heldRejectedCount > 0
@@ -1016,9 +1047,11 @@ private fun PosContextBar(
                     modifier = Modifier.weight(1f),
                 )
                 ErpButton("Status & alarms", onOpenStatus, intent = ActionIntent.Secondary)
-                onOpenLastReceipt?.let {
-                    ErpButton("Last receipt", it, intent = ActionIntent.Quiet)
-                }
+                ErpButton(
+                    if (receiptCount > 0) "Receipts ($receiptCount)" else "Receipts",
+                    onOpenReceipts,
+                    intent = ActionIntent.Quiet,
+                )
                 if (state.heldOrders.isNotEmpty()) {
                     ErpButton(
                         text = if (focused) "Review highlighted" else "Held (${state.heldOrders.size})",
@@ -1043,14 +1076,12 @@ private fun PosContextBar(
                         modifier = Modifier.weight(1f),
                         intent = ActionIntent.Secondary,
                     )
-                    onOpenLastReceipt?.let {
-                        ErpButton(
-                            "Last receipt",
-                            it,
-                            modifier = Modifier.weight(1f),
-                            intent = ActionIntent.Quiet,
-                        )
-                    }
+                    ErpButton(
+                        if (receiptCount > 0) "Receipts ($receiptCount)" else "Receipts",
+                        onOpenReceipts,
+                        modifier = Modifier.weight(1f),
+                        intent = ActionIntent.Quiet,
+                    )
                     if (state.heldOrders.isNotEmpty()) {
                         ErpButton(
                             text = if (focused) "Review" else "Held (${state.heldOrders.size})",

@@ -22,14 +22,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
 /**
- * D Company palette, taken from the existing web/iOS apps so all three
- * surfaces look like the same product: near-black background with the gold
- * brand accent.
+ * D Company native palette. Android keeps its calm navy operational surfaces
+ * rather than copying the web UI; the shared gold brand accent is reserved for
+ * selection, identity and primary actions.
  *
- * Extended with a tonal-elevation ladder, a gradient accent, and softer
- * secondary text tiers — a flat "Surface vs SurfaceRaised" pair reads as
- * plain once dialogs, nested cards, and pressed states all need to look
- * distinct from each other.
+ * The tonal-elevation ladder and restrained secondary text tiers provide the
+ * depth and hierarchy that a large tablet needs without adding more colours.
  */
 object Brand {
     // Neutral navy surfaces match the approved operational dashboard.  They
@@ -176,70 +174,64 @@ private val PreciseTextStyle = TextStyle(
 
 private val DCompanyTypography = Typography(
     displayLarge = PreciseTextStyle.copy(
-        fontSize = 40.sp,
-        lineHeight = 46.sp,
+        fontSize = 42.sp,
+        lineHeight = 48.sp,
         fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.5).sp,
-        fontFeatureSettings = "tnum",
+        letterSpacing = (-0.7).sp,
     ),
     headlineLarge = PreciseTextStyle.copy(
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.35).sp,
-        fontFeatureSettings = "tnum",
+        fontSize = 32.sp,
+        lineHeight = 38.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = (-0.5).sp,
     ),
     headlineMedium = PreciseTextStyle.copy(
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.25).sp,
-        fontFeatureSettings = "tnum",
+        fontSize = 27.sp,
+        lineHeight = 33.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = (-0.35).sp,
     ),
     headlineSmall = PreciseTextStyle.copy(
         fontSize = 22.sp,
-        lineHeight = 28.sp,
+        lineHeight = 27.sp,
         fontWeight = FontWeight.SemiBold,
-        fontFeatureSettings = "tnum",
+        letterSpacing = (-0.2).sp,
     ),
     titleLarge = PreciseTextStyle.copy(
         fontSize = 20.sp,
-        lineHeight = 26.sp,
+        lineHeight = 25.sp,
         fontWeight = FontWeight.SemiBold,
-        fontFeatureSettings = "tnum",
+        letterSpacing = (-0.1).sp,
     ),
     titleMedium = PreciseTextStyle.copy(
-        fontSize = 17.sp,
-        lineHeight = 23.sp,
+        fontSize = 16.sp,
+        lineHeight = 22.sp,
         fontWeight = FontWeight.SemiBold,
-        fontFeatureSettings = "tnum",
     ),
     titleSmall = PreciseTextStyle.copy(
-        fontSize = 15.sp,
-        lineHeight = 21.sp,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
         fontWeight = FontWeight.SemiBold,
-        fontFeatureSettings = "tnum",
     ),
-    bodyLarge = PreciseTextStyle.copy(fontSize = 16.sp, lineHeight = 23.sp, fontFeatureSettings = "tnum"),
-    bodyMedium = PreciseTextStyle.copy(fontSize = 14.sp, lineHeight = 20.sp, fontFeatureSettings = "tnum"),
-    bodySmall = PreciseTextStyle.copy(fontSize = 12.sp, lineHeight = 17.sp, fontFeatureSettings = "tnum"),
+    bodyLarge = PreciseTextStyle.copy(fontSize = 16.sp, lineHeight = 24.sp),
+    bodyMedium = PreciseTextStyle.copy(fontSize = 14.sp, lineHeight = 21.sp),
+    bodySmall = PreciseTextStyle.copy(fontSize = 12.sp, lineHeight = 18.sp),
     labelLarge = PreciseTextStyle.copy(
         fontSize = 14.sp,
-        lineHeight = 19.sp,
+        lineHeight = 20.sp,
         fontWeight = FontWeight.SemiBold,
-        fontFeatureSettings = "tnum",
     ),
     labelMedium = PreciseTextStyle.copy(
         fontSize = 12.sp,
         lineHeight = 17.sp,
         fontWeight = FontWeight.Medium,
-        fontFeatureSettings = "tnum",
+        letterSpacing = 0.05.sp,
     ),
     labelSmall = PreciseTextStyle.copy(
         fontSize = 11.sp,
         lineHeight = 15.sp,
         fontWeight = FontWeight.Medium,
-        fontFeatureSettings = "tnum",
+        letterSpacing = 0.12.sp,
     ),
 )
 

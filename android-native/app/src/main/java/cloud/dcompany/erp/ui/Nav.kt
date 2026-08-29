@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -55,7 +56,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -159,12 +159,15 @@ fun WorkspaceScaffold(
     val destinationStateHolder = rememberSaveableStateHolder()
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Brand.Background)) {
-        val compact = maxWidth < 1_000.dp
+        // The Redmi-class target is 1280 x 800 logical pixels. Use the compact
+        // rail and header at that exact width so persistent chrome does not
+        // crowd the operational board.
+        val compact = maxWidth <= 1_280.dp
         val narrow = maxWidth < 760.dp
         val railWidth = when {
             narrow -> 76.dp
             compact -> 88.dp
-            else -> 184.dp
+            else -> 176.dp
         }
 
         Row(Modifier.fillMaxSize()) {
@@ -246,7 +249,7 @@ private fun WorkspaceSidebar(
             .border(width = 1.dp, color = Brand.BorderSubtle),
     ) {
         Row(
-            Modifier.fillMaxWidth().height(if (expanded) 76.dp else 68.dp)
+            Modifier.fillMaxWidth().height(68.dp)
                 .padding(horizontal = if (expanded) Spacing.md else Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center,
@@ -257,7 +260,7 @@ private fun WorkspaceSidebar(
                 // the same real brand artwork, supplied as density-aware PNG.
                 painter = painterResource(R.mipmap.ic_launcher_foreground),
                 contentDescription = "D Company",
-                modifier = Modifier.size(if (expanded) 54.dp else 50.dp).clip(CircleShape),
+                modifier = Modifier.size(if (expanded) 48.dp else 44.dp).clip(CircleShape),
             )
             if (expanded) {
                 Spacer(Modifier.width(Spacing.sm))
@@ -270,11 +273,11 @@ private fun WorkspaceSidebar(
                         maxLines = 1,
                     )
                     Text(
-                        "PLAY. EAT. CONNECT.",
+                        "GAMING CENTRE",
                         color = Brand.GoldMuted,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 10.sp,
-                            letterSpacing = 0.sp,
+                            letterSpacing = 0.5.sp,
                         ),
                         maxLines = 1,
                     )
@@ -330,7 +333,7 @@ private fun WorkspaceNavItem(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val selectedBackground = Brand.Gold.copy(alpha = 0.14f)
+    val selectedBackground = Brand.SurfaceHover
     Box(
         modifier
             .fillMaxWidth()
@@ -467,24 +470,23 @@ private fun WorkspaceHeader(
     var accountMenuOpen by remember { mutableStateOf(false) }
 
     Row(
-        Modifier.fillMaxWidth().height(76.dp).background(Brand.BackgroundSecondary)
+        Modifier.fillMaxWidth().height(68.dp).background(Brand.BackgroundSecondary)
             .border(width = 1.dp, color = Brand.BorderSubtle)
-            .padding(horizontal = if (compact) Spacing.lg else Spacing.xl),
+            .padding(horizontal = if (compact) Spacing.md else Spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 destination.label,
                 color = Brand.Foreground,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
             )
             Text(
                 destination.description,
                 color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -510,9 +512,11 @@ private fun WorkspaceHeader(
                 )
             }
         } else {
-            IconButton(onClick = onOpenCommand, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Filled.Search, contentDescription = "Find a module", tint = Brand.ForegroundMuted)
-            }
+            HeaderIconAction(
+                icon = Icons.Filled.Search,
+                accessibilityLabel = "Find a module",
+                onClick = onOpenCommand,
+            )
         }
 
         ConnectivityStatus(connectivityProblem, showDetail = !compact)
@@ -522,83 +526,108 @@ private fun WorkspaceHeader(
             showDetail = !compact,
         )
 
-        Surface(
-            color = Brand.Surface,
-            shape = Radius.shapePill,
-            border = androidx.compose.foundation.BorderStroke(1.dp, Brand.BorderSubtle),
-            modifier = Modifier.heightIn(min = 48.dp)
-                .clickable(onClick = onOpenSupport)
-                .semantics {
-                    role = Role.Button
-                    contentDescription = if (pendingSupportCount > 0) {
-                        "Help and support. $pendingSupportCount saved request${if (pendingSupportCount == 1) "" else "s"} waiting"
-                    } else {
-                        "Help and support"
-                    }
-                },
-        ) {
-            Row(
-                Modifier.padding(horizontal = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        val supportDescription = if (pendingSupportCount > 0) {
+            "Help and support. $pendingSupportCount saved request${if (pendingSupportCount == 1) "" else "s"} waiting"
+        } else {
+            "Help and support"
+        }
+        if (compact) {
+            HeaderIconAction(
+                icon = Icons.AutoMirrored.Filled.HelpOutline,
+                accessibilityLabel = supportDescription,
+                onClick = onOpenSupport,
+                badgeCount = pendingSupportCount,
+            )
+        } else {
+            Surface(
+                color = Brand.Surface,
+                shape = Radius.shapePill,
+                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                modifier = Modifier.heightIn(min = 48.dp)
+                    .clickable(onClick = onOpenSupport)
+                    .semantics {
+                        role = Role.Button
+                        contentDescription = supportDescription
+                    },
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.HelpOutline,
-                    contentDescription = null,
-                    tint = Brand.ForegroundMuted,
-                    modifier = Modifier.size(21.dp),
-                )
-                if (!compact) {
+                Row(
+                    Modifier.padding(horizontal = Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.HelpOutline,
+                        contentDescription = null,
+                        tint = Brand.ForegroundMuted,
+                        modifier = Modifier.size(21.dp),
+                    )
                     Text(
                         "Help",
                         color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelLarge,
                     )
-                }
-                if (pendingSupportCount > 0) {
-                    Text(
-                        pendingSupportCount.coerceAtMost(99).toString(),
-                        color = Brand.Gold,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    if (pendingSupportCount > 0) {
+                        Text(
+                            pendingSupportCount.coerceAtMost(99).toString(),
+                            color = Brand.Gold,
+                            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
         }
 
         Box {
-            Row(
-                Modifier.height(48.dp).clip(Radius.shapeMd)
-                    .clickable { accountMenuOpen = true }
-                    .padding(horizontal = Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).background(Brand.SurfaceHover),
-                    contentAlignment = Alignment.Center,
+            if (compact) {
+                HeaderIconAction(
+                    icon = Icons.Filled.Person,
+                    accessibilityLabel = "Account actions",
+                    onClick = { accountMenuOpen = true },
+                    tint = Brand.Gold,
+                )
+            } else {
+                Surface(
+                    color = Brand.Surface,
+                    shape = Radius.shapeMd,
+                    border = BorderStroke(1.dp, Brand.BorderSubtle),
+                    modifier = Modifier.height(48.dp)
+                        .clickable { accountMenuOpen = true }
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = "Account actions"
+                        },
                 ) {
-                    Icon(Icons.Filled.Person, contentDescription = null, tint = Brand.Gold, modifier = Modifier.size(20.dp))
-                }
-                if (!compact) {
-                    Column(Modifier.widthIn(max = 150.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                        Text(
-                            employeeName,
-                            color = Brand.Foreground,
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            locationLabel,
-                            color = Brand.ForegroundFaint,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    Row(
+                        Modifier.padding(horizontal = Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        Box(
+                            Modifier.size(34.dp).clip(CircleShape).background(Brand.SurfaceHover),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Person, contentDescription = null, tint = Brand.Gold, modifier = Modifier.size(19.dp))
+                        }
+                        Column(Modifier.widthIn(max = 150.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                employeeName,
+                                color = Brand.Foreground,
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                locationLabel,
+                                color = Brand.ForegroundFaint,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Icon(Icons.Filled.MoreVert, contentDescription = null, tint = Brand.ForegroundMuted)
                     }
                 }
-                Icon(Icons.Filled.MoreVert, contentDescription = "Account actions", tint = Brand.ForegroundMuted)
             }
             DropdownMenu(
                 expanded = accountMenuOpen,
@@ -623,6 +652,49 @@ private fun WorkspaceHeader(
 }
 
 @Composable
+private fun HeaderIconAction(
+    icon: ImageVector,
+    accessibilityLabel: String,
+    onClick: () -> Unit,
+    tint: Color = Brand.ForegroundMuted,
+    badgeCount: Int = 0,
+) {
+    Surface(
+        color = Brand.Surface,
+        shape = Radius.shapeMd,
+        border = BorderStroke(1.dp, Brand.BorderSubtle),
+        modifier = Modifier.size(48.dp)
+            .clickable(onClick = onClick)
+            .semantics {
+                role = Role.Button
+                contentDescription = accessibilityLabel
+            },
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+            if (badgeCount > 0) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 3.dp)
+                        .size(18.dp).clip(CircleShape).background(Brand.Gold),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        badgeCount.coerceAtMost(99).toString(),
+                        color = Brand.Background,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConnectivityStatus(problem: SyncAvailabilityProblem, showDetail: Boolean) {
     val (label, color) = when (problem) {
         SyncAvailabilityProblem.NONE -> "Online" to Brand.Good
@@ -630,7 +702,7 @@ private fun ConnectivityStatus(problem: SyncAvailabilityProblem, showDetail: Boo
         SyncAvailabilityProblem.SERVER_UNREACHABLE -> "Server issue" to Brand.Danger
     }
     Row(
-        Modifier.height(44.dp).clip(Radius.shapePill).background(Brand.Surface)
+        Modifier.height(40.dp).clip(Radius.shapePill).background(Brand.Surface)
             .semantics { contentDescription = "Connection status: $label" }
             .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
@@ -666,7 +738,7 @@ private fun OutboxWorkStatusPill(
     }.joinToString(", ")
 
     Row(
-        Modifier.height(44.dp).clip(Radius.shapePill)
+        Modifier.height(40.dp).clip(Radius.shapePill)
             .background(color.copy(alpha = 0.12f))
             .border(1.dp, color.copy(alpha = 0.34f), Radius.shapePill)
             .semantics { contentDescription = "Saved work status: $accessibilityDetail" }

@@ -8,9 +8,11 @@ import {
   isProfileRouteEnabled,
   profileDeferredMoneyLabel,
   profileMembershipMoneyLabel,
+  profileOperationalCatalogItems,
   profilePosCheckoutSource,
   profilePosOrderType,
   visibleProfileNavigationGroups,
+  webLandingRouteFor,
   WEB_PRODUCT_PROFILE,
   type ProfileAccessContext,
 } from './product-profile';
@@ -42,6 +44,25 @@ describe('Gaming Centre web product profile', () => {
 
   it('keeps the normal staff workspace focused on the daily gaming flow', () => {
     expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Stock', 'Help']);
+  });
+
+  it('lands each web account on the most useful permitted control surface', () => {
+    expect(webLandingRouteFor({
+      protected_access: true,
+      accessible_modules: [],
+    })).toBe('/analytics');
+    expect(webLandingRouteFor({
+      protected_access: false,
+      accessible_modules: ['pos', 'gaming'],
+    })).toBe('/gaming');
+    expect(webLandingRouteFor({
+      protected_access: false,
+      accessible_modules: ['pos'],
+    })).toBe('/pos');
+    expect(webLandingRouteFor({
+      protected_access: false,
+      accessible_modules: [],
+    })).toBe('/workspace-unavailable');
   });
 
   it('adds finance and management surfaces only for an operational owner', () => {
@@ -101,6 +122,31 @@ describe('Gaming Centre web product profile', () => {
 
     expect(isProfileRouteEnabled('/menu')).toBe(true);
     expect(WEB_PRODUCT_PROFILE.defaultRoute).toBe('/gaming');
+  });
+
+  it('offers only packaged drinks and crisps for new operational sales', () => {
+    const categories = [
+      { id: 'soft-drinks', name: ' Soft Drinks ' },
+      { id: 'drinks-snacks', name: 'Drinks & Snacks' },
+      { id: 'snacks', name: 'Snacks' },
+      { id: 'coffee', name: 'Coffee' },
+      { id: 'food', name: 'Food' },
+    ];
+    const items = [
+      { id: 'can', category_id: 'soft-drinks', type: 'DRINK', is_available: true },
+      { id: 'legacy-can', category_id: 'drinks-snacks', type: 'drink', is_available: true },
+      { id: 'legacy-crisps', category_id: 'drinks-snacks', type: 'food', is_available: true },
+      { id: 'crisps', category_id: 'snacks', type: 'food', is_available: true },
+      { id: 'coffee', category_id: 'coffee', type: 'drink', is_available: true },
+      { id: 'burger', category_id: 'food', type: 'food', is_available: true },
+      { id: 'sold-out', category_id: 'soft-drinks', type: 'drink', is_available: false },
+      { id: 'wrong-type', category_id: 'soft-drinks', type: 'food', is_available: true },
+      { id: 'uncategorised', category_id: 'missing', type: 'drink', is_available: true },
+    ];
+
+    expect(profileOperationalCatalogItems(items, categories).map((item) => item.id))
+      .toEqual(['can', 'legacy-can', 'legacy-crisps', 'crisps']);
+    expect(WEB_PRODUCT_PROFILE.operationalCatalogPolicy).toHaveLength(4);
   });
 
   it('can re-enable a deferred workflow from one central feature flag', () => {

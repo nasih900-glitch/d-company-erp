@@ -5,6 +5,7 @@ import Modal from '@/components/ui/Modal';
 import { finance, type AssetDTO, type BranchReferenceDTO } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import { rupeesToMinor } from '@/lib/manual-collections';
+import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 
 // ============================================================================
 // FIXED ASSETS — equipment register (gaming, kitchen, furniture, ...),
@@ -32,8 +33,8 @@ export default function AssetsTab() {
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setErr(null);
     try {
       const [assets, branchRows] = await Promise.all([
@@ -45,11 +46,12 @@ export default function AssetsTab() {
     } catch (error) {
       setErr((error as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
 
   if (loading) {
     return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading fixed assets…</div>;
@@ -86,7 +88,7 @@ export default function AssetsTab() {
           {rows.length} asset{rows.length === 1 ? '' : 's'} on the register
         </p>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load} aria-label="Refresh assets"><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh assets"><RefreshCw size={14}/></button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
             <Plus size={14}/> Add asset
           </button>

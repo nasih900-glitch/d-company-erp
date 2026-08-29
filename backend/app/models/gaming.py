@@ -64,6 +64,19 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     opened_by: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    # NULL only for history that predates migration 0057. Stop and POS handoff
+    # are different accountable actions and must not be inferred from opened_by.
+    stopped_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    sent_to_pos_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    sent_to_pos_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     shift_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="RESTRICT"), nullable=False
     )
@@ -113,6 +126,21 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     # (e.g. a 3rd/4th player joining a Dual-mode PS5 slot). Surcharge is
     # computed at package-price time, never re-derived from elapsed time.
     extra_controllers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+@event.listens_for(GamingSession, "before_update")
+def _guard_gaming_session_actor_attribution(_mapper, _connection, row) -> None:
+    """A recorded stop or POS-handoff actor can never be replaced or erased."""
+
+    state = inspect(row)
+    for field in ("stopped_by", "sent_to_pos_by", "sent_to_pos_at"):
+        history = state.attrs[field].history
+        if history.has_changes() and any(value is not None for value in history.deleted):
+            raise ValueError(f"gaming session {field} attribution is immutable")
+    if (row.sent_to_pos_by is None) != (row.sent_to_pos_at is None):
+        raise ValueError(
+            "gaming session POS handoff actor and timestamp must be recorded together"
+        )
 
 
 class GamingSessionExtension(Base, TenantMixin):

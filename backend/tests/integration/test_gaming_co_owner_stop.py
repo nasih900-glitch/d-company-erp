@@ -145,6 +145,8 @@ async def test_co_owner_can_start_and_stop_same_terminal_session_without_audit_a
         await session.execute(select(GamingSession).where(GamingSession.id == started.json()["id"]))
     ).scalar_one()
     assert stored.opened_by == co_owner.id
+    assert stored.stopped_by == co_owner.id
+    assert stored.sent_to_pos_by is None
     assert stored.status == "ended"
 
     local_action_id = uuid4()

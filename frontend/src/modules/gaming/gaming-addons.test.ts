@@ -48,6 +48,13 @@ const drink: MenuItemDTO = {
   }],
 };
 
+const operationalCategories = [
+  { id: 'category-1', name: 'Soft Drinks', sort_order: 10 },
+  { id: 'category-2', name: 'Snacks', sort_order: 20 },
+  { id: 'category-3', name: 'Coffee', sort_order: 30 },
+];
+const eligibleDrinkIds = new Set([drink.id]);
+
 function addon(overrides: Partial<GamingSessionAddonDTO> = {}): GamingSessionAddonDTO {
   return {
     id: 'addon-1',
@@ -122,12 +129,34 @@ describe('Gaming session add-ons', () => {
     expect(isGamingAddonLedgerAuthoritative('session-1', reloaded, {})).toBe(true);
   });
 
-  it('shows only available food, drink, and dessert products in name order', () => {
-    const food = { ...drink, id: 'food-1', name: 'Crisps', type: 'food' };
+  it('shows only available packaged drinks and crisps in name order', () => {
+    const food = {
+      ...drink,
+      id: 'food-1',
+      category_id: 'category-2',
+      name: 'Crisps',
+      type: 'food',
+    };
+    const coffee = {
+      ...drink,
+      id: 'coffee-1',
+      category_id: 'category-3',
+      name: 'Coffee',
+    };
+    const dessert = {
+      ...drink,
+      id: 'dessert-1',
+      category_id: 'category-2',
+      name: 'Cake',
+      type: 'dessert',
+    };
     const gaming = { ...drink, id: 'gaming-1', name: 'PS5 time', type: 'gaming' };
     const unavailable = { ...drink, id: 'drink-2', name: 'Water', is_available: false };
 
-    expect(availableGamingAddonItems([drink, gaming, unavailable, food]).map((item) => item.id))
+    expect(availableGamingAddonItems(
+      [drink, gaming, unavailable, food, coffee, dessert],
+      operationalCategories,
+    ).map((item) => item.id))
       .toEqual(['drink-1', 'food-1']);
   });
 
@@ -163,7 +192,7 @@ describe('Gaming session add-ons', () => {
       expected_unit_price_minor: 1_200,
       note: null,
     };
-    expect(validateGamingAddonDraft(drink, missingModifier)).toBe(
+    expect(validateGamingAddonDraft(drink, missingModifier, eligibleDrinkIds)).toBe(
       'Extras: select between 1 and 2.',
     );
 
@@ -172,7 +201,7 @@ describe('Gaming session add-ons', () => {
       modifiers: [{ modifier_id: 'ice', qty: 1 }],
       expected_unit_price_minor: 1_225,
     };
-    expect(validateGamingAddonDraft(drink, valid)).toBeNull();
+    expect(validateGamingAddonDraft(drink, valid, eligibleDrinkIds)).toBeNull();
   });
 
   it('rejects an inactive modifier instead of silently pricing it at zero', () => {
@@ -191,7 +220,7 @@ describe('Gaming session add-ons', () => {
       qty: 1,
       expected_unit_price_minor: 1_200,
       note: null,
-    })).toBe('A selected modifier is no longer available. Select the item again.');
+    }, eligibleDrinkIds)).toBe('A selected modifier is no longer available. Select the item again.');
   });
 
   it('excludes soft-voided lines from the staged total without hiding history', () => {

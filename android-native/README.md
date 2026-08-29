@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.1` |
-| Version code | `12` |
+| Version name | `3.1.2` |
+| Version code | `13` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,23 +23,27 @@ build.
 
 ## Release status
 
-Version `3.1.1` (`12`) is an unreleased Gaming Centre candidate, not a declared
-production rollout. It follows the separately signed `3.1.0` (`11`) updater
-bootstrap and must keep that signing lineage. The current source advances Room from 36 through 39 to
-protect both the employee-owned Support outbox and immutable offline Gaming
-item actions, and requires exactly one server-confirmed Hybrid Gaming + POS
-workspace for the active shop. The focused migration tests must pass on an API-35 emulator and
-the signed in-place release upgrade must be reverified before handoff. That evidence does not
-replace the full authenticated staff workflow or physical Redmi Pad 2
-acceptance, and no Play AAB has been uploaded. Nothing from this Android release
+Version `3.1.2` (`13`) is the current source candidate, not a declared
+production rollout. The already signed `3.1.1` (`12`) partner APK remains the
+manual, update-capable baseline and must keep its exact bytes and signing
+lineage. The current source advances Room from 36 through 40 to protect the
+employee-owned Support outbox, immutable offline Gaming item actions, and the
+canonical receipt-history cache. It still requires exactly one
+server-confirmed Hybrid Gaming + POS workspace for the active shop. Focused
+migration tests must pass on an API-35 emulator, followed by a signed in-place
+upgrade from code `12` to code `13`. That evidence does not replace the full
+authenticated staff workflow or physical Redmi Pad 2 acceptance, and no code-13
+APK/AAB has been approved or uploaded. Nothing from this Android release
 preparation has deployed the backend or web ERP to production. A coordinated
-deployment must migrate the server database through Alembic revision `0056`.
+deployment must migrate the server database through Alembic revision `0057`.
 
-Android client code `8` remains the minimum-compatible floor while code `12` is
-offered as the optional latest update. Do not raise the minimum to `11` until
-every active tablet has installed and accepted the `3.1.0` updater bootstrap;
-do not raise it to `12` until every active tablet has installed and accepted
-this candidate.
+Android client code `8` remains the minimum-compatible floor. Code `12` is the
+manually installed partner baseline; it must not be advertised as a server
+update. Code `13` is the first later candidate intended for server-driven
+delivery, but it is not currently published, deployed, or advertised. Do not
+advertise it until the exact signed artifact and manifest are hosted and its
+in-place upgrade has passed. Do not raise the minimum to `13` until every active
+tablet has installed and accepted that build.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in

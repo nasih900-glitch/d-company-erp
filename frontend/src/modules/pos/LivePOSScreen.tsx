@@ -43,6 +43,7 @@ import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { resolveRequiredOpenShift } from '@/lib/operational-context';
 import {
   GAMING_CENTRE_FEATURES,
+  profileOperationalCatalogItems,
   profileMembershipMoneyLabel,
   profilePosCheckoutSource,
   profilePosOrderType,
@@ -309,7 +310,7 @@ export default function LivePOSScreen() {
         }
         const activeDraftKey = draftKey;
         const [menuResult, shiftResult] = await Promise.allSettled([
-          menu.items(),
+          Promise.all([menu.items(), menu.categories()]),
           resolveRequiredOpenShift({
             scope: { companyId, branchId, terminalId },
             listOpenShifts: () => shifts.list(true),
@@ -317,7 +318,7 @@ export default function LivePOSScreen() {
         ]);
         if (cancelled) return;
         if (menuResult.status === 'rejected') throw menuResult.reason;
-        const all = menuResult.value;
+        const [all, menuCategories] = menuResult.value;
         let resolvedShiftId: string | null = null;
         if (shiftResult.status === 'fulfilled') {
           resolvedShiftId = shiftResult.value;
@@ -328,7 +329,8 @@ export default function LivePOSScreen() {
           // record remains authoritative about whether that payment committed.
           setShiftError((shiftResult.reason as Error).message);
         }
-        const available = all.filter((i) => i.is_available && isAppStoreAllowedType(i.type));
+        const available = profileOperationalCatalogItems(all, menuCategories)
+          .filter((i) => isAppStoreAllowedType(i.type));
         const restorable = all.filter((i) => isAppStoreAllowedType(i.type));
         setItems(available);
         setShiftId(resolvedShiftId);

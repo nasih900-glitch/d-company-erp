@@ -28,6 +28,7 @@ import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
 import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
+import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.MenuModifierEntity
 import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
@@ -46,6 +47,7 @@ import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import cloud.dcompany.erp.ui.screens.CartModifierSelection
 import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -891,6 +893,7 @@ class GamingViewModel : ViewModel() {
     private data class ReferenceState(
         val stations: List<GamingStationEntity>,
         val packages: List<GamingPackageCacheEntity>,
+        val categories: List<MenuCategoryEntity>,
         val items: List<MenuItemEntity>,
         val variants: List<MenuVariantEntity>,
         val modifierGroups: List<MenuModifierGroupEntity>,
@@ -904,6 +907,7 @@ class GamingViewModel : ViewModel() {
     )
 
     private data class AddonCatalogState(
+        val categories: List<MenuCategoryEntity>,
         val items: List<MenuItemEntity>,
         val variants: List<MenuVariantEntity>,
         val modifierGroups: List<MenuModifierGroupEntity>,
@@ -913,17 +917,19 @@ class GamingViewModel : ViewModel() {
     private val referenceState = combine(
         combine(db.gamingDao().observeStations(), db.gamingDao().observePackages(), ::Pair),
         combine(
+            db.menuDao().observeCategories(),
             db.menuDao().observeItems(),
             db.menuDao().observeVariants(),
             db.menuDao().observeModifierGroups(),
             db.menuDao().observeModifiers(),
-        ) { items, variants, groups, modifiers ->
-            AddonCatalogState(items, variants, groups, modifiers)
+        ) { categories, items, variants, groups, modifiers ->
+            AddonCatalogState(categories, items, variants, groups, modifiers)
         },
     ) { gaming, menu ->
         ReferenceState(
             stations = gaming.first,
             packages = gaming.second,
+            categories = menu.categories,
             items = menu.items,
             variants = menu.variants,
             modifierGroups = menu.modifierGroups,
@@ -1010,8 +1016,14 @@ class GamingViewModel : ViewModel() {
                     lastError = it.lastError,
                 )
             },
-            addonCatalog = references.items.filter {
-                it.isAvailable && it.type.lowercase() in setOf("food", "drink", "dessert")
+            addonCatalog = references.items.filter { item ->
+                WorkspaceFeatureProfiles.Active.operationalCatalogPolicy.allows(
+                    categoryName = references.categories
+                        .firstOrNull { it.id == item.categoryId }
+                        ?.name,
+                    itemType = item.type,
+                    isAvailable = item.isAvailable,
+                )
             },
             addonVariants = references.variants.filter { it.isActive },
             addonModifierGroups = references.modifierGroups.filter { it.isActive },
@@ -1406,8 +1418,7 @@ class GamingViewModel : ViewModel() {
         val catalog = state.value
         val currentItem = catalog.addonCatalog.firstOrNull { it.id == item.id }
         if (
-            currentItem == null || currentItem != item || !currentItem.isAvailable ||
-            currentItem.type.lowercase() !in setOf("food", "drink", "dessert")
+            currentItem == null || currentItem != item
         ) {
             error.value = "${item.name} is not available for session add-ons. Refresh the menu."
             return

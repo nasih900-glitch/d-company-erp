@@ -7,7 +7,10 @@ the POS deep build.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+import base64
+import binascii
+import json
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -368,6 +371,568 @@ class PaymentRead(BaseModel):
     invoice_no: str | None
     fiscal_year: str | None
     invoice_issued_at: datetime | None
+
+
+class ReceiptLineHistoryRead(BaseModel):
+    """Immutable sold-line snapshot; decimal values stay exact as strings."""
+
+    id: UUID
+    menu_item_id: UUID
+    menu_item_name: str
+    menu_item_type: str
+    variant_id: UUID | None
+    variant_snapshot: dict | None
+    modifiers: list[dict]
+    qty: str
+    unit_price_minor: int
+    line_total_minor: int
+    discount_minor: int
+    hsn_or_sac: str | None
+    tax_rate: str
+    taxable_value_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+    note: str | None
+    voided_at: datetime | None
+    voided_by: UUID | None
+    voided_by_name: str | None
+    void_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReceiptPaymentHistoryRead(BaseModel):
+    id: UUID
+    shift_id: UUID
+    method: PosPaymentMethod
+    amount_minor: int
+    tendered_minor: int | None
+    change_minor: int | None
+    reference: str | None
+    paid_at: datetime
+    recorded_by: UUID | None
+    recorded_by_name: str | None
+    created_at: datetime
+
+
+class ReceiptRefundHistoryRead(BaseModel):
+    """Immutable proof of money returned against the original receipt."""
+
+    id: UUID
+    request_id: UUID | None
+    company_id: UUID | None
+    branch_id: UUID | None
+    terminal_id: UUID | None
+    settlement_shift_id: UUID | None
+    approved_by: UUID
+    approved_by_name: str | None
+    manager_override_user_id: UUID | None
+    manager_override_user_name: str | None
+    reason_code: str
+    amount_minor: int
+    mode: str
+    settlement_method: PosPaymentMethod | None
+    settled_at: datetime | None
+    settled_by: UUID | None
+    settled_by_name: str | None
+    external_reference: str | None
+    provider_settled_at: datetime | None
+    client_occurred_at: datetime | None
+    captured_time_reconciled: bool | None
+    provider_evidence_reconciled: bool | None
+    settlement_idempotency_key: str | None
+    receipt_no: str | None
+    receipt_fiscal_year: str | None
+    receipt_issued_at: datetime | None
+    customer_spend_reconciled: bool | None
+    loyalty_reconciliation_state: str | None
+    note: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReceiptGamingSessionHistoryRead(BaseModel):
+    id: UUID
+    station_id: UUID
+    # Station labels are current display metadata. The immutable source link is
+    # station_id; pre-0057 history cannot truthfully reconstruct old labels.
+    station_code: str
+    station_name: str
+    station_type: str
+    source_shift_id: UUID
+    started_by: UUID
+    started_by_name: str | None
+    stopped_by: UUID | None
+    stopped_by_name: str | None
+    sent_to_pos_by: UUID | None
+    sent_to_pos_by_name: str | None
+    started_at: datetime
+    stopped_at: datetime | None
+    sent_to_pos_at: datetime | None
+    billing_mode: str
+    rate_per_hour_minor: int
+    package_id: UUID | None
+    package_price_minor_snapshot: int | None
+    package_duration_minutes_snapshot: int | None
+    package_variant_snapshot: str | None
+    timer_minutes: int | None
+    paused_minutes: int
+    billable_minutes: int | None
+    amount_minor: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReceiptHistoryRead(BaseModel):
+    """Canonical receipt projection shared by web and native clients."""
+
+    order_id: UUID
+    company_id: UUID
+    branch_id: UUID
+    terminal_id: UUID
+    shift_id: UUID
+    shift_opened_by: UUID | None
+    shift_opened_by_name: str | None
+    shift_opened_at: datetime | None
+    shift_closed_at: datetime | None
+    opened_by: UUID
+    opened_by_name: str | None
+    invoice_no: str
+    fiscal_year: str
+    status: str
+    order_type: str
+    table_id: UUID | None
+    subtotal_minor: int
+    discount_minor: int
+    manual_discount_minor: int
+    points_redeemed_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+    tax_minor: int
+    round_off_minor: int
+    tip_minor: int
+    total_minor: int
+    paid_minor: int
+    refunded_minor: int
+    net_collected_minor: int
+    customer_name: str | None
+    customer_phone: str | None
+    customer_gstin: str | None
+    customer_address: str | None
+    customer_state_code: str | None
+    place_of_supply_state_code: str | None
+    is_reverse_charge: bool
+    irn: str | None
+    irn_ack_no: str | None
+    irn_acknowledged_at: datetime | None
+    e_invoice_qr: str | None
+    notes: str | None
+    opened_at: datetime
+    held_at: datetime | None
+    closed_at: datetime
+    invoice_issued_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    lines: list[ReceiptLineHistoryRead]
+    payments: list[ReceiptPaymentHistoryRead]
+    refunds: list[ReceiptRefundHistoryRead]
+    gaming_sessions: list[ReceiptGamingSessionHistoryRead]
+
+
+class ReceiptHistoryPage(BaseModel):
+    items: list[ReceiptHistoryRead]
+    next_cursor: str | None
+    has_more: bool
+
+
+def _encode_receipt_cursor(invoice_issued_at: datetime, order_id: UUID) -> str:
+    payload = json.dumps(
+        [invoice_issued_at.astimezone(UTC).isoformat(), str(order_id)],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_receipt_cursor(cursor: str) -> tuple[datetime, UUID]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        decoded = base64.b64decode(
+            padded.encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        )
+        values = json.loads(decoded.decode("utf-8"))
+        if not isinstance(values, list) or len(values) != 2:
+            raise ValueError("invalid cursor shape")
+        issued_at = datetime.fromisoformat(str(values[0]).replace("Z", "+00:00"))
+        if issued_at.tzinfo is None:
+            raise ValueError("cursor timestamp has no timezone")
+        return issued_at.astimezone(UTC), UUID(str(values[1]))
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BusinessRuleError(
+            "Receipt history cursor is invalid. Refresh receipt history and try again."
+        ) from exc
+
+
+def _exact_decimal_text(value: object) -> str:
+    return format(Decimal(str(value)), "f")
+
+
+async def _receipt_history_reads(
+    session,
+    *,
+    orders: list[Order],
+    company_id: UUID,
+    branch_id: UUID,
+) -> list[ReceiptHistoryRead]:
+    if not orders:
+        return []
+
+    order_ids = [order.id for order in orders]
+    line_rows = (
+        await session.execute(
+            select(OrderLine)
+            .where(OrderLine.order_id.in_(order_ids))
+            .order_by(OrderLine.order_id, OrderLine.created_at, OrderLine.id)
+        )
+    ).scalars().all()
+    payment_rows = (
+        await session.execute(
+            select(Payment)
+            .where(Payment.order_id.in_(order_ids))
+            .order_by(Payment.order_id, Payment.paid_at, Payment.id)
+        )
+    ).scalars().all()
+    refund_rows = (
+        await session.execute(
+            select(Refund)
+            .where(Refund.order_id.in_(order_ids))
+            .order_by(
+                Refund.order_id,
+                Refund.settled_at.nulls_last(),
+                Refund.created_at,
+                Refund.id,
+            )
+        )
+    ).scalars().all()
+    gaming_rows = (
+        await session.execute(
+            select(GamingSession, Station)
+            .join(Station, Station.id == GamingSession.station_id)
+            .where(
+                GamingSession.order_id.in_(order_ids),
+                GamingSession.company_id == company_id,
+                Station.company_id == company_id,
+                Station.branch_id == branch_id,
+            )
+            .order_by(GamingSession.order_id, GamingSession.start_at, GamingSession.id)
+        )
+    ).all()
+    shift_ids = {order.shift_id for order in orders}
+    shifts = (
+        await session.execute(
+            select(Shift).where(
+                Shift.id.in_(shift_ids),
+                Shift.company_id == company_id,
+                Shift.branch_id == branch_id,
+            )
+        )
+    ).scalars().all()
+    shifts_by_id = {shift.id: shift for shift in shifts}
+
+    actor_ids: set[UUID] = {order.opened_by for order in orders}
+    actor_ids.update(shift.opened_by for shift in shifts)
+    actor_ids.update(line.voided_by for line in line_rows if line.voided_by is not None)
+    actor_ids.update(
+        payment.recorded_by
+        for payment in payment_rows
+        if payment.recorded_by is not None
+    )
+    actor_ids.update(refund.approved_by for refund in refund_rows)
+    actor_ids.update(
+        refund.manager_override_user_id
+        for refund in refund_rows
+        if refund.manager_override_user_id is not None
+    )
+    actor_ids.update(
+        refund.settled_by for refund in refund_rows if refund.settled_by is not None
+    )
+    for gaming_session, _station in gaming_rows:
+        actor_ids.add(gaming_session.opened_by)
+        if gaming_session.stopped_by is not None:
+            actor_ids.add(gaming_session.stopped_by)
+        if gaming_session.sent_to_pos_by is not None:
+            actor_ids.add(gaming_session.sent_to_pos_by)
+    actor_names = dict(
+        (
+            await session.execute(
+                select(User.id, User.name).where(
+                    User.id.in_(actor_ids),
+                    User.company_id == company_id,
+                )
+            )
+        ).all()
+    )
+
+    lines_by_order: dict[UUID, list[OrderLine]] = {}
+    for line in line_rows:
+        lines_by_order.setdefault(line.order_id, []).append(line)
+    payments_by_order: dict[UUID, list[Payment]] = {}
+    for payment in payment_rows:
+        payments_by_order.setdefault(payment.order_id, []).append(payment)
+    refunds_by_order: dict[UUID, list[Refund]] = {}
+    for refund in refund_rows:
+        refunds_by_order.setdefault(refund.order_id, []).append(refund)
+    gaming_by_order: dict[UUID, list[tuple[GamingSession, Station]]] = {}
+    for gaming_session, station in gaming_rows:
+        assert gaming_session.order_id is not None
+        gaming_by_order.setdefault(gaming_session.order_id, []).append(
+            (gaming_session, station)
+        )
+
+    results: list[ReceiptHistoryRead] = []
+    for order in orders:
+        if (
+            order.invoice_no is None
+            or order.fiscal_year is None
+            or order.invoice_issued_at is None
+            or order.closed_at is None
+        ):
+            # The selecting query excludes this state. Keep this guard so a
+            # future caller cannot accidentally publish a guessed receipt.
+            raise BusinessRuleError(
+                "A finalized order is missing immutable invoice identity. "
+                "Ask a protected owner to reconcile it before opening its receipt."
+            )
+        shift = shifts_by_id.get(order.shift_id)
+        order_payments = payments_by_order.get(order.id, [])
+        order_refunds = refunds_by_order.get(order.id, [])
+        paid_minor = sum(int(payment.amount_minor) for payment in order_payments)
+        refunded_minor = sum(int(refund.amount_minor) for refund in order_refunds)
+        results.append(
+            ReceiptHistoryRead(
+                order_id=order.id,
+                company_id=order.company_id,
+                branch_id=order.branch_id,
+                terminal_id=order.terminal_id,
+                shift_id=order.shift_id,
+                shift_opened_by=shift.opened_by if shift else None,
+                shift_opened_by_name=(
+                    actor_names.get(shift.opened_by) if shift else None
+                ),
+                shift_opened_at=shift.opened_at if shift else None,
+                shift_closed_at=shift.closed_at if shift else None,
+                opened_by=order.opened_by,
+                opened_by_name=actor_names.get(order.opened_by),
+                invoice_no=order.invoice_no,
+                fiscal_year=order.fiscal_year,
+                status=order.status,
+                order_type=order.type,
+                table_id=order.table_id,
+                subtotal_minor=int(order.subtotal_minor or 0),
+                discount_minor=int(order.discount_minor or 0),
+                manual_discount_minor=int(order.manual_discount_minor or 0),
+                points_redeemed_minor=int(order.points_redeemed_minor or 0),
+                cgst_minor=int(order.cgst_minor or 0),
+                sgst_minor=int(order.sgst_minor or 0),
+                igst_minor=int(order.igst_minor or 0),
+                cess_minor=int(order.cess_minor or 0),
+                tax_minor=int(order.tax_minor or 0),
+                round_off_minor=int(order.round_off_minor or 0),
+                tip_minor=int(order.tip_minor or 0),
+                total_minor=int(order.total_minor or 0),
+                paid_minor=paid_minor,
+                refunded_minor=refunded_minor,
+                net_collected_minor=paid_minor - refunded_minor,
+                customer_name=order.customer_name,
+                customer_phone=order.customer_phone,
+                customer_gstin=order.customer_gstin,
+                customer_address=order.customer_address,
+                customer_state_code=order.customer_state_code,
+                place_of_supply_state_code=order.place_of_supply_state_code,
+                is_reverse_charge=bool(order.is_reverse_charge),
+                irn=order.irn,
+                irn_ack_no=order.irn_ack_no,
+                irn_acknowledged_at=order.irn_acknowledged_at,
+                e_invoice_qr=order.e_invoice_qr,
+                notes=order.notes,
+                opened_at=order.opened_at,
+                held_at=order.held_at,
+                closed_at=order.closed_at,
+                invoice_issued_at=order.invoice_issued_at,
+                created_at=order.created_at,
+                updated_at=order.updated_at,
+                lines=[
+                    ReceiptLineHistoryRead(
+                        id=line.id,
+                        menu_item_id=line.menu_item_id,
+                        menu_item_name=line.menu_item_name_snapshot,
+                        menu_item_type=line.menu_item_type_snapshot,
+                        variant_id=line.variant_id,
+                        variant_snapshot=line.variant_snapshot,
+                        modifiers=list(line.modifiers or []),
+                        qty=_exact_decimal_text(line.qty),
+                        unit_price_minor=int(line.unit_price_minor),
+                        line_total_minor=int(line.line_total_minor),
+                        discount_minor=int(line.discount_minor or 0),
+                        hsn_or_sac=line.hsn_or_sac,
+                        tax_rate=_exact_decimal_text(line.tax_rate),
+                        taxable_value_minor=int(line.taxable_value_minor or 0),
+                        cgst_minor=int(line.cgst_minor or 0),
+                        sgst_minor=int(line.sgst_minor or 0),
+                        igst_minor=int(line.igst_minor or 0),
+                        cess_minor=int(line.cess_minor or 0),
+                        note=line.note,
+                        voided_at=line.voided_at,
+                        voided_by=line.voided_by,
+                        voided_by_name=(
+                            actor_names.get(line.voided_by)
+                            if line.voided_by is not None
+                            else None
+                        ),
+                        void_reason=line.void_reason,
+                        created_at=line.created_at,
+                        updated_at=line.updated_at,
+                    )
+                    for line in lines_by_order.get(order.id, [])
+                ],
+                payments=[
+                    ReceiptPaymentHistoryRead(
+                        id=payment.id,
+                        shift_id=payment.shift_id,
+                        method=payment.method,
+                        amount_minor=int(payment.amount_minor),
+                        tendered_minor=(
+                            int(payment.tendered_minor)
+                            if payment.tendered_minor is not None
+                            else None
+                        ),
+                        change_minor=(
+                            int(payment.change_minor)
+                            if payment.change_minor is not None
+                            else None
+                        ),
+                        reference=payment.ref_external,
+                        paid_at=payment.paid_at,
+                        recorded_by=payment.recorded_by,
+                        recorded_by_name=(
+                            actor_names.get(payment.recorded_by)
+                            if payment.recorded_by is not None
+                            else None
+                        ),
+                        created_at=payment.created_at,
+                    )
+                    for payment in order_payments
+                ],
+                refunds=[
+                    ReceiptRefundHistoryRead(
+                        id=refund.id,
+                        request_id=refund.request_id,
+                        company_id=refund.company_id,
+                        branch_id=refund.branch_id,
+                        terminal_id=refund.terminal_id,
+                        settlement_shift_id=refund.settlement_shift_id,
+                        approved_by=refund.approved_by,
+                        approved_by_name=actor_names.get(refund.approved_by),
+                        manager_override_user_id=refund.manager_override_user_id,
+                        manager_override_user_name=(
+                            actor_names.get(refund.manager_override_user_id)
+                            if refund.manager_override_user_id is not None
+                            else None
+                        ),
+                        reason_code=refund.reason_code,
+                        amount_minor=int(refund.amount_minor),
+                        mode=refund.mode,
+                        settlement_method=refund.settlement_method,
+                        settled_at=refund.settled_at,
+                        settled_by=refund.settled_by,
+                        settled_by_name=(
+                            actor_names.get(refund.settled_by)
+                            if refund.settled_by is not None
+                            else None
+                        ),
+                        external_reference=refund.external_reference,
+                        provider_settled_at=refund.provider_settled_at,
+                        client_occurred_at=refund.client_occurred_at,
+                        captured_time_reconciled=refund.captured_time_reconciled,
+                        provider_evidence_reconciled=(
+                            refund.provider_evidence_reconciled
+                        ),
+                        settlement_idempotency_key=(
+                            refund.settlement_idempotency_key
+                        ),
+                        receipt_no=refund.receipt_no,
+                        receipt_fiscal_year=refund.receipt_fiscal_year,
+                        receipt_issued_at=refund.receipt_issued_at,
+                        customer_spend_reconciled=refund.customer_spend_reconciled,
+                        loyalty_reconciliation_state=(
+                            refund.loyalty_reconciliation_state
+                        ),
+                        note=refund.note,
+                        created_at=refund.created_at,
+                        updated_at=refund.updated_at,
+                    )
+                    for refund in order_refunds
+                ],
+                gaming_sessions=[
+                    ReceiptGamingSessionHistoryRead(
+                        id=gaming_session.id,
+                        station_id=gaming_session.station_id,
+                        station_code=station.code,
+                        station_name=station.name,
+                        station_type=station.type,
+                        source_shift_id=gaming_session.shift_id,
+                        started_by=gaming_session.opened_by,
+                        started_by_name=actor_names.get(gaming_session.opened_by),
+                        stopped_by=gaming_session.stopped_by,
+                        stopped_by_name=(
+                            actor_names.get(gaming_session.stopped_by)
+                            if gaming_session.stopped_by is not None
+                            else None
+                        ),
+                        sent_to_pos_by=gaming_session.sent_to_pos_by,
+                        sent_to_pos_by_name=(
+                            actor_names.get(gaming_session.sent_to_pos_by)
+                            if gaming_session.sent_to_pos_by is not None
+                            else None
+                        ),
+                        started_at=gaming_session.start_at,
+                        stopped_at=gaming_session.end_at,
+                        sent_to_pos_at=gaming_session.sent_to_pos_at,
+                        billing_mode=gaming_session.billing_mode,
+                        rate_per_hour_minor=int(gaming_session.rate_per_hour_minor),
+                        package_id=gaming_session.package_id,
+                        package_price_minor_snapshot=(
+                            int(gaming_session.package_price_minor_snapshot)
+                            if gaming_session.package_price_minor_snapshot is not None
+                            else None
+                        ),
+                        package_duration_minutes_snapshot=(
+                            int(gaming_session.package_duration_minutes_snapshot)
+                            if gaming_session.package_duration_minutes_snapshot is not None
+                            else None
+                        ),
+                        package_variant_snapshot=gaming_session.package_variant_snapshot,
+                        timer_minutes=gaming_session.timer_minutes,
+                        paused_minutes=int(gaming_session.paused_minutes or 0),
+                        billable_minutes=gaming_session.billable_minutes,
+                        amount_minor=(
+                            int(gaming_session.amount_minor)
+                            if gaming_session.amount_minor is not None
+                            else None
+                        ),
+                        created_at=gaming_session.created_at,
+                        updated_at=gaming_session.updated_at,
+                    )
+                    for gaming_session, station in gaming_by_order.get(order.id, [])
+                ],
+            )
+        )
+    return results
 
 
 async def _payment_read_from_stored_response(
@@ -2044,7 +2609,7 @@ async def _finalize_order(
 )
 async def get_receipt_business(
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.read")),
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
 ) -> ReceiptBusinessRead:
     """Return only fields needed for billing and receipt rendering.
 
@@ -2073,6 +2638,119 @@ async def get_receipt_business(
         raise NotFoundError("Current POS branch was not found for this company.")
     company, branch = row
     return _receipt_business_read(company, branch)
+
+
+@router.get(
+    "/receipts",
+    response_model=ReceiptHistoryPage,
+    summary="List immutable POS receipts for cross-platform history sync",
+)
+async def list_receipt_history(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ReceiptHistoryPage:
+    """Return newest-first finalized receipts with a stable opaque cursor.
+
+    History is scoped to the authenticated company and branch, but not to the
+    currently selected terminal. A shop's one active Hybrid workspace must
+    still be able to read receipts produced by an archived historical till.
+    Financial facts remain linked to their original terminal and shift in the
+    response; no row is repointed or re-attributed.
+    """
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before viewing receipts."
+        )
+
+    stmt = select(Order).where(
+        Order.company_id == tenant.company_id,
+        Order.branch_id == tenant.branch_id,
+        Order.status.in_(("paid", "refunded")),
+        Order.invoice_no.is_not(None),
+        Order.fiscal_year.is_not(None),
+        Order.invoice_issued_at.is_not(None),
+        Order.closed_at.is_not(None),
+    )
+    if cursor is not None:
+        cursor_issued_at, cursor_order_id = _decode_receipt_cursor(cursor)
+        stmt = stmt.where(
+            or_(
+                Order.invoice_issued_at < cursor_issued_at,
+                (
+                    (Order.invoice_issued_at == cursor_issued_at)
+                    & (Order.id < cursor_order_id)
+                ),
+            )
+        )
+    rows = (
+        await session.execute(
+            stmt.order_by(Order.invoice_issued_at.desc(), Order.id.desc()).limit(
+                limit + 1
+            )
+        )
+    ).scalars().all()
+    has_more = len(rows) > limit
+    page_orders = list(rows[:limit])
+    items = await _receipt_history_reads(
+        session,
+        orders=page_orders,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+    )
+    next_cursor: str | None = None
+    if has_more and page_orders:
+        last_order = page_orders[-1]
+        assert last_order.invoice_issued_at is not None
+        next_cursor = _encode_receipt_cursor(
+            last_order.invoice_issued_at,
+            last_order.id,
+        )
+    return ReceiptHistoryPage(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
+@router.get(
+    "/receipts/{order_id}",
+    response_model=ReceiptHistoryRead,
+    summary="Get one immutable POS receipt with payment and Gaming provenance",
+)
+async def get_receipt_history(
+    order_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
+) -> ReceiptHistoryRead:
+    if tenant.branch_id is None:
+        raise BusinessRuleError(
+            "This account has no branch assigned. Assign one before viewing receipts."
+        )
+    order = (
+        await session.execute(
+            select(Order).where(
+                Order.id == order_id,
+                Order.company_id == tenant.company_id,
+                Order.branch_id == tenant.branch_id,
+                Order.status.in_(("paid", "refunded")),
+                Order.invoice_no.is_not(None),
+                Order.fiscal_year.is_not(None),
+                Order.invoice_issued_at.is_not(None),
+                Order.closed_at.is_not(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if order is None:
+        raise NotFoundError("Receipt not found for this company and branch.")
+    reads = await _receipt_history_reads(
+        session,
+        orders=[order],
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+    )
+    return reads[0]
 
 
 @router.post(
@@ -4175,6 +4853,7 @@ async def record_payment(
         id=uuid4(),
         order_id=order_id,
         shift_id=order.shift_id,
+        recorded_by=tenant.user_id,
         method=payload.method,
         amount_minor=collected_minor,
         tendered_minor=payload.tendered_minor,

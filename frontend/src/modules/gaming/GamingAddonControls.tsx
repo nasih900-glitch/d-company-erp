@@ -172,6 +172,7 @@ export function SessionAddonPickerModal({
   const [note, setNote] = useState(attempt?.body.note ?? '');
   const [validation, setValidation] = useState<string | null>(null);
   const selectedItem = items.find((item) => item.id === selectedItemId);
+  const eligibleItemIds = useMemo(() => new Set(items.map((item) => item.id)), [items]);
   const activeVariants = (selectedItem?.variants ?? [])
     .filter((variant) => variant.is_active)
     .sort((left, right) => left.sort_order - right.sort_order);
@@ -229,7 +230,7 @@ export function SessionAddonPickerModal({
       expected_unit_price_minor: unitPrice,
       note: note.trim() || null,
     };
-    const problem = validateGamingAddonDraft(selectedItem, draft);
+    const problem = validateGamingAddonDraft(selectedItem, draft, eligibleItemIds);
     if (problem) {
       setValidation(problem);
       return;

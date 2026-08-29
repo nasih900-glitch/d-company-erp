@@ -340,9 +340,16 @@ class RealtimeBroadcastMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response = await call_next(request)
+        # Login has no trusted incoming tenant context. A caller may attach an
+        # unrelated bearer token, so deriving the login user's company from the
+        # request header would broadcast to the wrong tenant. The endpoint
+        # commits login_success and schedules its own audit signal using the
+        # authenticated database user instead.
+        is_login = request.url.path.rstrip("/").endswith("/auth/login")
         if (
             request.method in ("POST", "PATCH", "PUT", "DELETE")
             and 200 <= response.status_code < 300
+            and not is_login
         ):
             resources = resources_for_path(request.url.path)
             if resources:

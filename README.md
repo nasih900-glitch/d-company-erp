@@ -120,18 +120,22 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current unreleased candidate is `3.1.1`
-(`12`); Android code `8` remains the minimum-compatible floor. The candidate
-adds the Gaming Centre profile, durable session add-ons and verified direct
-updates while retaining contextual Support and the one-shop workspace UI. A
-signed candidate must still pass the complete release gates and API-35 in-place
-upgrades from `3.0.7` (`8`), the earlier schema-37 code-`9` candidate, and the
-signed `3.1.0` (`11`) updater bootstrap.
+`.github/workflows/release.yml`. The current source candidate is `3.1.2` (`13`);
+Android code `8` remains the minimum-compatible floor. The already signed
+`3.1.1` (`12`) partner APK is preserved as the manual, update-capable baseline
+and must not be rebuilt, replaced, or advertised as a server update. The
+`3.1.2` candidate adds the refined Gaming command workspace, canonical receipt
+history and more reliable real-time refresh while advancing Room to schema 40.
+A signed candidate must still pass the complete release gates, supported Room
+migration tests, and an API-35 in-place upgrade from the signed code-`12`
+baseline.
 This is not physical Redmi Pad 2 proof, a Play upload, or a production rollout.
-The coordinated backend deployment must reach Alembic revision `0056`. A
-`v3.1.1` tag reruns the backend, web, and Android release gates, signs the
-native build, and stages only verified artifacts in a private draft GitHub
-Release. Publish that draft only after the `0056` production smoke test passes.
+The coordinated backend deployment must reach Alembic revision `0057`. A
+future `v3.1.2` tag reruns the backend, web, and Android release gates, signs
+the native build, and stages only verified artifacts in a private draft GitHub
+Release. Code `13` has not been deployed, published, or advertised by the
+server; that may happen only after the `0057` production smoke test and the
+signed code-`12` to code-`13` upgrade pass.
 
 ## License
 

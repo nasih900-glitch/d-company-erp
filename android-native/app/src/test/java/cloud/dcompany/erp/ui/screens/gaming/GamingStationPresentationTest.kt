@@ -49,6 +49,65 @@ class GamingStationPresentationTest {
     }
 
     @Test
+    fun `station command workspace is reserved for genuinely wide landscape tablets`() {
+        assertTrue(useGamingCommandWorkspace(widthDp = 1_100, heightDp = 720))
+        assertTrue(useGamingCommandWorkspace(widthDp = 980, heightDp = 600))
+        assertFalse(useGamingCommandWorkspace(widthDp = 979, heightDp = 720))
+        assertFalse(useGamingCommandWorkspace(widthDp = 1_100, heightDp = 599))
+    }
+
+    @Test
+    fun `station command selection survives refresh but falls back after filtering`() {
+        assertEquals(
+            "station-2",
+            resolveGamingCommandStationId(
+                visibleStationIds = listOf("station-1", "station-2"),
+                currentStationId = "station-2",
+            ),
+        )
+        assertEquals(
+            "station-1",
+            resolveGamingCommandStationId(
+                visibleStationIds = listOf("station-1"),
+                currentStationId = "station-2",
+            ),
+        )
+        assertNull(resolveGamingCommandStationId(emptyList(), "station-2"))
+    }
+
+    @Test
+    fun `command attention count retains every independent operational item`() {
+        assertEquals(
+            6,
+            gamingCommandAttentionCount(
+                canManageSessions = false,
+                terminalBlocked = true,
+                focusRequested = false,
+                hasNotice = true,
+                hasRefreshError = false,
+                orphanedExtensionCount = 2,
+                needsCancellation = true,
+                awaitingPayment = false,
+                busy = false,
+            ),
+        )
+        assertEquals(
+            0,
+            gamingCommandAttentionCount(
+                canManageSessions = true,
+                terminalBlocked = false,
+                focusRequested = false,
+                hasNotice = false,
+                hasRefreshError = false,
+                orphanedExtensionCount = 0,
+                needsCancellation = false,
+                awaitingPayment = false,
+                busy = false,
+            ),
+        )
+    }
+
+    @Test
     fun `active session stays active before its authoritative timer end`() {
         val result = stationPresentation(
             station,

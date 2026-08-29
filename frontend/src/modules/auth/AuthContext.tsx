@@ -25,7 +25,7 @@ import {
 import { connectRealtime, disconnectRealtime } from '@/lib/realtime';
 import { alarmPermission, requestAlarmPermission } from '@/lib/alarm';
 
-interface Me {
+export interface Me {
   user_id: string;
   email: string;
   name: string;
@@ -111,7 +111,7 @@ interface AuthState {
   terminalOptions: TerminalDTO[];
   terminalIssue: string | null;
   selectTerminal: (terminalId: string) => void;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<Me>;
   logout: () => void;
 }
 
@@ -246,7 +246,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     if (DEMO_MODE) {
       setMe(DEMO_USER);
-      return;
+      return DEMO_USER;
     }
     clearStoredSession();
     const r = await api.post<{ access_token: string; refresh_token: string }>(
@@ -259,6 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const claim = await resolveTerminalClaim(meRes.data);
     applyTerminalClaim(claim);
     setMe(meRes.data);
+    return meRes.data;
   }
 
   function selectTerminal(nextTerminalId: string) {

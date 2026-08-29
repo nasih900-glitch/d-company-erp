@@ -435,6 +435,15 @@ class Payment(Base, TimestampMixin):
     shift_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="RESTRICT"), nullable=False
     )
+    # Immutable cashier attribution. Historical rows created before migration
+    # 0057 remain NULL rather than being falsely attributed to the order opener.
+    # Forward API writes always set this from the authenticated tenant context;
+    # Payment itself is append-only at the database layer (migration 0048).
+    recorded_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+    )
     method: Mapped[str] = mapped_column(String(20), nullable=False)  # cash|card|upi|qr|wallet
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tendered_minor: Mapped[int | None] = mapped_column(BigInteger)
