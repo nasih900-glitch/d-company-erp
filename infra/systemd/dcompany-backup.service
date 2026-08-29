@@ -1,0 +1,44 @@
+[Unit]
+Description=D Company ERP off-site database backup
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/d-company-erp
+ExecStartPre=/usr/bin/test -x /var/lib/dcompany-erp/backup-runtime/current/bin/python
+ExecStart=/var/lib/dcompany-erp/backup-runtime/current/bin/python /opt/d-company-erp/ops/backup_to_b2.py
+TimeoutStartSec=7200
+RuntimeDirectory=dcompany-backup
+RuntimeDirectoryMode=0700
+Environment=HOME=/run/dcompany-backup
+Environment=DOCKER_CONFIG=/run/dcompany-backup/docker
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+
+# Docker socket access is root-equivalent, so constrain every other host
+# surface while preserving the Unix socket, network, and backup directory.
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/dcompany-erp/backups
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
