@@ -120,22 +120,24 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current source candidate is `3.1.2` (`13`);
-Android code `8` remains the minimum-compatible floor. The already signed
-`3.1.1` (`12`) partner APK is preserved as the manual, update-capable baseline
-and must not be rebuilt, replaced, or advertised as a server update. The
-`3.1.2` candidate adds the refined Gaming command workspace, canonical receipt
-history and more reliable real-time refresh while advancing Room to schema 40.
-A signed candidate must still pass the complete release gates, supported Room
-migration tests, and an API-35 in-place upgrade from the signed code-`12`
-baseline.
-This is not physical Redmi Pad 2 proof, a Play upload, or a production rollout.
-The coordinated backend deployment must reach Alembic revision `0057`. A
-future `v3.1.2` tag reruns the backend, web, and Android release gates, signs
-the native build, and stages only verified artifacts in a private draft GitHub
-Release. Code `13` has not been deployed, published, or advertised by the
-server; that may happen only after the `0057` production smoke test and the
-signed code-`12` to code-`13` upgrade pass.
+`.github/workflows/release.yml`. The current release identity is `3.1.2` (`13`);
+Android code `8` remains the minimum-compatible floor. The signed `3.1.2`
+direct-release APK is the manual partner baseline for this rollout, but it may
+be handed to the partner only after the coordinated production deployment has
+reached Alembic revision `0057` and its production smoke test has passed. It
+must not be uploaded to the server release directory, published as a GitHub or
+Play release, or advertised by `/api/v1/app/android/update` in this release.
+Production must retain the existing code-`8` latest-version defaults and blank
+direct-update metadata.
+
+The immutable signed `3.1.1` (`12`) APK remains the predecessor used to prove
+the supported in-place upgrade to code `13`; neither signed identity may be
+rebuilt with different bytes. The first server-driven update from the manually
+installed code-`13` baseline will be a distinct `3.1.3` (`14`) release. It must
+be newly built and signed, hosted at an immutable HTTPS URL, verified against
+its exact SHA-256, byte size, package, version and expected signer, and then
+explicitly advertised by the server. Android still requires the employee to
+approve installation. Emulator evidence is not physical Redmi Pad 2 proof.
 
 ## License
 

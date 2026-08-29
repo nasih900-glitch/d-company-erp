@@ -5,8 +5,9 @@ This directory is mounted read-only into Caddy and exposed at
 Git. Never copy a keystore, password, signing certificate private key, or an
 unsigned/debug build here.
 
-Use a versioned filename such as `d-company-erp-v3.1.1.apk`; do not overwrite a
-published filename. Before enabling the release in the backend configuration:
+Use a versioned filename such as `d-company-erp-v<version>-direct.apk`; do not
+overwrite a published filename. Before enabling the release in the backend
+configuration:
 
 1. build and sign the APK in the trusted release workflow;
 2. verify the package name, version code, and signing-certificate lineage
@@ -19,6 +20,20 @@ published filename. Before enabling the release in the backend configuration:
 
 Removing a bad APK does not downgrade installed tablets. Publish a corrected
 APK with a strictly higher Android version code.
+
+## Current rollout boundary
+
+Do not place the signed `3.1.2` (code `13`) partner-review APK in this directory.
+It is the manually sent partner baseline after the production `0057` smoke and
+must not be hosted or advertised through the server in this release. Keep the
+production latest-version policy at code `8` with no direct-update URL or
+integrity metadata.
+
+The first artifact eligible for this server-hosted channel is a distinct,
+newly signed `3.1.3` (code `14`) APK. Before advertising it, verify the immutable
+HTTPS bytes, SHA-256, byte size, package, version, expected signer and an
+in-place upgrade from the manually installed code-`13` baseline. Android still
+requires the employee to approve installation.
 
 The `3.1.0` APK is the one-time bootstrap for the verified direct updater.
 Earlier installed builds still require Android's normal installer flow; future

@@ -27,12 +27,18 @@ be newest on the hosted runner.
 
 Version `3.1.0` (code `11`) first introduced the verified in-app direct updater.
 An already-installed `3.0.9` or older app cannot acquire new installer code
-from the server. The already signed `3.1.1` (code `12`) partner APK is now the
-preserved manual-install, update-capable baseline. Never overwrite either
-signed identity with changed bytes, and do not advertise code `12` as a server
-update. Version `3.1.2` (code `13`) is the first later candidate intended to be
-advertised to that baseline through the server. A locally signed partner-review
-APK now exists, but it has not been published, deployed, or advertised.
+from the server. Preserve the signed `3.1.1` (code `12`) APK as the immutable
+predecessor used to verify the supported in-place upgrade. The signed `3.1.2`
+(code `13`) direct-release APK is the manual-install, update-capable partner
+baseline for this rollout. Never overwrite either signed identity with changed
+bytes.
+
+Code `13` must not be hosted or advertised through the server in this release.
+It may be sent manually only after production has reached Alembic revision
+`0057` and the production smoke test has passed. Version `3.1.3` (code `14`) is
+the first future release eligible for server-driven delivery to the manually
+installed code-`13` baseline. It must be a distinct, newly signed immutable APK;
+code `13` must never be repurposed as that update.
 
 The repository and Compose defaults deliberately keep
 `ANDROID_LATEST_VERSION_CODE=8`. Building a newer APK is not authority to
@@ -76,42 +82,43 @@ installation path.
 
 ## Safe rollout
 
-Assume the partner tablet has the exact signed `3.1.1` baseline at code `12`,
-installed manually through Android's package installer. Older supported clients
-may remain at code `8`, code `9`, or the signed `3.1.0` code `11`; none is proof
-that the code-`12` partner baseline was installed successfully. The candidate
-server-delivered release has version code `13`.
+Assume the partner tablet has the exact signed `3.1.2` baseline at code `13`,
+installed manually through Android's package installer after the production
+`0057` smoke. Older supported clients may remain at code `8`, code `9`, the
+signed `3.1.0` code `11`, or the preserved code-`12` predecessor; none is proof
+that the code-`13` partner baseline was installed successfully. The first
+server-delivered release has version code `14` and version name `3.1.3`.
 
-1. Confirm the installed code-`12` baseline has the expected signer, no pending
+1. Confirm the installed code-`13` baseline has the expected signer, no pending
    offline work, and a working update check.
-2. Produce and verify the signed version-code-13 APK without changing the
+2. Produce and verify a newly signed version-code-14 APK without changing the
    server's update metadata.
-3. Publish the immutable APK on the controlled HTTPS release channel and
-   confirm its signing-certificate fingerprint matches code `12`.
+3. Publish that immutable APK once on the controlled HTTPS release channel and
+   confirm its signing-certificate fingerprint matches code `13`.
 4. Only after the artifact and complete manifest are verified, configure the
    backend initially as:
 
    ```dotenv
    ANDROID_MIN_SUPPORTED_VERSION_CODE=8
-   ANDROID_LATEST_VERSION_CODE=13
-   ANDROID_LATEST_VERSION_NAME=3.1.2
-   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.2.apk
+   ANDROID_LATEST_VERSION_CODE=14
+   ANDROID_LATEST_VERSION_NAME=3.1.3
+   ANDROID_UPDATE_URL=https://controlled.example/d-company-erp-v3.1.3.apk
    ANDROID_UPDATE_APK_SHA256=<64-hex APK digest from release-manifest.json>
    ANDROID_UPDATE_APK_SIZE_BYTES=<exact byte size from release-manifest.json>
    ANDROID_UPDATE_SIGNING_CERT_SHA256=<64-hex signer digest from release-manifest.json>
    ANDROID_UPDATE_RELEASE_NOTES=Gaming Centre reliability update
    ```
 
-   Code `12` sees an optional update while the minimum-compatible floor remains
-   code `8`. Code `13` is current only after this configuration is deployed.
+   Code `13` sees an optional update while the minimum-compatible floor remains
+   code `8`. Code `14` is current only after this configuration is deployed.
 
 5. Let every tablet sync its offline queue, install the update, sign in and
    complete the smoke test.
-6. Only when every active tablet is on version 13 may the minimum be raised:
+6. Only when every active tablet is on version 14 may the minimum be raised:
 
    ```dotenv
-   ANDROID_MIN_SUPPORTED_VERSION_CODE=13
-   ANDROID_LATEST_VERSION_CODE=13
+   ANDROID_MIN_SUPPORTED_VERSION_CODE=14
+   ANDROID_LATEST_VERSION_CODE=14
    ```
 
 ## What the employee experiences

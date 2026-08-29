@@ -5,7 +5,7 @@ native Android app. It can distribute a build to up to 100 selected testers,
 but it is not a production-readiness verdict and it does not replace acceptance
 testing on the café's real tablet.
 
-Current Android identity:
+Current manually distributed Android identity:
 
 | Field | Value |
 | --- | --- |
@@ -16,15 +16,20 @@ Current Android identity:
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
-This is the identity reserved for the next unreleased candidate. The already
-signed `3.1.1` code-`12` partner APK remains the immutable manual,
-update-capable baseline. A future signed `3.1.2` APK/AAB must pass its complete
-release gates and a signed in-place upgrade from code `12` to code `13`. No
-code-13 APK/AAB has been approved or uploaded, no production rollout or server
-advertisement has occurred, and physical Redmi Pad 2 acceptance remains
-unverified. The candidate includes the refined Gaming command workspace,
-canonical receipt history, reliable real-time refresh, and Room schema 40. Its
-coordinated backend deployment must reach Alembic revision `0057`.
+The signed `3.1.2` code-`13` direct-release APK is the manual partner baseline
+for this rollout. It may be sent to the partner only after production reaches
+Alembic revision `0057` and the production smoke test passes. Do not upload
+code `13` to Play, publish or host it, or advertise it through the server update
+API as part of this release. Production retains the code-`8` latest-version
+defaults and blank direct-update metadata. Physical Redmi Pad 2 acceptance
+remains unverified.
+
+The rest of this document is a future Play-channel playbook; it is not an
+instruction to upload the current partner APK. The first planned server-driven
+direct update is a distinct `3.1.3` code-`14` APK. Do not mix that direct channel
+with Play on the active fleet. If D Company later moves the fleet to Play, use a
+new, higher, previously unused version code and verify that channel's signing
+lineage and in-place upgrade independently.
 
 Google's current internal-testing instructions are at
 [Play Console Help](https://support.google.com/googleplay/android-developer/answer/9845334).
@@ -37,8 +42,8 @@ repository release workflow and verify all of the following:
 - backend tests and migrations pass;
 - Android JVM tests, compilation, lint, assembly, and emulator instrumentation
   pass;
-- the release manifest says package `cloud.dcompany.erp`, version `3.1.2`, code
-  `13`, and the production HTTPS API above;
+- the future bundle metadata says package `cloud.dcompany.erp`, the deliberately
+  chosen new version/code above `13`, and the production HTTPS API above;
 - APK/AAB signatures and the published SHA-256 checksums verify;
 - no test active session, unpaid held order, pending cancellation, or open test
   shift remains in the acceptance environment;
@@ -48,14 +53,14 @@ repository release workflow and verify all of the following:
   [`ANDROID_STAFF_GUIDE.md`](ANDROID_STAFF_GUIDE.md) passes on that physical
   tablet.
 
-API-35 emulator installation and a signed code-12-to-code-13 in-place upgrade
-are required, but they are not physical Redmi Pad proof.
+API-35 emulator installation and a signed same-channel in-place upgrade are
+required, but they are not physical Redmi Pad proof.
 Uploading to an internal track also does not deploy the backend or web ERP to
-production. Keep client code `8` as the compatibility floor and advertise code
-`13` only after its signed artifact is actually available at the configured
-HTTPS update URL. The code-`12` partner baseline remains a manual install and
-must not be advertised as a server update. GST validation is outside the
-current Android acceptance scope.
+production. Keep client code `8` as the compatibility floor. The current
+code-`13` partner baseline remains a manual install and must never be advertised
+as a server update. A Play rollout uses Play delivery rather than the direct APK
+URL; do not configure both channels for one active fleet. GST validation is
+outside the current Android acceptance scope.
 
 ## 1. Create or use the correct developer account
 
@@ -138,21 +143,28 @@ Never commit review credentials or real customer data. Internal-test artifacts
 may receive lighter listing treatment, but privacy and access answers must still
 be accurate before any broader rollout.
 
-## 5. Upload version 3.1.2 (13)
+## 5. Upload a future Play build (not 3.1.2/code 13)
+
+Do not perform this section for the current manual partner rollout. First choose
+Play as the fleet's deliberate future delivery channel, assign a version code
+higher than every code already used by either direct or Play delivery, and run
+the full same-channel upgrade gate.
 
 1. Open **Test and release → Testing → Internal testing**.
 2. Choose **Create new release**.
 3. Upload the signed AAB from the green repository release, normally named
-   `d-company-erp-v3.1.2-play.aab`. Do not upload `app-debug.apk` or substitute the
-   locally signed APK for Play's required bundle.
-4. Confirm Play reads package `cloud.dcompany.erp`, version `3.1.2`, and version
-   code `13` from the bundle.
-5. Use release name `3.1.2 (13)`.
+   `d-company-erp-v<version>-play.aab`. Do not upload `app-debug.apk` or
+   substitute the locally signed APK for Play's required bundle.
+4. Confirm Play reads package `cloud.dcompany.erp` and the exact newly assigned
+   version name/code from the bundle. The version code must be greater than
+   `13`, and greater than `14` if the planned direct code-`14` update has already
+   been issued.
+5. Use a release name that exactly records that version name and code.
 6. Add concise notes such as: `Gaming Centre command workspace, canonical
    receipt history, reliable real-time refresh, and offline recovery.`
 7. Review all warnings, then start the rollout to **Internal testing only**.
 
-If Play reports that version code `13` was already used, increment `versionCode`
+If Play reports that the version code was already used, increment `versionCode`
 and rebuild through the release workflow. Never alter or rename an existing
 bundle to work around a version error.
 
@@ -179,7 +191,8 @@ On the tablet:
 1. Sign in to Google Play with the authorised tester account.
 2. Open the opt-in link and accept the invitation.
 3. Install or update **D Company** from Google Play.
-4. Confirm Android reports version `3.1.2` (code `13`).
+4. Confirm Android reports the exact future version name/code uploaded to the
+   selected Play track.
 5. Grant notification permission and, when prompted, allow the exact-alarm
    access needed for operational session/held-order reminders.
 6. Run the complete start-to-close workflow in

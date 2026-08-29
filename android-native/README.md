@@ -23,27 +23,29 @@ build.
 
 ## Release status
 
-Version `3.1.2` (`13`) is the current source candidate, not a declared
-production rollout. The already signed `3.1.1` (`12`) partner APK remains the
-manual, update-capable baseline and must keep its exact bytes and signing
-lineage. The current source advances Room from 36 through 40 to protect the
-employee-owned Support outbox, immutable offline Gaming item actions, and the
-canonical receipt-history cache. It still requires exactly one
-server-confirmed Hybrid Gaming + POS workspace for the active shop. Focused
-migration tests must pass on an API-35 emulator, followed by a signed in-place
-upgrade from code `12` to code `13`. That evidence does not replace the full
-authenticated staff workflow or physical Redmi Pad 2 acceptance, and no code-13
-APK/AAB has been approved or uploaded. Nothing from this Android release
-preparation has deployed the backend or web ERP to production. A coordinated
-deployment must migrate the server database through Alembic revision `0057`.
+Version `3.1.2` (`13`) is the signed manual partner baseline for this rollout.
+It advances Room from 36 through 40 to protect the employee-owned Support
+outbox, immutable offline Gaming item actions, and the canonical receipt-history
+cache. It still requires exactly one server-confirmed Hybrid Gaming + POS
+workspace for the active shop. The signed code-`12` to code-`13` in-place
+upgrade and API-35 evidence preserve the supported upgrade path, but they do
+not replace the full authenticated workflow or physical Redmi Pad 2 acceptance.
+Nothing from Android release preparation deploys the backend or web ERP. Before
+the APK is manually handed to the partner, the coordinated production
+deployment must migrate the server database through Alembic revision `0057`
+and pass the production smoke test.
 
-Android client code `8` remains the minimum-compatible floor. Code `12` is the
-manually installed partner baseline; it must not be advertised as a server
-update. Code `13` is the first later candidate intended for server-driven
-delivery, but it is not currently published, deployed, or advertised. Do not
-advertise it until the exact signed artifact and manifest are hosted and its
-in-place upgrade has passed. Do not raise the minimum to `13` until every active
-tablet has installed and accepted that build.
+Android client code `8` remains the minimum-compatible floor. Preserve the
+signed `3.1.1` (`12`) predecessor and the signed `3.1.2` (`13`) baseline as
+immutable artifacts. Code `13` must not be hosted, published, or advertised as
+a server update in this release; production retains the code-`8` latest-version
+defaults and blank direct-update metadata. The first server-driven update will
+instead be a newly signed `3.1.3` (`14`) immutable APK with a verified HTTPS
+URL, SHA-256, byte size, package, version, and expected signer. The server may
+advertise that future artifact only after its same-lineage upgrade and release
+gates pass. Android will still require the employee to approve installation.
+Do not raise the minimum to `14` until every active tablet has installed and
+accepted that future build.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
