@@ -393,6 +393,12 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("./releases/android:/srv/releases/android:ro", compose)
         self.assertIn("caddy validate --config /etc/caddy/Caddyfile", ci_workflow)
 
+    def test_proxy_preserves_stricter_endpoint_content_security_policy(self) -> None:
+        caddy = CADDYFILE.read_text(encoding="utf-8")
+
+        self.assertIn("?Content-Security-Policy", caddy)
+        self.assertNotIn("\n        Content-Security-Policy  ", caddy)
+
 
 if __name__ == "__main__":
     unittest.main()
