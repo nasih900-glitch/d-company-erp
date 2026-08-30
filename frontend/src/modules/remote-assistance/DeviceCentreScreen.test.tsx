@@ -34,7 +34,7 @@ function device(
     terminal_id: '2e05212a-7f1c-4d33-a2bc-e918d0e84e4c',
     terminal_name: 'Front desk tablet',
     version_name: '3.1.6',
-    version_code: 16,
+    version_code: 17,
     last_user_id: 'ae5c8060-b147-4837-92d8-61d174e34a53',
     last_user_name: 'Employee',
     last_seen_at: '2026-08-30T12:00:00Z',
