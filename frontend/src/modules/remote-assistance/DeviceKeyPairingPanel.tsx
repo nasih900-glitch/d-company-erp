@@ -98,7 +98,8 @@ export function DeviceKeyPairingPanel({
           </button>
           {!pendingKeyId ? (
             <p className="mt-2 text-[11px] leading-4 text-fg-subtle">
-              To replace this key, staff must start a new pairing request on the physical tablet.
+              To replace this key, revoke it here first. Remote support will stop, then the
+              signed-in tablet will create a fresh pairing code for staff to read to you.
             </p>
           ) : null}
         </div>

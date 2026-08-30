@@ -230,6 +230,7 @@ describe('Device Centre protected presentation', () => {
     }]);
     expect(active).toContain('Key verified');
     expect(active).toContain('Revoke device key');
+    expect(active).toContain('revoke it here first');
 
     const revokedFingerprint = 'e'.repeat(64);
     const revoked = view([{
