@@ -30,8 +30,13 @@ class _Engine:
 
 
 class _RedisClient:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        close_error: Exception | None = None,
+    ) -> None:
         self.error = error
+        self.close_error = close_error
         self.closed = False
 
     async def ping(self) -> bool:
@@ -41,10 +46,18 @@ class _RedisClient:
 
     async def aclose(self) -> None:
         self.closed = True
+        if self.close_error:
+            raise self.close_error
 
 
-async def _get_readyz(monkeypatch, *, database_error=None, redis_error=None):
-    redis_client = _RedisClient(redis_error)
+async def _get_readyz(
+    monkeypatch,
+    *,
+    database_error=None,
+    redis_error=None,
+    redis_close_error=None,
+):
+    redis_client = _RedisClient(redis_error, redis_close_error)
 
     class _RedisFactory:
         @staticmethod
@@ -89,3 +102,17 @@ async def test_readyz_reports_each_failed_dependency(monkeypatch) -> None:
             "checks": {"database": "down", "redis": "down"},
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_readyz_redis_cleanup_failure_cannot_override_dependency_result(
+    monkeypatch,
+) -> None:
+    response = await _get_readyz(
+        monkeypatch,
+        redis_error=RuntimeError("redis unavailable"),
+        redis_close_error=RuntimeError("pool cleanup failed"),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["checks"]["redis"] == "down"

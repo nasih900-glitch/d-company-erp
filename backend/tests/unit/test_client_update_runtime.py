@@ -8,10 +8,18 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from pydantic import ValidationError
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
+from starlette.requests import Request
 
-from app.api.v1.client_installations.router import ClientInstallationHeartbeat
-from app.core.errors import RateLimitError, ServiceUnavailableError
+from app.api.v1.client_installations.router import (
+    ClientInstallationHeartbeat,
+    _validate_client_identity_headers,
+)
+from app.core.errors import (
+    ClientTelemetryIdentityConflictError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from app.services.client_updates import rate_limit as heartbeat_rate_limit
 from app.services.client_updates.releases import (
     AndroidReleaseFingerprint,
@@ -118,6 +126,81 @@ def test_event_allowlist_pairing_and_request_idempotency_identity() -> None:
         ClientInstallationHeartbeat.model_validate(
             _heartbeat(update_state="failed", update_error_code="stack_trace_here")
         )
+
+
+def test_upgrade_confirmation_must_match_the_installed_heartbeat_version() -> None:
+    confirmed = {
+        "client_event_id": str(uuid4()),
+        "event_type": "upgrade_confirmed",
+        "target_version_name": "3.1.4",
+        "target_version_code": 15,
+        "error_code": None,
+        "occurred_at": datetime.now(UTC).isoformat(),
+    }
+    accepted = ClientInstallationHeartbeat.model_validate(
+        _heartbeat(version_name="3.1.4", version_code=15, events=[confirmed])
+    )
+    assert accepted.events[0].target_version_code == accepted.version_code
+
+    historical = ClientInstallationHeartbeat.model_validate(
+        _heartbeat(
+            version_name="3.1.5",
+            version_code=16,
+            events=[confirmed],
+        )
+    )
+    assert historical.events[0].target_version_code == 15
+
+    with pytest.raises(ValidationError, match="cannot be newer"):
+        ClientInstallationHeartbeat.model_validate(_heartbeat(events=[confirmed]))
+
+    with pytest.raises(ValidationError, match="version name"):
+        ClientInstallationHeartbeat.model_validate(
+            _heartbeat(
+                version_name="3.1.5-hotfix",
+                version_code=15,
+                events=[confirmed],
+            )
+        )
+
+
+def test_heartbeat_identity_headers_must_match_the_authenticated_body() -> None:
+    payload = ClientInstallationHeartbeat.model_validate(_heartbeat())
+
+    def request(
+        *,
+        version_code: str = "14",
+        channel: str | None = "direct",
+    ) -> Request:
+        headers = [
+            (b"x-client-platform", b"android"),
+            (b"x-client-version-code", version_code.encode()),
+        ]
+        if channel is not None:
+            headers.append((b"x-client-distribution-channel", channel.encode()))
+        return Request(
+            {
+                "type": "http",
+                "headers": headers,
+            }
+        )
+
+    _validate_client_identity_headers(request(), payload)
+    _validate_client_identity_headers(request(version_code=" 0014 "), payload)
+    _validate_client_identity_headers(request(channel=None), payload)
+    with pytest.raises(ClientTelemetryIdentityConflictError) as invalid_version:
+        _validate_client_identity_headers(
+            request(version_code="2147483648"),
+            payload,
+        )
+    assert invalid_version.value.details == {"mismatched_fields": ["version_code"]}
+    with pytest.raises(ClientTelemetryIdentityConflictError) as mismatch:
+        _validate_client_identity_headers(
+            request(version_code="15", channel="play"),
+            payload,
+        )
+    assert mismatch.value.code == "client_telemetry_identity_conflict"
+    assert mismatch.value.details == {"mismatched_fields": ["distribution_channel", "version_code"]}
 
 
 def _manifest() -> AndroidReleaseManifest:
@@ -376,11 +459,7 @@ async def test_heartbeat_rate_limit_is_principal_scoped_and_returns_retry_after(
             client_heartbeat_user_limit_per_minute=2,
         ),
     )
-    monkeypatch.setattr(
-        heartbeat_rate_limit.Redis,
-        "from_url",
-        lambda *_args, **_kwargs: fake,
-    )
+    monkeypatch.setattr(heartbeat_rate_limit, "request_path_redis_client", lambda *_args: fake)
 
     await heartbeat_rate_limit.enforce_client_heartbeat_rate_limit(
         company_id=company_id,
@@ -410,7 +489,7 @@ async def test_heartbeat_rate_limit_is_principal_scoped_and_returns_retry_after(
 async def test_heartbeat_rate_limit_fails_closed_when_redis_is_unavailable(
     monkeypatch,
 ) -> None:
-    fake = _FakeRedis(error=RedisConnectionError("unavailable"))
+    fake = _FakeRedis(error=RedisTimeoutError("unavailable"))
     monkeypatch.setattr(
         heartbeat_rate_limit,
         "get_settings",
@@ -419,15 +498,12 @@ async def test_heartbeat_rate_limit_fails_closed_when_redis_is_unavailable(
             client_heartbeat_user_limit_per_minute=30,
         ),
     )
-    monkeypatch.setattr(
-        heartbeat_rate_limit.Redis,
-        "from_url",
-        lambda *_args, **_kwargs: fake,
-    )
+    monkeypatch.setattr(heartbeat_rate_limit, "request_path_redis_client", lambda *_args: fake)
 
-    with pytest.raises(ServiceUnavailableError, match="protection"):
+    with pytest.raises(ServiceUnavailableError, match="protection") as captured:
         await heartbeat_rate_limit.enforce_client_heartbeat_rate_limit(
             company_id=uuid4(),
             user_id=uuid4(),
         )
+    assert captured.value.status_code == 503
     assert fake.closed is True

@@ -32,6 +32,10 @@ interface ErpApi {
     @POST("auth/refresh")
     suspend fun refresh(@Body body: RefreshRequest): TokenPair
 
+    /** Best-effort server revocation; local sign-out never waits indefinitely for it. */
+    @POST("auth/logout")
+    suspend fun logout(): AccountActionResponse
+
     @POST("auth/password-reset/request")
     suspend fun requestPasswordReset(@Body body: PasswordResetRequest): PasswordResetChallenge
 

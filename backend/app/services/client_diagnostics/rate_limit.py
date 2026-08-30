@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
-from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 from app.core.errors import RateLimitError, ServiceUnavailableError
 from app.core.logging import get_logger
+from app.core.redis_clients import close_request_path_redis_client, request_path_redis_client
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -44,7 +44,7 @@ async def enforce_client_diagnostic_rate_limit(
         raise ValueError("diagnostic event count must be between 1 and 25")
 
     settings = get_settings()
-    client = Redis.from_url(str(settings.redis_url), decode_responses=True)
+    client = request_path_redis_client(settings.redis_url)
     try:
         result = await client.eval(
             _INCREMENT_WINDOW,
@@ -61,7 +61,7 @@ async def enforce_client_diagnostic_rate_limit(
             "remain on this device and will retry later."
         ) from exc
     finally:
-        await client.aclose()
+        await close_request_path_redis_client(client)
 
     limit = settings.client_diagnostics_user_event_limit_per_minute
     if count > limit:

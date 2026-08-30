@@ -134,6 +134,25 @@ class ApiException(
     val mustPreserveOutbox: Boolean get() = isAmbiguous || status == 426
 }
 
+/**
+ * Build the deliberately minimal client used only by `/readyz` recovery
+ * probes. Native-version enforcement applies to every Android request,
+ * including unauthenticated readiness, so identity is the one application
+ * interceptor this client must carry. Authentication, terminal authority and
+ * ordinary error observation remain intentionally excluded.
+ */
+internal fun buildReadinessClient(
+    versionCode: Int = BuildConfig.VERSION_CODE,
+    distributionChannel: String = BuildConfig.DISTRIBUTION_CHANNEL,
+): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(5, TimeUnit.SECONDS)
+    .readTimeout(5, TimeUnit.SECONDS)
+    .writeTimeout(5, TimeUnit.SECONDS)
+    .callTimeout(8, TimeUnit.SECONDS)
+    .retryOnConnectionFailure(true)
+    .addInterceptor(ClientIdentityInterceptor(versionCode, distributionChannel))
+    .build()
+
 object ApiClient {
 
     internal val backendReachability = BackendReachabilityTracker()
@@ -141,13 +160,7 @@ object ApiClient {
         // Deliberately isolated from ErrorInterceptor: the connectivity
         // coordinator owns this proof and must not feed its own probe back
         // into the ordinary request-hint stream.
-        OkHttpClient.Builder()
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(5, TimeUnit.SECONDS)
-            .writeTimeout(5, TimeUnit.SECONDS)
-            .callTimeout(8, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
+        buildReadinessClient()
     }
 
     // Not private: report-snapshot caching (core/db/ReportSnapshots.kt) reuses

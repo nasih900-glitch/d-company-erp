@@ -25,10 +25,13 @@ Do not tag, publish, host, register, or server-advertise code `14` as part of th
 rollout. In particular, do not copy its APK into `releases/android`, publish a
 GitHub/Play release, or create an Android release-registry row for it.
 
-The first future server-driven update starts with a new immutable artifact:
+Code `15` (`3.1.4`) is the first identity allowed by the server-release registry,
+but it is a held audit build. Preserve any signed artifact and manifest exactly;
+do not rebuild, overwrite, or activate it. The current server-delivery rollout
+starts with a distinct immutable code-`16` artifact:
 
 ```
-bump to 3.1.4/code 15, then tag v3.1.4
+bump to 3.1.5/code 16, then tag v3.1.5
         │
         ▼
 GitHub Actions: backend + web + Android gates
@@ -99,10 +102,10 @@ minimum supported version until that proof passes. See
 
 ## Versioning each release
 
-Choose one version and apply it consistently:
+Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_MANUAL_VERSION=3.1.3
+CURRENT_RELEASE_VERSION=3.1.5
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName and a new versionCode)
@@ -118,16 +121,16 @@ CURRENT_MANUAL_VERSION=3.1.3
 # Increment CLIENT_COMPATIBILITY_POLICY_REVISION for every reviewed minimum
 # change, including rollback; never decrement or reuse it.
 
-python3 scripts/verify_android_release_version.py --tag "v$CURRENT_MANUAL_VERSION"
+python3 scripts/verify_android_release_version.py --tag "v$CURRENT_RELEASE_VERSION"
 ```
 
-That command validates the coordinated code-`14` identity; it does not
-authorise creating or publishing a `v3.1.3` tag. Keep this manual rollout
-untagged and unadvertised. For a future tagged release, first bump every product
-version field and Android `versionCode`, then commit and tag only after the full
-coordinated release gates and signed same-channel upgrade test pass. Never use
-a blanket version replacement: many dependency versions and the Android
-rollout policy intentionally differ from the product version.
+That command validates the coordinated code-`16` identity; it does not authorise
+publishing or activating the artifact. Commit and tag `v3.1.5` only after every
+product-version field is coordinated and the full release gates pass. Keep the
+manual code-`14` baseline untagged and unadvertised, and keep the code-`15` audit
+identity immutable and held. Never use a blanket version replacement: many
+dependency versions and the Android rollout policy intentionally differ from
+the product version.
 
 The workflow rejects a release unless all of these are true:
 
@@ -141,7 +144,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, code-14 manual baseline, and the first future update
+## Version-code-8 floor, code-14 baseline, code-15 audit, and code-16 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -165,10 +168,12 @@ copy it into the server release directory, or register it through the update cha
 Redmi Pad 2 acceptance remains a separate post-install gate.
 
 Code `11` first introduced the verified in-app direct updater. The manually
-installed code-`14` app is now the update-capable baseline. The first release
-that may exercise server-driven delivery from it is a newly versioned and newly
-signed `3.1.4` APK with version code `15`. No active optional-release record
-exists throughout the code-`14` manual rollout.
+installed code-`14` app is now the update-capable baseline. Code `15` is the
+first version accepted by the immutable server-release registry, but `3.1.4`
+code `15` is a held audit build and is not the current activation target. The
+current server-delivery candidate is a newly built and signed `3.1.5` APK with
+version code `16`. An optional offer exists only after that exact artifact is
+staged and explicitly activated.
 
 Treat the app and backend as one coordinated release:
 
@@ -182,9 +187,9 @@ Treat the app and backend as one coordinated release:
    it on the VPS, GitHub, or Play while preparing the production migration.
 4. Back up the database and follow the `0056` maintenance sequence below:
    stop writers, upgrade only through `0055`, review and apply the explicit
-   terminal consolidation, and only then upgrade to `0056`/head. Verify the
-   database crosses revision `0056` safely and reaches the repository's release
-   head before starting the backend. Deploy with
+   terminal consolidation, and only then upgrade through `0056` to the
+   repository's release head. Verify the database crosses revision `0056`
+   safely and reaches the current head before starting the backend. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
    `REQUIRE_NATIVE_VERSION_HEADERS=true`,
    `ANDROID_UPDATE_ALLOWED_ORIGIN=https://dcompany.duckdns.org`, and the last
@@ -196,9 +201,9 @@ Treat the app and backend as one coordinated release:
    older receive HTTP 426 before a write handler and version `8` remains
    compatible. The owner may then send that same APK manually to the partner;
    no optional release is active.
-6. For the first later server-driven update, create `3.1.4` with version code
-   `15`, sign it with the trusted lineage, verify an in-place upgrade from code
-   `14`, and use `ops/stage_android_release.py` to publish it once at an
+6. For the current server-driven update, create `3.1.5` with version code `16`,
+   sign it with the trusted lineage, verify an in-place upgrade from code `14`,
+   and use `ops/stage_android_release.py` to publish it once at an
    immutable HTTPS URL and register a staged row. Only the exact company/user
    identity configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with
    `admin.system` and audit access, may activate it after review and the
@@ -395,12 +400,14 @@ order instead:
     the APK.
 
 Do not lower the compatibility minimum to keep an older APK operating against
-this backend. Do not raise the minimum as part of this manual rollout. The first
-future server-delivered release is `3.1.4` (`15`); its immutable row may be
-staged only after the distinct signed artifact and same-lineage upgrade proof
-exist. Protected-owner status alone grants no global release authority: only the
-exact company/user identity configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`,
-with `admin.system` and audit access, may activate it.
+this backend. Do not raise the minimum merely because an optional update exists.
+Code `15` remains the server-registry admission floor and immutable held audit
+history; the current activation target is `3.1.5` (`16`). Its immutable row may
+be staged only after the distinct signed artifact and same-lineage upgrade proof
+exist. Protected-owner status alone grants no global release authority: only
+the exact company/user identity configured in
+`ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and audit access, may
+activate it.
 
 If an erroneous minimum must be rolled back, deploy the lower minimum together
 with a strictly higher `CLIENT_COMPATIBILITY_POLICY_REVISION`. A code-`14`
@@ -410,8 +417,8 @@ returns a newer, non-cacheable `supported` policy that explicitly includes code
 
 ## Android artifacts
 
-For future tagged releases, starting no earlier than the newly versioned
-`3.1.4` (`15`) update, the Android job first reruns the complete backend
+Server-release registration begins at code `15`. For the current tagged
+`3.1.5` (`16`) candidate, the Android job first reruns the complete backend
 migration/test and web
 lint/typecheck/test/build gates. It then runs Android release lint, JVM tests,
 emulator instrumentation, and signature verification. It stages a draft

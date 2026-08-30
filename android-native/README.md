@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.4` |
-| Version code | `15` |
+| Version name | `3.1.5` |
+| Version code | `16` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,20 +23,20 @@ build.
 
 ## Release status
 
-Version `3.1.4` (`15`) is the first server-delivery candidate built on the
-manual `3.1.3` (`14`) baseline. It adds stable connectivity presentation,
-privacy-preserving crash/ANR/API/sync diagnostics with an offline outbox,
-actionable recovery guidance, and stricter real-time authentication handling.
-The coordinated backend and owner web ERP add protected System Health under
-Alembic revision `0059`. It still requires exactly one server-confirmed Hybrid
-Gaming + POS workspace for the active shop. A green local build does not prove
-the server channel, a physical Redmi Pad 2, or production deployment: those
-remain explicit rollout gates.
+Version `3.1.5` (`16`) is the corrected server-delivery candidate following the
+`3.1.4` (`15`) audit build and the manual `3.1.3` (`14`) baseline. It includes
+stable connectivity presentation, privacy-preserving crash/ANR/API/sync
+diagnostics with an offline outbox, actionable recovery guidance, stricter
+real-time authentication handling, and the final tablet runtime/layout fixes.
+It still requires exactly one server-confirmed Hybrid Gaming + POS workspace
+for the active shop. A green local build does not prove the server channel, a
+physical Redmi Pad 2, or production deployment: those remain explicit rollout
+gates.
 
 Android client code `8` remains the minimum-compatible floor. Preserve the
 signed `3.1.1` (`12`) and `3.1.2` (`13`) predecessors as immutable artifacts.
-Code `14` is installed manually and must not advertise itself as an update to
-code `14`. This server-driven successor, `3.1.4` (code `15`), must be a newly
+Code `14` is installed manually and must never be registered or advertised as a
+server update. This server-driven successor, `3.1.5` (code `16`), must be a newly
 signed immutable APK with a verified HTTPS
 URL, SHA-256, byte size, package, version, and expected signer. The server may
 offer that future artifact only after the stage-only operator checks and a

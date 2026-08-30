@@ -30,8 +30,25 @@ class FinanceRefreshArchitectureTest {
         )
         assertTrue("Finance manual refresh bypasses SyncEngine", "appCtx.sync.refresh(\"finance\")" in source)
         assertTrue(
+            "Finance loading has no bounded terminal state",
+            "withTimeout(FINANCE_LOAD_TIMEOUT_MILLIS)" in source &&
+                "catch (_: TimeoutCancellationException)" in source,
+        )
+        assertTrue(
+            "Finance timeout does not stop the loading presentation",
+            "loading.value = false" in source && "FINANCE_LOAD_TIMEOUT_MESSAGE" in source,
+        )
+        assertTrue(
+            "Finance does not restart loading when the authenticated scope changes",
+            "if (scopeChanged) load()" in source,
+        )
+        assertTrue(
             "Finance realtime/manual failures are not visible in screen state",
             "resourceRefreshErrors" in source && "it[\"finance\"]" in source,
+        )
+        assertTrue(
+            "A fresh Room summary does not clear the obsolete manual-load error after reconnect",
+            "loadFailure.value = financeLoadFailureAfterSummaryDelivery(" in source,
         )
         assertTrue(
             "Finance forms do not fail closed when required references are absent",
@@ -48,6 +65,18 @@ class FinanceRefreshArchitectureTest {
         assertTrue("Sync does not fetch manual collections", "financeApi.manualCollections()" in sync)
         assertTrue("Sync does not fetch tip payouts", "financeApi.tipPayouts()" in sync)
         assertTrue("Sync does not fetch Tips Payable", "financeApi.trialBalance()" in sync)
+        assertTrue(
+            "Sync rebuilds a restricted default Finance scope instead of the profile-derived observed scope",
+            "financeCacheScopeForLease(" in sync,
+        )
+
+        val screen = readSource(
+            mainSourceRoot().resolve("cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt"),
+        )
+        assertTrue(
+            "A completed load without a summary can still render the indefinite spinner",
+            "when (state.primaryContentState)" in screen,
+        )
     }
 
     private fun mainSourceRoot(): Path {

@@ -31,13 +31,18 @@ Do not place the signed `3.1.3` (code `14`) partner-review APK in this directory
 It is the manually sent partner baseline after the coordinated production smoke
 and must not be hosted, registered, or advertised through the server.
 
-The first artifact eligible for this server-hosted channel is a distinct,
-newly signed `3.1.4` (code `15`) APK. Before activation, verify the immutable
-HTTPS bytes, SHA-256, byte size, package, version, expected signer and an
-in-place upgrade from the manually installed code-`14` baseline. Android still
-requires the employee to approve installation.
+Code `15` (`3.1.4`) is the first identity eligible for this server-hosted
+registry, but it is a held audit build. Preserve any signed APK and manifest
+exactly; do not rebuild, overwrite, or activate them as a shortcut. The current
+server-delivery candidate is the distinct, newly signed `3.1.5` (code `16`)
+APK. Before activation, verify the immutable HTTPS bytes, SHA-256, byte size,
+package, version, expected signer and an in-place upgrade from the manually
+installed code-`14` baseline. Android still requires the employee to approve
+installation.
 
-The `3.1.0` APK is the one-time bootstrap for the verified direct updater.
-Earlier installed builds still require Android's normal installer flow; future
-versions may then be downloaded, verified, and handed to that installer by the
-app itself.
+Do not direct a tablet to the obsolete `3.1.0` APK as a current bootstrap. Use
+the verified, same-signer code-`14` direct baseline, or install code `16`
+manually in place when the installed build cannot prove update capability.
+Never uninstall while offline work is pending. After a verified direct build is
+installed, future server offers can be downloaded, verified, and handed to
+Android's installer by the app itself.

@@ -110,7 +110,7 @@ async def dashboard(
                 GamingSession.company_id == tenant.company_id,
                 Station.company_id == tenant.company_id,
                 Station.branch_id == tenant.branch_id,
-                GamingSession.status == "active",
+                GamingSession.status.in_(("active", "paused")),
             )
         )
     ).scalar_one()

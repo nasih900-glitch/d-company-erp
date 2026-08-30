@@ -79,6 +79,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -820,38 +821,51 @@ private fun OutboxWorkStatusPill(
     syncing: Boolean,
     showDetail: Boolean,
 ) {
-    if (status.isClear && !syncing) return
-
-    val color = when {
-        status.actionRequiredCount > 0 -> Brand.Danger
-        syncing -> Brand.Information
-        status.retryableCount > 0 -> Brand.Warning
-        else -> Brand.Information
-    }
-    val visibleLabel = outboxWorkVisibleLabel(status, syncing, showDetail) ?: return
-    val accessibilityDetail = buildList {
-        if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
-        if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
-        if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")
-        if (syncing) add("sync in progress")
-    }.joinToString(", ")
-
-    Row(
-        Modifier.height(40.dp).clip(Radius.shapePill)
-            .background(color.copy(alpha = 0.12f))
-            .border(1.dp, color.copy(alpha = 0.34f), Radius.shapePill)
-            .semantics { contentDescription = "Saved work status: $accessibilityDetail" }
-            .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+    val visibleLabel = outboxWorkVisibleLabel(status, syncing, showDetail)
+    Box(
+        modifier = Modifier
+            // Keep this slot present even when there is no saved work. A queue
+            // transition must update content, not move Help/account controls
+            // across the tablet header.
+            .width(if (showDetail) 192.dp else 64.dp)
+            .height(48.dp)
+            .testTag("outbox-work-status-slot"),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Text(
-            visibleLabel,
-            color = color,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-        )
+        if (visibleLabel != null) {
+            val color = when {
+                status.actionRequiredCount > 0 -> Brand.Danger
+                syncing -> Brand.Information
+                status.retryableCount > 0 -> Brand.Warning
+                else -> Brand.Information
+            }
+            val accessibilityDetail = buildList {
+                if (status.actionRequiredCount > 0) add("${status.actionRequiredCount} need review")
+                if (status.retryableCount > 0) add("${status.retryableCount} waiting to sync")
+                if (status.savedDraftCount > 0) add("${status.savedDraftCount} saved drafts")
+                if (syncing) add("sync in progress")
+            }.joinToString(", ")
+
+            Row(
+                Modifier.fillMaxWidth().height(40.dp).clip(Radius.shapePill)
+                    .background(color.copy(alpha = 0.12f))
+                    .border(1.dp, color.copy(alpha = 0.34f), Radius.shapePill)
+                    .semantics { contentDescription = "Saved work status: $accessibilityDetail" }
+                    .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+                Text(
+                    visibleLabel,
+                    color = color,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 

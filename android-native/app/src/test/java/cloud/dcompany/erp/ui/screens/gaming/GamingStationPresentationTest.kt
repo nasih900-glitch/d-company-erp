@@ -30,14 +30,14 @@ class GamingStationPresentationTest {
     }
 
     @Test
-    fun `compact void custom reason keeps its in-body actions above landscape IME`() {
-        assertTrue(useCompactVoidCustomLayout(600, VOID_REASON_OTHER_ID))
-        assertTrue(useCompactVoidCustomLayout(640, VOID_REASON_OTHER_ID))
-        assertFalse(useCompactVoidCustomLayout(641, VOID_REASON_OTHER_ID))
-        assertFalse(useCompactVoidCustomLayout(600, "guest_changed_mind"))
-        assertFalse(useCompactVoidCustomLayout(600, null))
+    fun `custom void reason always keeps its actions in a bounded IME safe body`() {
+        assertTrue(useCompactVoidCustomLayout(VOID_REASON_OTHER_ID))
+        assertFalse(useCompactVoidCustomLayout("guest_changed_mind"))
+        assertFalse(useCompactVoidCustomLayout(null))
 
         assertEquals(120.dp, voidDialogBodyMaxHeight(600, VOID_REASON_OTHER_ID))
+        assertEquals(120.dp, voidDialogBodyMaxHeight(800, VOID_REASON_OTHER_ID))
+        assertEquals(120.dp, voidDialogBodyMaxHeight(1_200, VOID_REASON_OTHER_ID))
         assertEquals(330.dp, voidDialogBodyMaxHeight(600, "guest_changed_mind"))
         assertEquals(330.dp, voidDialogBodyMaxHeight(600, null))
     }

@@ -1066,10 +1066,9 @@ class GamingDialogUiTest {
         compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
             .bringIntoViewIfNeeded()
             .performClick()
-        // Tall tablets retain the preset choices beside the custom editor;
-        // compact windows replace them to keep the IME and footer reachable.
-        // The workflow contract is that the custom field becomes reachable in
-        // either layout, not that every display must use the compact variant.
+        // Custom mode is deliberately bounded on every tablet height. OEM
+        // dialog/IME inset dispatch is not reliable enough to keep a separate
+        // footer reachable while this editor owns keyboard focus.
         compose.onNodeWithContentDescription("Show keyboard for custom cancellation reason")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()

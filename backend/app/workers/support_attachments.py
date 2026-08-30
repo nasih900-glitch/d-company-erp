@@ -15,7 +15,12 @@ from app.services.bug_reports.attachments import purge_expired_bug_report_attach
 from app.services.client_diagnostics import purge_expired_client_diagnostics
 
 
-async def run(*, batch_size: int, max_rows: int) -> tuple[int, int, int]:
+async def run(
+    *,
+    batch_size: int,
+    max_rows: int,
+    diagnostic_max_rows: int | None = None,
+) -> tuple[int, int, int]:
     total_rows = 0
     total_bytes = 0
     while total_rows < max_rows:
@@ -29,9 +34,10 @@ async def run(*, batch_size: int, max_rows: int) -> tuple[int, int, int]:
         total_bytes += result.bytes_released
         if result.rows < current_batch:
             break
+    diagnostic_limit = max_rows if diagnostic_max_rows is None else diagnostic_max_rows
     diagnostic_rows = 0
-    while diagnostic_rows < max_rows:
-        current_batch = min(batch_size, max_rows - diagnostic_rows)
+    while diagnostic_rows < diagnostic_limit:
+        current_batch = min(batch_size, diagnostic_limit - diagnostic_rows)
         async with AsyncSessionLocal() as session, session.begin():
             purged = await purge_expired_client_diagnostics(
                 session,
@@ -49,13 +55,25 @@ def main() -> None:
     )
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--max-rows", type=int, default=1_000)
+    parser.add_argument(
+        "--diagnostic-max-rows",
+        type=int,
+        default=50_000,
+        help="maximum expired diagnostic rows to purge independently of screenshots",
+    )
     args = parser.parse_args()
     if not 1 <= args.batch_size <= 1_000:
         parser.error("--batch-size must be between 1 and 1000")
     if not 1 <= args.max_rows <= 100_000:
         parser.error("--max-rows must be between 1 and 100000")
+    if not 1 <= args.diagnostic_max_rows <= 100_000:
+        parser.error("--diagnostic-max-rows must be between 1 and 100000")
     rows, released, diagnostics = asyncio.run(
-        run(batch_size=args.batch_size, max_rows=args.max_rows)
+        run(
+            batch_size=args.batch_size,
+            max_rows=args.max_rows,
+            diagnostic_max_rows=args.diagnostic_max_rows,
+        )
     )
     print(
         f"Purged {rows} expired Support screenshot(s), released {released} byte(s), "

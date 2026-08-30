@@ -28,6 +28,7 @@ from app.core.middleware import (
     RequestContextMiddleware,
     TimingMiddleware,
 )
+from app.core.redis_clients import close_request_path_redis_client
 from app.events.bus import get_event_bus
 from app.events.events import OrderPaid
 from app.services.audit.recorder import install_audit_listeners
@@ -137,7 +138,7 @@ def create_app() -> FastAPI:
         else:
             checks["redis"] = "ok"
         finally:
-            await redis.aclose()
+            await close_request_path_redis_client(redis)
 
         if "down" in checks.values():
             raise HTTPException(

@@ -2,9 +2,11 @@
 
 D Company uses a direct, signed-APK channel for the current partner pilot. The
 server can offer an update, but it cannot silently install one: Android always
-shows its package-installer approval screen. Do not combine direct APK delivery
-and Google Play delivery on the same active tablet fleet without first adding a
-channel-aware compatibility contract and proving both signing lineages.
+shows its package-installer approval screen. The compatibility contract uses
+`X-Client-Distribution-Channel`: only `direct` clients can receive self-hosted
+APK metadata. `play` and `managed` clients fail closed without that metadata.
+Do not combine delivery channels on the active tablet fleet until a separate
+Play/managed update contract and both signing lineages have been proven.
 
 ## Trust and authority boundaries
 
@@ -42,11 +44,14 @@ change their identity, or lower the compatibility floor.
 `3.1.3` (version code `14`) is the manual, update-capable partner baseline. Send
 that exact signed APK to the partner only after the coordinated production
 deployment and smoke test pass. Code `14` must remain unhosted, unregistered and
-unadvertised; it is the package from which the next update is tested.
+unadvertised; it is the package from which the server-delivery upgrade is
+tested.
 
-The first server-delivered release is a distinct `3.1.4` (version code `15`)
-artifact with a new immutable filename. Never rebuild code `14` or code `15`
-with different bytes under the same version identity.
+Code `15` (`3.1.4`) is the first identity accepted by the server-release
+registry. It is a held audit build, not the current activation target. Preserve
+any signed Code `15` APK and manifest exactly and never rebuild, overwrite, or
+activate them as a shortcut. The current server-delivery candidate is the
+distinct `3.1.5` (version code `16`) artifact with a new immutable filename.
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
@@ -83,6 +88,11 @@ The public compatibility endpoint is:
 GET /api/v1/public/client-compatibility?platform=android&version_code=<installed-code>
 ```
 
+The Android networking layer sends `X-Client-Distribution-Channel` on this and
+every other request. A missing header retains the legacy direct-client contract;
+an explicit `play` or `managed` header never receives a direct APK URL, hash,
+size, signer, or 426 recovery payload.
+
 When no release is active, it may return the compatibility floor without APK
 metadata. When a release is active, URL, version name, hash, size and signer are
 an all-or-nothing atomic contract and the response uses `Cache-Control:
@@ -99,11 +109,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Build and stage code 15
+## Build and stage code 16
 
 1. Confirm the code-`14` tablet is signed by the trusted certificate, can check
    for updates, and has no pending offline work.
-2. Bump the coordinated application to `3.1.4` / code `15`. Run the complete
+2. Coordinate the application at `3.1.5` / code `16`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
 3. Download both files without renaming or modifying either one. First run a
@@ -111,8 +121,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.4/release-manifest.json \
-     --apk /secure/release-3.1.4/d-company-erp-v3.1.4-direct.apk \
+     --manifest /secure/release-3.1.5/release-manifest.json \
+     --apk /secure/release-3.1.5/d-company-erp-v3.1.5-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Gaming Centre reliability and update delivery"
    ```
@@ -125,8 +135,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.4/release-manifest.json \
-     --apk /secure/release-3.1.4/d-company-erp-v3.1.4-direct.apk \
+     --manifest /secure/release-3.1.5/release-manifest.json \
+     --apk /secure/release-3.1.5/d-company-erp-v3.1.5-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Gaming Centre reliability and update delivery" \
      --ssh-key ~/.ssh/dcompany_erp \
@@ -140,11 +150,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence. Activate only the staged code-`15` row.
+   size, signer and source evidence. Activate only the staged code-`16` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
 6. On one code-`14` tablet, refresh the update check, download, install and
-   reopen code `15`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+   reopen code `16`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
 Do not activate code `14` as its own update. Do not stage from an arbitrary
@@ -171,9 +181,10 @@ rewrite the APK, or invent a second environment-variable activation path.
 
 Withdrawal stops new offers but cannot uninstall an APK already installed.
 Android does not normally allow a lower code to replace a higher code. A bad
-code-`15` release therefore requires withdrawal followed by a newly signed
-code-`16` hotfix. Do not lower the compatibility minimum as a substitute for a
-fixed binary, and do not ask staff to uninstall while offline work is pending.
+active code-`16` release therefore requires withdrawal followed by a newly
+signed artifact with a strictly higher code, such as code `17`. Do not lower the
+compatibility minimum as a substitute for a fixed binary, and do not ask staff
+to uninstall while offline work is pending.
 
 ## Minimum-version rollout
 
@@ -203,8 +214,9 @@ or owner activation.
   local bytes, or an invalid compatibility status.
 - Retain every APK, CI manifest, workflow provenance, signer fingerprint,
   staging attestation and audit event needed to reconstruct a release. Keep at
-  least the active APK, the manual code-`14` baseline and previous known-good
-  installers in encrypted backup storage; never expose the signing key there.
+  least the active APK, the manual code-`14` baseline, the held code-`15` audit
+  artifact and previous known-good installers in encrypted backup storage;
+  never expose the signing key there.
 - Test restoration of the registry, hosted bytes and attestations. Restoring
   metadata without the exact APK must fail closed rather than advertise a
   broken update.
@@ -220,6 +232,11 @@ per registering user, 32 per company, 1,000 update events per installation,
 remain idempotent at capacity; new evidence receives a clear 409 and no history
 is deleted. Alert on sustained heartbeat 429/409/503 responses and investigate
 the protected owner device list rather than clearing rows.
+
+Heartbeat platform, version code, and distribution channel must exactly match
+the native request headers. An `upgrade_confirmed` event must exactly match the
+installed version in that heartbeat. These checks detect ordinary client/server
+drift; they are consistency evidence, not cryptographic device attestation.
 
 TLS terminates at the existing production HTTPS edge. A CDN may be added later
 only if it preserves exact bytes, HTTPS, `Content-Length`, immutable headers and

@@ -7,6 +7,7 @@ broadcast-on-write test, which needs a real Postgres connection.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -46,7 +47,14 @@ def test_ws_closes_when_the_authenticated_access_token_expires():
         extra={"exp": datetime.now(UTC) + timedelta(seconds=1)},
     )
 
-    with TestClient(app) as client, client.websocket_connect("/api/v1/ws") as ws:
+    with (
+        patch(
+            "app.api.v1.ws.router._server_session_is_active",
+            new=AsyncMock(return_value=True),
+        ),
+        TestClient(app) as client,
+        client.websocket_connect("/api/v1/ws") as ws,
+    ):
         ws.send_json({"token": token})
         assert ws.receive_json() == {"type": "connected"}
 
@@ -54,3 +62,27 @@ def test_ws_closes_when_the_authenticated_access_token_expires():
             ws.receive_json()
         assert exc_info.value.code == 4401
         assert exc_info.value.reason == "access token expired"
+
+
+def test_ws_fails_closed_with_retryable_reason_when_session_store_is_unavailable():
+    app = create_app()
+    token = issue_access_token(
+        user_id=uuid4(),
+        company_id=uuid4(),
+        roles=["staff"],
+    )
+
+    with (
+        patch(
+            "app.api.v1.ws.router._server_session_is_active",
+            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
+        ),
+        TestClient(app) as client,
+        client.websocket_connect("/api/v1/ws") as ws,
+    ):
+        ws.send_json({"token": token})
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_json()
+
+        assert exc_info.value.code == 1013
+        assert exc_info.value.reason == "authentication service temporarily unavailable"

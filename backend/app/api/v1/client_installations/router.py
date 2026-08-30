@@ -7,13 +7,18 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, get_args
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.db import SessionDep  # noqa: TC001 - FastAPI resolves dependency annotations
-from app.core.errors import ClientTelemetryCapacityError, ConflictError
+from app.core.errors import (
+    ClientTelemetryCapacityError,
+    ClientTelemetryIdentityConflictError,
+    ConflictError,
+)
+from app.core.middleware import parse_client_version_code
 from app.core.permissions import requires
 from app.core.tenant import (  # noqa: TC001 - FastAPI resolves dependency annotations
     TenantContext,
@@ -178,6 +183,20 @@ class ClientInstallationHeartbeat(BaseModel):
         ids = [event.client_event_id for event in self.events]
         if len(ids) != len(set(ids)):
             raise ValueError("events must not repeat a client event id in one heartbeat")
+        for event in self.events:
+            if event.event_type != "upgrade_confirmed":
+                continue
+            if event.target_version_code > self.version_code:
+                raise ValueError(
+                    "upgrade_confirmed cannot be newer than the installed app version"
+                )
+            if (
+                event.target_version_code == self.version_code
+                and event.target_version_name != self.version_name
+            ):
+                raise ValueError(
+                    "upgrade_confirmed must match the installed app version name"
+                )
         return self
 
 
@@ -220,6 +239,43 @@ def _capacity_error(*, resource: str, scope: str, limit: int) -> ClientTelemetry
         "Existing records were preserved; ask the protected owner to review support status.",
         details={"resource": resource, "scope": scope, "limit": limit},
     )
+
+
+def _validate_client_identity_headers(
+    request: Request,
+    payload: ClientInstallationHeartbeat,
+) -> None:
+    """Fail closed when authenticated telemetry contradicts native identity headers.
+
+    This is consistency evidence, not device attestation: a modified client can
+    forge both values. It still prevents ordinary client/server drift from
+    corrupting owner-facing installation health.
+    """
+
+    expected: dict[str, object] = {
+        "platform": payload.platform,
+        "version_code": payload.version_code,
+        "distribution_channel": payload.distribution_channel,
+    }
+    observed: dict[str, object] = {
+        "platform": request.headers.get("X-Client-Platform", "").strip().lower(),
+        "version_code": parse_client_version_code(
+            request.headers.get("X-Client-Version-Code")
+        ),
+        "distribution_channel": (
+            request.headers.get("X-Client-Distribution-Channel", "direct")
+            .strip()
+            .lower()
+            or "direct"
+        ),
+    }
+    mismatched = sorted(field for field, value in expected.items() if observed[field] != value)
+    if mismatched:
+        raise ClientTelemetryIdentityConflictError(
+            "Device status did not match this app build. Restart the app and try again; "
+            "if this repeats, open Help and report the issue.",
+            details={"mismatched_fields": mismatched},
+        )
 
 
 async def _lock_company_telemetry(session: SessionDep, company_id: UUID) -> None:
@@ -312,6 +368,7 @@ async def _enforce_new_event_capacity(
 
 @router.post("/heartbeat", response_model=ClientInstallationHeartbeatRead)
 async def heartbeat(
+    request: Request,
     payload: ClientInstallationHeartbeat,
     session: SessionDep,
     tenant: TenantDep,
@@ -321,6 +378,7 @@ async def heartbeat(
     Scope comes exclusively from the validated tenant dependency.  There are
     deliberately no company, user, or terminal fields in the request DTO.
     """
+    _validate_client_identity_headers(request, payload)
     await enforce_client_heartbeat_rate_limit(
         company_id=tenant.company_id,
         user_id=tenant.user_id,

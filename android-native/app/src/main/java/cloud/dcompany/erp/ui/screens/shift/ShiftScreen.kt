@@ -45,7 +45,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -145,14 +148,21 @@ fun ShiftScreen(
         BoxWithConstraints(Modifier.fillMaxSize()) {
             if (maxWidth >= 900.dp) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-                    Column(Modifier.weight(1f)) {
+                    WideCurrentShiftPanel(
+                        stateIdentity = state.open?.let(::shiftCloseUiIdentity) ?: "closed",
+                        modifier = Modifier.weight(1f),
+                    ) {
                         if (state.open == null) OpenShiftCard(state, vm, access.canOpen)
                         else CloseShiftCard(
                             state,
                             vm,
                             access.canClose,
                             access.canOpen,
-                            compactLayout = false,
+                            // The wide panel now owns vertical scrolling. Let
+                            // the card wrap its complete content instead of
+                            // stretching to the bounded viewport and clipping
+                            // the actions below it.
+                            compactLayout = true,
                             presentation = presentation,
                         )
                     }
@@ -226,6 +236,29 @@ fun ShiftScreen(
                 )
             },
         )
+    }
+}
+
+/**
+ * The target tablet is wide (1280dp) but only 800dp tall. The shell, summary
+ * cards and page padding leave less height than the touch keypad/open action or
+ * the complete close-shift workflow require. Give only the current-shift panel
+ * a scroll owner so its primary action remains reachable while shift history
+ * stays independently visible.
+ */
+@Composable
+internal fun WideCurrentShiftPanel(
+    stateIdentity: String,
+    modifier: Modifier = Modifier,
+    currentPanel: @Composable () -> Unit,
+) {
+    // Opening or closing replaces the workflow. Reset its scroll position so
+    // staff always land on the new panel heading, while ordinary state updates
+    // preserve their current position.
+    key(stateIdentity) {
+        LazyColumn(modifier = modifier.fillMaxSize()) {
+            item(key = "wide-current-shift-panel") { currentPanel() }
+        }
     }
 }
 
@@ -399,6 +432,8 @@ internal fun OpenShiftForm(
     onOpenShift: (Long) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val submitFocusRequester = remember { FocusRequester() }
     var float by remember { mutableStateOf("") }
     val parsedFloat = remember(float) { parseRupeesToMinor(float) }
     val floatMinor = parsedFloat ?: 0L
@@ -435,12 +470,18 @@ internal fun OpenShiftForm(
                 // The form is replaced immediately after a successful open.
                 // Clear its IME focus first so the old numeric keyboard cannot
                 // cover the newly rendered close-shift panel.
+                keyboardController?.hide()
                 focusManager.clearFocus(force = true)
+                // Compose buttons do not necessarily take focus after a
+                // touch/semantics click. Move focus explicitly so OEM focus
+                // restoration cannot put the IME back on the money field
+                // while the open request is in flight.
+                submitFocusRequester.requestFocus()
                 onOpenShift(floatMinor)
             },
             enabled = canOpen && validFloat && !blockedByRejectedShift,
             busy = busy,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().focusRequester(submitFocusRequester),
         )
     }
 }

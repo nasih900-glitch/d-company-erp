@@ -24,6 +24,7 @@ from app.core.errors import (
 )
 from app.core.logging import get_logger
 from app.core.permissions import requires
+from app.core.redis_clients import close_request_path_redis_client
 from app.core.tenant import (  # noqa: TC001 - FastAPI resolves dependency annotations
     TenantContext,
     TenantDep,
@@ -662,7 +663,7 @@ async def _redis_dependency_status() -> DependencyStatus:
         )
         return "unavailable"
     finally:
-        await redis.aclose()
+        await close_request_path_redis_client(redis)
     return "operational"
 
 
@@ -740,6 +741,10 @@ async def system_health(
             await session.execute(
                 select(func.count(ClientInstallation.id)).where(
                     ClientInstallation.company_id == tenant.company_id,
+                    # Historical/reinstalled devices remain visible as stale
+                    # evidence, but only a device seen in the health window can
+                    # be an actionable "outdated installation".
+                    ClientInstallation.last_seen_at >= stale_before,
                     ClientInstallation.version_code < latest_supported,
                 )
             )

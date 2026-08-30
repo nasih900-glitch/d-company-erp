@@ -48,6 +48,12 @@ class ClientTelemetryCapacityError(ConflictError):
     code = "client_telemetry_capacity"
 
 
+class ClientTelemetryIdentityConflictError(ConflictError):
+    """Native identity headers disagree with the installation heartbeat body."""
+
+    code = "client_telemetry_identity_conflict"
+
+
 class DiagnosticIdempotencyConflictError(ConflictError):
     """A diagnostic event UUID was reused with a different immutable payload."""
 

@@ -120,26 +120,26 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current release identity is `3.1.3` (`14`);
-Android code `8` remains the minimum-compatible floor. The signed `3.1.3`
-direct-release APK is the manual partner baseline for this rollout, but it may
-be handed to the partner only after the coordinated production deployment has
-reached the repository's release-head migration and its production smoke test
-has passed. It must not be uploaded to the server release directory, published as a GitHub or
-Play release, or registered as an update in this release. The public status
-contract is `/api/v1/public/client-compatibility?platform=android&version_code=<installed-code>`.
+`.github/workflows/release.yml`. The current release candidate is `3.1.5`
+(`16`); Android code `8` remains the minimum-compatible floor. The signed
+`3.1.3` (`14`) direct-release APK remains the manual, update-capable partner
+baseline. It must not be uploaded to the server release directory, published as
+a GitHub or Play release, or registered as an update. The public status contract
+is `/api/v1/public/client-compatibility?platform=android&version_code=<installed-code>`.
 
 The immutable signed `3.1.2` (`13`) APK remains the predecessor used to prove
 the supported in-place upgrade to code `14`; neither signed identity may be
-rebuilt with different bytes. The first server-driven update from the manually
-installed code-`14` baseline will be a distinct `3.1.4` (`15`) release. It must
-be newly built and signed, hosted at an immutable HTTPS URL, verified against
-its exact SHA-256, byte size, package, version and expected signer, and then
-staged by the guarded operator tool and activated only by the exact company/user
-identity explicitly configured as the global release controller, which must
+rebuilt with different bytes. Code `15` (`3.1.4`) is the first identity admitted
+by the server-release registry, but it is an immutable held audit build, not the
+current rollout target. Do not rebuild, overwrite, or activate it as a shortcut.
+The current server-delivery candidate is the distinct `3.1.5` (`16`) release.
+It must be newly built and signed, hosted at an immutable HTTPS URL, verified
+against its exact SHA-256, byte size, package, version and expected signer, and
+then staged by the guarded operator tool and activated only by the exact
+company/user identity configured as the global release controller, which must
 also retain protected-owner audit authority. Android still requires the
-employee to approve installation. Emulator evidence is not
-physical Redmi Pad 2 proof.
+employee to approve installation. Emulator evidence is not physical Redmi Pad
+2 proof.
 
 ## License
 

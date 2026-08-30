@@ -40,7 +40,9 @@ def _printable_ascii_header(value: str | None, *, max_length: int) -> str | None
     return normalized
 
 
-def _client_version_code(value: str | None) -> int | None:
+def parse_client_version_code(value: str | None) -> int | None:
+    """Parse the bounded positive integer used by every native-version header."""
+
     try:
         parsed = int((value or "").strip())
     except ValueError:
@@ -114,6 +116,10 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
 
         platform = request.headers.get("X-Client-Platform", "").strip().lower()
         version_raw = request.headers.get("X-Client-Version-Code", "").strip()
+        distribution_channel = (
+            request.headers.get("X-Client-Distribution-Channel", "direct").strip().lower()
+            or "direct"
+        )
         if not platform:
             is_legacy_android = "okhttp/" in request.headers.get("user-agent", "").lower()
             if self.require_native_headers and is_legacy_android:
@@ -124,6 +130,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                         "This app is too old to verify server compatibility. "
                         "Install the current D Company ERP app before continuing."
                     ),
+                    distribution_channel="direct",
                 )
             return await call_next(request)
 
@@ -137,12 +144,13 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                     }
                 },
             )
-        version_code = _client_version_code(version_raw)
+        version_code = parse_client_version_code(version_raw)
         if version_code is None:
             return self._reject(
                 platform=platform,
                 code="client_version_invalid",
                 message="This app could not prove its build version. Update before continuing.",
+                distribution_channel=distribution_channel,
             )
 
         minimum, latest, _ = self.versions[platform]
@@ -156,6 +164,7 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
                     "Update before continuing; saved offline work will remain on this device."
                 ),
                 current=version_code,
+                distribution_channel=distribution_channel,
             )
 
         response = await call_next(request)
@@ -171,9 +180,13 @@ class ClientCompatibilityMiddleware(BaseHTTPMiddleware):
         code: str,
         message: str,
         current: int | None = None,
+        distribution_channel: str = "direct",
     ) -> JSONResponse:
         minimum, latest, update_url = self.versions[platform]
-        release_details = self.android_release if platform == "android" else {}
+        direct_android = platform == "android" and distribution_channel == "direct"
+        if platform == "android" and not direct_android:
+            update_url = None
+        release_details = self.android_release if direct_android else {}
         return JSONResponse(
             status_code=426,
             headers={
@@ -275,7 +288,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         platform = (request.headers.get("X-Client-Platform") or "web").strip().lower()
         if platform not in {"android", "ios", "web"}:
             platform = "web"
-        client_version_code = _client_version_code(request.headers.get("X-Client-Version-Code"))
+        client_version_code = parse_client_version_code(
+            request.headers.get("X-Client-Version-Code")
+        )
         action_id = _printable_ascii_header(
             request.headers.get("X-Client-Action-Id"), max_length=100
         ) or _printable_ascii_header(request.headers.get("Idempotency-Key"), max_length=100)

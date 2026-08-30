@@ -12,10 +12,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -110,14 +113,29 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DCompanyApp.instance.notificationRoutes.accept(intent)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        // Use one deterministic edge-to-edge contract on every supported API.
+        // Android 15 ignores decor-fitting for targetSdk 35; asking for it on
+        // older releases while also applying Compose insets risks divergent
+        // (and, on some OEM builds, double-inset) tablet geometry.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             DCompanyTheme {
-                Surface(Modifier.fillMaxSize(), color = Brand.Background) {
-                    AppRoot(
-                        onOpenUpdateLink = ::openSecureUpdate,
-                        onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
-                    )
+                Surface(
+                    // Android 15 enforces edge-to-edge for targetSdk 35 even
+                    // when decor fitting is requested. Paint Brand.Background
+                    // across the complete window, including the system-bar
+                    // regions, then inset only the interactive workspace.
+                    Modifier.fillMaxSize(),
+                    color = Brand.Background,
+                ) {
+                    Box(
+                        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+                    ) {
+                        AppRoot(
+                            onOpenUpdateLink = ::openSecureUpdate,
+                            onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
+                        )
+                    }
                 }
             }
         }

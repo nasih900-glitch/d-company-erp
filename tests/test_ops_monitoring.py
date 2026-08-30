@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from ops import backup_to_b2, runtime_monitor
 from ops.android_update_channel import (
     AdvertisedAndroidRelease,
     ChannelMatrix,
@@ -14,12 +17,15 @@ from ops.android_update_channel import (
 )
 from ops.runtime_monitor import (
     LOCAL_BACKUP_DIR,
+    NOTIFICATION_RETRY_MAX_SECONDS,
     ContainerState,
     Issue,
     MonitorResult,
     check_android_update_channel,
     check_backup_freshness,
     evaluate_containers,
+    notification_delivery_failed,
+    notification_delivery_succeeded,
     notification_for,
 )
 from ops.smtp_client import (
@@ -163,6 +169,121 @@ class RuntimeMonitorTest(unittest.TestCase):
         assert notice is not None
         self.assertIn("recovered", notice[0].lower())
 
+    def test_failed_delivery_is_retried_after_persisted_backoff(self) -> None:
+        failed = MonitorResult(
+            issues=[Issue("disk_capacity", "disk is full")],
+            metrics={},
+            restart_counts={},
+        )
+        previous = {
+            "issues": [],
+            "notification_delivery": {
+                "delivered_transition_key": "healthy",
+                "pending_transition_key": None,
+                "failed_attempts": 0,
+                "next_retry_at": None,
+            },
+        }
+        now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+
+        self.assertIsNotNone(notification_for(failed, previous, now=now))
+        delivery = notification_delivery_failed(
+            failed, previous, now=now, error=TimeoutError("smtp timeout")
+        )
+        persisted = {
+            "issues": [{"code": "disk_capacity", "detail": "disk is full"}],
+            "notification_delivery": delivery,
+        }
+
+        self.assertEqual("healthy", delivery["delivered_transition_key"])
+        self.assertEqual("issues:disk_capacity", delivery["pending_transition_key"])
+        self.assertEqual(1, delivery["failed_attempts"])
+        self.assertIsNone(
+            notification_for(failed, persisted, now=now + timedelta(minutes=4))
+        )
+        self.assertIsNotNone(
+            notification_for(failed, persisted, now=now + timedelta(minutes=5))
+        )
+
+    def test_delivery_retry_backoff_is_bounded_and_success_suppresses_retry(
+        self,
+    ) -> None:
+        failed = MonitorResult(
+            issues=[Issue("http_readyz", "unreachable")],
+            metrics={},
+            restart_counts={},
+        )
+        previous: dict[str, object] = {
+            "issues": [],
+            "notification_delivery": {
+                "delivered_transition_key": "healthy",
+                "pending_transition_key": None,
+                "failed_attempts": 0,
+                "next_retry_at": None,
+            },
+        }
+        now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+        delivery: dict[str, object] = {}
+        for attempt in range(1, 16):
+            delivery = notification_delivery_failed(
+                failed,
+                previous,
+                now=now,
+                error=ConnectionError("smtp unavailable"),
+            )
+            self.assertEqual(min(attempt, 11), delivery["failed_attempts"])
+            previous = {
+                "issues": [{"code": "http_readyz"}],
+                "notification_delivery": delivery,
+            }
+
+        retry_at = datetime.fromisoformat(str(delivery["next_retry_at"]))
+        self.assertLessEqual(
+            (retry_at - now).total_seconds(), NOTIFICATION_RETRY_MAX_SECONDS
+        )
+
+        succeeded = notification_delivery_succeeded(failed, previous, now=retry_at)
+        delivered_state = {
+            "issues": [{"code": "http_readyz"}],
+            "notification_delivery": succeeded,
+        }
+        self.assertEqual("issues:http_readyz", succeeded["delivered_transition_key"])
+        self.assertIsNone(notification_for(failed, delivered_state, now=retry_at))
+
+    def test_main_persists_pending_delivery_when_smtp_fails(self) -> None:
+        failed = MonitorResult(
+            issues=[Issue("backend_errors", "one error")],
+            metrics={},
+            restart_counts={},
+        )
+        previous = {
+            "issues": [],
+            "notification_delivery": {
+                "delivered_transition_key": "healthy",
+                "pending_transition_key": None,
+                "failed_attempts": 0,
+                "next_retry_at": None,
+            },
+        }
+        with (
+            patch("ops.runtime_monitor.sys.argv", ["runtime_monitor.py"]),
+            patch("ops.runtime_monitor.load_env", return_value={}),
+            patch("ops.runtime_monitor.load_previous_state", return_value=previous),
+            patch("ops.runtime_monitor.run_monitor", return_value=failed),
+            patch(
+                "ops.runtime_monitor.send_notice",
+                side_effect=TimeoutError("smtp timeout"),
+            ),
+            patch("ops.runtime_monitor.save_state") as save_state,
+        ):
+            exit_code = runtime_monitor.main()
+
+        self.assertEqual(1, exit_code)
+        delivery = save_state.call_args.kwargs["notification_delivery"]
+        self.assertEqual("healthy", delivery["delivered_transition_key"])
+        self.assertEqual("issues:backend_errors", delivery["pending_transition_key"])
+        self.assertEqual(1, delivery["failed_attempts"])
+
     def test_backup_freshness_detects_stale_and_empty_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             backup_dir = Path(temporary)
@@ -235,6 +356,144 @@ class RuntimeMonitorTest(unittest.TestCase):
 
         self.assertEqual([], issues)
         self.assertEqual(0, metrics["android_release_advertised"])
+
+
+class BackupRuntimeTest(unittest.TestCase):
+    def test_dump_is_validated_then_atomically_published(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "nightly.dump"
+            commands: list[list[str]] = []
+
+            def run(command, **kwargs):
+                commands.append(command)
+                if "pg_dump" in command:
+                    kwargs["stdout"].write(b"valid-custom-archive")
+                else:
+                    self.assertIn("pg_restore", command)
+                    self.assertEqual(b"valid-custom-archive", kwargs["stdin"].read())
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch("ops.backup_to_b2.subprocess.run", side_effect=run):
+                backup_to_b2.run_pg_dump(destination)
+
+            self.assertEqual(b"valid-custom-archive", destination.read_bytes())
+            self.assertFalse(destination.with_name("nightly.dump.part").exists())
+            self.assertIn("pg_dump", commands[0])
+            self.assertIn("pg_restore", commands[1])
+            self.assertIn("--list", commands[1])
+
+    def test_invalid_dump_removes_partial_and_never_publishes_final(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "nightly.dump"
+
+            def run(command, **kwargs):
+                if "pg_dump" in command:
+                    kwargs["stdout"].write(b"truncated-custom-archive")
+                    return subprocess.CompletedProcess(command, 0)
+                raise subprocess.CalledProcessError(
+                    1, command, stderr=b"archive is corrupt"
+                )
+
+            with (
+                patch("ops.backup_to_b2.subprocess.run", side_effect=run),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                backup_to_b2.run_pg_dump(destination)
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name("nightly.dump.part").exists())
+
+    def test_upload_requires_remote_size_to_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            local_path = Path(temporary) / "nightly.dump"
+            local_path.write_bytes(b"verified")
+            client = MagicMock()
+            client.head_object.return_value = {"ContentLength": 7}
+
+            with self.assertRaisesRegex(RuntimeError, "size mismatch"):
+                backup_to_b2.upload(client, local_path)
+
+            client.upload_file.assert_called_once_with(
+                str(local_path), backup_to_b2.B2_BUCKET, local_path.name
+            )
+
+    def test_local_cleanup_preserves_verified_recovery_point(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backup_dir = Path(temporary)
+            preserved = backup_dir / "verified.dump"
+            expired = backup_dir / "expired.dump"
+            preserved.write_bytes(b"verified")
+            expired.write_bytes(b"old")
+            stale_time = time.time() - (backup_to_b2.RETENTION_DAYS + 1) * 86400
+            os.utime(preserved, (stale_time, stale_time))
+            os.utime(expired, (stale_time, stale_time))
+
+            with patch("ops.backup_to_b2.LOCAL_BACKUP_DIR", backup_dir):
+                backup_to_b2.cleanup_local(preserve_verified=preserved)
+
+            self.assertTrue(preserved.exists())
+            self.assertFalse(expired.exists())
+
+    def test_failed_upload_prunes_only_expired_superseded_local_dumps(self) -> None:
+        def write_verified(path: Path) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"verified")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                patch("ops.backup_to_b2.LOCAL_BACKUP_DIR", Path(temporary)),
+                patch("ops.backup_to_b2.load_env", return_value={}),
+                patch("ops.backup_to_b2.run_pg_dump", side_effect=write_verified),
+                patch("ops.backup_to_b2.b2_client", return_value=object()),
+                patch("ops.backup_to_b2.upload", side_effect=RuntimeError("offline")),
+                patch("ops.backup_to_b2.cleanup_remote") as cleanup_remote,
+                patch("ops.backup_to_b2.cleanup_local") as cleanup_local,
+                patch("ops.backup_to_b2.send_alert"),
+            ):
+                result = backup_to_b2.main()
+
+            self.assertEqual(1, result)
+            cleanup_remote.assert_not_called()
+            cleanup_local.assert_called_once()
+            self.assertTrue(
+                cleanup_local.call_args.kwargs["preserve_verified"].is_file()
+            )
+
+    def test_cleanup_after_failed_dump_preserves_newest_prior_recovery_point(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backup_dir = Path(temporary)
+            newest = backup_dir / "newest.dump"
+            expired = backup_dir / "expired.dump"
+            newest.write_bytes(b"known-good")
+            expired.write_bytes(b"old")
+            stale_time = time.time() - (backup_to_b2.RETENTION_DAYS + 1) * 86400
+            os.utime(expired, (stale_time, stale_time))
+
+            with patch("ops.backup_to_b2.LOCAL_BACKUP_DIR", backup_dir):
+                backup_to_b2.cleanup_local()
+
+            self.assertTrue(newest.exists())
+            self.assertFalse(expired.exists())
+
+    def test_local_cleanup_removes_abandoned_partial_without_any_final_dump(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backup_dir = Path(temporary)
+            abandoned = backup_dir / "interrupted.dump.part"
+            recent = backup_dir / "running.dump.part"
+            abandoned.write_bytes(b"partial")
+            recent.write_bytes(b"partial")
+            stale_time = time.time() - (
+                backup_to_b2.PARTIAL_RETENTION_HOURS + 1
+            ) * 3600
+            os.utime(abandoned, (stale_time, stale_time))
+
+            with patch("ops.backup_to_b2.LOCAL_BACKUP_DIR", backup_dir):
+                backup_to_b2.cleanup_local()
+
+            self.assertFalse(abandoned.exists())
+            self.assertTrue(recent.exists())
 
 
 class BackupServiceInstallationTest(unittest.TestCase):

@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI, Response
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
+from starlette.requests import Request
 
 from app.api.v1.public.router import client_compatibility
 from app.core.config import Settings, get_settings
@@ -36,6 +37,17 @@ class _ActiveRelease:
     apk_signing_cert_sha256 = "cd" * 32
 
 
+def _request(distribution_channel: str = "direct") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"x-client-distribution-channel", distribution_channel.encode()),
+            ],
+        }
+    )
+
+
 def test_backend_defaults_require_and_advertise_v8() -> None:
     assert Settings.model_fields["android_min_supported_version_code"].default == 8
     assert Settings.model_fields["android_latest_version_code"].default == 8
@@ -64,19 +76,32 @@ async def test_android_compatibility_distinguishes_required_optional_and_current
     session = _CompatibilitySession(_ActiveRelease())
     required_response = Response()
     required = await client_compatibility(
+        request=_request(),
         response=required_response,
         session=session,
         platform="android",
         version_code=4,
     )
     optional = await client_compatibility(
-        response=Response(), session=session, platform="android", version_code=5
+        request=_request(),
+        response=Response(),
+        session=session,
+        platform="android",
+        version_code=5,
     )
     optional_v6 = await client_compatibility(
-        response=Response(), session=session, platform="android", version_code=6
+        request=_request(),
+        response=Response(),
+        session=session,
+        platform="android",
+        version_code=6,
     )
     supported = await client_compatibility(
-        response=Response(), session=session, platform="android", version_code=7
+        request=_request(),
+        response=Response(),
+        session=session,
+        platform="android",
+        version_code=7,
     )
 
     assert required.status == "update_required"
@@ -107,6 +132,7 @@ async def test_supported_android_has_no_optional_offer_without_active_release(
     monkeypatch.setattr(settings, "android_update_url", "https://example.test/legacy.apk")
 
     contract = await client_compatibility(
+        request=_request(),
         response=Response(),
         session=_CompatibilitySession(),
         platform="android",
@@ -209,6 +235,7 @@ async def test_active_android_offer_below_raised_minimum_is_ignored(monkeypatch)
     stale_offer.version_code = 9
 
     required = await client_compatibility(
+        request=_request(),
         response=Response(),
         session=_CompatibilitySession(stale_offer),
         platform="android",
@@ -287,7 +314,11 @@ def test_native_version_codes_must_fit_the_client_wire_integer() -> None:
             Settings(**{field: 2_147_483_648})
 
 
-def _compatibility_app(*, require_headers: bool = False) -> FastAPI:
+def _compatibility_app(
+    *,
+    require_headers: bool = False,
+    ios_update_url: str | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.add_middleware(
         ClientCompatibilityMiddleware,
@@ -297,7 +328,7 @@ def _compatibility_app(*, require_headers: bool = False) -> FastAPI:
         android_update_url="https://example.test/erp.apk",
         ios_minimum=2,
         ios_latest=2,
-        ios_update_url=None,
+        ios_update_url=ios_update_url,
         require_native_headers=require_headers,
         message=None,
         android_latest_version_name="3.1.0",
@@ -349,6 +380,46 @@ async def test_declared_native_build_is_enforced_and_supported_build_is_annotate
     assert contract.status_code == 200
     assert contract.headers["Cache-Control"] == "no-store"
     assert contract.headers["X-Client-Compatibility-Policy-Revision"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_non_direct_android_build_never_receives_direct_apk_recovery_metadata() -> None:
+    transport = ASGITransport(app=_compatibility_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/private",
+            headers={
+                "X-Client-Platform": "android",
+                "X-Client-Version-Code": "4",
+                "X-Client-Distribution-Channel": "play",
+            },
+        )
+
+    assert response.status_code == 426
+    details = response.json()["error"]["details"]
+    assert details["update_url"] is None
+    assert "apk_sha256" not in details
+    assert "apk_size_bytes" not in details
+    assert "apk_signing_cert_sha256" not in details
+
+
+@pytest.mark.asyncio
+async def test_ios_required_update_preserves_its_configured_store_url() -> None:
+    store_url = "https://apps.apple.com/app/d-company-erp/id123456789"
+    transport = ASGITransport(app=_compatibility_app(ios_update_url=store_url))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/private",
+            headers={
+                "X-Client-Platform": "ios",
+                "X-Client-Version-Code": "1",
+            },
+        )
+
+    assert response.status_code == 426
+    details = response.json()["error"]["details"]
+    assert details["update_url"] == store_url
+    assert "apk_sha256" not in details
 
 
 @pytest.mark.asyncio

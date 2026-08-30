@@ -18,13 +18,18 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
 from starlette.websockets import WebSocketState
 
+from app.core.db import AsyncSessionLocal
 from app.core.logging import get_logger
 from app.core.security import decode_token
+from app.models import User
+from app.services.auth.refresh_sessions import access_family_is_active
 from app.services.realtime import manager
 
 log = get_logger(__name__)
@@ -40,12 +45,15 @@ _AUTH_TIMEOUT_SECONDS = 10
 # end-to-end (browser <-> Caddy <-> backend), and so a truly dead peer is
 # noticed and cleaned up instead of leaking a phantom registry entry.
 _PING_INTERVAL_SECONDS = 20
+_SERVER_AUTH_RECHECK_SECONDS = 20
 
 
 @dataclass(frozen=True)
 class _AuthenticatedSocket:
-    company_id: str
-    user_id: str
+    company_id: UUID
+    user_id: UUID
+    auth_version: int
+    claims: dict[str, Any]
     expires_at_epoch_seconds: float
 
 
@@ -66,22 +74,76 @@ async def _authenticate(websocket: WebSocket) -> _AuthenticatedSocket | None:
         return None
     if claims.get("type") != "access":
         return None
-    company_id = claims.get("company_id")
-    user_id = claims.get("sub")
     expires_at = claims.get("exp")
     if (
-        not company_id
-        or not user_id
-        or isinstance(expires_at, bool)
+        isinstance(expires_at, bool)
         or not isinstance(expires_at, (int, float))
         or not math.isfinite(float(expires_at))
     ):
         return None
+    try:
+        company_id = UUID(str(claims["company_id"]))
+        user_id = UUID(str(claims["sub"]))
+        auth_version = int(claims.get("auth_version", 0))
+    except (KeyError, TypeError, ValueError):
+        return None
     return _AuthenticatedSocket(
-        company_id=str(company_id),
-        user_id=str(user_id),
+        company_id=company_id,
+        user_id=user_id,
+        auth_version=auth_version,
+        claims=claims,
         expires_at_epoch_seconds=float(expires_at),
     )
+
+
+async def _server_session_is_active(auth: _AuthenticatedSocket) -> bool:
+    """Revalidate mutable account and session-family state for realtime auth."""
+
+    async with AsyncSessionLocal() as session:
+        user = (
+            await session.execute(
+                select(User).where(
+                    User.id == auth.user_id,
+                    User.company_id == auth.company_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            user is None
+            or user.deleted_at is not None
+            or user.status != "active"
+            or user.auth_version != auth.auth_version
+        ):
+            return False
+        return await access_family_is_active(session, user=user, claims=auth.claims)
+
+
+async def _checked_server_session_is_active(
+    websocket: WebSocket,
+    auth: _AuthenticatedSocket,
+) -> bool | None:
+    """Fail closed with an explicit retryable close when auth storage is down.
+
+    Database unavailability must never accidentally authenticate a socket, but
+    an accepted connection also must not be abandoned with an opaque ASGI
+    failure. ``None`` means the check could not be completed and the socket has
+    already been closed with the standard temporary-unavailability code.
+    """
+
+    try:
+        return await _server_session_is_active(auth)
+    except Exception:  # noqa: BLE001 - every auth-state failure must fail closed
+        log.exception(
+            "realtime.session_validation_unavailable",
+            company_id=str(auth.company_id),
+            user_id=str(auth.user_id),
+        )
+        with contextlib.suppress(Exception):
+            await websocket.close(
+                code=1013,
+                reason="authentication service temporarily unavailable",
+            )
+        return None
 
 
 @router.websocket("")
@@ -95,16 +157,31 @@ async def realtime_socket(websocket: WebSocket) -> None:
     if auth.expires_at_epoch_seconds <= time.time():
         await websocket.close(code=4401, reason="access token expired")
         return
+    session_active = await _checked_server_session_is_active(websocket, auth)
+    if session_active is None:
+        return
+    if not session_active:
+        await websocket.close(code=4401, reason="session expired")
+        return
     company_id = auth.company_id
 
-    manager.connect(UUID(company_id), websocket)
+    manager.connect(company_id, websocket)
     try:
         await websocket.send_json({"type": "connected"})
+        last_server_auth_check = time.monotonic()
         while True:
             seconds_until_expiry = auth.expires_at_epoch_seconds - time.time()
             if seconds_until_expiry <= 0:
                 await websocket.close(code=4401, reason="access token expired")
                 return
+            if time.monotonic() - last_server_auth_check >= _SERVER_AUTH_RECHECK_SECONDS:
+                session_active = await _checked_server_session_is_active(websocket, auth)
+                if session_active is None:
+                    return
+                if not session_active:
+                    await websocket.close(code=4401, reason="session expired")
+                    return
+                last_server_auth_check = time.monotonic()
             try:
                 await asyncio.wait_for(
                     websocket.receive_text(),
@@ -122,8 +199,8 @@ async def realtime_socket(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     except Exception:
-        log.exception("realtime.socket_error", company_id=company_id)
+        log.exception("realtime.socket_error", company_id=str(company_id))
     finally:
-        manager.disconnect(UUID(company_id), websocket)
+        manager.disconnect(company_id, websocket)
         with contextlib.suppress(Exception):
             await websocket.close()

@@ -22,9 +22,15 @@ from starlette.testclient import TestClient
 
 from app.core.config import get_settings
 from app.core.db import _async_url, async_engine
-from app.core.security import hash_password, issue_access_token
+from app.core.security import (
+    decode_token,
+    hash_password,
+    issue_access_token,
+    issue_refresh_token,
+)
 from app.main import create_app
 from app.models import Branch, Company, Role, Terminal, User, UserRole
+from app.services.auth.refresh_sessions import register_refresh_session
 
 
 async def _seed_owner() -> dict:
@@ -74,7 +80,28 @@ async def _seed_owner() -> dict:
             await session.commit()
             # Migration 0047 bumps auth_version for every role mutation.
             await session.refresh(owner)
-            return {"company": company, "branch": branch, "terminal": terminal, "owner": owner}
+            family_id = uuid4()
+            refresh = issue_refresh_token(
+                user_id=owner.id,
+                jti=str(uuid4()),
+                auth_version=owner.auth_version,
+                family_id=family_id,
+            )
+            register_refresh_session(
+                session,
+                user=owner,
+                token=refresh,
+                claims=decode_token(refresh),
+                family_id=family_id,
+            )
+            await session.commit()
+            return {
+                "company": company,
+                "branch": branch,
+                "terminal": terminal,
+                "owner": owner,
+                "family_id": family_id,
+            }
     finally:
         await engine.dispose()
 
@@ -86,6 +113,7 @@ def _token_for(seed: dict) -> str:
         roles=["owner"],
         branch_id=seed["branch"].id,
         auth_version=seed["owner"].auth_version,
+        extra={"session_family_id": str(seed["family_id"])},
     )
 
 

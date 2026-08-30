@@ -313,7 +313,7 @@ export function SystemHealthOverview({
             <EmptyPanel
               icon={<Smartphone size={23} aria-hidden="true" />}
               title="No tablet health received yet"
-              detail="A signed Code 15 tablet reports here after an authenticated sign-in. No device state is being inferred."
+              detail="A signed direct-release tablet reports here after an authenticated sign-in. No device state is being inferred."
             />
           ) : (
             <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -66,6 +66,7 @@ class ClientCompatibilityDTO(BaseModel):
 # ---------------------------------------------------------------- endpoints
 @router.get("/client-compatibility", response_model=ClientCompatibilityDTO)
 async def client_compatibility(
+    request: Request,
     response: Response,
     session: SessionDep,
     platform: Literal["android", "ios"],
@@ -84,14 +85,23 @@ async def client_compatibility(
     )
     if platform == "android":
         minimum = settings.android_min_supported_version_code
-        active_release = (
-            await session.execute(
-                select(AndroidRelease).where(
-                    AndroidRelease.channel == "direct",
-                    AndroidRelease.status == "active",
+        # Missing means the existing direct-APK client/monitor contract. Play
+        # and managed builds must never be handed our self-hosted APK, even if
+        # they happen to share the same version code.
+        distribution_channel = (
+            request.headers.get("X-Client-Distribution-Channel", "direct").strip().lower()
+            or "direct"
+        )
+        active_release = None
+        if distribution_channel == "direct":
+            active_release = (
+                await session.execute(
+                    select(AndroidRelease).where(
+                        AndroidRelease.channel == "direct",
+                        AndroidRelease.status == "active",
+                    )
                 )
-            )
-        ).scalar_one_or_none()
+            ).scalar_one_or_none()
         if active_release is not None and active_release.version_code >= minimum:
             latest = active_release.version_code
             update_url = active_release.update_url
@@ -100,7 +110,7 @@ async def client_compatibility(
             apk_sha256 = active_release.apk_sha256
             apk_size_bytes = active_release.apk_size_bytes
             apk_signing_cert_sha256 = active_release.apk_signing_cert_sha256
-        elif version_code < minimum:
+        elif version_code < minimum and distribution_channel == "direct":
             # Required-update recovery remains deploy-time policy so an owner
             # cannot accidentally strand an already-blocked client by
             # withdrawing the optional offer.

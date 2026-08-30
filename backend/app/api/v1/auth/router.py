@@ -40,6 +40,13 @@ from app.services.auth.otp import (
     normalize_account_email,
 )
 from app.services.auth.rate_limit import enforce_login_rate_limit
+from app.services.auth.refresh_sessions import (
+    RefreshTokenReuseDetectedError,
+    consume_refresh_session,
+    register_refresh_session,
+    revoke_access_session,
+    revoke_refresh_credential,
+)
 from app.services.realtime import manager as realtime_manager
 
 router = APIRouter()
@@ -630,18 +637,31 @@ async def login(
 
     protected_access = has_full_access(roles)
     audit_access = has_protected_owner_access(roles)
+    family_id = uuid4()
     access = issue_access_token(
         user_id=user.id,
         company_id=user.company_id,
         roles=public_roles(roles),
         branch_id=branch_id,
         auth_version=user.auth_version,
-        extra={"protected_access": protected_access, "audit_access": audit_access},
+        extra={
+            "protected_access": protected_access,
+            "audit_access": audit_access,
+            "session_family_id": str(family_id),
+        },
     )
     refresh = issue_refresh_token(
         user_id=user.id,
         jti=str(uuid4()),
         auth_version=user.auth_version,
+        family_id=family_id,
+    )
+    register_refresh_session(
+        session,
+        user=user,
+        token=refresh,
+        claims=decode_token(refresh),
+        family_id=family_id,
     )
 
     cookie_session = _uses_cookie_session(request)
@@ -706,15 +726,19 @@ async def refresh(
     if claims.get("type") != "refresh":
         raise AuthError("not a refresh token")
     try:
-        user_id = UUID(claims["sub"])
-        auth_version = int(claims.get("auth_version", 0))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise AuthError("malformed token claims") from exc
-    user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user or user.deleted_at or user.status != "active":
-        raise AuthError("user not found")
-    if auth_version != user.auth_version:
-        raise AuthError("session expired")
+        consumed = await consume_refresh_session(
+            session,
+            token=supplied_refresh,
+            claims=claims,
+        )
+    except RefreshTokenReuseDetectedError as exc:
+        # Reuse detection is a security write, not a failed business mutation.
+        # Persist family revocation before returning 401; the request dependency
+        # would otherwise roll it back together with the raised AuthError.
+        await session.commit()
+        raise AuthError("refresh token reuse detected; sign in again") from exc
+    user = consumed.user
+    family_id = consumed.family_id
     roles, branch_id = await _roles_and_branch(session, user)
     protected_access = has_full_access(roles)
     audit_access = has_protected_owner_access(roles)
@@ -724,12 +748,24 @@ async def refresh(
         roles=public_roles(roles),
         branch_id=branch_id,
         auth_version=user.auth_version,
-        extra={"protected_access": protected_access, "audit_access": audit_access},
+        extra={
+            "protected_access": protected_access,
+            "audit_access": audit_access,
+            "session_family_id": str(family_id),
+        },
     )
     new_refresh = issue_refresh_token(
         user_id=user.id,
         jti=str(uuid4()),
         auth_version=user.auth_version,
+        family_id=family_id,
+    )
+    register_refresh_session(
+        session,
+        user=user,
+        token=new_refresh,
+        claims=decode_token(new_refresh),
+        family_id=family_id,
     )
     cookie_session = _uses_cookie_session(request) or _REFRESH_COOKIE in request.cookies
     if cookie_session:
@@ -742,17 +778,55 @@ async def refresh(
 
 
 @router.post("/logout", response_model=AccountActionResponse)
-async def logout(request: Request, response: Response) -> AccountActionResponse:
-    """Forget the browser refresh cookie.
-
-    Refresh tokens are otherwise stateless JWTs, so account-wide revocation is
-    still performed by incrementing the user's auth_version. This endpoint is
-    the browser's local sign-out boundary and deliberately returns success even
-    when no cookie exists.
-    """
-    if request.cookies.get(_REFRESH_COOKIE) and not _uses_cookie_session(request):
+async def logout(
+    request: Request,
+    response: Response,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+) -> AccountActionResponse:
+    """Revoke every refresh family identified by presented credentials."""
+    cookie_refresh = request.cookies.get(_REFRESH_COOKIE)
+    if cookie_refresh and not _uses_cookie_session(request):
         raise AuthError("cookie session header required")
+
+    changed_companies: set[UUID] = set()
+    if cookie_refresh:
+        try:
+            cookie_claims = decode_token(cookie_refresh)
+            if cookie_claims.get("type") == "refresh":
+                company_id = await revoke_refresh_credential(
+                    session,
+                    token=cookie_refresh,
+                    claims=cookie_claims,
+                )
+                if company_id is not None:
+                    changed_companies.add(company_id)
+        except (AuthError, ValueError):
+            # Logout is deliberately idempotent. An expired or malformed local
+            # cookie is still deleted even though it identifies no live family.
+            pass
+
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        try:
+            bearer_claims = decode_token(authorization.split(" ", 1)[1])
+            if bearer_claims.get("type") == "access":
+                company_id, _auth_version_changed = await revoke_access_session(
+                    session,
+                    claims=bearer_claims,
+                )
+                if company_id is not None:
+                    changed_companies.add(company_id)
+        except (AuthError, ValueError):
+            pass
+
     _clear_refresh_cookie(response)
+    for company_id in changed_companies:
+        background_tasks.add_task(
+            realtime_manager.broadcast,
+            company_id,
+            "access_control",
+        )
     return AccountActionResponse(message="Signed out.")
 
 

@@ -3,6 +3,7 @@
 from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
 from app.models.auth_challenge import AuthOtpChallenge
+from app.models.auth_refresh_session import AuthRefreshSession
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
 from app.models.bug_report import (
     BugReport,
@@ -119,6 +120,7 @@ __all__ = [
     "Attendance",
     "AuditLog",
     "AuthOtpChallenge",
+    "AuthRefreshSession",
     "Base",
     "Batch",
     "Branch",

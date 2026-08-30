@@ -389,6 +389,10 @@ async def test_summary_and_system_health_are_protected_and_sanitized(
     assert health_body["devices"]["total"] == 2
     assert health_body["devices"]["stale"] == 1
     assert health_body["devices"]["with_pending_sync"] == 2
+    # Stale historical installs stay visible, but do not keep the actionable
+    # outdated count permanently red after a reinstall. A reconnect makes the
+    # old build recent and therefore actionable again.
+    assert health_body["devices"]["outdated_installations"] == 0
     # Pending work and old heartbeat timestamps do not imply a stall. This is
     # one only because the client explicitly uploaded a recent sync_stall.
     assert health_body["devices"]["sync_stalled"] == 1

@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
-from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 from app.core.errors import RateLimitError, ServiceUnavailableError
 from app.core.logging import get_logger
+from app.core.redis_clients import close_request_path_redis_client, request_path_redis_client
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -38,7 +38,7 @@ async def enforce_client_heartbeat_rate_limit(*, company_id: UUID, user_id: UUID
     """Limit authenticated writes by server-derived principal, not client UUID."""
 
     settings = get_settings()
-    client = Redis.from_url(str(settings.redis_url), decode_responses=True)
+    client = request_path_redis_client(settings.redis_url)
     try:
         result = await client.eval(
             _INCREMENT_WINDOW,
@@ -53,7 +53,7 @@ async def enforce_client_heartbeat_rate_limit(*, company_id: UUID, user_id: UUID
             "Device status protection is temporarily unavailable; try again shortly."
         ) from exc
     finally:
-        await client.aclose()
+        await close_request_path_redis_client(client)
 
     if count > settings.client_heartbeat_user_limit_per_minute:
         retry_after = max(1, ttl if ttl > 0 else _WINDOW_SECONDS)

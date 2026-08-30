@@ -298,7 +298,9 @@ async def test_authenticated_reports_align_order_stock_and_gaming_to_token_branc
                 paused_minutes=0,
                 rate_per_hour_minor=station_a.rate_per_hour_minor,
                 billing_mode="hourly",
-                status="active",
+                # Paused sessions still occupy a station and remain open for
+                # operational reporting until they are ended or cancelled.
+                status="paused",
                 extra_controllers=0,
             ),
             GamingSession(

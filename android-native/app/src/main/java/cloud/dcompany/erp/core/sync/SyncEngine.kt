@@ -128,6 +128,7 @@ import cloud.dcompany.erp.ui.screens.finance.ExpenseCreate
 import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
+import cloud.dcompany.erp.ui.screens.finance.financeCacheScopeForLease
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
@@ -5110,10 +5111,11 @@ class SyncEngine(
      */
     private suspend fun pullFinanceSnapshots(): List<String> {
         val lease = cacheIsolation.currentLease() ?: return emptyList()
-        val cacheScope = FinanceCacheScope(
-            companyId = lease.scope.companyId,
-            branchId = lease.scope.branchId,
-        )
+        val cacheScope = financeCacheScopeForLease(
+            profile = DCompanyApp.instance.shiftCache.profile.value,
+            leaseCompanyId = lease.scope.companyId,
+            leaseBranchId = lease.scope.branchId,
+        ) ?: throw IllegalStateException("Authenticated Finance scope changed during refresh")
         return coroutineScope {
             val plDeferred = async { financeApi.profitAndLoss() }
             val metricsDeferred = async { financeApi.metrics() }

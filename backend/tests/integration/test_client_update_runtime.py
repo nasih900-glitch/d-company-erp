@@ -70,7 +70,8 @@ def _headers(seed_owner, *, roles: list[str], audit_access: bool = False) -> dic
         "Authorization": f"Bearer {token}",
         "X-Terminal-Id": str(seed_owner["terminal"].id),
         "X-Client-Platform": "android",
-        "X-Client-Version-Code": "8",
+        "X-Client-Version-Code": "14",
+        "X-Client-Distribution-Channel": "direct",
     }
 
 
@@ -346,6 +347,28 @@ async def test_heartbeat_rate_limit_returns_retryable_429(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_heartbeat_rejects_identity_header_body_drift(
+    client,
+    seed_owner,
+) -> None:
+    headers = _headers(seed_owner, roles=["staff"])
+    headers["X-Client-Version-Code"] = "15"
+    headers["X-Client-Distribution-Channel"] = "play"
+    response = await client.post(
+        "/api/v1/client-installations/heartbeat",
+        headers=headers,
+        json=_heartbeat(uuid4()),
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "client_telemetry_identity_conflict"
+    assert response.json()["error"]["details"] == {
+        "mismatched_fields": ["distribution_channel", "version_code"]
+    }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_same_random_installation_uuid_is_isolated_per_company(
     client,
     session,
@@ -374,7 +397,8 @@ async def test_same_random_installation_uuid_is_isolated_per_company(
         "Authorization": f"Bearer {token}",
         "X-Terminal-Id": str(terminal.id),
         "X-Client-Platform": "android",
-        "X-Client-Version-Code": "8",
+        "X-Client-Version-Code": "14",
+        "X-Client-Distribution-Channel": "direct",
     }
     second = await client.post(
         "/api/v1/client-installations/heartbeat",
@@ -570,7 +594,8 @@ async def test_only_protected_owner_can_activate_and_public_offer_tracks_active_
         "Authorization": f"Bearer {other_token}",
         "X-Terminal-Id": str(other_terminal.id),
         "X-Client-Platform": "android",
-        "X-Client-Version-Code": "8",
+        "X-Client-Version-Code": "14",
+        "X-Client-Distribution-Channel": "direct",
     }
 
     monkeypatch.setattr(
@@ -622,6 +647,17 @@ async def test_only_protected_owner_can_activate_and_public_offer_tracks_active_
     assert contract.json()["policy_revision"] == 1
     assert contract.json()["latest_version_code"] == 15
     assert contract.json()["update_url"] == first_release.update_url
+
+    play_contract = await client.get(
+        "/api/v1/public/client-compatibility",
+        params={"platform": "android", "version_code": 14},
+        headers={"X-Client-Distribution-Channel": "play"},
+    )
+    assert play_contract.status_code == 200, play_contract.text
+    assert play_contract.json()["status"] == "supported"
+    assert play_contract.json()["update_url"] is None
+    assert play_contract.json()["apk_sha256"] is None
+    assert play_contract.json()["apk_signing_cert_sha256"] is None
 
     promoted = await client.post(
         f"/api/v1/client-updates/android/releases/{second_release.id}/activate",

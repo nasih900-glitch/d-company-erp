@@ -71,8 +71,10 @@ class GamingCentreNavigationUiTest {
     }
 
     @Test
-    fun connectionChangesNeverMoveOrResizeTheActiveWorkflow() {
+    fun connectionAndSavedWorkChangesNeverMoveHeaderControlsOrActiveWorkflow() {
         val problem = mutableStateOf(SyncAvailabilityProblem.NONE)
+        val outboxStatus = mutableStateOf(OutboxWorkStatus())
+        val syncing = mutableStateOf(false)
         compose.setContent {
             DCompanyTheme {
                 WorkspaceScaffold(
@@ -81,8 +83,8 @@ class GamingCentreNavigationUiTest {
                     employeeName = "Rafi",
                     locationLabel = "Gaming Centre",
                     connectivityProblem = problem.value,
-                    outboxWorkStatus = OutboxWorkStatus(),
-                    syncing = false,
+                    outboxWorkStatus = outboxStatus.value,
+                    syncing = syncing.value,
                     canChangeTill = false,
                     onOpenSupport = {},
                     onChangeTill = {},
@@ -93,8 +95,15 @@ class GamingCentreNavigationUiTest {
             }
         }
 
-        val original = compose.onNodeWithTag("active-workflow").fetchSemanticsNode().boundsInRoot
-        repeat(30) { index ->
+        val stableNodes = listOf(
+            compose.onNodeWithTag("active-workflow"),
+            compose.onNodeWithContentDescription("Connection status: Online. Open connection details"),
+            compose.onNodeWithTag("outbox-work-status-slot"),
+            compose.onNodeWithContentDescription("Help and support"),
+            compose.onNodeWithContentDescription("Account actions"),
+        )
+        val originalBounds = stableNodes.map { it.fetchSemanticsNode().boundsInRoot }
+        repeat(40) { index ->
             val next = when (index % 5) {
                 0 -> SyncAvailabilityProblem.VERIFYING
                 1 -> SyncAvailabilityProblem.NO_NETWORK
@@ -102,11 +111,35 @@ class GamingCentreNavigationUiTest {
                 3 -> SyncAvailabilityProblem.RECOVERING
                 else -> SyncAvailabilityProblem.NONE
             }
-            compose.runOnIdle { problem.value = next }
+            val nextStatus = when (index % 4) {
+                0 -> OutboxWorkStatus()
+                1 -> OutboxWorkStatus(retryableCount = 1)
+                2 -> OutboxWorkStatus(actionRequiredCount = 12)
+                else -> OutboxWorkStatus(savedDraftCount = 3)
+            }
+            compose.runOnIdle {
+                problem.value = next
+                outboxStatus.value = nextStatus
+                syncing.value = index % 3 == 0
+            }
             compose.waitForIdle()
-            val current = compose.onNodeWithTag("active-workflow").fetchSemanticsNode().boundsInRoot
-            assertEquals(original.top, current.top, 0.1f)
-            assertEquals(original.height, current.height, 0.1f)
+            val currentNodes = listOf(
+                compose.onNodeWithTag("active-workflow"),
+                compose.onNodeWithContentDescription(
+                    "Connection status: ${connectionLabel(next)}. Open connection details",
+                ),
+                compose.onNodeWithTag("outbox-work-status-slot"),
+                compose.onNodeWithContentDescription("Help and support"),
+                compose.onNodeWithContentDescription("Account actions"),
+            )
+            currentNodes.forEachIndexed { nodeIndex, node ->
+                val original = originalBounds[nodeIndex]
+                val current = node.fetchSemanticsNode().boundsInRoot
+                assertEquals(original.left, current.left, 0.1f)
+                assertEquals(original.top, current.top, 0.1f)
+                assertEquals(original.width, current.width, 0.1f)
+                assertEquals(original.height, current.height, 0.1f)
+            }
         }
 
         compose.runOnIdle { problem.value = SyncAvailabilityProblem.SERVER_UNREACHABLE }
@@ -124,5 +157,13 @@ class GamingCentreNavigationUiTest {
         compose.onNodeWithContentDescription(
             "Connection status: Server issue. Open connection details",
         ).assertExists()
+    }
+
+    private fun connectionLabel(problem: SyncAvailabilityProblem): String = when (problem) {
+        SyncAvailabilityProblem.NONE -> "Online"
+        SyncAvailabilityProblem.VERIFYING -> "Checking"
+        SyncAvailabilityProblem.NO_NETWORK -> "No internet"
+        SyncAvailabilityProblem.SERVER_UNREACHABLE -> "Server issue"
+        SyncAvailabilityProblem.RECOVERING -> "Restoring"
     }
 }

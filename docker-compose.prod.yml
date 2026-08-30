@@ -84,7 +84,7 @@ services:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.4}
+        APP_VERSION: ${APP_VERSION:-3.1.5}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -162,8 +162,8 @@ services:
       dockerfile: infra/docker/frontend.Dockerfile
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.4}
-        APP_VERSION: ${APP_VERSION:-3.1.4}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.5}
+        APP_VERSION: ${APP_VERSION:-3.1.5}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

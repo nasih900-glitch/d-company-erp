@@ -20,6 +20,26 @@ class AndroidInteractionContractTest {
     }
 
     @Test
+    fun `target 35 workspace stays clear of enforced system bars`() {
+        val activity = read(
+            projectRoot().resolve("src/main/java/cloud/dcompany/erp/MainActivity.kt"),
+        )
+
+        assertTrue(
+            "The window must use one edge-to-edge contract on every supported Android release",
+            "setDecorFitsSystemWindows(window, false)" in activity,
+        )
+        assertTrue(
+            "The full window, including system-bar regions, must retain the branded background",
+            "Modifier.fillMaxSize(),\n                    color = Brand.Background" in activity,
+        )
+        assertTrue(
+            "Only the interactive workspace should be inset clear of system bars",
+            "Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)" in activity,
+        )
+    }
+
+    @Test
     fun `staff password fields request a password keyboard`() {
         val source = read(
             projectRoot().resolve(

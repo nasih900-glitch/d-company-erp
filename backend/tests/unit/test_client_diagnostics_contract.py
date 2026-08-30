@@ -8,11 +8,33 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
+from app.api.v1.client_diagnostics import router as diagnostics_router
 from app.api.v1.client_diagnostics.router import ClientDiagnosticBatchWrite
 from app.core.errors import DiagnosticIngestRetryError, RateLimitError, ServiceUnavailableError
 from app.services.client_diagnostics import rate_limit
+
+
+@pytest.mark.asyncio
+async def test_system_health_redis_cleanup_failure_cannot_override_status(
+    monkeypatch,
+) -> None:
+    class _RedisClient:
+        async def ping(self) -> bool:
+            raise RedisTimeoutError("redis unavailable")
+
+        async def aclose(self) -> None:
+            raise RuntimeError("pool cleanup failed")
+
+    class _RedisFactory:
+        @staticmethod
+        def from_url(*_args, **_kwargs):
+            return _RedisClient()
+
+    monkeypatch.setattr(diagnostics_router, "Redis", _RedisFactory)
+
+    assert await diagnostics_router._redis_dependency_status() == "unavailable"
 
 
 def _payload() -> dict[str, object]:
@@ -123,7 +145,7 @@ async def test_rate_limit_counts_events_and_hashes_authenticated_principal(monke
             client_diagnostics_user_event_limit_per_minute=30,
         ),
     )
-    monkeypatch.setattr(rate_limit.Redis, "from_url", lambda *_args, **_kwargs: fake)
+    monkeypatch.setattr(rate_limit, "request_path_redis_client", lambda *_args: fake)
 
     await rate_limit.enforce_client_diagnostic_rate_limit(
         company_id=company_id,
@@ -148,7 +170,7 @@ async def test_rate_limit_counts_events_and_hashes_authenticated_principal(monke
 
 @pytest.mark.asyncio
 async def test_rate_limit_fails_closed_without_losing_local_retry_guidance(monkeypatch) -> None:
-    fake = _FakeRedis(error=RedisConnectionError("unavailable"))
+    fake = _FakeRedis(error=RedisTimeoutError("unavailable"))
     monkeypatch.setattr(
         rate_limit,
         "get_settings",
@@ -157,12 +179,13 @@ async def test_rate_limit_fails_closed_without_losing_local_retry_guidance(monke
             client_diagnostics_user_event_limit_per_minute=120,
         ),
     )
-    monkeypatch.setattr(rate_limit.Redis, "from_url", lambda *_args, **_kwargs: fake)
+    monkeypatch.setattr(rate_limit, "request_path_redis_client", lambda *_args: fake)
 
-    with pytest.raises(ServiceUnavailableError, match="remain on this device"):
+    with pytest.raises(ServiceUnavailableError, match="remain on this device") as captured:
         await rate_limit.enforce_client_diagnostic_rate_limit(
             company_id=uuid4(),
             user_id=uuid4(),
             event_count=1,
         )
+    assert captured.value.status_code == 503
     assert fake.closed is True

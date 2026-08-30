@@ -203,20 +203,18 @@ internal fun gamingDialogBodyMaxHeight(screenHeightDp: Int) =
     (screenHeightDp.dp * 0.55f).coerceAtMost(440.dp)
 
 /**
- * The API-35 landscape IME can cover an AlertDialog footer even when dialog
- * window insets are enabled. In the one state that opens a keyboard, move the
- * actions into a deliberately short body instead of depending on OEM inset
- * dispatch. Preset reasons keep the standard dialog layout.
+ * Android dialog/IME inset dispatch varies by OEM and can cover or displace a
+ * footer even on a tall tablet. The one state that opens a keyboard therefore
+ * always moves its recovery and confirmation actions into a bounded body.
+ * Preset reasons keep the standard dialog layout.
  */
-internal fun useCompactVoidCustomLayout(
-    screenHeightDp: Int,
-    selectedReasonId: String?,
-) = screenHeightDp <= 640 && selectedReasonId == VOID_REASON_OTHER_ID
+internal fun useCompactVoidCustomLayout(selectedReasonId: String?) =
+    selectedReasonId == VOID_REASON_OTHER_ID
 
 internal fun voidDialogBodyMaxHeight(
     screenHeightDp: Int,
     selectedReasonId: String?,
-) = if (useCompactVoidCustomLayout(screenHeightDp, selectedReasonId)) {
+) = if (useCompactVoidCustomLayout(selectedReasonId)) {
     VOID_REASON_COMPACT_EDITOR_HEIGHT.coerceAtMost(gamingDialogBodyMaxHeight(screenHeightDp))
 } else {
     gamingDialogBodyMaxHeight(screenHeightDp)
@@ -3205,7 +3203,7 @@ internal fun CancelUnbilledSessionDialog(
     var selectedReasonId by rememberSaveable(stationName) { mutableStateOf<String?>(null) }
     var customReason by rememberSaveable(stationName) { mutableStateOf("") }
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
-    val compactCustomLayout = useCompactVoidCustomLayout(screenHeightDp, selectedReasonId)
+    val compactCustomLayout = useCompactVoidCustomLayout(selectedReasonId)
     val contentMaxHeight = voidDialogBodyMaxHeight(screenHeightDp, selectedReasonId)
     val normalized = resolvedVoidReason(selectedReasonId, customReason)
     val hasBillableAmount = amountMinor > 0L

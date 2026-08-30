@@ -65,6 +65,18 @@ async def test_web_cookie_session_is_httponly_rotated_and_explicitly_logged_out(
     assert logged_out.json()["message"] == "Signed out."
     assert client.cookies.get(COOKIE_NAME) is None
 
+    revoked_access = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+    )
+    assert revoked_access.status_code == 401
+
+    revoked_cookie = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": rotated_refresh},
+    )
+    assert revoked_cookie.status_code == 401
+
     no_cookie = await client.post(
         "/api/v1/auth/refresh",
         json={},

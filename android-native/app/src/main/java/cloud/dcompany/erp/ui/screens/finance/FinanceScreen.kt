@@ -117,11 +117,16 @@ private fun FinanceContent(
 
     Column(Modifier.fillMaxSize().background(Brand.Background)) {
         Header(state, onRefresh = vm::load)
-        when {
-            // Nothing to show yet and it failed: this is the whole screen.
-            !state.loaded && state.error != null -> ErrorBlock(state.error, vm::load)
+        when (state.primaryContentState) {
+            FinancePrimaryContentState.ERROR -> ErrorBlock(
+                state.error ?: financeLoadFailureMessage(
+                    hasSavedFigures = false,
+                    online = state.online,
+                ),
+                vm::load,
+            )
 
-            !state.loaded -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            FinancePrimaryContentState.LOADING -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -131,7 +136,7 @@ private fun FinanceContent(
                 }
             }
 
-            else -> {
+            FinancePrimaryContentState.DATA -> {
                 PremiumTabBar(
                     options = tabs.mapIndexed { index, title ->
                         TabOption(index.toString(), title)
@@ -217,7 +222,11 @@ private fun Header(state: FinanceUiState, onRefresh: () -> Unit) {
             leading = {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        if (state.loaded) "Financial controls" else "Loading financial records",
+                        when {
+                            state.loaded -> "Financial controls"
+                            state.loading -> "Loading financial records"
+                            else -> "Financial records unavailable"
+                        },
                         color = Brand.Foreground,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,

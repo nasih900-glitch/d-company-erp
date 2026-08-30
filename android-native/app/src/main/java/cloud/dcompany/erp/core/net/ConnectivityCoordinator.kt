@@ -143,10 +143,21 @@ internal class ConnectivityStateMachine(
     private fun backendFailed(): ConnectivityTransition {
         if (state.phase == ConnectivityPhase.NO_NETWORK) return ConnectivityTransition(state)
 
+        // SERVER_UNREACHABLE is only entered after a failed /readyz proof. Once
+        // that outage is authoritative, ordinary request failures must not
+        // restart or multiply the coordinator's bounded retry loop.
+        if (state.phase == ConnectivityPhase.SERVER_UNREACHABLE) {
+            return ConnectivityTransition(state)
+        }
+
         if (state.probeInFlight) {
             return ConnectivityTransition(
                 state.copy(
-                    phase = ConnectivityPhase.SERVER_UNREACHABLE,
+                    // A normal API call can lose a response for many transient
+                    // reasons. Keep writes offline-safe immediately, but wait
+                    // for the isolated readiness probe before showing a red
+                    // server-outage state to the operator.
+                    phase = ConnectivityPhase.VERIFYING,
                     requiresRecoveryStability = true,
                 ),
             )
@@ -155,7 +166,7 @@ internal class ConnectivityStateMachine(
         val generation = state.generation + 1L
         return ConnectivityTransition(
             state.copy(
-                phase = ConnectivityPhase.SERVER_UNREACHABLE,
+                phase = ConnectivityPhase.VERIFYING,
                 generation = generation,
                 probeInFlight = true,
                 requiresRecoveryStability = true,
@@ -326,11 +337,18 @@ internal class ConnectivityObserver(
         manager?.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) = refresh()
-                override fun onLost(network: Network) = offerNetworkState(false)
+                // A default-network handover can report the old Wi-Fi as lost
+                // after cellular (or another Wi-Fi) is already active. Treating
+                // that callback as proof of "no network" produced a false
+                // offline/online flash even though the tablet never lost
+                // validated internet. Re-read Android's current default for
+                // every callback instead of publishing the departed network's
+                // state as the whole-device state.
+                override fun onLost(network: Network) = refresh()
                 override fun onCapabilitiesChanged(
                     network: Network,
                     caps: NetworkCapabilities,
-                ) = offerNetworkState(caps.isValidatedInternet())
+                ) = refresh()
             },
         )
     }

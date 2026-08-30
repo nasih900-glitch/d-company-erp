@@ -22,6 +22,7 @@ import cloud.dcompany.erp.core.auth.TerminalResolution
 import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.activateAndRememberTerminal
+import cloud.dcompany.erp.core.auth.bestEffortAuthenticatedLogout
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
 import cloud.dcompany.erp.core.errors.RecoveryRisk
 import cloud.dcompany.erp.core.errors.recoveryGuidance
@@ -1407,7 +1408,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             cancelOperationalAlarms()
             (getApplication() as DCompanyApp).notificationRoutes.clearPending()
             try {
-                withContext(Dispatchers.IO) { tokens.clear() }
+                bestEffortAuthenticatedLogout(
+                    timeoutMillis = REMOTE_LOGOUT_TIMEOUT_MILLIS,
+                    revokeRemoteSession = { ApiClient.api.logout() },
+                    clearLocalSession = {
+                        withContext(Dispatchers.IO) { tokens.clear() }
+                    },
+                )
             } catch (_: Exception) {
                 _state.value = AuthState.SignOutFailed(
                     "This tablet could not durably remove the secure session. Keep this screen open, " +
@@ -1627,6 +1634,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
+        const val REMOTE_LOGOUT_TIMEOUT_MILLIS = 1_000L
         const val RESTORE_SERVER_TIMEOUT_MILLIS = 8_000L
     }
 

@@ -2,6 +2,8 @@ package cloud.dcompany.erp.core.sync
 
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +20,7 @@ class SyncResourceAccessTest {
                     ErpPermission.StaffAttendanceWrite,
                 ),
             ),
+            WorkspaceFeatureProfiles.FullHospitality,
         )
 
         assertTrue(access.canPull("kitchen"))
@@ -38,6 +41,7 @@ class SyncResourceAccessTest {
                     ErpPermission.TablesRead,
                 ),
             ),
+            WorkspaceFeatureProfiles.FullHospitality,
         )
 
         assertTrue(access.canPull("kitchen"))
@@ -88,6 +92,74 @@ class SyncResourceAccessTest {
         assertFalse(access.canPull("shifts"))
         assertFalse(access.canPull("unknown"))
     }
+
+    @Test
+    fun `Gaming Centre owner skips hidden hospitality pulls but keeps operational dependencies`() {
+        val access = SyncResourceAccess.from(
+            profile(
+                roles = listOf("owner"),
+                permissions = allPullPermissions,
+            ),
+            WorkspaceFeatureProfiles.GamingCentre,
+        )
+
+        val retained = setOf(
+            "shifts", "gaming", "menu", "orders", "receipts", "customers",
+            "staff", "attendance", "inventory", "finance", "settings",
+        )
+        val hidden = setOf(
+            "tables", "kitchen", "events", "memberships", "reservations", "refunds",
+        )
+
+        assertEquals(retained, retained.filterTo(linkedSetOf(), access::canPull))
+        assertTrue(hidden.none(access::canPull))
+    }
+
+    @Test
+    fun `Full Hospitality retains hidden module pulls when permissions allow them`() {
+        val access = SyncResourceAccess.from(
+            profile(
+                roles = listOf("owner"),
+                permissions = allPullPermissions,
+            ),
+            WorkspaceFeatureProfiles.FullHospitality,
+        )
+
+        for (resource in listOf("tables", "kitchen", "events", "memberships", "reservations", "refunds")) {
+            assertTrue(resource, access.canPull(resource))
+        }
+    }
+
+    @Test
+    fun `enabled feature never bypasses its server permission`() {
+        val access = SyncResourceAccess.from(
+            profile(
+                roles = listOf("cashier"),
+                permissions = listOf(ErpPermission.PosRead),
+            ),
+            WorkspaceFeatureProfiles.FullHospitality,
+        )
+
+        assertTrue(access.canPull("orders"))
+        assertTrue(access.canPull("customers"))
+        for (forbidden in listOf("gaming", "tables", "kitchen", "finance", "refunds")) {
+            assertFalse(forbidden, access.canPull(forbidden))
+        }
+    }
+
+    private val allPullPermissions = listOf(
+        ErpPermission.PosRead,
+        ErpPermission.PosRefund,
+        ErpPermission.GamingRead,
+        ErpPermission.KitchenRead,
+        ErpPermission.TablesRead,
+        ErpPermission.MenuRead,
+        ErpPermission.StaffRead,
+        ErpPermission.StaffAttendanceWrite,
+        ErpPermission.InventoryRead,
+        ErpPermission.FinanceRead,
+        ErpPermission.SettingsManage,
+    )
 
     private fun profile(
         roles: List<String>,

@@ -25,14 +25,16 @@ class ConnectivityStateMachineTest {
     }
 
     @Test
-    fun `network and backend failures are visible immediately`() {
+    fun `transport failure verifies before showing an outage while network loss is immediate`() {
         val machine = onlineMachine(generation = 4L)
 
         val serverFailure = machine.reduce(ConnectivityEvent.BackendTransportFailure)
 
-        assertEquals(ConnectivityPhase.SERVER_UNREACHABLE, serverFailure.state.phase)
+        assertEquals(ConnectivityPhase.VERIFYING, serverFailure.state.phase)
         assertEquals(5L, serverFailure.state.generation)
         assertTrue(serverFailure.state.probeInFlight)
+        assertFalse(serverFailure.state.presentation.online)
+        assertEquals(BackendReachability.UNKNOWN, serverFailure.state.presentation.backendReachability)
         assertEquals(listOf(ConnectivityEffect.StartProbe(5L)), serverFailure.effects)
 
         val networkFailure = machine.reduce(
@@ -53,12 +55,60 @@ class ConnectivityStateMachineTest {
         )
 
         val failed = machine.reduce(ConnectivityEvent.BackendTransportFailure)
-        assertEquals(ConnectivityPhase.SERVER_UNREACHABLE, failed.state.phase)
+        assertEquals(ConnectivityPhase.VERIFYING, failed.state.phase)
         assertEquals(10L, failed.state.generation)
+        assertFalse(failed.state.presentation.online)
 
         val stale = machine.reduce(ConnectivityEvent.RecoverySettled(9L))
         assertEquals(failed.state, stale.state)
         assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
+    fun `transient transport blip never flashes server unreachable when readiness succeeds`() {
+        val machine = onlineMachine(generation = 7L)
+        val phases = mutableListOf<ConnectivityPhase>()
+
+        machine.reduce(ConnectivityEvent.BackendTransportFailure).also {
+            phases += it.state.phase
+            assertEquals(ConnectivityPhase.VERIFYING, it.state.phase)
+            assertFalse(it.state.presentation.online)
+        }
+        machine.reduce(ConnectivityEvent.BackendTransportFailure).also {
+            phases += it.state.phase
+            assertEquals(8L, it.state.generation)
+            assertTrue(it.state.probeInFlight)
+            assertTrue(it.effects.isEmpty())
+        }
+        machine.reduce(ConnectivityEvent.ProbeCompleted(8L, successful = true)).also {
+            phases += it.state.phase
+            assertEquals(ConnectivityPhase.RECOVERING, it.state.phase)
+        }
+        machine.reduce(ConnectivityEvent.RecoverySettled(8L)).also {
+            phases += it.state.phase
+            assertEquals(ConnectivityPhase.ONLINE, it.state.phase)
+        }
+
+        assertFalse(phases.contains(ConnectivityPhase.SERVER_UNREACHABLE))
+    }
+
+    @Test
+    fun `readiness failure is the authority that exposes server unreachable`() {
+        val machine = onlineMachine(generation = 11L)
+
+        val checking = machine.reduce(ConnectivityEvent.BackendTransportFailure)
+        assertEquals(ConnectivityPhase.VERIFYING, checking.state.phase)
+
+        val failedProof = machine.reduce(
+            ConnectivityEvent.ProbeCompleted(generation = 12L, successful = false),
+        )
+        assertEquals(ConnectivityPhase.SERVER_UNREACHABLE, failedProof.state.phase)
+        assertEquals(BackendReachability.UNREACHABLE, failedProof.state.presentation.backendReachability)
+        assertEquals(listOf(ConnectivityEffect.RetryLater(12L, 2_000L)), failedProof.effects)
+
+        val duplicateTransportFailure = machine.reduce(ConnectivityEvent.BackendTransportFailure)
+        assertEquals(failedProof.state, duplicateTransportFailure.state)
+        assertTrue(duplicateTransportFailure.effects.isEmpty())
     }
 
     @Test

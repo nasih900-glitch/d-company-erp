@@ -154,6 +154,7 @@ describe('Owner System Health presentation', () => {
     );
 
     expect(markup).toContain('No tablet health received yet');
+    expect(markup).toContain('A signed direct-release tablet reports here');
     expect(markup).toContain('No incidents received in this window');
     expect(markup).toContain('does not replace physical tablet testing');
   });
