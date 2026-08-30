@@ -67,4 +67,32 @@ class BackendReachabilityTest {
         tracker.recordApiFailure(ApiException("No response", status = null))
         assertEquals(BackendReachability.UNREACHABLE, tracker.state.value)
     }
+
+    @Test
+    fun `an explicitly cancelled call never publishes a server outage`() {
+        assertFalse(shouldPublishTransportFailure(callCancelled = true))
+        assertTrue(shouldPublishTransportFailure(callCancelled = false))
+    }
+
+    @Test
+    fun `a cancelled nested API failure publishes only when an HTTP response exists`() {
+        assertFalse(
+            shouldPublishApiReachability(
+                ApiException("No response", status = null),
+                callCancelled = true,
+            ),
+        )
+        assertTrue(
+            shouldPublishApiReachability(
+                ApiException("No response", status = null),
+                callCancelled = false,
+            ),
+        )
+        assertTrue(
+            shouldPublishApiReachability(
+                ApiException("Forbidden", status = 403),
+                callCancelled = true,
+            ),
+        )
+    }
 }

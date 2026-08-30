@@ -9,6 +9,7 @@ from app.api.v1.admin.router import router as admin_router
 from app.api.v1.analytics.router import router as analytics_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.bug_reports.router import router as bug_reports_router
+from app.api.v1.client_diagnostics.router import router as client_diagnostics_router
 from app.api.v1.client_installations.router import router as client_installations_router
 from app.api.v1.client_updates.router import router as client_updates_router
 from app.api.v1.customers.router import router as customers_router
@@ -42,6 +43,11 @@ api_router.include_router(
     tags=["client-updates"],
 )
 api_router.include_router(bug_reports_router, prefix="/bug-reports", tags=["bug-reports"])
+api_router.include_router(
+    client_diagnostics_router,
+    prefix="/client-diagnostics",
+    tags=["client-diagnostics"],
+)
 api_router.include_router(pos_router, prefix="/pos", tags=["pos"])
 api_router.include_router(tables_router, prefix="/tables", tags=["tables"])
 api_router.include_router(menu_router, prefix="/menu", tags=["menu"])

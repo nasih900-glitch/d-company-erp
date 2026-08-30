@@ -48,6 +48,25 @@ class ClientTelemetryCapacityError(ConflictError):
     code = "client_telemetry_capacity"
 
 
+class DiagnosticIdempotencyConflictError(ConflictError):
+    """A diagnostic event UUID was reused with a different immutable payload."""
+
+    code = "diagnostic_idempotency_conflict"
+
+
+class DiagnosticIngestRetryError(ConflictError):
+    """Diagnostic admission raced with another writer and is safe to retry."""
+
+    code = "diagnostic_ingest_retry"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            details={"retry_after_seconds": 1},
+            headers={"Retry-After": "1"},
+        )
+
+
 class CheckoutClaimRequiredError(ConflictError):
     code = "checkout_claim_required"
 

@@ -36,6 +36,9 @@ import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CardMembership
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Celebration
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inventory2
@@ -50,6 +53,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TableRestaurant
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -77,10 +81,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,9 +97,10 @@ import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.R
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
-import cloud.dcompany.erp.ui.components.SyncAvailabilityBanner
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.components.syncAvailabilityCopy
+import cloud.dcompany.erp.ui.components.syncAvailabilityDialogTitle
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -198,7 +206,6 @@ fun WorkspaceScaffold(
                     onChangeTill = onChangeTill,
                     onSignOut = onSignOut,
                 )
-                SyncAvailabilityBanner(connectivityProblem)
                 Box(Modifier.fillMaxSize()) {
                     // A full-screen crossfade renders both destination trees into
                     // overlapping layers. On the target 2560 x 1600 tablet that
@@ -519,7 +526,11 @@ private fun WorkspaceHeader(
             )
         }
 
-        ConnectivityStatus(connectivityProblem, showDetail = !compact)
+        ConnectivityStatus(
+            problem = connectivityProblem,
+            expanded = !compact,
+            onOpenSupport = onOpenSupport,
+        )
         OutboxWorkStatusPill(
             status = outboxWorkStatus,
             syncing = syncing,
@@ -695,23 +706,111 @@ private fun HeaderIconAction(
 }
 
 @Composable
-private fun ConnectivityStatus(problem: SyncAvailabilityProblem, showDetail: Boolean) {
-    val (label, color) = when (problem) {
-        SyncAvailabilityProblem.NONE -> "Online" to Brand.Good
-        SyncAvailabilityProblem.NO_NETWORK -> "Offline" to Brand.Warning
-        SyncAvailabilityProblem.SERVER_UNREACHABLE -> "Server issue" to Brand.Danger
+private fun ConnectivityStatus(
+    problem: SyncAvailabilityProblem,
+    expanded: Boolean,
+    onOpenSupport: () -> Unit,
+) {
+    var detailsOpen by remember { mutableStateOf(false) }
+    val (label, color, icon) = when (problem) {
+        SyncAvailabilityProblem.NONE -> Triple("Online", Brand.Good, Icons.Filled.CloudDone)
+        SyncAvailabilityProblem.VERIFYING -> Triple("Checking", Brand.Information, Icons.Filled.Sync)
+        SyncAvailabilityProblem.NO_NETWORK -> Triple("No internet", Brand.Warning, Icons.Filled.CloudOff)
+        SyncAvailabilityProblem.SERVER_UNREACHABLE -> Triple("Server issue", Brand.Danger, Icons.Filled.Error)
+        SyncAvailabilityProblem.RECOVERING -> Triple("Restoring", Brand.Information, Icons.Filled.Sync)
     }
-    Row(
-        Modifier.height(40.dp).clip(Radius.shapePill).background(Brand.Surface)
-            .semantics { contentDescription = "Connection status: $label" }
-            .padding(horizontal = if (showDetail) Spacing.md else Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+    val background = if (problem == SyncAvailabilityProblem.NONE) {
+        Brand.Surface
+    } else {
+        color.copy(alpha = 0.12f)
+    }
+    val border = if (problem == SyncAvailabilityProblem.NONE) {
+        Brand.BorderSubtle
+    } else {
+        color.copy(alpha = 0.42f)
+    }
+
+    Surface(
+        color = background,
+        shape = Radius.shapePill,
+        border = BorderStroke(1.dp, border),
+        modifier = Modifier
+            // Width is fixed for each breakpoint. A status transition changes
+            // neither the header geometry nor the active workflow below it.
+            .width(if (expanded) 136.dp else 124.dp)
+            .height(48.dp)
+            .clickable { detailsOpen = true }
+            .semantics {
+                role = Role.Button
+                liveRegion = LiveRegionMode.Polite
+                stateDescription = label
+                contentDescription = "Connection status: $label. Open connection details"
+            },
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        if (showDetail) {
-            Text(label, color = Brand.Foreground, style = MaterialTheme.typography.labelMedium)
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(19.dp),
+            )
+            Text(
+                label,
+                color = if (problem == SyncAvailabilityProblem.NONE) Brand.ForegroundMuted else color,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (problem == SyncAvailabilityProblem.NONE) FontWeight.Normal else FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+    }
+
+    if (detailsOpen) {
+        val copy = syncAvailabilityCopy(problem)
+        val title = syncAvailabilityDialogTitle(problem)
+        val detail = copy?.detail
+            ?: "This tablet is connected to D Company ERP. Saved work can synchronise normally."
+        AlertDialog(
+            onDismissRequest = { detailsOpen = false },
+            containerColor = Brand.SurfaceOverlay,
+            shape = Radius.shapeLg,
+            icon = {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = color,
+                )
+            },
+            title = { Text(title, color = Brand.Foreground) },
+            text = {
+                Text(
+                    detail,
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                if (problem != SyncAvailabilityProblem.NONE) {
+                    TextButton(
+                        onClick = {
+                            detailsOpen = false
+                            onOpenSupport()
+                        },
+                    ) {
+                        Text("Report issue", color = Brand.Gold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { detailsOpen = false }) {
+                    Text("Close", color = Brand.ForegroundMuted)
+                }
+            },
+        )
     }
 }
 

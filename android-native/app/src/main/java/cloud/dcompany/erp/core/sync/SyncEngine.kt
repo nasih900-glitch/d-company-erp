@@ -1,10 +1,5 @@
 package cloud.dcompany.erp.core.sync
 
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.util.Log
 import androidx.room.withTransaction
 import cloud.dcompany.erp.DCompanyApp
@@ -117,8 +112,6 @@ import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.ModifierSelectionRequest
-import cloud.dcompany.erp.core.net.BackendReachability
-import cloud.dcompany.erp.core.net.backendIsOnline
 import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
@@ -228,143 +221,6 @@ private const val REFRESH_LOG_TAG = "DCompanySync"
 private class FinanceReferenceRefreshException(labels: List<String>) : Exception(
     "Finance totals refreshed, but ${labels.joinToString(" and ")} could not be refreshed",
 )
-
-/**
- * Watches effective ERP connectivity, not merely "Wi-Fi associated".
- *
- * Android validation proves a general internet route; the backend tracker
- * proves whether the ERP API itself answered. Both are required after a
- * transport failure, which is what lets the UI distinguish cafe Wi-Fi loss
- * from a reachable network whose ERP endpoint is unavailable.
- */
-internal class ConnectivityObserver(
-    context: Context,
-    scope: CoroutineScope,
-    backendReachability: StateFlow<BackendReachability>,
-) {
-
-    private val manager = context.getSystemService(ConnectivityManager::class.java)
-    private val _networkValidated = MutableStateFlow(false)
-    val networkValidated: StateFlow<Boolean> = _networkValidated.asStateFlow()
-    private val _online = MutableStateFlow(false)
-    val online: StateFlow<Boolean> = _online.asStateFlow()
-
-    private var onRegained: (() -> Unit)? = null
-    private var onValidatedReconnect: (() -> Unit)? = null
-    @Volatile private var latestBackendReachability = BackendReachability.UNKNOWN
-
-    init {
-        scope.launch {
-            backendReachability.collect { backend ->
-                latestBackendReachability = backend
-                updateEffectiveOnline(
-                    backendIsOnline(
-                        networkValidated = _networkValidated.value,
-                        backendReachability = backend,
-                    ),
-                )
-            }
-        }
-    }
-
-    fun start(
-        onValidatedReconnect: () -> Unit = {},
-        onBackOnline: () -> Unit,
-    ) {
-        onRegained = onBackOnline
-        this.onValidatedReconnect = onValidatedReconnect
-        // The initial online snapshot starts normal sync/realtime work, but is
-        // not a reconnect. Compatibility has its dedicated startup request.
-        updateNetworkValidation(currentlyValidated(), notifyValidatedReconnect = false)
-        // registerDefaultNetworkCallback, NOT a capability-filtered request.
-        // The filtered form only reports networks that already match, so in the
-        // trial run toggling airplane mode never produced a callback: the
-        // banner stayed hidden and the queue never drained. The default
-        // callback reports every transition, and onCapabilitiesChanged is what
-        // actually fires when a link becomes validated.
-        manager?.registerDefaultNetworkCallback(
-            object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) = refresh()
-                // This is the *default* network callback. A loss is therefore
-                // authoritative even if activeNetwork still returns the old
-                // handle for a short system race; waiting on another lookup
-                // used to miss the false -> true edge and strand the outbox.
-                override fun onLost(network: Network) = updateNetworkValidation(false)
-                override fun onCapabilitiesChanged(
-                    network: Network,
-                    caps: NetworkCapabilities,
-                ) = updateNetworkValidation(caps.isValidatedInternet())
-            },
-        )
-    }
-
-    private fun refresh() {
-        updateNetworkValidation(currentlyValidated())
-    }
-
-    private fun updateNetworkValidation(
-        nowValidated: Boolean,
-        notifyValidatedReconnect: Boolean = true,
-    ) {
-        val networkWasUnavailable = !_networkValidated.value
-        _networkValidated.value = nowValidated
-        updateEffectiveOnline(
-            backendIsOnline(
-                networkValidated = nowValidated,
-                backendReachability = latestBackendReachability,
-            ),
-        )
-        if (
-            shouldNotifyValidatedReconnect(
-                wasValidated = !networkWasUnavailable,
-                nowValidated = nowValidated,
-                notificationsEnabled = notifyValidatedReconnect,
-            )
-        ) {
-            onValidatedReconnect?.invoke()
-        }
-        // If internet returned while the last API probe was unreachable, the
-        // effective state intentionally remains offline. Trigger one probe so
-        // a successful HTTP response can prove recovery and clear the banner.
-        if (shouldProbeBackendOnValidatedReconnect(
-                wasValidated = !networkWasUnavailable,
-                nowValidated = nowValidated,
-                backendReachability = latestBackendReachability,
-            )
-        ) {
-            onRegained?.invoke()
-        }
-    }
-
-    private fun updateEffectiveOnline(nowOnline: Boolean) {
-        val wasOffline = !_online.value
-        _online.value = nowOnline
-        if (nowOnline && wasOffline) onRegained?.invoke()
-    }
-
-    private fun currentlyValidated(): Boolean {
-        val active = manager?.activeNetwork ?: return false
-        val caps = manager.getNetworkCapabilities(active) ?: return false
-        return caps.isValidatedInternet()
-    }
-}
-
-private fun NetworkCapabilities.isValidatedInternet(): Boolean =
-    hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-        hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-
-internal fun shouldProbeBackendOnValidatedReconnect(
-    wasValidated: Boolean,
-    nowValidated: Boolean,
-    backendReachability: BackendReachability,
-): Boolean =
-    !wasValidated && nowValidated && backendReachability == BackendReachability.UNREACHABLE
-
-internal fun shouldNotifyValidatedReconnect(
-    wasValidated: Boolean,
-    nowValidated: Boolean,
-    notificationsEnabled: Boolean,
-): Boolean = notificationsEnabled && !wasValidated && nowValidated
 
 /**
  * Thread-safe state machine for conflating fire-and-forget sync requests.
@@ -834,6 +690,26 @@ internal fun gamingStopReplayMode(endAtMillis: Long?): GamingStopReplayMode =
 
 internal enum class GamingSessionPushPhase { STARTS, STOPS, SENDS }
 
+/**
+ * A normal return from a Gaming push is not always a completed write: Stop
+ * and Send deliberately defer while earlier add-on actions are unresolved.
+ * Progress telemetry must therefore inspect the durable row after the push
+ * instead of treating every return as proof of delivery.
+ */
+internal fun gamingSessionPushResolved(
+    phase: GamingSessionPushPhase,
+    rowStillExists: Boolean,
+    currentState: String?,
+    hasServerId: Boolean,
+): Boolean {
+    if (!rowStillExists) return true
+    return when (phase) {
+        GamingSessionPushPhase.STARTS -> hasServerId
+        GamingSessionPushPhase.STOPS -> currentState != GamingSessionState.STOP_PENDING
+        GamingSessionPushPhase.SENDS -> currentState != GamingSessionState.SEND_PENDING
+    }
+}
+
 internal fun gamingAddonFailureMessage(failure: Exception): String = when (failure) {
     is ApiException -> if (failure.mustPreserveOutbox) {
         "Gaming item confirmation is pending. The exact saved request will retry without duplicating the item."
@@ -972,6 +848,15 @@ class SyncEngine(
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
+
+    /**
+     * Process-local proof that at least one durable outbox row completed its
+     * server-authoritative push. Queue size alone is insufficient: during a
+     * busy shift one row can drain while another is captured, leaving the
+     * count unchanged even though Sync is healthy.
+     */
+    private val _deliveryProgressMarker = MutableStateFlow(0L)
+    val deliveryProgressMarker: StateFlow<Long> = _deliveryProgressMarker.asStateFlow()
 
     private var sessionAwareSyncing: Boolean
         get() = _syncing.value
@@ -2361,10 +2246,31 @@ class SyncEngine(
         rows: List<T>,
         markRejected: suspend (T, String) -> Unit,
         push: suspend (T) -> Unit,
+        madeProgress: suspend (T) -> Boolean = { true },
     ): Boolean {
         for (row in rows) {
             try {
                 push(row)
+                val resolved = try {
+                    madeProgress(row)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (verificationFailure: Exception) {
+                    // The business write already returned successfully. A
+                    // telemetry-only verification failure must not reclassify
+                    // or replay it as a rejected money action.
+                    Log.w(
+                        "SyncEngine",
+                        "Could not verify outbox progress marker",
+                        verificationFailure,
+                    )
+                    false
+                }
+                if (resolved) {
+                    _deliveryProgressMarker.update { marker ->
+                        if (marker == Long.MAX_VALUE) 1L else marker + 1L
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
@@ -2759,6 +2665,15 @@ class SyncEngine(
             },
             push = { row ->
                 if (pushGamingSessionOne(row, phase)) changedHeldQueue = true
+            },
+            madeProgress = { row ->
+                val current = dao.localSessionById(row.localId)
+                gamingSessionPushResolved(
+                    phase = phase,
+                    rowStillExists = current != null,
+                    currentState = current?.state,
+                    hasServerId = current?.serverId != null,
+                )
             },
         )
         return changedHeldQueue

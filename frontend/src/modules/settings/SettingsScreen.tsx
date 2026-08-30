@@ -13,6 +13,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   Building2,
   Crown,
+  HeartPulse,
   IndianRupee,
   Sheet,
   ShieldCheck,
@@ -31,8 +32,10 @@ import MembershipsTab from './tabs/MembershipsTab';
 import PricingTab from './tabs/PricingTab';
 import AccessControlTab from './tabs/AccessControlTab';
 import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
+import { hasAdminSystemAccess } from '@/lib/admin-access';
 
 const DevicesUpdatesTab = lazy(() => import('./tabs/DevicesUpdatesTab'));
+const SystemHealthTab = lazy(() => import('./tabs/SystemHealthTab'));
 
 type Tab =
   | 'account'
@@ -42,6 +45,7 @@ type Tab =
   | 'sheets'
   | 'memberships'
   | 'access'
+  | 'health'
   | 'devices';
 
 export default function SettingsScreen() {
@@ -50,6 +54,10 @@ export default function SettingsScreen() {
   // co_owner (protected_access=true, audit_access=false) must not see this
   // tab, so it keys off audit_access specifically, not protected_access.
   const hasAuditAccess = Boolean(demo || me?.audit_access);
+  // System Health is a protected operational view served by admin.system.
+  // Use the shared audit_access predicate exactly: general owner, settings,
+  // protected-owner and release-control grants must never imply this access.
+  const canViewSystemHealth = hasAdminSystemAccess(me);
   // Release control is a separate server-issued capability bound to the exact
   // configured company and user. Never infer it from audit, protected-owner,
   // demo, role, or settings permissions; an older response missing the field
@@ -70,6 +78,7 @@ export default function SettingsScreen() {
       tab === 'account'
       || (tab === 'memberships' && canManageMemberships)
       || (tab === 'access' && hasAuditAccess)
+      || (tab === 'health' && canViewSystemHealth)
       || (tab === 'devices' && canManageDeviceUpdates)
       || (
         (['company', 'branches', 'pricing', 'sheets'] as Tab[]).includes(tab)
@@ -77,7 +86,14 @@ export default function SettingsScreen() {
       )
     );
     if (!tabAllowed) setTab('account');
-  }, [tab, canManageDeviceUpdates, canManageMemberships, canManageSettings, hasAuditAccess]);
+  }, [
+    tab,
+    canManageDeviceUpdates,
+    canManageMemberships,
+    canManageSettings,
+    canViewSystemHealth,
+    hasAuditAccess,
+  ]);
 
   return (
     <div>
@@ -92,6 +108,11 @@ export default function SettingsScreen() {
         <TabBtn active={tab === 'account'}  onClick={() => setTab('account')}>
           <User size={14}/> Account
         </TabBtn>
+        {canViewSystemHealth && (
+          <TabBtn active={tab === 'health'} onClick={() => setTab('health')}>
+            <HeartPulse size={14}/> System Health
+          </TabBtn>
+        )}
         {canManageSettings && (
           <>
             <TabBtn active={tab === 'company'} onClick={() => setTab('company')}>
@@ -132,6 +153,11 @@ export default function SettingsScreen() {
       {tab === 'memberships' && canManageMemberships && <MembershipsTab/>}
       {tab === 'sheets' && canManageSettings && <SheetsTab/>}
       {tab === 'access' && hasAuditAccess && <AccessControlTab/>}
+      {tab === 'health' && canViewSystemHealth && (
+        <Suspense fallback={<SkeletonCard lines={8} />}>
+          <SystemHealthTab />
+        </Suspense>
+      )}
       {tab === 'devices' && canManageDeviceUpdates && (
         <Suspense fallback={<SkeletonCard lines={6} />}>
           <DevicesUpdatesTab />

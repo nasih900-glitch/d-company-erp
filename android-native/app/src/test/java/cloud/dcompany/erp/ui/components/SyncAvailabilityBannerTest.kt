@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.components
 
 import cloud.dcompany.erp.core.net.BackendReachability
+import cloud.dcompany.erp.core.net.ConnectivityPhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -31,9 +32,9 @@ class SyncAvailabilityBannerTest {
     }
 
     @Test
-    fun `unknown or reachable API stays clear while network is validated`() {
+    fun `unknown API is verifying while a proven response is clear`() {
         assertEquals(
-            SyncAvailabilityProblem.NONE,
+            SyncAvailabilityProblem.VERIFYING,
             syncAvailabilityProblem(true, BackendReachability.UNKNOWN),
         )
         assertEquals(
@@ -41,6 +42,38 @@ class SyncAvailabilityBannerTest {
             syncAvailabilityProblem(true, BackendReachability.REACHABLE),
         )
         assertNull(syncAvailabilityCopy(SyncAvailabilityProblem.NONE))
+        assertEquals(
+            "Connected to the ERP server",
+            syncAvailabilityDialogTitle(SyncAvailabilityProblem.NONE),
+        )
+    }
+
+    @Test
+    fun `degraded dialog titles continue to use their specific recovery copy`() {
+        assertEquals(
+            syncAvailabilityCopy(SyncAvailabilityProblem.RECOVERING)?.title,
+            syncAvailabilityDialogTitle(SyncAvailabilityProblem.RECOVERING),
+        )
+    }
+
+    @Test
+    fun `every coordinator phase has one stable presentation state`() {
+        assertEquals(SyncAvailabilityProblem.NO_NETWORK, syncAvailabilityProblem(ConnectivityPhase.NO_NETWORK))
+        assertEquals(SyncAvailabilityProblem.VERIFYING, syncAvailabilityProblem(ConnectivityPhase.VERIFYING))
+        assertEquals(
+            SyncAvailabilityProblem.SERVER_UNREACHABLE,
+            syncAvailabilityProblem(ConnectivityPhase.SERVER_UNREACHABLE),
+        )
+        assertEquals(SyncAvailabilityProblem.RECOVERING, syncAvailabilityProblem(ConnectivityPhase.RECOVERING))
+        assertEquals(SyncAvailabilityProblem.NONE, syncAvailabilityProblem(ConnectivityPhase.ONLINE))
+    }
+
+    @Test
+    fun `recovery copy warns against repeating a payment`() {
+        val copy = syncAvailabilityCopy(SyncAvailabilityProblem.RECOVERING)!!
+
+        assertTrue(copy.detail.contains("synchronise", ignoreCase = true))
+        assertTrue(copy.detail.contains("do not repeat a payment", ignoreCase = true))
     }
 
     @Test

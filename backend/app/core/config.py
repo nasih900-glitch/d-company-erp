@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # compromised staff token cannot bypass the limit by rotating its random
     # installation UUID.
     client_heartbeat_user_limit_per_minute: int = Field(default=30, ge=4, le=120)
+    # Diagnostics are uploaded in small offline-safe batches. Limit the number
+    # of events, not merely HTTP requests, so rotating batch sizes cannot evade
+    # the protection while a normal reconnect burst still drains promptly.
+    client_diagnostics_user_event_limit_per_minute: int = Field(
+        default=120,
+        ge=20,
+        le=1_000,
+    )
     max_request_body_bytes: int = Field(
         default=25 * 1024 * 1024,
         ge=1024,

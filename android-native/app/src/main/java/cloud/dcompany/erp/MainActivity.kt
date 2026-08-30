@@ -88,7 +88,6 @@ import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
 import cloud.dcompany.erp.core.net.ClientUpdateNotice
-import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.safeHttpsUpdateUrl
 import cloud.dcompany.erp.core.update.AppUpdateUiState
 import cloud.dcompany.erp.core.update.AppUpdateViewModel
@@ -225,10 +224,13 @@ private fun AppRoot(
     val compatibility = DCompanyApp.instance.clientCompatibility
     val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
     val appUpdateState by appUpdate.state.collectAsStateWithLifecycle()
-    val networkValidated by DCompanyApp.instance.connectivity.networkValidated.collectAsStateWithLifecycle()
-    val effectiveOnline by DCompanyApp.instance.connectivity.online.collectAsStateWithLifecycle()
-    val backendReachability by ApiClient.backendReachability.state.collectAsStateWithLifecycle()
-    val syncAvailability = syncAvailabilityProblem(networkValidated, backendReachability)
+    // The connectivity observer owns the user-visible state. Raw per-request
+    // outcomes still protect writes immediately, but cannot repeatedly
+    // invalidate this entire application root while the network is flapping.
+    val connectivity by DCompanyApp.instance.connectivity.presentation.collectAsStateWithLifecycle()
+    val networkValidated = connectivity.networkValidated
+    val effectiveOnline = connectivity.online
+    val syncAvailability = syncAvailabilityProblem(connectivity.phase)
     val unresolvedOutboxGroups by DCompanyApp.instance.db.outboxSafetyDao()
         .observeUnresolvedGroups()
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -531,6 +533,10 @@ private fun AppRoot(
                                     "network_offline"
                                 cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.SERVER_UNREACHABLE ->
                                     "server_unreachable"
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.VERIFYING ->
+                                    "connection_verifying"
+                                cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.RECOVERING ->
+                                    "connection_recovering"
                                 cloud.dcompany.erp.ui.components.SyncAvailabilityProblem.NONE -> null
                             },
                         ),

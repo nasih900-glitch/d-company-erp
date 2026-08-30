@@ -3,7 +3,6 @@ package cloud.dcompany.erp.core.sync
 import androidx.work.ExistingWorkPolicy
 import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.db.UnresolvedOutboxGroup
-import cloud.dcompany.erp.core.net.BackendReachability
 import cloud.dcompany.erp.core.net.Terminal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -89,63 +88,6 @@ class BackgroundSyncWorkerPolicyTest {
         val pending = listOf(group("shifts", "open_pending"))
 
         assertTrue(shouldRetryBackgroundSync(pending))
-    }
-
-    @Test
-    fun `validated reconnect probes a backend still marked unreachable`() {
-        assertTrue(
-            shouldProbeBackendOnValidatedReconnect(
-                wasValidated = false,
-                nowValidated = true,
-                backendReachability = BackendReachability.UNREACHABLE,
-            ),
-        )
-        assertFalse(
-            shouldProbeBackendOnValidatedReconnect(
-                wasValidated = true,
-                nowValidated = true,
-                backendReachability = BackendReachability.UNREACHABLE,
-            ),
-        )
-        assertFalse(
-            shouldProbeBackendOnValidatedReconnect(
-                wasValidated = false,
-                nowValidated = true,
-                backendReachability = BackendReachability.REACHABLE,
-            ),
-        )
-    }
-
-    @Test
-    fun `compatibility reconnect skips the initial snapshot and repeated capabilities`() {
-        assertFalse(
-            shouldNotifyValidatedReconnect(
-                wasValidated = false,
-                nowValidated = true,
-                notificationsEnabled = false,
-            ),
-        )
-        assertTrue(
-            shouldNotifyValidatedReconnect(
-                wasValidated = false,
-                nowValidated = true,
-                notificationsEnabled = true,
-            ),
-        )
-        assertFalse(
-            shouldNotifyValidatedReconnect(
-                wasValidated = true,
-                nowValidated = true,
-                notificationsEnabled = true,
-            ),
-        )
-        assertFalse(
-            shouldNotifyValidatedReconnect(
-                wasValidated = true,
-                nowValidated = false,
-                notificationsEnabled = true,
-            ),
-        )
     }
 
     private fun group(resource: String, state: String) = UnresolvedOutboxGroup(

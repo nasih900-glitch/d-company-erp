@@ -1040,6 +1040,70 @@ export interface AndroidReleaseListDTO {
 }
 
 // =============================================================================
+// SYSTEM HEALTH — protected, sanitized operational aggregates
+// =============================================================================
+export type SystemHealthStatus = 'healthy' | 'degraded' | 'action_required';
+export type SystemHealthDependencyStatus = 'operational' | 'unavailable';
+export type ClientDiagnosticEventType = 'crash' | 'anr' | 'api_failure' | 'sync_stall';
+export type ClientDiagnosticSeverity = 'warning' | 'error' | 'critical';
+export type ClientDiagnosticComponent =
+  | 'app'
+  | 'auth'
+  | 'gaming'
+  | 'pos'
+  | 'finance'
+  | 'sync'
+  | 'network'
+  | 'updates'
+  | 'storage';
+
+export interface ClientDiagnosticSummaryDTO {
+  server_time: string;
+  window_hours: number;
+  total: number;
+  critical_count: number;
+  affected_installations: number;
+  offline_event_count: number;
+  latest_event_at: string | null;
+  counts_by_type: Record<ClientDiagnosticEventType, number>;
+  counts_by_severity: Record<ClientDiagnosticSeverity, number>;
+  counts_by_component: Record<ClientDiagnosticComponent, number>;
+}
+
+export interface SystemHealthDTO {
+  status: SystemHealthStatus;
+  server_time: string;
+  retention_days: number;
+  dependencies: {
+    api: SystemHealthDependencyStatus;
+    database: SystemHealthDependencyStatus;
+    redis: SystemHealthDependencyStatus;
+  };
+  /**
+   * Backup evidence is deliberately explicit. Code 15 does not infer host
+   * backup success from an API process that cannot read the host monitor.
+   */
+  backups: {
+    status: 'operational' | 'unavailable' | 'unknown';
+    last_success_at: string | null;
+    restore_tested_at: string | null;
+    evidence_code: 'host_monitor_not_connected';
+  };
+  devices: {
+    total: number;
+    seen_last_24h: number;
+    stale: number;
+    with_pending_sync: number;
+    sync_stalled: number;
+    max_pending_outbox_count: number;
+    latest_supported_version_code: number;
+    outdated_installations: number;
+  };
+  diagnostics: ClientDiagnosticSummaryDTO;
+  recommendations: string[];
+}
+
+// =============================================================================
 // BUG REPORTS — staff submissions and the system-admin triage inbox
 // =============================================================================
 export type BugReportCategory =
@@ -3079,6 +3143,12 @@ export const androidReleases = {
       .then((r) => r.data),
   withdraw: (releaseId: string) =>
     api.post<AndroidReleaseDTO>(`/client-updates/android/releases/${releaseId}/withdraw`)
+      .then((r) => r.data),
+};
+
+export const systemHealth = {
+  get: (signal?: AbortSignal) =>
+    api.get<SystemHealthDTO>('/client-diagnostics/system-health', { signal })
       .then((r) => r.data),
 };
 

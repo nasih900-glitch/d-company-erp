@@ -34,6 +34,8 @@ import cloud.dcompany.erp.core.db.zeroTotalReceipt
 import cloud.dcompany.erp.core.db.decodedReceipt
 import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.db.shiftClosingMessageOr
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.CreateOrderRequest
@@ -631,7 +633,11 @@ class PosViewModel : ViewModel() {
             app.sync.refresh("menu")
             if (db.syncMetaDao().observe("menu").first() == null) {
                 notice.value = app.sync.lastError.value
-                    ?: "The menu could not be downloaded. Check the connection, then tap Download menu."
+                    ?: recoveryGuidance(
+                        risk = RecoveryRisk.READ,
+                        failure = null,
+                        subject = "the POS menu",
+                    ).message
             }
             app.sync.refresh("orders")
             app.sync.refresh("receipts")
@@ -644,7 +650,11 @@ class PosViewModel : ViewModel() {
             app.sync.refresh("menu")
             if (db.syncMetaDao().observe("menu").first() == null) {
                 notice.value = app.sync.lastError.value
-                    ?: "The menu could not be downloaded. Check the connection, then try again."
+                    ?: recoveryGuidance(
+                        risk = RecoveryRisk.READ,
+                        failure = null,
+                        subject = "the POS menu",
+                    ).message
             }
             app.sync.refresh("orders")
             app.sync.refresh("receipts")

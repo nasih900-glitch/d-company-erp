@@ -61,3 +61,29 @@ describe('Settings protected device update navigation', () => {
     expect(missingDedicatedGrant).not.toContain('Devices &amp; Updates');
   });
 });
+
+describe('Settings protected System Health navigation', () => {
+  it('uses audit_access without inheriting release or general owner authority', () => {
+    auth.me = identity({ audit_access: true });
+    const systemOwner = renderToStaticMarkup(<SettingsScreen />);
+    expect(systemOwner).toContain('System Health');
+    expect(systemOwner).not.toContain('Devices &amp; Updates');
+
+    auth.me = identity({ release_control_access: true });
+    const releaseOnly = renderToStaticMarkup(<SettingsScreen />);
+    expect(releaseOnly).toContain('Devices &amp; Updates');
+    expect(releaseOnly).not.toContain('System Health');
+
+    auth.me = identity({
+      protected_access: true,
+      effective_permissions: ['settings.manage'],
+    });
+    const generalOwner = renderToStaticMarkup(<SettingsScreen />);
+    expect(generalOwner).not.toContain('System Health');
+
+    auth.me = identity({ audit_access: true, release_control_access: true });
+    const bothGrants = renderToStaticMarkup(<SettingsScreen />);
+    expect(bothGrants).toContain('System Health');
+    expect(bothGrants).toContain('Devices &amp; Updates');
+  });
+});

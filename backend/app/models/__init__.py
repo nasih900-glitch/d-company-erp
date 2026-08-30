@@ -10,6 +10,7 @@ from app.models.bug_report import (
     BugReportInboxRead,
     BugReportPublicReply,
 )
+from app.models.client_diagnostic import ClientDiagnosticEvent
 from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
 from app.models.customer import (
     Customer,
@@ -130,6 +131,7 @@ __all__ = [
     "Customer",
     "CustomerSpendReconciliation",
     "ClientInstallation",
+    "ClientDiagnosticEvent",
     "ClientUpdateEvent",
     "CustomerMembership",
     "Event",

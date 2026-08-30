@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.core.net.MeResponse
@@ -315,7 +317,12 @@ internal fun financeLoadFailureMessage(hasSavedFigures: Boolean, online: Boolean
         "Finance is offline. Saved figures remain visible and will refresh automatically after reconnection."
     !online ->
         "Finance has not loaded for this account yet. Reconnect, then refresh once to make saved figures available offline."
-    hasSavedFigures -> "Could not refresh Finance. Saved figures remain visible; try again."
+    hasSavedFigures -> recoveryGuidance(
+        risk = RecoveryRisk.READ,
+        failure = null,
+        subject = "Finance",
+        localStatePreserved = true,
+    ).message
     else -> "Could not load Finance. Check access and the connection, then try again."
 }
 

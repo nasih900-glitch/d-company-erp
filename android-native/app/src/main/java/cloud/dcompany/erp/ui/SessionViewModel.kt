@@ -23,6 +23,8 @@ import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.activateAndRememberTerminal
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.LoginRequest
@@ -91,10 +93,11 @@ internal fun loginErrorMessage(error: ApiException): String {
                 "Wait, then try again or ask an owner."
         error.status == 401 ->
             "Email or password is incorrect. Check both fields and try again."
-        error.status == null ->
-            "The server could not be reached. Check the connection and try again."
-        else -> serverMessage.takeIf { it.isNotBlank() }
-            ?: "Sign-in failed. Check the details and try again."
+        else -> recoveryGuidance(
+            risk = RecoveryRisk.AUTH,
+            failure = error,
+            subject = "sign-in",
+        ).message
     }
 }
 
@@ -927,7 +930,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return TerminalReassignmentFacts(
             protectedOwner = identityExact && current?.protectedAccess == true,
             tokenLineageCurrent = identityExact && tokens.currentAccessFor(lease) != null,
-            online = connectivity.networkValidated.value,
+            // Android-validated Wi-Fi is not proof that the ERP backend can
+            // authorize a workspace change. The coordinator publishes online
+            // only after a successful readiness proof.
+            online = connectivity.online.value,
             activeTerminalExact = activeExact,
             currentTerminalStillAvailable = currentTerminalStillAvailable,
             unresolvedOutboxCount = outbox.count,
@@ -1160,9 +1166,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 "Your sign-in or protected-owner access changed. Cancel the till change and sign in again.",
             )
         }
-        if (!connectivity.networkValidated.value) {
+        if (!connectivity.online.value) {
             throw TerminalScopeException(
-                "Changing tills requires a live server check. Reconnect, then choose the till again.",
+                "Changing tills requires a verified ERP server connection. " +
+                    "Check the connection status, then choose the till again.",
             )
         }
 
@@ -1206,7 +1213,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             TerminalReassignmentFacts(
                 protectedOwner = pending.me.protectedAccess,
                 tokenLineageCurrent = pending.isTokenCurrent(),
-                online = connectivity.networkValidated.value,
+                online = connectivity.online.value,
                 activeTerminalExact =
                     terminals.terminalId() == previous.terminalId &&
                         previous.branchId == branchId,
@@ -1339,6 +1346,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Header authority and its human-readable label always change together. */
     private fun deactivateTerminalRuntime() {
+        cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime.onScopeUnavailable()
         ApiClient.deactivateTerminalScope()
         terminals.deactivateValidatedDisplay()
     }

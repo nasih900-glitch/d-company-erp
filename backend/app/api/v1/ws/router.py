@@ -15,6 +15,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
+import time
+from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -39,11 +42,18 @@ _AUTH_TIMEOUT_SECONDS = 10
 _PING_INTERVAL_SECONDS = 20
 
 
-async def _authenticate(websocket: WebSocket) -> tuple[str, str] | None:
-    """Returns (company_id, user_id) as strings, or None if auth failed."""
+@dataclass(frozen=True)
+class _AuthenticatedSocket:
+    company_id: str
+    user_id: str
+    expires_at_epoch_seconds: float
+
+
+async def _authenticate(websocket: WebSocket) -> _AuthenticatedSocket | None:
+    """Validate the first frame and retain the access-token expiry boundary."""
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=_AUTH_TIMEOUT_SECONDS)
-    except (asyncio.TimeoutError, WebSocketDisconnect):
+    except (TimeoutError, WebSocketDisconnect):
         return None
     try:
         payload = json.loads(raw)
@@ -58,9 +68,20 @@ async def _authenticate(websocket: WebSocket) -> tuple[str, str] | None:
         return None
     company_id = claims.get("company_id")
     user_id = claims.get("sub")
-    if not company_id or not user_id:
+    expires_at = claims.get("exp")
+    if (
+        not company_id
+        or not user_id
+        or isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+        or not math.isfinite(float(expires_at))
+    ):
         return None
-    return str(company_id), str(user_id)
+    return _AuthenticatedSocket(
+        company_id=str(company_id),
+        user_id=str(user_id),
+        expires_at_epoch_seconds=float(expires_at),
+    )
 
 
 @router.websocket("")
@@ -71,17 +92,30 @@ async def realtime_socket(websocket: WebSocket) -> None:
     if auth is None:
         await websocket.close(code=4401, reason="unauthenticated")
         return
-    company_id, _user_id = auth
+    if auth.expires_at_epoch_seconds <= time.time():
+        await websocket.close(code=4401, reason="access token expired")
+        return
+    company_id = auth.company_id
 
     manager.connect(UUID(company_id), websocket)
     try:
         await websocket.send_json({"type": "connected"})
         while True:
+            seconds_until_expiry = auth.expires_at_epoch_seconds - time.time()
+            if seconds_until_expiry <= 0:
+                await websocket.close(code=4401, reason="access token expired")
+                return
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=_PING_INTERVAL_SECONDS)
+                await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=min(_PING_INTERVAL_SECONDS, seconds_until_expiry),
+                )
                 # Any client message (e.g. a pong) just resets the wait —
                 # this endpoint doesn't need to act on client-sent content.
-            except asyncio.TimeoutError:
+            except TimeoutError:
+                if time.time() >= auth.expires_at_epoch_seconds:
+                    await websocket.close(code=4401, reason="access token expired")
+                    return
                 if websocket.client_state != WebSocketState.CONNECTED:
                     break
                 await websocket.send_json({"type": "ping"})

@@ -1,10 +1,16 @@
 package cloud.dcompany.erp.core.net
 
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.diagnostics.ApiFailureObservation
+import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
+import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
 import cloud.dcompany.erp.core.auth.PricingLock
 import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -109,6 +115,7 @@ class ApiException(
     message: String,
     val status: Int? = null,
     val code: String? = null,
+    val diagnosticConflictEventId: String? = null,
 ) : IOException(message) {
 
     /** No answer from the server: the request may or may not have committed. */
@@ -130,6 +137,18 @@ class ApiException(
 object ApiClient {
 
     internal val backendReachability = BackendReachabilityTracker()
+    private val readinessClient by lazy {
+        // Deliberately isolated from ErrorInterceptor: the connectivity
+        // coordinator owns this proof and must not feed its own probe back
+        // into the ordinary request-hint stream.
+        OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
 
     // Not private: report-snapshot caching (core/db/ReportSnapshots.kt) reuses
     // this exact instance to encode/decode cached bodies, so a cached row
@@ -157,6 +176,26 @@ object ApiClient {
     inline fun <reified T> create(): T = createApi(T::class.java)
 
     fun <T> createApi(service: Class<T>): T = retrofit.create(service)
+
+    /** A bounded, unauthenticated DB/Redis readiness proof for recovery only. */
+    internal suspend fun probeBackendReadiness(): Boolean = withContext(Dispatchers.IO) {
+        val url = BuildConfig.API_BASE_URL.toHttpUrl().resolve("/readyz")
+            ?: return@withContext false
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Cache-Control", "no-cache")
+            .build()
+        try {
+            readinessClient.newCall(request).execute().use { response ->
+                response.isSuccessful.also { ready ->
+                    if (ready) backendReachability.recordReadinessProof()
+                }
+            }
+        } catch (_: IOException) {
+            false
+        }
+    }
 
     /**
      * Creates an isolated, non-refreshing client for one transient authority
@@ -351,9 +390,38 @@ object ApiClient {
                 // Inner interceptors may already have classified a dedicated
                 // refresh response. Preserve its status/code so a transient
                 // 5xx or network error can never be mistaken for auth loss.
-                backendReachability.recordApiFailure(e)
+                val explicitlyCancelled = chain.call().isCanceled()
+                if (shouldPublishApiReachability(e, explicitlyCancelled)) {
+                    backendReachability.recordApiFailure(e)
+                }
+                DiagnosticsRuntime.recordApiFailure(
+                    ApiFailureObservation(
+                        status = e.status,
+                        serverCode = e.code,
+                        encodedPath = chain.request().url.encodedPath,
+                        connectivity = DiagnosticConnectivity.UNKNOWN,
+                        explicitlyCancelled = explicitlyCancelled,
+                    ),
+                )
                 throw e
             } catch (e: IOException) {
+                // Retrofit cancels the OkHttp call when a bounded coroutine
+                // check times out. Publishing that expected cancellation as a
+                // server outage made the global status oscillate even on a
+                // healthy connection.
+                val explicitlyCancelled = chain.call().isCanceled()
+                DiagnosticsRuntime.recordApiFailure(
+                    ApiFailureObservation(
+                        status = null,
+                        serverCode = "network_error",
+                        encodedPath = chain.request().url.encodedPath,
+                        connectivity = DiagnosticConnectivity.UNKNOWN,
+                        explicitlyCancelled = explicitlyCancelled,
+                    ),
+                )
+                if (!shouldPublishTransportFailure(explicitlyCancelled)) {
+                    throw e
+                }
                 backendReachability.recordTransportFailure()
                 throw ApiException(
                     "Could not reach the server. Check the connection and try again.",
@@ -403,13 +471,23 @@ object ApiClient {
                 )
             }
 
-            throw ApiException(
+            val classified = ApiException(
                 message = envelope?.error?.message
                     ?: fastApiValidationMessage(json, body)
                     ?: "Request failed (HTTP ${response.code}).",
                 status = response.code,
                 code = envelope?.error?.code,
+                diagnosticConflictEventId = envelope?.error?.details?.clientEventId,
             )
+            DiagnosticsRuntime.recordApiFailure(
+                ApiFailureObservation(
+                    status = classified.status,
+                    serverCode = classified.code,
+                    encodedPath = response.request.url.encodedPath,
+                    connectivity = DiagnosticConnectivity.ONLINE,
+                ),
+            )
+            throw classified
         }
     }
 }

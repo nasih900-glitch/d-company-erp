@@ -242,6 +242,7 @@ async def test_heartbeat_rotation_is_concurrency_bounded_and_retries_remain_idem
     headers = _headers(seed_owner, roles=["staff"])
     company_id = seed_owner["company"].id
     owner_id = seed_owner["owner"].id
+    terminal_id = seed_owner["terminal"].id
     installation_ids = [uuid4() for _ in range(CLIENT_INSTALLATIONS_MAX_PER_USER + 4)]
 
     responses = await asyncio.gather(
@@ -296,7 +297,7 @@ async def test_heartbeat_rotation_is_concurrency_bounded_and_retries_remain_idem
                 installation_id=uuid4(),
                 registered_by_user_id=owner_id,
                 last_user_id=owner_id,
-                terminal_id=seed_owner["terminal"].id,
+                terminal_id=terminal_id,
                 platform="android",
                 distribution_channel="direct",
                 version_name="3.1.3",

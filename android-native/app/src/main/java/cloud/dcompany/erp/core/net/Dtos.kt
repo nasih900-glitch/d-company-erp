@@ -113,6 +113,8 @@ data class ApiErrorBody(
  */
 @Serializable
 data class ClientCompatibilityErrorDetails(
+    /** Exact diagnostics outbox row involved in an immutable UUID collision. */
+    @SerialName("client_event_id") val clientEventId: String? = null,
     val platform: String? = null,
     @SerialName("current_version_code") val currentVersionCode: Int? = null,
     @SerialName("minimum_supported_version_code") val minimumSupportedVersionCode: Int? = null,

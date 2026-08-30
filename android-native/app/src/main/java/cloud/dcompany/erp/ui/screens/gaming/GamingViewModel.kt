@@ -30,6 +30,8 @@ import cloud.dcompany.erp.core.db.LocalGamingPackageExtensionEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionAddonActionEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
+import cloud.dcompany.erp.core.errors.RecoveryRisk
+import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.db.MenuModifierEntity
 import cloud.dcompany.erp.core.db.MenuModifierGroupEntity
 import cloud.dcompany.erp.core.db.MenuVariantEntity
@@ -1101,9 +1103,13 @@ class GamingViewModel : ViewModel() {
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
-            refreshError.value =
-                "Could not load gaming stations. Check the connection and try again."
+        } catch (failure: Exception) {
+            refreshError.value = recoveryGuidance(
+                risk = RecoveryRisk.READ,
+                failure = failure,
+                subject = "gaming stations",
+                localStatePreserved = state.value.stations.isNotEmpty(),
+            ).message
         } finally {
             refreshing.value = false
         }
