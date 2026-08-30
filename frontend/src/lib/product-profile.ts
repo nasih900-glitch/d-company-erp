@@ -290,6 +290,7 @@ export type ProfileNavIcon =
   | 'settings'
   | 'audit'
   | 'supportInbox'
+  | 'deviceCentre'
   | 'tables'
   | 'kitchen'
   | 'reservations'
@@ -390,6 +391,7 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
     items: [
       { id: 'audit', label: 'Audit Log', icon: 'audit', feature: 'audit', to: '/audit', audience: 'audit' },
       { id: 'support-inbox', label: 'Support Inbox', icon: 'supportInbox', feature: 'supportInbox', to: '/bug-reports', audience: 'system' },
+      { id: 'device-centre', label: 'Device Centre', icon: 'deviceCentre', feature: 'settings', to: '/device-centre', audience: 'system' },
     ],
   },
   {
@@ -420,6 +422,7 @@ const ROUTE_FEATURE: Readonly<Record<string, WebFeature>> = Object.freeze({
   '/settings': 'settings',
   '/audit': 'audit',
   '/bug-reports': 'supportInbox',
+  '/device-centre': 'settings',
   '/tables': 'tables',
   '/kitchen': 'kitchen',
   '/reservations': 'reservations',

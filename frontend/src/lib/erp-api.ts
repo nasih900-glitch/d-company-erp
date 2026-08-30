@@ -7,6 +7,13 @@
  * All methods raise a normalized Error with .code (see /lib/api.ts).
  */
 import { api } from './api';
+import {
+  buildRemoteAssistanceCommand,
+  type RemoteAssistanceCommandRequest,
+  type RemoteAssistanceCommandType,
+  type RemoteAssistanceModule,
+  type SafeRemoteAssistanceCommand,
+} from './remote-assistance-policy';
 
 // =============================================================================
 // CSV / file export — shared by reports.gstr1Csv / gstr3bCsv / analytics.exportCsv
@@ -3150,6 +3157,232 @@ export const systemHealth = {
   get: (signal?: AbortSignal) =>
     api.get<SystemHealthDTO>('/client-diagnostics/system-health', { signal })
       .then((r) => r.data),
+};
+
+// =============================================================================
+// REMOTE ASSISTANCE — owner-only, consented ERP-window support
+// =============================================================================
+export type RemoteAssistanceSharingCapability =
+  | 'available'
+  | 'permission_required'
+  | 'unsupported';
+
+export type RemoteAssistanceGrantKind = 'one_time' | 'anytime';
+export type RemoteAssistanceGrantStatus =
+  | 'requested'
+  | 'active'
+  | 'declined'
+  | 'revoked'
+  | 'expired'
+  | 'consumed';
+export type RemoteAssistanceSessionStatus = 'requested' | 'active' | 'ended' | 'expired';
+export type RemoteAssistanceCommandStatus = 'pending' | 'acknowledged' | 'rejected';
+export type RemoteAssistanceEndReason =
+  | 'owner_ended'
+  | 'user_ended'
+  | 'permission_revoked'
+  | 'capture_stopped'
+  | 'app_backgrounded'
+  | 'grant_revoked'
+  | 'grant_declined'
+  | null;
+
+export interface RemoteAssistanceDeviceDTO {
+  installation_id: string;
+  terminal_id: string | null;
+  terminal_name: string | null;
+  version_name: string;
+  version_code: number;
+  last_user_id: string | null;
+  last_user_name: string | null;
+  last_seen_at: string;
+  remote_support_last_seen_at: string | null;
+  is_remote_online: boolean;
+  protocol_version: number | null;
+  sharing_capability: RemoteAssistanceSharingCapability | null;
+  grant_status: RemoteAssistanceGrantStatus | null;
+  current_grant_id: string | null;
+  current_grant_kind: RemoteAssistanceGrantKind | null;
+  current_grant_expires_at: string | null;
+  current_grant_responded_by_user_id: string | null;
+  current_grant_responded_by_name: string | null;
+  current_grant_responded_at: string | null;
+  session_status: RemoteAssistanceSessionStatus | null;
+  current_session_id: string | null;
+  current_session_expires_at: string | null;
+  current_session_next_sequence: number | null;
+}
+
+export interface RemoteAssistanceDeviceListDTO {
+  server_time: string;
+  online_within_seconds: number;
+  total: number;
+  items: RemoteAssistanceDeviceDTO[];
+}
+
+export interface RemoteAssistanceGrantDTO {
+  id: string;
+  installation_id: string;
+  kind: RemoteAssistanceGrantKind;
+  status: RemoteAssistanceGrantStatus;
+  requested_by_user_id: string;
+  requested_by_name: string | null;
+  responded_by_user_id: string | null;
+  responded_by_name: string | null;
+  requested_at: string;
+  expires_at: string;
+  responded_at: string | null;
+  revoked_at: string | null;
+  consumed_at: string | null;
+}
+
+export interface RemoteAssistanceSessionDTO {
+  id: string;
+  installation_id: string;
+  grant_id: string;
+  status: RemoteAssistanceSessionStatus;
+  duration_seconds: number;
+  requested_by_user_id: string;
+  requested_by_name: string | null;
+  started_by_user_id: string | null;
+  started_by_name: string | null;
+  ended_by_user_id: string | null;
+  ended_by_name: string | null;
+  requested_at: string;
+  request_expires_at: string;
+  started_at: string | null;
+  expires_at: string | null;
+  ended_at: string | null;
+  end_reason: RemoteAssistanceEndReason;
+  next_sequence: number;
+}
+
+export interface RemoteAssistanceSessionListDTO {
+  total: number;
+  limit: number;
+  offset: number;
+  items: RemoteAssistanceSessionDTO[];
+}
+
+export interface RemoteAssistanceCommandDTO {
+  command_id: string;
+  session_id: string;
+  sequence: number;
+  type: RemoteAssistanceCommandType;
+  module: RemoteAssistanceModule | null;
+  status: RemoteAssistanceCommandStatus;
+  issued_by_user_id: string;
+  issued_at: string;
+  resolved_by_user_id: string | null;
+  resolved_at: string | null;
+  rejection_reason_code: string | null;
+}
+
+export interface RemoteAssistanceRequestResultDTO {
+  grant: RemoteAssistanceGrantDTO;
+  session: RemoteAssistanceSessionDTO;
+}
+
+export interface RemoteAssistanceFrameDTO {
+  blob: Blob;
+  frame_id: string | null;
+  sequence: number | null;
+  width: number | null;
+  height: number | null;
+  received_at: string | null;
+}
+
+function finiteHeaderNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+/**
+ * The complete endpoint surface intentionally lives in one object. Callers
+ * cannot construct an arbitrary command body; every command passes through
+ * the shared ERP-only allowlist first.
+ */
+export const remoteAssistance = {
+  listDevices: (signal?: AbortSignal) =>
+    api.get<RemoteAssistanceDeviceListDTO>('/remote-assistance/devices', { signal })
+      .then((r) => r.data),
+  listSessions: (
+    params: {
+      installation_id?: string;
+      status?: RemoteAssistanceSessionStatus;
+      limit?: number;
+      offset?: number;
+    } = {},
+    signal?: AbortSignal,
+  ) => api.get<RemoteAssistanceSessionListDTO>('/remote-assistance/sessions', {
+    params,
+    signal,
+  }).then((r) => r.data),
+  requestGrant: (body: {
+    request_id: string;
+    installation_id: string;
+    grant_kind: RemoteAssistanceGrantKind;
+    grant_ttl_seconds: number;
+    session_ttl_seconds: number;
+  }) => api.post<RemoteAssistanceRequestResultDTO>('/remote-assistance/requests', body)
+    .then((r) => r.data),
+  createSession: (body: {
+    session_id: string;
+    installation_id: string;
+    grant_id: string;
+    session_ttl_seconds: number;
+  }) => api.post<RemoteAssistanceSessionDTO>('/remote-assistance/sessions', body)
+    .then((r) => r.data),
+  startSession: (sessionId: string, startId: string) =>
+    api.post<RemoteAssistanceSessionDTO>(
+      `/remote-assistance/sessions/${sessionId}/start`,
+      { start_id: startId },
+    ).then((r) => r.data),
+  sendCommand: (
+    sessionId: string,
+    command: SafeRemoteAssistanceCommand,
+    sequence: number,
+    commandId: string,
+    signal?: AbortSignal,
+  ) => {
+    const body: RemoteAssistanceCommandRequest = buildRemoteAssistanceCommand(
+      command,
+      sequence,
+      commandId,
+    );
+    return api.post<RemoteAssistanceCommandDTO>(
+      `/remote-assistance/sessions/${sessionId}/commands`,
+      body,
+      { signal },
+    ).then((r) => r.data);
+  },
+  getCommand: (sessionId: string, commandId: string, signal?: AbortSignal) =>
+    api.get<RemoteAssistanceCommandDTO>(
+      `/remote-assistance/sessions/${sessionId}/commands/${commandId}`,
+      { signal },
+    ).then((r) => r.data),
+  endSession: (sessionId: string, endId: string) =>
+    api.post<RemoteAssistanceSessionDTO>(
+      `/remote-assistance/sessions/${sessionId}/end`,
+      { end_id: endId },
+    ).then((r) => r.data),
+  revokeGrant: (grantId: string, revokeId: string) =>
+    api.post<RemoteAssistanceGrantDTO>(
+      `/remote-assistance/grants/${grantId}/revoke`,
+      { revoke_id: revokeId },
+    ).then((r) => r.data),
+  frame: (sessionId: string, signal?: AbortSignal) =>
+    api.get<Blob>(`/remote-assistance/sessions/${sessionId}/frame`, {
+      responseType: 'blob',
+      signal,
+    }).then((r): RemoteAssistanceFrameDTO => ({
+      blob: r.data,
+      frame_id: (r.headers?.['x-frame-id'] as string | undefined) ?? null,
+      sequence: finiteHeaderNumber(r.headers?.['x-frame-sequence']),
+      width: finiteHeaderNumber(r.headers?.['x-frame-width']),
+      height: finiteHeaderNumber(r.headers?.['x-frame-height']),
+      received_at: (r.headers?.['x-frame-received-at'] as string | undefined) ?? null,
+    })),
 };
 
 export const settings = {

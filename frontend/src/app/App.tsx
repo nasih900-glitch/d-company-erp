@@ -41,6 +41,7 @@ const ReportsScreen = lazy(() => import('@/modules/reports/ReportsScreen'));
 const SettingsScreen = lazy(() => import('@/modules/settings/SettingsScreen'));
 const RefundsScreen = lazy(() => import('@/modules/refunds/RefundsScreen'));
 const MembershipsScreen = lazy(() => import('@/modules/memberships/MembershipsScreen'));
+const DeviceCentreScreen = lazy(() => import('@/modules/remote-assistance/DeviceCentreScreen'));
 
 function RouteFallback() {
   return (
@@ -61,7 +62,7 @@ function AuditAccessOnly({ children }: { children: ReactNode }) {
   return <Navigate to="/pos" replace />;
 }
 
-function AdminSystemOnly({ children }: { children: ReactNode }) {
+export function AdminSystemOnly({ children }: { children: ReactNode }) {
   const { me } = useAuth();
   if (hasAdminSystemAccess(me)) return <>{children}</>;
   return <Navigate to="/pos" replace />;
@@ -243,6 +244,14 @@ export default function App() {
           element={
             <FeatureOnly feature="supportInbox">
               <Screen><AdminSystemOnly><BugReportsScreen /></AdminSystemOnly></Screen>
+            </FeatureOnly>
+          }
+        />
+        <Route
+          path="/device-centre"
+          element={
+            <FeatureOnly feature="settings">
+              <Screen><AdminSystemOnly><DeviceCentreScreen /></AdminSystemOnly></Screen>
             </FeatureOnly>
           }
         />

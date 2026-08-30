@@ -81,7 +81,7 @@ describe('Gaming Centre web product profile', () => {
     expect(owner).not.toContain('Support Inbox');
   });
 
-  it('keeps Audit Log and Support Inbox on the exact protected signals', () => {
+  it('keeps Audit Log, Support Inbox and Device Centre on the exact protected signals', () => {
     const protectedOwner = labels({
       ...staffAccess,
       isOwner: true,
@@ -91,6 +91,7 @@ describe('Gaming Centre web product profile', () => {
     });
     expect(protectedOwner).toContain('Audit Log');
     expect(protectedOwner).toContain('Support Inbox');
+    expect(protectedOwner).toContain('Device Centre');
 
     const coOwner = labels({
       ...staffAccess,
@@ -101,6 +102,7 @@ describe('Gaming Centre web product profile', () => {
     });
     expect(coOwner).not.toContain('Audit Log');
     expect(coOwner).not.toContain('Support Inbox');
+    expect(coOwner).not.toContain('Device Centre');
   });
 
   it('still honours module access for non-owner operational tabs', () => {

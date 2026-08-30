@@ -6,6 +6,7 @@ import {
   ClipboardList, UserCircle, Sparkles, ShieldCheck, ChefHat, CalendarClock,
   MessageSquareWarning, RotateCcw,
   CreditCard, HelpCircle, LayoutDashboard,
+  TabletSmartphone,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -39,6 +40,7 @@ const NAV_ICONS: Record<ProfileNavIcon, LucideIcon> = {
   settings: Settings,
   audit: ShieldCheck,
   supportInbox: MessageSquareWarning,
+  deviceCentre: TabletSmartphone,
   tables: LayoutGrid,
   kitchen: ChefHat,
   reservations: CalendarClock,
