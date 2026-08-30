@@ -9,6 +9,7 @@ import { hasAdminSystemAccess, hasAuditAccess } from '@/lib/admin-access';
 import { LIVE_MODE } from '@/lib/demo';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
+import { internalAppRouteOr } from '@/lib/internal-navigation';
 import {
   canManageGamingCentreProducts,
   GAMING_CENTRE_FEATURES,
@@ -90,13 +91,13 @@ function FeatureOnly({
   fallback?: string;
 }) {
   if (GAMING_CENTRE_FEATURES[feature]) return <>{children}</>;
-  return <Navigate to={fallback} replace />;
+  return <Navigate to={internalAppRouteOr(fallback)} replace />;
 }
 
 function ProfileOwnerOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
   if (demo || me?.protected_access) return <>{children}</>;
-  return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
+  return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
 }
 
 function ModuleAccessOnly({ module, children }: { module: string; children: ReactNode }) {
@@ -107,20 +108,20 @@ function ModuleAccessOnly({ module, children }: { module: string; children: Reac
   const fallback = me?.accessible_modules?.includes('gaming')
     ? '/gaming'
     : me?.accessible_modules?.includes('pos') ? '/pos' : '/workspace-unavailable';
-  return <Navigate to={fallback} replace />;
+  return <Navigate to={internalAppRouteOr(fallback)} replace />;
 }
 
 function ProductManagementOnly({ children }: { children: ReactNode }) {
   const { me, demo } = useAuth();
   if (canManageGamingCentreProducts(me, demo)) return <>{children}</>;
-  return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
+  return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
 }
 
 function ProfileLanding() {
   const { me, demo } = useAuth();
   if (demo) return <Navigate to="/analytics" replace />;
   if (!me) return <Navigate to="/login" replace />;
-  return <Navigate to={webLandingRouteFor(me)} replace />;
+  return <Navigate to={internalAppRouteOr(webLandingRouteFor(me))} replace />;
 }
 
 function WorkspaceUnavailable() {
@@ -146,7 +147,7 @@ function MenuRoute() {
       : <Navigate to="/login" replace />;
   }
   if (!GAMING_CENTRE_FEATURES.menuManagement) {
-    return <Navigate to={WEB_PRODUCT_PROFILE.defaultRoute} replace />;
+    return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
   }
   return (
     <AppShell>

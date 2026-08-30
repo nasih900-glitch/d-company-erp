@@ -26,6 +26,7 @@ import ConnectivityBanner from './ConnectivityBanner';
 import SupportLauncher, { openSupportLauncher } from '@/components/support/SupportLauncher';
 import { bugReports } from '@/lib/erp-api';
 import { subscribeRealtime } from '@/lib/realtime';
+import { internalAppRouteOr } from '@/lib/internal-navigation';
 
 const NAV_ICONS: Record<ProfileNavIcon, LucideIcon> = {
   gaming: Gamepad2,
@@ -265,7 +266,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
                 return (
                   <NavLink
                     key={item.id}
-                    to={item.to}
+                    to={internalAppRouteOr(item.to)}
                     onClick={onNavigate}
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium ` +

@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { internalAppRouteOr } from '@/lib/internal-navigation';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -231,7 +232,7 @@ function OwnerCommandCenter({
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
         {actions.map((action) => (
-          <Link key={action.to} to={action.to}
+          <Link key={action.to} to={internalAppRouteOr(action.to)}
             className="rounded-xl border border-bg-border bg-bg-raised/50 px-3 py-3 text-sm font-medium hover:border-accent hover:text-accent flex items-center justify-between gap-2 transition">
             <span className="min-w-0 flex items-center gap-2 truncate">{action.icon}{action.label}</span>
             <ArrowUpRight size={13}/>
