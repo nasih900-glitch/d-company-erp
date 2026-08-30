@@ -26,7 +26,7 @@ internal class RemoteAssistanceNotification(private val context: Context) {
                 "Remote assistance",
                 NotificationManager.IMPORTANCE_DEFAULT,
             ).apply {
-                description = "Visible while an owner can view the D Company ERP app window."
+                description = "Visible while an owner can view only Help in D Company ERP."
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
                 setSound(null, null)
                 enableVibration(false)
@@ -51,9 +51,10 @@ internal class RemoteAssistanceNotification(private val context: Context) {
         manager?.activeNotifications?.any { it.id == NOTIFICATION_ID } == true
     }.getOrDefault(false)
 
-    fun show(timeoutMillis: Long): Boolean {
+    fun show(timeoutMillis: Long, sharingPaused: Boolean = false): Boolean {
         if (!canShowPersistentIndicator()) return false
         val notificationManager = manager ?: return false
+        val copy = remoteAssistanceNotificationCopy(sharingPaused)
         val openIntent = PendingIntent.getActivity(
             context,
             0,
@@ -72,8 +73,9 @@ internal class RemoteAssistanceNotification(private val context: Context) {
         )
         val notification = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_dcompany_alarm)
-            .setContentTitle("D Company ERP support is active")
-            .setContentText("The owner can view this ERP app only. Tap Stop at any time.")
+            .setContentTitle(copy.title)
+            .setContentText(copy.detail)
+            .setStyle(Notification.BigTextStyle().bigText(copy.detail))
             .setContentIntent(openIntent)
             .addAction(
                 Notification.Action.Builder(

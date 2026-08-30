@@ -157,7 +157,8 @@ describe('Device Centre protected presentation', () => {
 
     expect(markup).toContain('Protected owner access');
     expect(markup).toContain('Sensitive fields are hidden');
-    expect(markup).toContain('Open Help');
+    expect(markup).toContain('Ask staff to open Help');
+    expect(markup).not.toContain('>Open Help<');
     expect(markup).toContain('Refresh Help');
     expect(markup).toContain('Operational screens stay private');
     expect(markup).toContain('Collect diagnostics');
@@ -172,6 +173,45 @@ describe('Device Centre protected presentation', () => {
     expect(markup).not.toContain('Open Gaming');
     expect(markup).not.toContain('Open POS');
     expect(markup).not.toContain('Open Shift');
+  });
+
+  it('disables Help commands while the view is privacy protected or unavailable', () => {
+    for (const state of ['privacy', 'offline', 'loading'] as const) {
+      const markup = view(
+        [{
+          device: device({ is_remote_online: state !== 'offline' }),
+          grant: grant(),
+          session: session(),
+        }],
+        { ...freshFrame, state, src: null },
+      );
+
+      expect(markup).toContain('Ask staff to open Help');
+      expect(markup).toContain('Help commands stay disabled');
+      for (const label of ['Refresh Help</button>', 'Collect diagnostics</button>']) {
+        const labelIndex = markup.indexOf(label);
+        expect(labelIndex).toBeGreaterThan(-1);
+        const buttonStart = markup.lastIndexOf('<button', labelIndex);
+        expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
+          .toContain('disabled=""');
+      }
+      expect(markup).toContain('End session');
+      expect(markup).toContain('Emergency stop &amp; revoke');
+    }
+  });
+
+  it('enables only safe Help refresh and diagnostics when a live frame is visible', () => {
+    const markup = view([{ device: device(), grant: grant(), session: session() }]);
+
+    expect(markup).toContain('Help is visible');
+    for (const label of ['Refresh Help</button>', 'Collect diagnostics</button>']) {
+      const labelIndex = markup.indexOf(label);
+      expect(labelIndex).toBeGreaterThan(-1);
+      const buttonStart = markup.lastIndexOf('<button', labelIndex);
+      expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
+        .not.toContain('disabled=""');
+    }
+    expect(markup).not.toContain('type="navigate"');
   });
 
   it('shows pending pairing evidence without leaking a code or unapproved fingerprint', () => {

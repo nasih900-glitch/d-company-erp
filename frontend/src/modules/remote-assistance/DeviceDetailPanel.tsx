@@ -97,6 +97,7 @@ export function DeviceDetail({
       <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.75fr)]">
         <RemoteControls
           row={row}
+          frame={frame}
           grantKind={grantKind}
           busyAction={busyAction}
           canRequest={canRequest}

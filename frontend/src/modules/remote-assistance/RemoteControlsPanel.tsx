@@ -1,7 +1,6 @@
 import {
   CircleStop,
   Clock3,
-  HelpCircle,
   Loader2,
   Navigation,
   RotateCw,
@@ -23,10 +22,12 @@ import {
   isRemoteCommandBusyAction,
   type BusyAction,
   type DeviceCentreRow,
+  type RemoteFrameViewModel,
 } from './remote-assistance-state';
 
 export function RemoteControls({
   row,
+  frame,
   grantKind,
   busyAction,
   canRequest,
@@ -40,6 +41,7 @@ export function RemoteControls({
   onCommand,
 }: {
   row: DeviceCentreRow;
+  frame: RemoteFrameViewModel;
   grantKind: RemoteAssistanceGrantKind;
   busyAction: BusyAction;
   canRequest: boolean;
@@ -61,6 +63,7 @@ export function RemoteControls({
   const approvalRequired = row.device.sharing_capability === 'permission_required';
   const offline = !row.device.is_remote_online;
   const commandBusy = isRemoteCommandBusyAction(busyAction);
+  const helpFrameLive = !offline && frame.state === 'fresh' && Boolean(frame.src);
 
   return (
     <section className="rounded-xl border border-bg-border bg-bg/35 p-4" aria-labelledby="remote-controls-title">
@@ -173,16 +176,23 @@ export function RemoteControls({
           <InlineNotice
             tone="neutral"
             title="Operational screens stay private"
-            message="Code 17 cannot remotely open or control Gaming, POS, Shift, payments, settings or financial records. Staff must open Help before approving a session."
+            message="Code 17 cannot remotely open or control Gaming, POS, Shift, payments, settings or financial records."
+          />
+          <InlineNotice
+            tone={helpFrameLive ? 'neutral' : 'warning'}
+            title="Ask staff to open Help"
+            message={helpFrameLive
+              ? 'Help is visible. Refresh and safe diagnostics are available below.'
+              : 'Remote assistance cannot move staff away from an operational screen. Help commands stay disabled until a live redacted Help view is visible.'}
           />
           <div className="grid gap-2 sm:grid-cols-2">
             <ActionButton
-              label="Open Help"
-              Icon={HelpCircle}
-              busy={busyAction === 'navigate'}
+              label="Refresh Help"
+              Icon={RotateCw}
+              busy={busyAction === 'refresh'}
               busyLabel="Waiting for tablet…"
-              disabled={busyAction !== null}
-              onClick={() => onCommand({ type: 'navigate', module: 'help' })}
+              disabled={!helpFrameLive || busyAction !== null}
+              onClick={() => onCommand({ type: 'refresh' })}
               compact
             />
             <ActionButton
@@ -190,20 +200,11 @@ export function RemoteControls({
               Icon={Wrench}
               busy={busyAction === 'collect_diagnostics'}
               busyLabel="Waiting for tablet…"
-              disabled={busyAction !== null}
+              disabled={!helpFrameLive || busyAction !== null}
               onClick={() => onCommand({ type: 'collect_diagnostics' })}
               compact
             />
           </div>
-          <ActionButton
-            label="Refresh Help"
-            Icon={RotateCw}
-            busy={busyAction === 'refresh'}
-            busyLabel="Waiting for tablet…"
-            disabled={busyAction !== null}
-            onClick={() => onCommand({ type: 'refresh' })}
-            compact
-          />
           <ActionButton
             label="End session"
             Icon={CircleStop}

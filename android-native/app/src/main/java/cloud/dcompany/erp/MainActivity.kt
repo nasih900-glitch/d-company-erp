@@ -655,6 +655,7 @@ private fun AppRoot(
                     remoteSupportRequestWaiting = remoteAssistanceState.pendingGrant != null &&
                         Destination.Help in destinations,
                     remoteSupportActive = remoteAssistanceState.activeSession != null,
+                    remoteSupportOnline = effectiveOnline,
                     remoteSupportPrivacyProtected = remoteAssistanceState.privacyProtected,
                     remoteSupportLastCommandLabel = remoteAssistanceState.lastCommandLabel,
                     canChangeTill = s.me.protectedAccess && requiresTill && advancedTerminalWorkflow,

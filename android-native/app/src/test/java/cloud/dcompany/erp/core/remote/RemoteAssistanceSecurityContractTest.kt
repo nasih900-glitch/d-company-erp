@@ -193,6 +193,11 @@ class RemoteAssistanceSecurityContractTest {
                 "src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceNotification.kt",
             ),
         )
+        val coordinator = read(
+            projectRoot().resolve(
+                "src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceCoordinator.kt",
+            ),
+        )
 
         assertTrue("Android 13 permission must be checked", "Manifest.permission.POST_NOTIFICATIONS" in notification)
         assertTrue("Global notification blocking must be checked", "areNotificationsEnabled()" in notification)
@@ -203,6 +208,15 @@ class RemoteAssistanceSecurityContractTest {
         })
         assertTrue("The active indicator must be persistent", ".setOngoing(true)" in notification)
         assertTrue("The notification must expose Stop", "\"Stop\"" in notification)
+        assertTrue("The notification must use the verified Help-only disclosure copy", run {
+            "remoteAssistanceNotificationCopy(sharingPaused)" in notification
+        })
+        assertTrue("Connectivity changes must update the visible paused-sharing state", run {
+            "notification.show(remaining, sharingPaused = !isOnline)" in coordinator
+        })
+        assertTrue("Initial session admission must disclose its current connectivity state", run {
+            "notification.show(remaining, sharingPaused = !online.value)" in coordinator
+        })
     }
 
     @Test

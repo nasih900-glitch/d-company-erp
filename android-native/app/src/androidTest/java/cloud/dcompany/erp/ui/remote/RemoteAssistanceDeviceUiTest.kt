@@ -51,6 +51,7 @@ class RemoteAssistanceDeviceUiTest {
                 Column {
                     RemoteAssistanceActiveBanner(
                         active = active,
+                        online = true,
                         privacyProtected = true,
                         lastCommandLabel = null,
                         onStop = {
@@ -98,6 +99,9 @@ class RemoteAssistanceDeviceUiTest {
         compose.onNodeWithTag("remote-assistance-allow").performClick()
 
         compose.onNodeWithTag("remote-assistance-active").assertIsDisplayed()
+        compose.onNodeWithText("Owner ERP support active — Help only").assertIsDisplayed()
+        compose.onNodeWithText("Owner can view Help only", substring = true).assertExists()
+        compose.onNodeWithText("other ERP screens are hidden", substring = true).assertExists()
         compose.onNodeWithTag("remote-assistance-stop").assertIsDisplayed()
         compose.onNodeWithTag("remote-assistance-settings-stop").assertExists()
         compose.onNodeWithTag("remote-assistance-revoke").assertExists()
@@ -114,6 +118,29 @@ class RemoteAssistanceDeviceUiTest {
         compose.onNodeWithTag("remote-assistance-confirm-revoke").performClick()
         compose.onNodeWithText("Owner ERP support has been revoked on this tablet.").assertExists()
         compose.runOnIdle { assertTrue(permissionRevoked) }
+    }
+
+    @Test
+    fun activeOfflineBannerExplainsPausedSharingAndKeepsStopAvailable() {
+        var stopped = false
+        compose.setContent {
+            DCompanyTheme {
+                RemoteAssistanceActiveBanner(
+                    active = true,
+                    online = false,
+                    privacyProtected = true,
+                    lastCommandLabel = null,
+                    onStop = { stopped = true },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Sharing paused while offline", substring = true).assertExists()
+        compose.onNodeWithText("Owner can view Help only", substring = true).assertExists()
+        compose.onNodeWithText("other ERP screens stay hidden", substring = true).assertExists()
+        compose.onNodeWithText("Stop remains available", substring = true).assertExists()
+        compose.onNodeWithTag("remote-assistance-stop").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertTrue(stopped) }
     }
 
     @Test

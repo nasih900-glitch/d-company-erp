@@ -154,6 +154,7 @@ fun WorkspaceScaffold(
     pendingSupportCount: Int = 0,
     remoteSupportRequestWaiting: Boolean = false,
     remoteSupportActive: Boolean = false,
+    remoteSupportOnline: Boolean = true,
     remoteSupportPrivacyProtected: Boolean = true,
     remoteSupportLastCommandLabel: String? = null,
     canChangeTill: Boolean,
@@ -219,6 +220,7 @@ fun WorkspaceScaffold(
                 )
                 RemoteAssistanceActiveBanner(
                     active = remoteSupportActive,
+                    online = remoteSupportOnline,
                     privacyProtected = remoteSupportPrivacyProtected,
                     lastCommandLabel = remoteSupportLastCommandLabel,
                     onStop = onStopRemoteSupport,

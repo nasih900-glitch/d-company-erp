@@ -111,6 +111,13 @@ internal class RemoteAssistanceCoordinator(
         }
         scope.launch {
             online.collect { isOnline ->
+                _uiState.value.activeSession?.let { active ->
+                    val remaining =
+                        (active.deadlineElapsedMillis - elapsedRealtime()).coerceAtLeast(1_000L)
+                    if (!notification.show(remaining, sharingPaused = !isOnline)) {
+                        requestSessionEnd(active, "capture_stopped")
+                    }
+                }
                 if (isOnline) {
                     ensurePolling()
                     pollWakeups.trySend(Unit)
@@ -921,7 +928,7 @@ internal class RemoteAssistanceCoordinator(
     private suspend fun activateSession(session: RemoteActiveSession) {
         val admittedSession = clampRemoteSessionDeadline(_uiState.value.activeSession, session)
         val remaining = (admittedSession.deadlineElapsedMillis - elapsedRealtime()).coerceAtLeast(1_000L)
-        if (!notification.show(remaining)) {
+        if (!notification.show(remaining, sharingPaused = !online.value)) {
             requestSessionEnd(admittedSession, "capture_stopped")
             return
         }

@@ -153,11 +153,19 @@ private val REMOTE_GRANT_EXPIRY_FORMATTER: DateTimeFormatter = DateTimeFormatter
 @Composable
 internal fun RemoteAssistanceActiveBanner(
     active: Boolean,
+    online: Boolean,
     privacyProtected: Boolean,
     lastCommandLabel: String?,
     onStop: () -> Unit,
 ) {
     if (!active) return
+    val statusDetail = when {
+        !online -> "Sharing paused while offline. Owner can view Help only; other ERP screens " +
+            "stay hidden. Stop remains available."
+        privacyProtected -> "Owner can view Help only. This screen and other ERP screens are hidden."
+        lastCommandLabel != null -> "$lastCommandLabel · Owner can view Help only; other ERP screens are hidden."
+        else -> "Owner can view Help only; other ERP screens are hidden."
+    }
     Surface(
         color = Brand.InformationMuted,
         border = BorderStroke(1.dp, Brand.Information.copy(alpha = 0.55f)),
@@ -167,7 +175,7 @@ internal fun RemoteAssistanceActiveBanner(
             .testTag("remote-assistance-active")
             .semantics {
                 liveRegion = LiveRegionMode.Assertive
-                contentDescription = "Owner ERP remote assistance active. Stop is always available."
+                contentDescription = "Owner ERP remote assistance active. $statusDetail"
             },
     ) {
         Row(
@@ -188,16 +196,12 @@ internal fun RemoteAssistanceActiveBanner(
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    "Owner ERP support active",
+                    "Owner ERP support active — Help only",
                     color = Brand.Foreground,
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Text(
-                    when {
-                        privacyProtected -> "Privacy shield on — this screen is not being captured."
-                        lastCommandLabel != null -> lastCommandLabel
-                        else -> "Only this D Company ERP window can be viewed."
-                    },
+                    statusDetail,
                     color = Brand.ForegroundMuted,
                     style = MaterialTheme.typography.labelMedium,
                 )
