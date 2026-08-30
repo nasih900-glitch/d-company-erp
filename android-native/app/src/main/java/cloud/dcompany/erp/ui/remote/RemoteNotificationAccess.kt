@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.remote
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -28,6 +29,7 @@ import cloud.dcompany.erp.core.remote.REMOTE_ASSISTANCE_NOTIFICATION_CHANNEL_ID
  * fixed denial opens Settings instead of launching an invisible retry.
  */
 @Composable
+@SuppressLint("InlinedApi") // Permission access is routed away below API 33.
 internal fun rememberRemoteNotificationAccessAction(
     notificationReady: Boolean,
     onStatusChanged: () -> Unit,
@@ -85,22 +87,19 @@ internal fun rememberRemoteNotificationAccessAction(
 }
 
 internal fun remoteNotificationSettingsIntents(packageName: String): List<Intent> = buildList {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        add(
-            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-                .putExtra(
-                    Settings.EXTRA_CHANNEL_ID,
-                    REMOTE_ASSISTANCE_NOTIFICATION_CHANNEL_ID,
-                ),
-        )
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        add(
-            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
-        )
-    }
+    // minSdk is 26, so both notification Settings intents are always defined.
+    add(
+        Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            .putExtra(
+                Settings.EXTRA_CHANNEL_ID,
+                REMOTE_ASSISTANCE_NOTIFICATION_CHANNEL_ID,
+            ),
+    )
+    add(
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+    )
     add(
         Intent(
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,

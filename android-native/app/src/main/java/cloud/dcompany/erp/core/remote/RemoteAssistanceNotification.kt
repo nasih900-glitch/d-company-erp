@@ -19,20 +19,19 @@ internal class RemoteAssistanceNotification(private val context: Context) {
     private val manager = context.getSystemService(NotificationManager::class.java)
 
     init {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager?.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Remote assistance",
-                    NotificationManager.IMPORTANCE_DEFAULT,
-                ).apply {
-                    description = "Visible while an owner can view the D Company ERP app window."
-                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-                    setSound(null, null)
-                    enableVibration(false)
-                },
-            )
-        }
+        // minSdk is 26, so this channel is part of every supported runtime.
+        manager?.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                "Remote assistance",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = "Visible while an owner can view the D Company ERP app window."
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                setSound(null, null)
+                enableVibration(false)
+            },
+        )
     }
 
     fun canShowPersistentIndicator(): Boolean {
@@ -42,10 +41,8 @@ internal class RemoteAssistanceNotification(private val context: Context) {
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) return false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = manager.getNotificationChannel(CHANNEL_ID) ?: return false
-            if (channel.importance == NotificationManager.IMPORTANCE_NONE) return false
-        }
+        val channel = manager.getNotificationChannel(CHANNEL_ID) ?: return false
+        if (channel.importance == NotificationManager.IMPORTANCE_NONE) return false
         return true
     }
 
