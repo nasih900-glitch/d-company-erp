@@ -1,8 +1,4 @@
 export const REMOTE_ASSISTANCE_MODULES = [
-  'dashboard',
-  'gaming',
-  'pos',
-  'shift',
   'help',
 ] as const;
 

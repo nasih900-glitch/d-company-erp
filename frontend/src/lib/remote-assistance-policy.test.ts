@@ -21,13 +21,10 @@ describe('remote-assistance command policy', () => {
       'refresh',
       'collect_diagnostics',
     ]);
-    expect(REMOTE_ASSISTANCE_MODULES).toEqual([
-      'dashboard',
-      'gaming',
-      'pos',
-      'shift',
-      'help',
-    ]);
+    expect(REMOTE_ASSISTANCE_MODULES).toEqual(['help']);
+    expect(isRemoteAssistanceModule('gaming')).toBe(false);
+    expect(isRemoteAssistanceModule('pos')).toBe(false);
+    expect(isRemoteAssistanceModule('shift')).toBe(false);
     expect(isRemoteAssistanceModule('finance')).toBe(false);
     expect(isRemoteAssistanceModule('settings')).toBe(false);
     expect(isRemoteAssistanceModule('raw_tap')).toBe(false);
@@ -35,14 +32,14 @@ describe('remote-assistance command policy', () => {
 
   it('builds an allowlisted command without accepting arbitrary payload fields', () => {
     expect(buildRemoteAssistanceCommand(
-      { type: 'navigate', module: 'gaming' },
+      { type: 'navigate', module: 'help' },
       3,
       COMMAND_ID,
     )).toEqual({
       command_id: COMMAND_ID,
       sequence: 3,
       type: 'navigate',
-      module: 'gaming',
+      module: 'help',
     });
 
     expect(buildRemoteAssistanceCommand(

@@ -142,7 +142,7 @@ describe('remote-assistance API contract', () => {
 
     await remoteAssistance.sendCommand(
       SESSION_ID,
-      { type: 'navigate', module: 'pos' },
+      { type: 'navigate', module: 'help' },
       4,
       MUTATION_ID,
     );
@@ -162,7 +162,7 @@ describe('remote-assistance API contract', () => {
         command_id: MUTATION_ID,
         sequence: 4,
         type: 'navigate',
-        module: 'pos',
+        module: 'help',
       },
       { signal: undefined },
     );

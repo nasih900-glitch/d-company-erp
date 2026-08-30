@@ -34,7 +34,6 @@ export default function DeviceCentreScreen() {
         actionError={controller.actionError}
         frame={controller.frame}
         grantKind={controller.grantKind}
-        selectedModule={controller.selectedModule}
         busyAction={controller.busyAction}
         onSelect={controller.selectDevice}
         onRefresh={() => void controller.refresh(true)}
@@ -60,7 +59,6 @@ export default function DeviceCentreScreen() {
         }}
         onReviewPairing={controller.openPairing}
         onRevokeKey={(keyId) => controller.setConfirmAction({ type: 'revoke_key', keyId })}
-        onModuleChange={controller.setSelectedModule}
         onCommand={(command) => void controller.runCommand(command)}
       />
 

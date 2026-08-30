@@ -9,10 +9,7 @@ import {
 } from 'lucide-react';
 
 import type { RemoteAssistanceGrantKind } from '@/lib/erp-api';
-import type {
-  RemoteAssistanceModule,
-  SafeRemoteAssistanceCommand,
-} from '@/lib/remote-assistance-policy';
+import type { SafeRemoteAssistanceCommand } from '@/lib/remote-assistance-policy';
 import { RemoteFramePanel } from './RemoteFramePanel';
 import { RemoteControls } from './RemoteControlsPanel';
 import { DeviceKeyPairingPanel } from './DeviceKeyPairingPanel';
@@ -36,7 +33,6 @@ export function DeviceDetail({
   row,
   frame,
   grantKind,
-  selectedModule,
   busyAction,
   onGrantKindChange,
   onRequestGrant,
@@ -45,13 +41,11 @@ export function DeviceDetail({
   onRevoke,
   onReviewPairing,
   onRevokeKey,
-  onModuleChange,
   onCommand,
 }: {
   row: DeviceCentreRow;
   frame: RemoteFrameViewModel;
   grantKind: RemoteAssistanceGrantKind;
-  selectedModule: RemoteAssistanceModule;
   busyAction: BusyAction;
   onGrantKindChange: (kind: RemoteAssistanceGrantKind) => void;
   onRequestGrant: () => void;
@@ -60,7 +54,6 @@ export function DeviceDetail({
   onRevoke: () => void;
   onReviewPairing: (keyId: string, replacement: boolean) => void;
   onRevokeKey: (keyId: string) => void;
-  onModuleChange: (module: RemoteAssistanceModule) => void;
   onCommand: (command: SafeRemoteAssistanceCommand) => void;
 }) {
   const { device, grant, session } = row;
@@ -105,7 +98,6 @@ export function DeviceDetail({
         <RemoteControls
           row={row}
           grantKind={grantKind}
-          selectedModule={selectedModule}
           busyAction={busyAction}
           canRequest={canRequest}
           canConnect={canConnect}
@@ -115,7 +107,6 @@ export function DeviceDetail({
           onConnect={onConnect}
           onEnd={onEnd}
           onRevoke={onRevoke}
-          onModuleChange={onModuleChange}
           onCommand={onCommand}
         />
         <AuditProtection row={row} />

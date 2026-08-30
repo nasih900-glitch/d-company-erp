@@ -1,14 +1,11 @@
 import {
   CircleStop,
   Clock3,
-  Gamepad2,
   HelpCircle,
-  LayoutDashboard,
   Loader2,
   Navigation,
   RotateCw,
   ShieldOff,
-  Store,
   UserCheck,
   Wifi,
   WifiOff,
@@ -18,8 +15,6 @@ import {
 
 import type { RemoteAssistanceGrantKind } from '@/lib/erp-api';
 import {
-  REMOTE_ASSISTANCE_MODULES,
-  type RemoteAssistanceModule,
   type SafeRemoteAssistanceCommand,
 } from '@/lib/remote-assistance-policy';
 import { InlineNotice } from './DeviceCentrePrimitives';
@@ -30,21 +25,9 @@ import {
   type DeviceCentreRow,
 } from './remote-assistance-state';
 
-const MODULE_PRESENTATION: Record<RemoteAssistanceModule, {
-  label: string;
-  Icon: LucideIcon;
-}> = {
-  dashboard: { label: 'Dashboard', Icon: LayoutDashboard },
-  gaming: { label: 'Gaming', Icon: Gamepad2 },
-  pos: { label: 'POS', Icon: Store },
-  shift: { label: 'Shift', Icon: Clock3 },
-  help: { label: 'Help', Icon: HelpCircle },
-};
-
 export function RemoteControls({
   row,
   grantKind,
-  selectedModule,
   busyAction,
   canRequest,
   canConnect,
@@ -54,12 +37,10 @@ export function RemoteControls({
   onConnect,
   onEnd,
   onRevoke,
-  onModuleChange,
   onCommand,
 }: {
   row: DeviceCentreRow;
   grantKind: RemoteAssistanceGrantKind;
-  selectedModule: RemoteAssistanceModule;
   busyAction: BusyAction;
   canRequest: boolean;
   canConnect: boolean;
@@ -69,7 +50,6 @@ export function RemoteControls({
   onConnect: () => void;
   onEnd: () => void;
   onRevoke: () => void;
-  onModuleChange: (module: RemoteAssistanceModule) => void;
   onCommand: (command: SafeRemoteAssistanceCommand) => void;
 }) {
   const reportedSessionActive = row.session?.status === 'active';
@@ -190,40 +170,19 @@ export function RemoteControls({
         </div>
       ) : sessionActive ? (
         <div className="mt-4 space-y-3">
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <label>
-              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
-                Navigate inside ERP
-              </span>
-              <select
-                className="input !min-h-[46px] !py-2.5 text-sm"
-                value={selectedModule}
-                onChange={(event) => onModuleChange(event.target.value as RemoteAssistanceModule)}
-                disabled={busyAction !== null}
-              >
-                {REMOTE_ASSISTANCE_MODULES.map((module) => (
-                  <option key={module} value={module}>{MODULE_PRESENTATION[module].label}</option>
-                ))}
-              </select>
-            </label>
+          <InlineNotice
+            tone="neutral"
+            title="Operational screens stay private"
+            message="Code 17 cannot remotely open or control Gaming, POS, Shift, payments, settings or financial records. Staff must open Help before approving a session."
+          />
+          <div className="grid gap-2 sm:grid-cols-2">
             <ActionButton
-              label={`Open ${MODULE_PRESENTATION[selectedModule].label}`}
-              Icon={MODULE_PRESENTATION[selectedModule].Icon}
+              label="Open Help"
+              Icon={HelpCircle}
               busy={busyAction === 'navigate'}
               busyLabel="Waiting for tablet…"
               disabled={busyAction !== null}
-              onClick={() => onCommand({ type: 'navigate', module: selectedModule })}
-              compact
-            />
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <ActionButton
-              label="Refresh current screen"
-              Icon={RotateCw}
-              busy={busyAction === 'refresh'}
-              busyLabel="Waiting for tablet…"
-              disabled={busyAction !== null}
-              onClick={() => onCommand({ type: 'refresh' })}
+              onClick={() => onCommand({ type: 'navigate', module: 'help' })}
               compact
             />
             <ActionButton
@@ -236,6 +195,15 @@ export function RemoteControls({
               compact
             />
           </div>
+          <ActionButton
+            label="Refresh Help"
+            Icon={RotateCw}
+            busy={busyAction === 'refresh'}
+            busyLabel="Waiting for tablet…"
+            disabled={busyAction !== null}
+            onClick={() => onCommand({ type: 'refresh' })}
+            compact
+          />
           <ActionButton
             label="End session"
             Icon={CircleStop}

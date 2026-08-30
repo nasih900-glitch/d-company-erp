@@ -16,7 +16,6 @@ import {
 import {
   createRemoteMutationId,
   isRemoteFrameStale,
-  type RemoteAssistanceModule,
   type SafeRemoteAssistanceCommand,
 } from '@/lib/remote-assistance-policy';
 import {
@@ -75,7 +74,6 @@ export function useDeviceCentreController() {
   const [pairingRetryAvailable, setPairingRetryAvailable] = useState(false);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [grantKind, setGrantKind] = useState<RemoteAssistanceGrantKind>('one_time');
-  const [selectedModule, setSelectedModule] = useState<RemoteAssistanceModule>('dashboard');
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [frame, setFrame] = useState<RemoteFrameViewModel>(EMPTY_REMOTE_FRAME);
   const [frameSuspended, setFrameSuspended] = useState(false);
@@ -682,13 +680,11 @@ export function useDeviceCentreController() {
     pairingRetryAvailable,
     busyAction,
     grantKind,
-    selectedModule,
     confirmAction,
     frame,
     selectDevice,
     refresh: load,
     setGrantKind,
-    setSelectedModule,
     setConfirmAction,
     openPairing,
     dismissConfirmAction,

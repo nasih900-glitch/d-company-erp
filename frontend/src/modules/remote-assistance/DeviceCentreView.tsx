@@ -5,10 +5,7 @@ import {
 } from 'lucide-react';
 
 import type { RemoteAssistanceGrantKind } from '@/lib/erp-api';
-import type {
-  RemoteAssistanceModule,
-  SafeRemoteAssistanceCommand,
-} from '@/lib/remote-assistance-policy';
+import type { SafeRemoteAssistanceCommand } from '@/lib/remote-assistance-policy';
 import { DeviceDetail } from './DeviceDetailPanel';
 import { DeviceList } from './DeviceListPanel';
 import {
@@ -29,7 +26,6 @@ export interface DeviceCentreViewProps {
   actionError: string | null;
   frame: RemoteFrameViewModel;
   grantKind: RemoteAssistanceGrantKind;
-  selectedModule: RemoteAssistanceModule;
   busyAction: BusyAction;
   onSelect: (installationId: string) => void;
   onRefresh: () => void;
@@ -40,7 +36,6 @@ export interface DeviceCentreViewProps {
   onRevoke: () => void;
   onReviewPairing: (keyId: string, replacement: boolean) => void;
   onRevokeKey: (keyId: string) => void;
-  onModuleChange: (module: RemoteAssistanceModule) => void;
   onCommand: (command: SafeRemoteAssistanceCommand) => void;
 }
 
@@ -52,7 +47,6 @@ export function DeviceCentreView({
   actionError,
   frame,
   grantKind,
-  selectedModule,
   busyAction,
   onSelect,
   onRefresh,
@@ -63,7 +57,6 @@ export function DeviceCentreView({
   onRevoke,
   onReviewPairing,
   onRevokeKey,
-  onModuleChange,
   onCommand,
 }: DeviceCentreViewProps) {
   const selected = rows.find((row) => row.device.installation_id === selectedId) ?? null;
@@ -129,7 +122,6 @@ export function DeviceCentreView({
               row={selected}
               frame={frame}
               grantKind={grantKind}
-              selectedModule={selectedModule}
               busyAction={busyAction}
               onGrantKindChange={onGrantKindChange}
               onRequestGrant={onRequestGrant}
@@ -138,7 +130,6 @@ export function DeviceCentreView({
               onRevoke={onRevoke}
               onReviewPairing={onReviewPairing}
               onRevokeKey={onRevokeKey}
-              onModuleChange={onModuleChange}
               onCommand={onCommand}
             />
           ) : (

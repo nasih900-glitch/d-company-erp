@@ -130,10 +130,6 @@ function sessionPriority(session: RemoteAssistanceSessionDTO): number {
 
 
 const MODULE_LABELS: Record<RemoteAssistanceModule, string> = {
-  dashboard: 'Dashboard',
-  gaming: 'Gaming',
-  pos: 'POS',
-  shift: 'Shift',
   help: 'Help',
 };
 

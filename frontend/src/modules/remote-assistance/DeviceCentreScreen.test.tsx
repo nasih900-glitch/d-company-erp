@@ -135,7 +135,6 @@ function view(
       actionError={null}
       frame={frame}
       grantKind="one_time"
-      selectedModule="dashboard"
       busyAction={busyAction}
       onSelect={() => undefined}
       onRefresh={() => undefined}
@@ -146,7 +145,6 @@ function view(
       onRevoke={() => undefined}
       onReviewPairing={() => undefined}
       onRevokeKey={() => undefined}
-      onModuleChange={() => undefined}
       onCommand={() => undefined}
     />,
   );
@@ -158,8 +156,9 @@ describe('Device Centre protected presentation', () => {
 
     expect(markup).toContain('Protected owner access');
     expect(markup).toContain('Sensitive fields are hidden');
-    expect(markup).toContain('Open Dashboard');
-    expect(markup).toContain('Refresh current screen');
+    expect(markup).toContain('Open Help');
+    expect(markup).toContain('Refresh Help');
+    expect(markup).toContain('Operational screens stay private');
     expect(markup).toContain('Collect diagnostics');
     expect(markup).toContain('Device key verified');
     expect(markup).toContain('a'.repeat(64));
@@ -169,6 +168,9 @@ describe('Device Centre protected presentation', () => {
     expect(markup).not.toContain('Raw tap');
     expect(markup).not.toContain('Send text');
     expect(markup).not.toContain('Open Finance');
+    expect(markup).not.toContain('Open Gaming');
+    expect(markup).not.toContain('Open POS');
+    expect(markup).not.toContain('Open Shift');
   });
 
   it('shows pending pairing evidence without leaking a code or unapproved fingerprint', () => {
