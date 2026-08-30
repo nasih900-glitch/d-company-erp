@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.5` |
-| Version code | `16` |
+| Version name | `3.1.6` |
+| Version code | `17` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,8 +23,8 @@ build.
 
 ## Release status
 
-Version `3.1.5` (`16`) is the corrected server-delivery candidate following the
-`3.1.4` (`15`) audit build and the manual `3.1.3` (`14`) baseline. It includes
+Version `3.1.6` (`17`) is the consent-gated ERP-only remote-assistance candidate
+following the immutable `3.1.5` (`16`) reliability predecessor. It preserves
 stable connectivity presentation, privacy-preserving crash/ANR/API/sync
 diagnostics with an offline outbox, actionable recovery guidance, stricter
 real-time authentication handling, and the final tablet runtime/layout fixes.
@@ -36,8 +36,9 @@ gates.
 Android client code `8` remains the minimum-compatible floor. Preserve the
 signed `3.1.1` (`12`) and `3.1.2` (`13`) predecessors as immutable artifacts.
 Code `14` is installed manually and must never be registered or advertised as a
-server update. This server-driven successor, `3.1.5` (code `16`), must be a newly
-signed immutable APK with a verified HTTPS
+server update. Code `16` remains immutable upgrade history. This server-driven
+successor, `3.1.6` (code `17`), must be a newly signed immutable APK with a
+verified HTTPS
 URL, SHA-256, byte size, package, version, and expected signer. The server may
 offer that future artifact only after the stage-only operator checks and a
 protected owner activation re-verifies its public bytes. Android will still

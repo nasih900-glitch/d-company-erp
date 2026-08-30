@@ -120,8 +120,8 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current release candidate is `3.1.5`
-(`16`); Android code `8` remains the minimum-compatible floor. The signed
+`.github/workflows/release.yml`. The current release candidate is `3.1.6`
+(`17`); Android code `8` remains the minimum-compatible floor. The signed
 `3.1.3` (`14`) direct-release APK remains the manual, update-capable partner
 baseline. It must not be uploaded to the server release directory, published as
 a GitHub or Play release, or registered as an update. The public status contract
@@ -132,7 +132,9 @@ the supported in-place upgrade to code `14`; neither signed identity may be
 rebuilt with different bytes. Code `15` (`3.1.4`) is the first identity admitted
 by the server-release registry, but it is an immutable held audit build, not the
 current rollout target. Do not rebuild, overwrite, or activate it as a shortcut.
-The current server-delivery candidate is the distinct `3.1.5` (`16`) release.
+Code `16` (`3.1.5`) is the immutable predecessor used for the final in-place
+upgrade proof. The current server-delivery candidate is the distinct `3.1.6`
+(`17`) release, which adds consent-gated ERP-only remote assistance.
 It must be newly built and signed, hosted at an immutable HTTPS URL, verified
 against its exact SHA-256, byte size, package, version and expected signer, and
 then staged by the guarded operator tool and activated only by the exact

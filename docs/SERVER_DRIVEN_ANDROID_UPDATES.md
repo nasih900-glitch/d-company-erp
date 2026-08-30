@@ -50,8 +50,9 @@ tested.
 Code `15` (`3.1.4`) is the first identity accepted by the server-release
 registry. It is a held audit build, not the current activation target. Preserve
 any signed Code `15` APK and manifest exactly and never rebuild, overwrite, or
-activate them as a shortcut. The current server-delivery candidate is the
-distinct `3.1.5` (version code `16`) artifact with a new immutable filename.
+activate them as a shortcut. Code `16` (`3.1.5`) remains the immutable
+predecessor used for upgrade proof. The current server-delivery candidate is the
+distinct `3.1.6` (version code `17`) artifact with a new immutable filename.
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
@@ -109,11 +110,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Build and stage code 16
+## Build and stage code 17
 
-1. Confirm the code-`14` tablet is signed by the trusted certificate, can check
+1. Confirm the code-`16` installation is signed by the trusted certificate, can check
    for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.5` / code `16`. Run the complete
+2. Coordinate the application at `3.1.6` / code `17`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
 3. Download both files without renaming or modifying either one. First run a
@@ -121,8 +122,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.5/release-manifest.json \
-     --apk /secure/release-3.1.5/d-company-erp-v3.1.5-direct.apk \
+     --manifest /secure/release-3.1.6/release-manifest.json \
+     --apk /secure/release-3.1.6/d-company-erp-v3.1.6-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Gaming Centre reliability and update delivery"
    ```
@@ -135,8 +136,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.5/release-manifest.json \
-     --apk /secure/release-3.1.5/d-company-erp-v3.1.5-direct.apk \
+     --manifest /secure/release-3.1.6/release-manifest.json \
+     --apk /secure/release-3.1.6/d-company-erp-v3.1.6-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Gaming Centre reliability and update delivery" \
      --ssh-key ~/.ssh/dcompany_erp \
