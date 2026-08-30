@@ -246,7 +246,7 @@ private class UpdateEventQueueStore(context: Context) {
                 .remove(KEY_RUNTIME_STATE)
                 .remove(KEY_RUNTIME_ERROR)
                 .remove(KEY_RUNTIME_BINDING)
-                .commit()
+                .apply()
             return@synchronized UpdateRuntimeState.IDLE to null
         }
         val state = prefs.getString(KEY_RUNTIME_STATE, null)

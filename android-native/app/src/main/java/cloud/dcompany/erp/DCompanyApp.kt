@@ -1,5 +1,6 @@
 package cloud.dcompany.erp
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.app.Notification
@@ -416,6 +417,7 @@ class DCompanyApp : Application() {
      * The trace section is visible in Perfetto and the debug timing gives QA a
      * stable cold-start signal without collecting employee or business data.
      */
+    @SuppressLint("UnclosedTrace") // runBlocking returns on this caller thread; finally always closes it.
     private fun loadPersistedStartupState() {
         val startedAt = SystemClock.elapsedRealtime()
         Trace.beginSection(STARTUP_STATE_TRACE)

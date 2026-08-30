@@ -2,7 +2,6 @@ package cloud.dcompany.erp
 
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -203,10 +202,7 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "The verified update file is no longer available. Download it again.", Toast.LENGTH_LONG).show()
             return InstallerLaunchResult.VERIFIED_FILE_UNAVAILABLE
         }
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !packageManager.canRequestPackageInstalls()
-        ) {
+        if (!packageManager.canRequestPackageInstalls()) {
             val settingsIntent = Intent(
                 Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                 Uri.parse("package:$packageName"),

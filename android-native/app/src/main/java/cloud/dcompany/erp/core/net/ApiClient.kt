@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.net
 
+import android.annotation.SuppressLint
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.diagnostics.ApiFailureObservation
 import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
@@ -243,6 +244,8 @@ object ApiClient {
             .create(service)
     }
 
+    // TokenStore canonicalizes its constructor argument to applicationContext.
+    @SuppressLint("StaticFieldLeak")
     private lateinit var tokens: TokenStore
     private val activeTerminalHeaders = ActiveTerminalHeaderContext()
 

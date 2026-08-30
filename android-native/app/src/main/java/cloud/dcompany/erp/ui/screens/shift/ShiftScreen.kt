@@ -312,7 +312,7 @@ private fun ShiftSummaryRow(state: ShiftUiState) {
                 detail = if (open == null) {
                     "Loaded for this device"
                 } else {
-                    historyDateFormat.format(Date(open.openedAtMillis))
+                    formatHistoryDate(open.openedAtMillis)
                 },
                 icon = if (open == null) Icons.Filled.History else Icons.Filled.Person,
                 tone = UiTone.Neutral,
@@ -1276,7 +1276,7 @@ private fun ShiftOwnershipSummary(shift: ResolvedOpenShift) {
     val opener = shift.openedByName?.takeIf(String::isNotBlank)
         ?: shift.openedByEmail?.takeIf(String::isNotBlank)
         ?: "Opener not yet verified"
-    val opened = historyDateFormat.format(Date(shift.openedAtMillis))
+    val opened = formatHistoryDate(shift.openedAtMillis)
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             "Opened by $opener",
@@ -1290,7 +1290,8 @@ private fun ShiftOwnershipSummary(shift: ResolvedOpenShift) {
     }
 }
 
-private val historyDateFormat = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
+private fun formatHistoryDate(epochMillis: Long): String =
+    SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
 @Composable
 private fun HistoryRow(s: ShiftHistoryRow) {
@@ -1301,7 +1302,7 @@ private fun HistoryRow(s: ShiftHistoryRow) {
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
             .background(Brand.SurfaceRaised).padding(10.dp),
     ) {
-        Text(historyDateFormat.format(Date(s.openedAtMillis)), color = Brand.Foreground)
+        Text(formatHistoryDate(s.openedAtMillis), color = Brand.Foreground)
         Text(
             "Opened by $opener",
             color = Brand.ForegroundMuted,

@@ -895,9 +895,9 @@ private fun KitchenBoardShell(
     canAdvance: Boolean,
     onAdvance: (KitchenOrder) -> Unit,
     onAcknowledgeCancellation: (String, String) -> Unit,
+    modifier: Modifier = Modifier,
     wallClock: State<Long>? = null,
     onRetry: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     Column(
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)

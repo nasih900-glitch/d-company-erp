@@ -150,7 +150,7 @@ internal class SharedPreferencesFinanceWriteRecoveryStore(context: Context) :
             ApiClient.json.decodeFromString<PendingFinanceOnlineWrite>(raw)
         }.getOrNull()
         if (restored?.scope == scope) return restored
-        preferences.edit().remove(key).commit()
+        preferences.edit().remove(key).apply()
         return null
     }
 

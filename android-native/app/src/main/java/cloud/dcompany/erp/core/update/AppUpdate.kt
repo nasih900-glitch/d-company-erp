@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.update
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -740,6 +741,10 @@ private class VerifiedApkDownloader(context: Context) {
         .callTimeout(10, TimeUnit.MINUTES)
         .build()
 
+    // Deliberately use currently usable bytes plus a fixed margin. Asking
+    // StorageManager to evict other app caches would make a background ERP
+    // update unexpectedly destructive; a streaming ENOSPC still fails closed.
+    @SuppressLint("UsableSpace")
     suspend fun download(
         descriptor: DirectUpdateDescriptor,
         onProgress: (Long) -> Unit,

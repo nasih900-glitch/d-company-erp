@@ -101,8 +101,8 @@ fun MetricCard(
     value: String,
     detail: String,
     icon: ImageVector,
-    tone: UiTone = UiTone.Brand,
     modifier: Modifier = Modifier,
+    tone: UiTone = UiTone.Brand,
 ) {
     val colors = toneColors(tone)
     Row(

@@ -71,7 +71,7 @@ internal class DiagnosticCrashMarkerStore(context: Context) {
                 ?.takeIf { SCOPE_HASH.matches(it) }
             CapturedCrashMarker(event, scopeHash)
         }.getOrNull()
-        if (marker == null) prefs.edit().clear().commit()
+        if (marker == null) prefs.edit().clear().apply()
         return marker
     }
 
