@@ -36,6 +36,21 @@ def request_path_redis_client(redis_url: object) -> Redis:
     )
 
 
+def request_path_redis_binary_client(redis_url: object) -> Redis:
+    """Return a fail-fast client that preserves ephemeral binary frame bytes."""
+
+    return cast(
+        "Redis",
+        Redis.from_url(
+            str(redis_url),
+            decode_responses=False,
+            socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+            socket_timeout=REDIS_READ_TIMEOUT_SECONDS,
+            retry_on_timeout=False,
+        ),
+    )
+
+
 async def close_request_path_redis_client(client: RedisCloseable) -> None:
     """Bound best-effort pool disposal without corrupting the API outcome."""
 
@@ -53,5 +68,6 @@ __all__ = [
     "REDIS_CLOSE_TIMEOUT_SECONDS",
     "REDIS_READ_TIMEOUT_SECONDS",
     "close_request_path_redis_client",
+    "request_path_redis_binary_client",
     "request_path_redis_client",
 ]

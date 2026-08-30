@@ -76,6 +76,34 @@ class Settings(BaseSettings):
         ge=20,
         le=1_000,
     )
+    # Remote assistance is a latest-frame support aid, never a video archive.
+    # These ceilings are intentionally small enough for the existing Redis
+    # request path and the 1280x800 tablet target.
+    remote_assistance_frame_max_bytes: int = Field(
+        default=512 * 1024,
+        ge=64 * 1024,
+        le=2 * 1024 * 1024,
+    )
+    remote_assistance_frame_max_width: int = Field(default=1_920, ge=640, le=2_560)
+    remote_assistance_frame_max_height: int = Field(default=1_200, ge=480, le=1_600)
+    remote_assistance_frame_ttl_seconds: int = Field(default=5, ge=2, le=10)
+    remote_assistance_frame_rate_per_second: int = Field(default=1, ge=1, le=3)
+    remote_assistance_frame_decode_min_interval_ms: int = Field(
+        default=2_000,
+        ge=500,
+        le=5_000,
+    )
+    # Android heartbeats every 20 seconds while the support coordinator is in
+    # foreground scope. 45 seconds tolerates two normal intervals plus jitter
+    # while still exposing a genuinely stale tablet promptly.
+    remote_assistance_device_online_seconds: int = Field(default=45, ge=15, le=180)
+    remote_assistance_request_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    remote_assistance_session_max_seconds: int = Field(default=900, ge=60, le=900)
+    remote_assistance_anytime_grant_max_seconds: int = Field(
+        default=30 * 24 * 60 * 60,
+        ge=3_600,
+        le=30 * 24 * 60 * 60,
+    )
     max_request_body_bytes: int = Field(
         default=25 * 1024 * 1024,
         ge=1024,

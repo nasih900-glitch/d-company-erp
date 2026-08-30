@@ -39,7 +39,7 @@ RESOURCES = frozenset({
     "shifts", "tables", "orders", "gaming", "kitchen", "attendance",
     "menu", "customers", "inventory", "finance", "staff", "events",
     "memberships", "access_control", "ocr", "settings", "bug_reports",
-    "receipts", "audit",
+    "receipts", "audit", "remote_assistance",
 })
 
 
@@ -94,6 +94,7 @@ _PATH_RESOURCE_MAP: tuple[tuple[str, str], ...] = (
     ("/auth/login", "audit"),
     ("/auth/register/confirm", "audit"),
     ("/auth/password-reset/confirm", "audit"),
+    ("/remote-assistance", "remote_assistance"),
     ("/pos/shifts", "shifts"),
     ("/pos/receipts", "receipts"),
     ("/pos/refund-requests", "orders"),

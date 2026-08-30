@@ -24,6 +24,7 @@ from app.api.v1.menu.router import router as menu_router
 from app.api.v1.ocr.router import router as ocr_router
 from app.api.v1.pos.router import router as pos_router
 from app.api.v1.public.router import router as public_router
+from app.api.v1.remote_assistance.router import router as remote_assistance_router
 from app.api.v1.reports.router import router as reports_router
 from app.api.v1.settings.router import router as settings_router
 from app.api.v1.staff.router import router as staff_router
@@ -59,6 +60,11 @@ api_router.include_router(ocr_router, prefix="/ocr", tags=["ocr"])
 api_router.include_router(staff_router, prefix="/staff", tags=["staff"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(reports_router, prefix="/reports", tags=["reports"])
+api_router.include_router(
+    remote_assistance_router,
+    prefix="/remote-assistance",
+    tags=["remote-assistance"],
+)
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 api_router.include_router(settings_router, prefix="/settings", tags=["settings"])
 api_router.include_router(customers_router, prefix="/customers", tags=["customers"])

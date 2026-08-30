@@ -109,6 +109,11 @@ from app.models.pos import (
     Refund,
     Shift,
 )
+from app.models.remote_assistance import (
+    RemoteAssistanceCommand,
+    RemoteAssistanceGrant,
+    RemoteAssistanceSession,
+)
 from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
 from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
@@ -204,6 +209,9 @@ __all__ = [
     "Recipe",
     "RecipeLine",
     "Refund",
+    "RemoteAssistanceCommand",
+    "RemoteAssistanceGrant",
+    "RemoteAssistanceSession",
     "RefundLoyaltyAdjustment",
     "Reservation",
     "Role",

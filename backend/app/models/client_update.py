@@ -135,6 +135,25 @@ class ClientInstallation(Base, TimestampMixin, TenantMixin):
             "length(trim(version_name)) BETWEEN 1 AND 80",
             name="ck_client_installations_version_name",
         ),
+        CheckConstraint(
+            "remote_support_protocol_version IS NULL OR "
+            "remote_support_protocol_version BETWEEN 1 AND 10",
+            name="ck_client_installations_remote_protocol",
+        ),
+        CheckConstraint(
+            "remote_support_capability IS NULL OR remote_support_capability IN "
+            "('available', 'permission_required', 'unsupported')",
+            name="ck_client_installations_remote_capability",
+        ),
+        CheckConstraint(
+            "(remote_support_protocol_version IS NULL "
+            "AND remote_support_capability IS NULL "
+            "AND remote_support_last_seen_at IS NULL) OR "
+            "(remote_support_protocol_version IS NOT NULL "
+            "AND remote_support_capability IS NOT NULL "
+            "AND remote_support_last_seen_at IS NOT NULL)",
+            name="ck_client_installations_remote_heartbeat",
+        ),
         Index(
             "ix_client_installations_company_last_seen",
             "company_id",
@@ -185,6 +204,13 @@ class ClientInstallation(Base, TimestampMixin, TenantMixin):
     update_error_code: Mapped[str | None] = mapped_column(String(64))
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    # Remote assistance is opt-in and separately heartbeated.  Null means this
+    # installation has never advertised the constrained support protocol.
+    remote_support_protocol_version: Mapped[int | None] = mapped_column(Integer)
+    remote_support_capability: Mapped[str | None] = mapped_column(String(32))
+    remote_support_last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
 
 
