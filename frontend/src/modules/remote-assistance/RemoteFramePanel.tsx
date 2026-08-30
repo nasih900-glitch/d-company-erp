@@ -14,7 +14,7 @@ import type {
   RemoteAssistanceSessionDTO,
 } from '@/lib/erp-api';
 import { deviceName } from './remote-assistance-presentation';
-import type { RemoteFrameViewModel } from './remote-assistance-state';
+import { hasActiveDeviceKey, type RemoteFrameViewModel } from './remote-assistance-state';
 
 const TIME_ONLY = new Intl.DateTimeFormat(undefined, {
   hour: 'numeric',
@@ -32,7 +32,7 @@ export function RemoteFramePanel({
   frame: RemoteFrameViewModel;
 }) {
   const frameStatus = framePresentation(frame, device, session);
-  const hasImage = Boolean(frame.src);
+  const hasImage = hasActiveDeviceKey(device) && Boolean(frame.src);
 
   return (
     <section className="overflow-hidden rounded-xl border border-bg-border bg-bg/85" aria-label="ERP-only remote view">
@@ -134,6 +134,16 @@ function framePresentation(
   iconClass: string;
   dotClass: string;
 } {
+  if (!hasActiveDeviceKey(device)) {
+    return {
+      label: 'Pairing required',
+      title: 'Remote view is locked',
+      detail: 'A verified device key is required before any ERP frame can be requested or displayed.',
+      Icon: LockKeyhole,
+      iconClass: 'text-accent-gold',
+      dotClass: 'bg-accent-gold',
+    };
+  }
   if (!session || session.status !== 'active') {
     return {
       label: 'Private',

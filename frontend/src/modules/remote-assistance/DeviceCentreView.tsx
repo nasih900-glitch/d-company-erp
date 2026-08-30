@@ -38,6 +38,8 @@ export interface DeviceCentreViewProps {
   onConnect: () => void;
   onEnd: () => void;
   onRevoke: () => void;
+  onReviewPairing: (keyId: string, replacement: boolean) => void;
+  onRevokeKey: (keyId: string) => void;
   onModuleChange: (module: RemoteAssistanceModule) => void;
   onCommand: (command: SafeRemoteAssistanceCommand) => void;
 }
@@ -59,6 +61,8 @@ export function DeviceCentreView({
   onConnect,
   onEnd,
   onRevoke,
+  onReviewPairing,
+  onRevokeKey,
   onModuleChange,
   onCommand,
 }: DeviceCentreViewProps) {
@@ -132,6 +136,8 @@ export function DeviceCentreView({
               onConnect={onConnect}
               onEnd={onEnd}
               onRevoke={onRevoke}
+              onReviewPairing={onReviewPairing}
+              onRevokeKey={onRevokeKey}
               onModuleChange={onModuleChange}
               onCommand={onCommand}
             />

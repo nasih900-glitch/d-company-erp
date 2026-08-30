@@ -3177,6 +3177,7 @@ export type RemoteAssistanceGrantStatus =
   | 'consumed';
 export type RemoteAssistanceSessionStatus = 'requested' | 'active' | 'ended' | 'expired';
 export type RemoteAssistanceCommandStatus = 'pending' | 'acknowledged' | 'rejected';
+export type RemoteAssistanceDeviceKeyStatus = 'pending' | 'active' | 'revoked' | 'expired';
 export type RemoteAssistanceEndReason =
   | 'owner_ended'
   | 'user_ended'
@@ -3200,6 +3201,16 @@ export interface RemoteAssistanceDeviceDTO {
   is_remote_online: boolean;
   protocol_version: number | null;
   sharing_capability: RemoteAssistanceSharingCapability | null;
+  device_key_id: string | null;
+  device_key_status: RemoteAssistanceDeviceKeyStatus | null;
+  device_key_fingerprint_sha256: string | null;
+  device_key_approved_at: string | null;
+  pending_device_key_id: string | null;
+  pending_device_key_enrolled_by_user_id: string | null;
+  pending_device_key_enrolled_by_name: string | null;
+  pending_device_key_enrolled_at: string | null;
+  pending_device_key_expires_at: string | null;
+  pairing_required: boolean;
   grant_status: RemoteAssistanceGrantStatus | null;
   current_grant_id: string | null;
   current_grant_kind: RemoteAssistanceGrantKind | null;
@@ -3218,6 +3229,23 @@ export interface RemoteAssistanceDeviceListDTO {
   online_within_seconds: number;
   total: number;
   items: RemoteAssistanceDeviceDTO[];
+}
+
+export interface RemoteAssistanceDeviceKeyAdminDTO {
+  key_id: string;
+  installation_id: string;
+  status: RemoteAssistanceDeviceKeyStatus;
+  fingerprint_sha256: string | null;
+  enrolled_by_user_id: string;
+  enrolled_by_name: string | null;
+  enrolled_at: string;
+  pending_expires_at: string;
+  approved_by_user_id: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+  revoked_by_user_id: string | null;
+  revoked_by_name: string | null;
+  revoked_at: string | null;
 }
 
 export interface RemoteAssistanceGrantDTO {
@@ -3318,6 +3346,18 @@ export const remoteAssistance = {
     params,
     signal,
   }).then((r) => r.data),
+  approveDeviceKey: (
+    keyId: string,
+    body: { approval_id: string; pairing_code: string },
+  ) => api.post<RemoteAssistanceDeviceKeyAdminDTO>(
+    `/remote-assistance/device-keys/${keyId}/approve`,
+    body,
+  ).then((r) => r.data),
+  revokeDeviceKey: (keyId: string, revocationId: string) =>
+    api.post<RemoteAssistanceDeviceKeyAdminDTO>(
+      `/remote-assistance/device-keys/${keyId}/revoke`,
+      { revocation_id: revocationId },
+    ).then((r) => r.data),
   requestGrant: (body: {
     request_id: string;
     installation_id: string;

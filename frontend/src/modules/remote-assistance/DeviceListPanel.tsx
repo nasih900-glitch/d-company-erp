@@ -5,6 +5,7 @@ import {
 
 import {
   deviceName,
+  deviceKeyStatusPresentation,
   grantStatusPresentation,
   relativeTime,
   sessionStatusPresentation,
@@ -35,6 +36,10 @@ export function DeviceList({
       <div className="divide-y divide-bg-border xl:max-h-[calc(100dvh-15rem)] xl:overflow-y-auto">
         {rows.map((row) => {
           const selected = row.device.installation_id === selectedId;
+          const key = deviceKeyStatusPresentation(
+            row.device.device_key_status,
+            Boolean(row.device.pending_device_key_id && row.device.device_key_status === 'active'),
+          );
           const grant = grantStatusPresentation(row.device.grant_status);
           const session = sessionStatusPresentation(row.device.session_status);
           return (
@@ -66,6 +71,7 @@ export function DeviceList({
               </div>
               <div className="flex items-center justify-between gap-2 sm:justify-end xl:justify-between 2xl:justify-end">
                 <div className="flex flex-wrap gap-1.5">
+                  <StatusPill label={key.shortLabel} tone={key.tone} />
                   <StatusPill label={grant.shortLabel} tone={grant.tone} />
                   <StatusPill label={session.shortLabel} tone={session.tone} />
                 </div>

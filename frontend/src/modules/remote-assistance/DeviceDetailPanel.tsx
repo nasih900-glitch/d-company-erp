@@ -15,8 +15,10 @@ import type {
 } from '@/lib/remote-assistance-policy';
 import { RemoteFramePanel } from './RemoteFramePanel';
 import { RemoteControls } from './RemoteControlsPanel';
+import { DeviceKeyPairingPanel } from './DeviceKeyPairingPanel';
 import {
   assistanceEvents,
+  deviceKeyStatusPresentation,
   deviceName,
   formatDate,
   grantStatusPresentation,
@@ -41,6 +43,8 @@ export function DeviceDetail({
   onConnect,
   onEnd,
   onRevoke,
+  onReviewPairing,
+  onRevokeKey,
   onModuleChange,
   onCommand,
 }: {
@@ -54,6 +58,8 @@ export function DeviceDetail({
   onConnect: () => void;
   onEnd: () => void;
   onRevoke: () => void;
+  onReviewPairing: (keyId: string, replacement: boolean) => void;
+  onRevokeKey: (keyId: string) => void;
   onModuleChange: (module: RemoteAssistanceModule) => void;
   onCommand: (command: SafeRemoteAssistanceCommand) => void;
 }) {
@@ -86,6 +92,13 @@ export function DeviceDetail({
         </div>
       </div>
 
+      <DeviceKeyPairingPanel
+        device={device}
+        busyAction={busyAction}
+        onReviewPairing={onReviewPairing}
+        onRevokeKey={onRevokeKey}
+      />
+
       <RemoteFramePanel device={device} session={session} frame={frame} />
 
       <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.75fr)]">
@@ -117,6 +130,10 @@ export function AuditProtection({ row }: { row: DeviceCentreRow }) {
   const actor = session?.requested_by_name ?? grant?.requested_by_name ?? 'Protected owner';
   const employee = device.current_grant_responded_by_name ?? grant?.responded_by_name;
   const respondedAt = device.current_grant_responded_at ?? grant?.responded_at;
+  const deviceKey = deviceKeyStatusPresentation(
+    device.device_key_status,
+    Boolean(device.pending_device_key_id && device.device_key_status === 'active'),
+  );
   const events = assistanceEvents(device, grant, session);
 
   return (
@@ -128,6 +145,7 @@ export function AuditProtection({ row }: { row: DeviceCentreRow }) {
         </div>
         <dl className="mt-4 space-y-3 text-xs">
           <AuditRow icon={UserCheck} label="Requester" value={actor} />
+          <AuditRow icon={LockKeyhole} label="Device identity" value={deviceKey.label} />
           <AuditRow
             icon={ShieldCheck}
             label="Employee consent"

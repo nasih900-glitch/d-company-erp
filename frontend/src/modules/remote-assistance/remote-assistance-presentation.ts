@@ -2,6 +2,7 @@ import type {
   RemoteAssistanceDeviceDTO,
   RemoteAssistanceGrantDTO,
   RemoteAssistanceGrantStatus,
+  RemoteAssistanceDeviceKeyStatus,
   RemoteAssistanceSessionDTO,
   RemoteAssistanceSessionStatus,
 } from '@/lib/erp-api';
@@ -12,6 +13,32 @@ const DATE_TIME = new Intl.DateTimeFormat(undefined, {
 });
 
 export type Tone = 'good' | 'warning' | 'bad' | 'neutral';
+
+export function deviceKeyStatusPresentation(
+  status: RemoteAssistanceDeviceKeyStatus | null,
+  hasPendingReplacement = false,
+): { label: string; shortLabel: string; detail: string; tone: Tone } {
+  if (hasPendingReplacement) {
+    return {
+      label: 'Replacement pairing required',
+      shortLabel: 'Pairing required',
+      detail: 'A new tablet key is waiting for physical-code approval.',
+      tone: 'warning',
+    };
+  }
+  switch (status) {
+    case 'active':
+      return { label: 'Device key verified', shortLabel: 'Key verified', detail: 'Cryptographic device identity is active.', tone: 'good' };
+    case 'pending':
+      return { label: 'Pairing required', shortLabel: 'Pairing required', detail: 'Approve the code shown on the physical tablet.', tone: 'warning' };
+    case 'revoked':
+      return { label: 'Device key revoked', shortLabel: 'Key revoked', detail: 'A new tablet key must be paired.', tone: 'bad' };
+    case 'expired':
+      return { label: 'Pairing expired', shortLabel: 'Pairing expired', detail: 'Ask staff to start pairing again.', tone: 'neutral' };
+    default:
+      return { label: 'Pairing required', shortLabel: 'Pairing required', detail: 'No verified device key is active.', tone: 'warning' };
+  }
+}
 
 export function grantStatusPresentation(status: RemoteAssistanceGrantStatus | null): {
   label: string;
@@ -60,6 +87,13 @@ export function assistanceEvents(
   const events: Array<{ title: string; at: string; dotClass: string }> = [];
   const respondedAt = device.current_grant_responded_at ?? grant?.responded_at;
   const grantStatus = device.grant_status ?? grant?.status;
+  if (device.device_key_approved_at) {
+    events.push({
+      title: 'Device key verified',
+      at: device.device_key_approved_at,
+      dotClass: 'bg-accent-good',
+    });
+  }
   if (grant?.requested_at) events.push({ title: 'Access requested', at: grant.requested_at, dotClass: 'bg-accent-gold' });
   if (respondedAt) {
     events.push({

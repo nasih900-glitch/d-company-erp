@@ -16,6 +16,7 @@ vi.mock('./api', () => ({
 const INSTALLATION_ID = '5b2d6639-5da5-4b2f-89fa-61a6b5a8b700';
 const GRANT_ID = '0878831b-ef18-49f1-9c16-f2f8cbdfac04';
 const SESSION_ID = '267d32f3-e98c-4d83-a402-7a132a181dd1';
+const KEY_ID = '712fa29d-c5da-4be0-9804-ec659d5038bd';
 const MUTATION_ID = '625ed2bc-fdb4-42d4-9412-017a3917147d';
 
 describe('remote-assistance API contract', () => {
@@ -101,6 +102,27 @@ describe('remote-assistance API contract', () => {
       5,
       `/remote-assistance/grants/${GRANT_ID}/revoke`,
       { revoke_id: MUTATION_ID },
+    );
+  });
+
+  it('uses the protected idempotent device-key approval and revocation contract', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+
+    await remoteAssistance.approveDeviceKey(KEY_ID, {
+      approval_id: MUTATION_ID,
+      pairing_code: 'AB3DEF5G7H9J',
+    });
+    await remoteAssistance.revokeDeviceKey(KEY_ID, MUTATION_ID);
+
+    expect(api.post).toHaveBeenNthCalledWith(
+      1,
+      `/remote-assistance/device-keys/${KEY_ID}/approve`,
+      { approval_id: MUTATION_ID, pairing_code: 'AB3DEF5G7H9J' },
+    );
+    expect(api.post).toHaveBeenNthCalledWith(
+      2,
+      `/remote-assistance/device-keys/${KEY_ID}/revoke`,
+      { revocation_id: MUTATION_ID },
     );
   });
 

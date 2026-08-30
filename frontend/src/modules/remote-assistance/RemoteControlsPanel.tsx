@@ -1,7 +1,6 @@
 import {
   CircleStop,
   Clock3,
-  CloudCog,
   Gamepad2,
   HelpCircle,
   LayoutDashboard,
@@ -25,6 +24,7 @@ import {
 } from '@/lib/remote-assistance-policy';
 import { InlineNotice } from './DeviceCentrePrimitives';
 import {
+  hasActiveDeviceKey,
   isRemoteCommandBusyAction,
   type BusyAction,
   type DeviceCentreRow,
@@ -72,7 +72,9 @@ export function RemoteControls({
   onModuleChange: (module: RemoteAssistanceModule) => void;
   onCommand: (command: SafeRemoteAssistanceCommand) => void;
 }) {
-  const sessionActive = row.session?.status === 'active';
+  const reportedSessionActive = row.session?.status === 'active';
+  const keyActive = hasActiveDeviceKey(row.device);
+  const sessionActive = reportedSessionActive && keyActive;
   const pending = row.device.grant_status === 'requested';
   const unsupported = row.device.sharing_capability === 'unsupported';
   const capabilityUnknown = row.device.sharing_capability === null;
@@ -92,22 +94,31 @@ export function RemoteControls({
         </div>
       </div>
 
-      {!sessionActive ? (
+      {!reportedSessionActive ? (
         <div className="mt-4 space-y-3">
           <div className="grid gap-2 sm:grid-cols-2">
             <GrantKindButton
               active={grantKind === 'one_time'}
               title="One-time"
               detail="One 15-minute support session"
+              disabled={!keyActive || busyAction !== null}
               onClick={() => onGrantKindChange('one_time')}
             />
             <GrantKindButton
               active={grantKind === 'anytime'}
               title="Anytime access"
               detail="Up to 24 hours or until revoked"
+              disabled={!keyActive || busyAction !== null}
               onClick={() => onGrantKindChange('anytime')}
             />
           </div>
+          {!keyActive ? (
+            <InlineNotice
+              tone="warning"
+              title="Pairing required"
+              message="Approve a device key from the physical tablet before requesting access or connecting."
+            />
+          ) : null}
           <div className="flex flex-col gap-2 sm:flex-row">
             <ActionButton
               label={offline
@@ -177,7 +188,7 @@ export function RemoteControls({
             />
           ) : null}
         </div>
-      ) : (
+      ) : sessionActive ? (
         <div className="mt-4 space-y-3">
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <label>
@@ -205,7 +216,7 @@ export function RemoteControls({
               compact
             />
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2">
             <ActionButton
               label="Refresh current screen"
               Icon={RotateCw}
@@ -213,15 +224,6 @@ export function RemoteControls({
               busyLabel="Waiting for tablet…"
               disabled={busyAction !== null}
               onClick={() => onCommand({ type: 'refresh' })}
-              compact
-            />
-            <ActionButton
-              label="Sync now"
-              Icon={CloudCog}
-              busy={busyAction === 'sync_now'}
-              busyLabel="Waiting for tablet…"
-              disabled={busyAction !== null}
-              onClick={() => onCommand({ type: 'sync_now' })}
               compact
             />
             <ActionButton
@@ -236,6 +238,22 @@ export function RemoteControls({
           </div>
           <ActionButton
             label="End session"
+            Icon={CircleStop}
+            busy={busyAction === 'end'}
+            disabled={busyAction !== null && !commandBusy}
+            onClick={onEnd}
+            danger
+          />
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <InlineNotice
+            tone="bad"
+            title="Session controls locked · device key is not active"
+            message="The reported session may be stale. No view or ERP command is available until the tablet has a verified key."
+          />
+          <ActionButton
+            label="End reported session"
             Icon={CircleStop}
             busy={busyAction === 'end'}
             disabled={busyAction !== null && !commandBusy}
@@ -270,11 +288,13 @@ function GrantKindButton({
   active,
   title,
   detail,
+  disabled,
   onClick,
 }: {
   active: boolean;
   title: string;
   detail: string;
+  disabled: boolean;
   onClick: () => void;
 }) {
   return (
@@ -282,11 +302,12 @@ function GrantKindButton({
       type="button"
       aria-pressed={active}
       onClick={onClick}
+      disabled={disabled}
       className={`rounded-xl border px-3 py-3 text-left transition ${
         active
           ? 'border-accent/70 bg-accent/10 text-fg'
           : 'border-bg-border bg-bg-raised/50 text-fg-muted hover:border-accent/40 hover:text-fg'
-      }`}
+      } disabled:cursor-not-allowed disabled:opacity-40`}
     >
       <span className="block text-sm font-semibold">{title}</span>
       <span className="mt-0.5 block text-[11px] leading-4 text-fg-muted">{detail}</span>

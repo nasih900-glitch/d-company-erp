@@ -10,8 +10,12 @@ import {
   DeviceCentreView,
 } from './DeviceCentreView';
 import { DeviceCentreLoadError } from './DeviceCentrePrimitives';
+import { DeviceKeyApprovalModal } from './DeviceKeyPairingPanel';
 import { RemoteFramePanel } from './RemoteFramePanel';
 import {
+  canConnectRemoteSession,
+  canRequestRemoteGrant,
+  deviceKeyActionErrorMessage,
   joinRemoteAssistanceState,
   remoteAssistanceErrorMessage,
   type BusyAction,
@@ -20,6 +24,7 @@ import {
 } from './remote-assistance-state';
 
 const INSTALLATION_ID = '5b2d6639-5da5-4b2f-89fa-61a6b5a8b700';
+const PENDING_KEY_ID = 'c7345b8e-1c2c-4385-ad55-c3d8d540b544';
 
 function device(
   overrides: Partial<RemoteAssistanceDeviceDTO> = {},
@@ -37,6 +42,16 @@ function device(
     is_remote_online: true,
     protocol_version: 1,
     sharing_capability: 'available',
+    device_key_id: '7f144289-1b3a-4fc1-99e7-02d8d90bb911',
+    device_key_status: 'active',
+    device_key_fingerprint_sha256: 'a'.repeat(64),
+    device_key_approved_at: '2026-08-30T11:50:00Z',
+    pending_device_key_id: null,
+    pending_device_key_enrolled_by_user_id: null,
+    pending_device_key_enrolled_by_name: null,
+    pending_device_key_enrolled_at: null,
+    pending_device_key_expires_at: null,
+    pairing_required: false,
     grant_status: 'active',
     current_grant_id: '9cccd67f-1c98-4d73-8a20-5df6ccf35977',
     current_grant_kind: 'one_time',
@@ -129,6 +144,8 @@ function view(
       onConnect={() => undefined}
       onEnd={() => undefined}
       onRevoke={() => undefined}
+      onReviewPairing={() => undefined}
+      onRevokeKey={() => undefined}
       onModuleChange={() => undefined}
       onCommand={() => undefined}
     />,
@@ -143,14 +160,130 @@ describe('Device Centre protected presentation', () => {
     expect(markup).toContain('Sensitive fields are hidden');
     expect(markup).toContain('Open Dashboard');
     expect(markup).toContain('Refresh current screen');
-    expect(markup).toContain('Sync now');
     expect(markup).toContain('Collect diagnostics');
+    expect(markup).toContain('Device key verified');
+    expect(markup).toContain('a'.repeat(64));
     expect(markup).toContain('End session');
     expect(markup).toContain('Emergency stop &amp; revoke');
     expect(markup).toContain('Every action is recorded');
     expect(markup).not.toContain('Raw tap');
     expect(markup).not.toContain('Send text');
     expect(markup).not.toContain('Open Finance');
+  });
+
+  it('shows pending pairing evidence without leaking a code or unapproved fingerprint', () => {
+    const unapprovedFingerprint = 'f'.repeat(64);
+    const pendingDevice = device({
+      device_key_id: PENDING_KEY_ID,
+      device_key_status: 'pending',
+      device_key_fingerprint_sha256: unapprovedFingerprint,
+      device_key_approved_at: null,
+      pending_device_key_id: PENDING_KEY_ID,
+      pending_device_key_enrolled_by_user_id: 'b5589e6e-6842-4c61-b6f6-c9693879b7a6',
+      pending_device_key_enrolled_by_name: 'Front desk employee',
+      pending_device_key_enrolled_at: '2026-08-30T12:01:00Z',
+      pending_device_key_expires_at: '2026-08-30T12:11:00Z',
+      pairing_required: true,
+      grant_status: null,
+      current_grant_id: null,
+      current_grant_kind: null,
+      current_grant_expires_at: null,
+      session_status: null,
+      current_session_id: null,
+      current_session_expires_at: null,
+      current_session_next_sequence: null,
+    });
+    const row = { device: pendingDevice, grant: null, session: null };
+    const markup = view([row], { ...freshFrame, state: 'inactive', src: null });
+
+    expect(markup).toContain('Pairing required');
+    expect(markup).toContain(PENDING_KEY_ID);
+    expect(markup).toContain('Front desk employee');
+    expect(markup).toContain('Enter pairing code');
+    expect(markup).not.toContain(unapprovedFingerprint);
+    expect(markup).not.toContain('pairing_code');
+    expect(canRequestRemoteGrant(row)).toBe(false);
+    expect(canConnectRemoteSession(row)).toBe(false);
+
+    for (const label of ['Request employee approval</button>', 'Connect</button>']) {
+      const labelIndex = markup.indexOf(label);
+      expect(labelIndex).toBeGreaterThan(-1);
+      const buttonStart = markup.lastIndexOf('<button', labelIndex);
+      expect(markup.slice(buttonStart, markup.indexOf('>', buttonStart)))
+        .toContain('disabled=""');
+    }
+  });
+
+  it('renders active, revoked and expired key states with fail-closed recovery copy', () => {
+    const active = view([{
+      device: device({
+        grant_status: null,
+        current_grant_id: null,
+        current_grant_kind: null,
+        current_grant_expires_at: null,
+        session_status: null,
+      }),
+      grant: null,
+      session: null,
+    }]);
+    expect(active).toContain('Key verified');
+    expect(active).toContain('Revoke device key');
+
+    const revokedFingerprint = 'e'.repeat(64);
+    const revoked = view([{
+      device: device({
+        device_key_status: 'revoked',
+        device_key_fingerprint_sha256: revokedFingerprint,
+        device_key_approved_at: '2026-08-30T11:45:00Z',
+        pairing_required: true,
+        grant_status: null,
+        current_grant_id: null,
+        current_grant_kind: null,
+        current_grant_expires_at: null,
+        session_status: null,
+      }),
+      grant: null,
+      session: null,
+    }], { ...freshFrame, state: 'inactive', src: null });
+    expect(revoked).toContain('Device key revoked');
+    expect(revoked).toContain('Remote access is blocked');
+    expect(revoked).not.toContain(revokedFingerprint);
+
+    const expired = view([{
+      device: device({
+        device_key_status: 'expired',
+        device_key_fingerprint_sha256: null,
+        device_key_approved_at: null,
+        pairing_required: true,
+        grant_status: null,
+        current_grant_id: null,
+        current_grant_kind: null,
+        current_grant_expires_at: null,
+        session_status: null,
+      }),
+      grant: null,
+      session: null,
+    }], { ...freshFrame, state: 'inactive', src: null });
+    expect(expired).toContain('Pairing expired');
+    expect(expired).toContain('start a new pairing request');
+  });
+
+  it('treats a pending replacement as explicit rotation while the active key stays visible', () => {
+    const markup = view([{
+      device: device({
+        pending_device_key_id: PENDING_KEY_ID,
+        pending_device_key_enrolled_by_user_id: 'b5589e6e-6842-4c61-b6f6-c9693879b7a6',
+        pending_device_key_enrolled_by_name: 'Shift lead',
+        pending_device_key_enrolled_at: '2026-08-30T12:01:00Z',
+        pending_device_key_expires_at: '2026-08-30T12:11:00Z',
+      }),
+      grant: grant(),
+      session: session(),
+    }]);
+
+    expect(markup).toContain('Replacement key waiting');
+    expect(markup).toContain('Review replacement');
+    expect(markup).toContain('a'.repeat(64));
   });
 
   it('shows a queued command as waiting while stop and revoke remain available', () => {
@@ -161,7 +294,11 @@ describe('Device Centre protected presentation', () => {
     );
 
     expect(markup).toContain('Waiting for tablet…');
-    for (const label of ['End session</button>', 'Emergency stop &amp; revoke</button>']) {
+    for (const label of [
+      'Revoke device key</button>',
+      'End session</button>',
+      'Emergency stop &amp; revoke</button>',
+    ]) {
       const labelIndex = markup.indexOf(label);
       expect(labelIndex).toBeGreaterThan(-1);
       const buttonStart = markup.lastIndexOf('<button', labelIndex);
@@ -238,6 +375,74 @@ describe('Device Centre protected presentation', () => {
     );
     expect(offline).toContain('Tablet is offline');
     expect(offline).not.toContain('<img');
+  });
+
+  it('never displays a frame when the reported session lacks an active device key', () => {
+    const markup = renderToStaticMarkup(
+      <RemoteFramePanel
+        device={device({
+          device_key_id: PENDING_KEY_ID,
+          device_key_status: 'pending',
+          device_key_fingerprint_sha256: null,
+          device_key_approved_at: null,
+          pending_device_key_id: PENDING_KEY_ID,
+          pairing_required: true,
+        })}
+        session={session()}
+        frame={freshFrame}
+      />,
+    );
+
+    expect(markup).toContain('Remote view is locked');
+    expect(markup).toContain('verified device key');
+    expect(markup).not.toContain('<img');
+    expect(markup).not.toContain('blob:frame-1');
+  });
+
+  it('keeps pairing entry masked and supports truthful wrong-code and unknown-outcome states', () => {
+    const wrongCode = renderToStaticMarkup(
+      <DeviceKeyApprovalModal
+        replacement={false}
+        busy={false}
+        error="The pairing code was not accepted."
+        retryAvailable={false}
+        onSubmit={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(wrongCode).toContain('type="password"');
+    expect(wrongCode).toContain('value=""');
+    expect(wrongCode).toContain('0 of 12 characters entered');
+    expect(wrongCode).toContain('The pairing code was not accepted.');
+    expect(wrongCode).not.toContain('AB3DEF5G7H9J');
+
+    const retry = renderToStaticMarkup(
+      <DeviceKeyApprovalModal
+        replacement
+        busy={false}
+        error="The ERP server could not be reached."
+        retryAvailable
+        onSubmit={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(retry).toContain('Approval outcome is unknown');
+    expect(retry).toContain('exact same hidden code and approval ID');
+    expect(retry).toContain('Retry approval');
+    expect(retry).not.toContain('type="password"');
+
+    const loading = renderToStaticMarkup(
+      <DeviceKeyApprovalModal
+        replacement={false}
+        busy
+        error={null}
+        retryAvailable
+        onSubmit={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(loading).toContain('animate-spin');
+    expect(loading).toContain('disabled=""');
   });
 
   it('separates heartbeat presence from sharing approval and blocks stale requests', () => {
@@ -336,6 +541,19 @@ describe('Device Centre state recovery', () => {
     expect(remoteAssistanceErrorMessage(forbidden)).toContain('protected System Health access');
     expect(remoteAssistanceErrorMessage(server)).toContain('did not complete');
     expect(remoteAssistanceErrorMessage(server)).not.toContain('SQL');
+
+    const mismatch = Object.assign(new Error('raw mismatch trace'), {
+      status: 403,
+      code: 'remote_pairing_code_mismatch',
+    });
+    const pairingForbidden = Object.assign(new Error('raw permission trace'), {
+      status: 403,
+      code: 'forbidden',
+    });
+    expect(deviceKeyActionErrorMessage(mismatch, 'approve')).toContain('not accepted');
+    expect(deviceKeyActionErrorMessage(mismatch, 'approve')).not.toContain('trace');
+    expect(deviceKeyActionErrorMessage(pairingForbidden, 'approve'))
+      .toContain('Protected System Health access');
 
     const markup = renderToStaticMarkup(
       <DeviceCentreLoadError

@@ -24,8 +24,11 @@ import {
   canRequestRemoteGrant,
   commandRejectionMessage,
   commandSuccessMessage,
+  deviceKeyActionErrorMessage,
   EMPTY_REMOTE_FRAME,
   frameErrorMessage,
+  hasActiveDeviceKey,
+  isCompletePairingCode,
   isRemoteCommandBusyAction,
   joinRemoteAssistanceState,
   remoteAssistanceErrorMessage,
@@ -45,8 +48,15 @@ const FRAME_POLL_MS = 3_000;
 const SESSION_TTL_SECONDS = 15 * 60;
 const ONE_TIME_GRANT_TTL_SECONDS = 10 * 60;
 const ANYTIME_GRANT_TTL_SECONDS = 24 * 60 * 60;
+const TRUST_RECONCILING_FRAME: RemoteFrameViewModel = {
+  ...EMPTY_REMOTE_FRAME,
+  state: 'privacy',
+  message: 'The ERP view is paused while the tablet key state is reconciled.',
+};
 
 export type ConfirmAction =
+  | { type: 'approve_key'; keyId: string; replacement: boolean }
+  | { type: 'revoke_key'; keyId: string }
   | { type: 'request_anytime' }
   | { type: 'end'; sessionId: string }
   | { type: 'revoke'; grantId: string };
@@ -61,11 +71,14 @@ export function useDeviceCentreController() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [pairingRetryAvailable, setPairingRetryAvailable] = useState(false);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [grantKind, setGrantKind] = useState<RemoteAssistanceGrantKind>('one_time');
   const [selectedModule, setSelectedModule] = useState<RemoteAssistanceModule>('dashboard');
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [frame, setFrame] = useState<RemoteFrameViewModel>(EMPTY_REMOTE_FRAME);
+  const [frameSuspended, setFrameSuspended] = useState(false);
   const requestSequence = useRef(0);
   const statusController = useRef<AbortController | null>(null);
   const frameController = useRef<AbortController | null>(null);
@@ -73,6 +86,11 @@ export function useDeviceCentreController() {
   const frameUrl = useRef<string | null>(null);
   const mutationIds = useRef(new Map<string, string>());
   const grants = useRef(new Map<string, RemoteAssistanceGrantDTO>());
+  const pairingIntent = useRef<{
+    keyId: string;
+    approvalId: string;
+    pairingCode: string;
+  } | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -81,6 +99,7 @@ export function useDeviceCentreController() {
       mounted.current = false;
       commandController.current?.abort();
       commandController.current = null;
+      pairingIntent.current = null;
     };
   }, []);
 
@@ -98,7 +117,7 @@ export function useDeviceCentreController() {
         remoteAssistance.listDevices(controller.signal),
         remoteAssistance.listSessions({ limit: 100, offset: 0 }, controller.signal),
       ]);
-      if (controller.signal.aborted || request !== requestSequence.current) return;
+      if (controller.signal.aborted || request !== requestSequence.current) return false;
       const nextRows = joinRemoteAssistanceState(devices.items, sessions.items, grants.current);
       rowsRef.current = nextRows;
       setRows(nextRows);
@@ -108,11 +127,13 @@ export function useDeviceCentreController() {
           : nextRows[0]?.device.installation_id ?? null
       ));
       setRefreshError(null);
+      return true;
     } catch (error) {
-      if (controller.signal.aborted || request !== requestSequence.current) return;
+      if (controller.signal.aborted || request !== requestSequence.current) return false;
       const message = remoteAssistanceErrorMessage(error);
       if (rowsRef.current) setRefreshError(message);
       else setLoadError(message);
+      return false;
     } finally {
       if (request === requestSequence.current) {
         setLoading(false);
@@ -142,6 +163,26 @@ export function useDeviceCentreController() {
   );
   const selectedSessionId = selectedRow?.session?.id ?? null;
   const selectedSessionStatus = selectedRow?.session?.status ?? null;
+  const selectedDeviceKeyActive = selectedRow
+    ? hasActiveDeviceKey(selectedRow.device)
+    : false;
+  const selectedPendingKeyId = selectedRow?.device.pending_device_key_id ?? null;
+
+  useEffect(() => {
+    if (
+      confirmAction?.type === 'approve_key'
+      && rows
+      && selectedPendingKeyId !== confirmAction.keyId
+    ) {
+      pairingIntent.current = null;
+      setPairingRetryAvailable(false);
+      setPairingError(null);
+      setConfirmAction(null);
+      setActionError(
+        'The pending tablet key changed or expired. Review the latest pairing state before retrying.',
+      );
+    }
+  }, [confirmAction, rows, selectedPendingKeyId]);
 
   useEffect(() => {
     commandController.current?.abort();
@@ -153,9 +194,16 @@ export function useDeviceCentreController() {
       URL.revokeObjectURL(frameUrl.current);
       frameUrl.current = null;
     }
-    setFrame(EMPTY_REMOTE_FRAME);
+    setFrame(frameSuspended ? TRUST_RECONCILING_FRAME : EMPTY_REMOTE_FRAME);
 
-    if (!selectedSessionId || selectedSessionStatus !== 'active') return undefined;
+    if (
+      !selectedSessionId
+      || selectedSessionStatus !== 'active'
+      || !selectedDeviceKeyActive
+      || frameSuspended
+    ) {
+      return undefined;
+    }
 
     let disposed = false;
     const pollFrame = async () => {
@@ -206,7 +254,7 @@ export function useDeviceCentreController() {
         frameUrl.current = null;
       }
     };
-  }, [selectedSessionId, selectedSessionStatus]);
+  }, [frameSuspended, selectedDeviceKeyActive, selectedSessionId, selectedSessionStatus]);
 
   const mutationId = useCallback((key: string) => {
     const existing = mutationIds.current.get(key);
@@ -226,9 +274,184 @@ export function useDeviceCentreController() {
     controller?.abort();
   }, []);
 
+  const clearFrameImmediately = useCallback(() => {
+    frameController.current?.abort();
+    if (frameUrl.current) {
+      URL.revokeObjectURL(frameUrl.current);
+      frameUrl.current = null;
+    }
+    setFrame(TRUST_RECONCILING_FRAME);
+  }, []);
+
+  const openPairing = useCallback((keyId: string, replacement: boolean) => {
+    if (selectedPendingKeyId !== keyId) {
+      setActionError('The pending tablet key changed. Refresh pairing state before approving.');
+      return;
+    }
+    pairingIntent.current = null;
+    setActionError(null);
+    setPairingError(null);
+    setPairingRetryAvailable(false);
+    setConfirmAction({ type: 'approve_key', keyId, replacement });
+  }, [selectedPendingKeyId]);
+
+  const dismissConfirmAction = useCallback(() => {
+    const reconcileUnknownPairing = pairingRetryAvailable;
+    pairingIntent.current = null;
+    setPairingError(null);
+    setPairingRetryAvailable(false);
+    setConfirmAction(null);
+    if (reconcileUnknownPairing) {
+      void load(true).then((reconciled) => {
+        if (reconciled) setFrameSuspended(false);
+      });
+    }
+  }, [load, pairingRetryAvailable]);
+
+  const selectDevice = useCallback((installationId: string) => {
+    pairingIntent.current = null;
+    setPairingError(null);
+    setPairingRetryAvailable(false);
+    setConfirmAction(null);
+    setFrameSuspended(false);
+    setSelectedId(installationId);
+  }, []);
+
+  const runApproveDeviceKey = useCallback(async (
+    keyId: string,
+    pairingCode: string | null,
+  ) => {
+    if (busyAction) return;
+    if (selectedPendingKeyId !== keyId) {
+      pairingIntent.current = null;
+      setPairingRetryAvailable(false);
+      setPairingError('The pending tablet key changed or expired. Review device state again.');
+      return;
+    }
+    let intent = pairingIntent.current;
+    if (pairingCode !== null) {
+      if (!isCompletePairingCode(pairingCode)) {
+        setPairingError('Enter the complete 12-character code shown on the physical tablet.');
+        return;
+      }
+      intent = {
+        keyId,
+        approvalId: createRemoteMutationId(),
+        pairingCode,
+      };
+      pairingIntent.current = intent;
+    }
+    if (!intent || intent.keyId !== keyId) {
+      setPairingError('The pairing attempt is no longer available. Enter the code again.');
+      setPairingRetryAvailable(false);
+      return;
+    }
+
+    setBusyAction('approve_key');
+    setPairingError(null);
+    setFrameSuspended(true);
+    clearFrameImmediately();
+    try {
+      await remoteAssistance.approveDeviceKey(keyId, {
+        approval_id: intent.approvalId,
+        pairing_code: intent.pairingCode,
+      });
+      pairingIntent.current = null;
+      setPairingRetryAvailable(false);
+      notifications.success(
+        selectedDeviceKeyActive
+          ? 'The replacement tablet key is verified. Refresh employee consent before reconnecting.'
+          : 'The tablet identity is verified. Employee consent can now be requested.',
+        { title: selectedDeviceKeyActive ? 'Device key replaced' : 'Tablet paired' },
+      );
+      setConfirmAction(null);
+      const reconciled = await load(true);
+      if (reconciled) setFrameSuspended(false);
+    } catch (error) {
+      const apiError = error as ApiError;
+      const retryableUnknown = !apiError.status
+        || apiError.status >= 500
+        || apiError.code === 'network_error';
+      if (!retryableUnknown) pairingIntent.current = null;
+      setPairingRetryAvailable(retryableUnknown);
+      const message = deviceKeyActionErrorMessage(error, 'approve');
+      setPairingError(message);
+      notifications.error(message, {
+        title: retryableUnknown ? 'Pairing outcome is unknown' : 'Pairing was not approved',
+      });
+      const reconciled = await load(true);
+      if (reconciled) setFrameSuspended(false);
+    } finally {
+      setBusyAction(null);
+    }
+  }, [
+    busyAction,
+    clearFrameImmediately,
+    load,
+    notifications,
+    selectedDeviceKeyActive,
+    selectedPendingKeyId,
+  ]);
+
+  const runRevokeDeviceKey = useCallback(async (keyId: string) => {
+    if (busyAction && !isRemoteCommandBusyAction(busyAction)) return;
+    if (
+      !selectedRow
+      || selectedRow.device.device_key_id !== keyId
+      || !hasActiveDeviceKey(selectedRow.device)
+    ) {
+      setActionError('The active tablet key changed. Refresh device state before revoking.');
+      setConfirmAction(null);
+      return;
+    }
+    interruptCommandConfirmation();
+    setFrameSuspended(true);
+    clearFrameImmediately();
+    const key = `key-revoke:${keyId}`;
+    setBusyAction('revoke_key');
+    setActionError(null);
+    try {
+      await remoteAssistance.revokeDeviceKey(keyId, mutationId(key));
+      mutationSucceeded(key);
+      notifications.success(
+        'The tablet key was revoked. Remote access and open assistance sessions were stopped.',
+        { title: 'Device trust revoked' },
+      );
+      const reconciled = await load(true);
+      if (reconciled) setFrameSuspended(false);
+    } catch (error) {
+      const apiError = error as ApiError;
+      if (apiError.status && apiError.status < 500) mutationSucceeded(key);
+      const message = deviceKeyActionErrorMessage(error, 'revoke');
+      setActionError(message);
+      notifications.error(message, {
+        title: 'Device trust may still be active',
+        critical: true,
+      });
+      const reconciled = await load(true);
+      if (reconciled) setFrameSuspended(false);
+    } finally {
+      setBusyAction(null);
+      setConfirmAction(null);
+    }
+  }, [
+    busyAction,
+    clearFrameImmediately,
+    interruptCommandConfirmation,
+    load,
+    mutationId,
+    mutationSucceeded,
+    notifications,
+    selectedRow,
+  ]);
+
   const runRequestGrant = useCallback(async () => {
     if (!selectedRow || busyAction) return;
     const device = selectedRow.device;
+    if (!hasActiveDeviceKey(device)) {
+      setActionError('Pairing is required before an employee access request can be sent.');
+      return;
+    }
     if (!canRequestRemoteGrant(selectedRow)) {
       setActionError(device.is_remote_online
         ? 'This tablet cannot accept a new access request in its current grant or sharing state.'
@@ -272,6 +495,10 @@ export function useDeviceCentreController() {
     if (!selectedRow || busyAction) return;
     const { device, grant } = selectedRow;
     let session = selectedRow.session;
+    if (!hasActiveDeviceKey(device)) {
+      setActionError('Pairing is required before an assistance session can connect.');
+      return;
+    }
     const grantId = device.current_grant_id ?? grant?.id ?? session?.grant_id;
     if (device.grant_status !== 'active' || !grantId) {
       setActionError('An active employee-approved grant is required before connecting.');
@@ -451,16 +678,22 @@ export function useDeviceCentreController() {
     loadError,
     refreshError,
     actionError,
+    pairingError,
+    pairingRetryAvailable,
     busyAction,
     grantKind,
     selectedModule,
     confirmAction,
     frame,
-    selectDevice: setSelectedId,
+    selectDevice,
     refresh: load,
     setGrantKind,
     setSelectedModule,
     setConfirmAction,
+    openPairing,
+    dismissConfirmAction,
+    runApproveDeviceKey,
+    runRevokeDeviceKey,
     runRequestGrant,
     runConnect,
     runEnd,

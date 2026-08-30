@@ -11,7 +11,6 @@ export type RemoteAssistanceModule = typeof REMOTE_ASSISTANCE_MODULES[number];
 export const REMOTE_ASSISTANCE_COMMANDS = [
   'navigate',
   'refresh',
-  'sync_now',
   'collect_diagnostics',
 ] as const;
 
