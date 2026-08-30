@@ -18,6 +18,7 @@ import {
   deviceKeyActionErrorMessage,
   joinRemoteAssistanceState,
   remoteAssistanceErrorMessage,
+  shouldRetainRemoteFrameAfterError,
   type BusyAction,
   type DeviceCentreRow,
   type RemoteFrameViewModel,
@@ -521,6 +522,27 @@ describe('Device Centre protected presentation', () => {
     }]);
     expect(unavailable).toContain('Recorded · actor unavailable');
     expect(unavailable).not.toContain('Recorded · Different shift operator');
+  });
+});
+
+describe('remote frame privacy retention', () => {
+  const now = Date.parse('2026-08-30T12:00:15Z');
+
+  it('clears pixels immediately when privacy or authority is no longer confirmed', () => {
+    const fresh = '2026-08-30T12:00:10Z';
+    expect(shouldRetainRemoteFrameAfterError(401, fresh, now)).toBe(false);
+    expect(shouldRetainRemoteFrameAfterError(403, fresh, now)).toBe(false);
+    expect(shouldRetainRemoteFrameAfterError(404, fresh, now)).toBe(false);
+  });
+
+  it('retains only a very recent frame for transient server or network failures', () => {
+    const recent = '2026-08-30T12:00:05Z';
+    const expired = '2026-08-30T11:59:59Z';
+    expect(shouldRetainRemoteFrameAfterError(503, recent, now)).toBe(true);
+    expect(shouldRetainRemoteFrameAfterError(undefined, recent, now)).toBe(true);
+    expect(shouldRetainRemoteFrameAfterError(500, expired, now)).toBe(false);
+    expect(shouldRetainRemoteFrameAfterError(503, null, now)).toBe(false);
+    expect(shouldRetainRemoteFrameAfterError(503, 'not-a-date', now)).toBe(false);
   });
 });
 

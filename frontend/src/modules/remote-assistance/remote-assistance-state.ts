@@ -103,6 +103,27 @@ export const EMPTY_REMOTE_FRAME: RemoteFrameViewModel = {
   message: null,
 };
 
+export const TRANSIENT_REMOTE_FRAME_RETENTION_MS = 15_000;
+
+/**
+ * A failed privacy/authority lookup must never leave old pixels visible.
+ * Transient server/network failures may retain the most recent redacted frame
+ * briefly so an operator can understand that the feed stalled, but the frame
+ * is cleared once it is old enough to be misleading.
+ */
+export function shouldRetainRemoteFrameAfterError(
+  status: number | undefined,
+  receivedAt: string | null,
+  nowMs: number = Date.now(),
+): boolean {
+  const transientFailure = status === undefined || status === 0 || status >= 500;
+  if (!transientFailure || !receivedAt) return false;
+
+  const receivedAtMs = Date.parse(receivedAt);
+  if (!Number.isFinite(receivedAtMs) || receivedAtMs > nowMs) return false;
+  return nowMs - receivedAtMs <= TRANSIENT_REMOTE_FRAME_RETENTION_MS;
+}
+
 export function joinRemoteAssistanceState(
   devices: RemoteAssistanceDeviceDTO[],
   sessions: RemoteAssistanceSessionDTO[],

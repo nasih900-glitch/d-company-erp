@@ -31,6 +31,7 @@ import {
   isRemoteCommandBusyAction,
   joinRemoteAssistanceState,
   remoteAssistanceErrorMessage,
+  shouldRetainRemoteFrameAfterError,
   type BusyAction,
   type DeviceCentreRow,
   type RemoteFrameViewModel,
@@ -82,6 +83,7 @@ export function useDeviceCentreController() {
   const frameController = useRef<AbortController | null>(null);
   const commandController = useRef<AbortController | null>(null);
   const frameUrl = useRef<string | null>(null);
+  const frameReceivedAt = useRef<string | null>(null);
   const mutationIds = useRef(new Map<string, string>());
   const grants = useRef(new Map<string, RemoteAssistanceGrantDTO>());
   const pairingIntent = useRef<{
@@ -192,6 +194,7 @@ export function useDeviceCentreController() {
       URL.revokeObjectURL(frameUrl.current);
       frameUrl.current = null;
     }
+    frameReceivedAt.current = null;
     setFrame(frameSuspended ? TRUST_RECONCILING_FRAME : EMPTY_REMOTE_FRAME);
 
     if (
@@ -217,6 +220,7 @@ export function useDeviceCentreController() {
         const nextUrl = URL.createObjectURL(response.blob);
         const previousUrl = frameUrl.current;
         frameUrl.current = nextUrl;
+        frameReceivedAt.current = response.received_at;
         setFrame({
           state: isRemoteFrameStale(response.received_at) ? 'stale' : 'fresh',
           src: nextUrl,
@@ -231,11 +235,22 @@ export function useDeviceCentreController() {
       } catch (error) {
         if (disposed || controller.signal.aborted) return;
         const status = (error as ApiError).status;
-        setFrame((current) => ({
-          ...current,
-          state: status === 404 ? 'privacy' : status === 503 ? 'offline' : 'error',
-          message: frameErrorMessage(error),
-        }));
+        const state = status === 404
+          ? 'privacy'
+          : status === 503 || (error as ApiError).code === 'network_error'
+            ? 'offline'
+            : 'error';
+        const message = frameErrorMessage(error);
+        const retainImage = Boolean(frameUrl.current)
+          && shouldRetainRemoteFrameAfterError(status, frameReceivedAt.current);
+        if (!retainImage) {
+          if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
+          frameUrl.current = null;
+          frameReceivedAt.current = null;
+          setFrame({ ...EMPTY_REMOTE_FRAME, state, message });
+        } else {
+          setFrame((current) => ({ ...current, state, message }));
+        }
       }
     };
 
@@ -251,6 +266,7 @@ export function useDeviceCentreController() {
         URL.revokeObjectURL(frameUrl.current);
         frameUrl.current = null;
       }
+      frameReceivedAt.current = null;
     };
   }, [frameSuspended, selectedDeviceKeyActive, selectedSessionId, selectedSessionStatus]);
 
@@ -278,6 +294,7 @@ export function useDeviceCentreController() {
       URL.revokeObjectURL(frameUrl.current);
       frameUrl.current = null;
     }
+    frameReceivedAt.current = null;
     setFrame(TRUST_RECONCILING_FRAME);
   }, []);
 
@@ -549,6 +566,7 @@ export function useDeviceCentreController() {
     try {
       await remoteAssistance.endSession(sessionId, mutationId(key));
       mutationSucceeded(key);
+      clearFrameImmediately();
       notifications.success('The assistance session has ended.', { title: 'Session ended' });
       await load(true);
     } catch (error) {
@@ -560,7 +578,15 @@ export function useDeviceCentreController() {
       setBusyAction(null);
       setConfirmAction(null);
     }
-  }, [busyAction, interruptCommandConfirmation, load, mutationId, mutationSucceeded, notifications]);
+  }, [
+    busyAction,
+    clearFrameImmediately,
+    interruptCommandConfirmation,
+    load,
+    mutationId,
+    mutationSucceeded,
+    notifications,
+  ]);
 
   const runRevoke = useCallback(async (grantId: string) => {
     if (busyAction && !isRemoteCommandBusyAction(busyAction)) return;
@@ -572,6 +598,7 @@ export function useDeviceCentreController() {
       const revoked = await remoteAssistance.revokeGrant(grantId, mutationId(key));
       grants.current.set(revoked.installation_id, revoked);
       mutationSucceeded(key);
+      clearFrameImmediately();
       notifications.success('Access was revoked and active assistance was stopped.', {
         title: 'Remote access revoked',
       });
@@ -585,7 +612,15 @@ export function useDeviceCentreController() {
       setBusyAction(null);
       setConfirmAction(null);
     }
-  }, [busyAction, interruptCommandConfirmation, load, mutationId, mutationSucceeded, notifications]);
+  }, [
+    busyAction,
+    clearFrameImmediately,
+    interruptCommandConfirmation,
+    load,
+    mutationId,
+    mutationSucceeded,
+    notifications,
+  ]);
 
   const runCommand = useCallback(async (command: SafeRemoteAssistanceCommand) => {
     const session = selectedRow?.session;
