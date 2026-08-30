@@ -31,7 +31,9 @@ class AndroidInteractionContractTest {
         )
         assertTrue(
             "The full window, including system-bar regions, must retain the branded background",
-            "Modifier.fillMaxSize(),\n                    color = Brand.Background" in activity,
+            Regex(
+                """Modifier\.fillMaxSize\(\),\s*color\s*=\s*Brand\.Background""",
+            ).containsMatchIn(activity),
         )
         assertTrue(
             "Only the interactive workspace should be inset clear of system bars",

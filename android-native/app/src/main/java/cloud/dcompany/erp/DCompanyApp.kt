@@ -37,6 +37,7 @@ import cloud.dcompany.erp.core.sync.RealtimeClient
 import cloud.dcompany.erp.core.sync.RealtimeEvent
 import cloud.dcompany.erp.core.sync.RealtimeRefreshPolicy
 import cloud.dcompany.erp.core.sync.SyncEngine
+import cloud.dcompany.erp.core.remote.RemoteAssistanceCoordinator
 import cloud.dcompany.erp.core.sync.summarizeOutboxWork
 import cloud.dcompany.erp.core.update.UpdateTelemetryCoordinator
 import cloud.dcompany.erp.ui.screens.settings.BugReportPrivacyScheduler
@@ -198,6 +199,8 @@ class DCompanyApp : Application() {
         private set
     lateinit var realtime: RealtimeClient
         private set
+    internal lateinit var remoteAssistance: RemoteAssistanceCoordinator
+        private set
     lateinit var clientCompatibility: ClientCompatibilityGate
         private set
     internal lateinit var updateTelemetry: UpdateTelemetryCoordinator
@@ -221,6 +224,7 @@ class DCompanyApp : Application() {
         override fun onActivityStarted(activity: Activity) {
             synchronized(foregroundLock) {
                 if (foregroundActivities.onStarted()) {
+                    remoteAssistance.onAppForegrounded()
                     startForegroundMaintenanceLocked()
                     startForegroundDiagnosticSamplingLocked()
                 }
@@ -230,6 +234,7 @@ class DCompanyApp : Application() {
         override fun onActivityStopped(activity: Activity) {
             synchronized(foregroundLock) {
                 if (foregroundActivities.onStopped()) {
+                    remoteAssistance.onAppBackgrounded()
                     foregroundMaintenanceJob?.cancel()
                     foregroundMaintenanceJob = null
                     foregroundDiagnosticJob?.cancel()
@@ -328,6 +333,15 @@ class DCompanyApp : Application() {
                         DiagnosticConnectivity.UNKNOWN
                 }
             },
+        )
+        remoteAssistance = RemoteAssistanceCoordinator(
+            context = this,
+            scope = appScope,
+            cacheIsolation = cacheIsolation,
+            realtime = realtime,
+            online = connectivity.online,
+            installationIdentity = updateTelemetry.installation,
+            collectDiagnostics = ::collectRemoteDiagnostics,
         )
         startDiagnosticSyncObservation()
 
@@ -526,6 +540,7 @@ class DCompanyApp : Application() {
     /** Invoked only after cache ownership and the authenticated outbox owner agree. */
     internal fun onVerifiedScopeAvailable() {
         DiagnosticsRuntime.onVerifiedScopeAvailable()
+        remoteAssistance.onVerifiedScopeAvailable()
         appScope.launch {
             recordCurrentDiagnosticSyncHealth()
             recordCompatibilityOfferIfScoped(clientCompatibility.state.value)
@@ -533,6 +548,16 @@ class DCompanyApp : Application() {
             updateTelemetry.reconcileInstallerReturn()
             if (connectivity.online.value) updateTelemetry.heartbeat()
         }
+    }
+
+    /** The existing diagnostics pipeline remains the only diagnostic payload path. */
+    private suspend fun collectRemoteDiagnostics(): Boolean {
+        if (!tokens.hasSession() || !cacheIsolation.isReady()) return false
+        return runCatching {
+            recordCurrentDiagnosticSyncHealth()
+            DiagnosticsRuntime.requestDelivery()
+            true
+        }.getOrDefault(false)
     }
 
     private fun recordCompatibilityOfferIfScoped(state: ClientCompatibilityState) {

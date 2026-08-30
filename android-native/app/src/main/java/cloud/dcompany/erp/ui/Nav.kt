@@ -1,7 +1,6 @@
 package cloud.dcompany.erp.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -80,7 +79,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -95,16 +93,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.BuildConfig
-import cloud.dcompany.erp.R
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.core.sync.outboxWorkVisibleLabel
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
+import cloud.dcompany.erp.ui.components.DCompanyBrandMark
 import cloud.dcompany.erp.ui.components.fieldColors
 import cloud.dcompany.erp.ui.components.syncAvailabilityCopy
 import cloud.dcompany.erp.ui.components.syncAvailabilityDialogTitle
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.remote.RemoteAssistanceActiveBanner
+import cloud.dcompany.erp.ui.remote.RemoteAssistanceRequestWaitingBanner
 
 /** Permission-filtered destinations. The shell never manufactures routes that
  * the authenticated profile cannot access. */
@@ -152,10 +152,16 @@ fun WorkspaceScaffold(
     outboxWorkStatus: OutboxWorkStatus,
     syncing: Boolean,
     pendingSupportCount: Int = 0,
+    remoteSupportRequestWaiting: Boolean = false,
+    remoteSupportActive: Boolean = false,
+    remoteSupportPrivacyProtected: Boolean = true,
+    remoteSupportLastCommandLabel: String? = null,
     canChangeTill: Boolean,
     onOpenSupport: () -> Unit,
     onChangeTill: () -> Unit,
     onSignOut: () -> Unit,
+    onReviewRemoteSupportRequest: () -> Unit = {},
+    onStopRemoteSupport: () -> Unit = {},
     onDestinationChanged: (Destination) -> Unit = {},
     content: @Composable (Destination, navigateTo: (Destination) -> Unit) -> Unit,
 ) {
@@ -206,6 +212,16 @@ fun WorkspaceScaffold(
                     onOpenSupport = onOpenSupport,
                     onChangeTill = onChangeTill,
                     onSignOut = onSignOut,
+                )
+                RemoteAssistanceRequestWaitingBanner(
+                    visible = remoteSupportRequestWaiting && current != Destination.Help,
+                    onReview = onReviewRemoteSupportRequest,
+                )
+                RemoteAssistanceActiveBanner(
+                    active = remoteSupportActive,
+                    privacyProtected = remoteSupportPrivacyProtected,
+                    lastCommandLabel = remoteSupportLastCommandLabel,
+                    onStop = onStopRemoteSupport,
                 )
                 Box(Modifier.fillMaxSize()) {
                     // A full-screen crossfade renders both destination trees into
@@ -262,13 +278,11 @@ private fun WorkspaceSidebar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center,
         ) {
-            Image(
-                // Adaptive launcher XML is not a supported Compose painter
-                // resource and crashes on API 26+. The foreground asset is
-                // the same real brand artwork, supplied as density-aware PNG.
-                painter = painterResource(R.mipmap.ic_launcher_foreground),
+            DCompanyBrandMark(
+                // The shared mark keeps the adaptive PNG path safe on API 26+
+                // while cropping its square source plate into a crisp circle.
+                size = if (expanded) 48.dp else 44.dp,
                 contentDescription = "D Company",
-                modifier = Modifier.size(if (expanded) 48.dp else 44.dp).clip(CircleShape),
             )
             if (expanded) {
                 Spacer(Modifier.width(Spacing.sm))

@@ -276,7 +276,7 @@ object ApiClient {
             .build()
             .create(ErpApi::class.java)
 
-        val client = baseClientBuilder()
+        val client = authenticatedClientBuilder()
             // Order matters here more than it looks: OkHttp interceptors
             // nest in add-order, so the LAST one added sits closest to the
             // real network call and is the FIRST to see the raw Response on
@@ -291,11 +291,6 @@ object ApiClient {
             // confirmed broken with a real reproduction — it predates this
             // phase but lives in a file this phase touches, so it's fixed
             // here rather than left in place.
-            .addInterceptor(ClientIdentityInterceptor())
-            .addInterceptor(TerminalInterceptor())
-            .addInterceptor(PricingTokenInterceptor())
-            .addInterceptor(ErrorInterceptor(json))
-            .addInterceptor(AuthInterceptor())
             .build()
 
         retrofit = Retrofit.Builder()
@@ -313,6 +308,57 @@ object ApiClient {
     internal fun deactivateTerminalScope() {
         activeTerminalHeaders.deactivate()
     }
+
+    /**
+     * Feature-isolated authenticated client whose proof interceptor must run
+     * once per physical network attempt. Remote device nonces cannot be
+     * safely attached as an ordinary application interceptor because OkHttp
+     * may transparently retry an exchange without re-running it.
+     */
+    internal fun <T> createApiWithNetworkProof(
+        service: Class<T>,
+        proofInterceptor: Interceptor,
+    ): T {
+        val client = remoteAuthenticatedClientBuilder()
+            // Enrollment proof lives in the JSON body, so an opaque transport
+            // retry would reuse its nonce. The coordinator owns retries and
+            // rebuilds every proof; exact device endpoints never follow a
+            // redirect to a different request target.
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .addNetworkInterceptor(proofInterceptor)
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(service)
+    }
+
+    private fun authenticatedClientBuilder(): OkHttpClient.Builder = baseClientBuilder()
+        .addInterceptor(ClientIdentityInterceptor())
+        .addInterceptor(TerminalInterceptor())
+        .addInterceptor(
+            PricingTokenInterceptor(allowPricingAuthority = true) {
+                PricingLock.currentToken(tokens.currentPricingSession())
+            },
+        )
+        .addInterceptor(ErrorInterceptor(json))
+        .addInterceptor(AuthInterceptor())
+
+    /** Remote support never receives the short-lived authority to mutate prices. */
+    private fun remoteAuthenticatedClientBuilder(): OkHttpClient.Builder = baseClientBuilder()
+        .addInterceptor(ClientIdentityInterceptor())
+        .addInterceptor(TerminalInterceptor())
+        .addInterceptor(
+            PricingTokenInterceptor(allowPricingAuthority = false) {
+                PricingLock.currentToken(tokens.currentPricingSession())
+            },
+        )
+        .addInterceptor(ErrorInterceptor(json))
+        .addInterceptor(AuthInterceptor())
 
     private fun baseClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
         // Cafe wifi is congested, not dead. These are deliberately generous:
@@ -362,6 +408,14 @@ object ApiClient {
                 response.close()
                 throw failure
             } ?: return response
+            // Remote device enrollment carries its ECDSA nonce/signature in
+            // the immutable JSON body. Replaying this same request here would
+            // reuse that nonce. The refreshed bearer is retained, but the
+            // coordinator must rebuild a fresh enrollment proof on its next
+            // bounded attempt.
+            if (!canReplayAfterBearerRefresh(original.url.encodedPath)) {
+                return response
+            }
             response.close()
             return chain.proceed(signed(original, newAccess))
         }
@@ -379,12 +433,21 @@ object ApiClient {
      * set the header itself). A request for an endpoint that doesn't care
      * about pricing just carries an extra, ignored header.
      */
-    private class PricingTokenInterceptor : Interceptor {
+    internal class PricingTokenInterceptor(
+        private val allowPricingAuthority: Boolean,
+        private val currentToken: () -> String?,
+    ) : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
-            val token = PricingLock.currentToken(tokens.currentPricingSession())
-                ?: return chain.proceed(chain.request())
+            // Strip any caller-supplied value first. Only the normal ERP client
+            // may reattach the current in-memory capability; remote support is
+            // incapable of carrying it even if a future caller adds a header.
+            val clean = chain.request().newBuilder()
+                .removeHeader(PRICING_TOKEN_HEADER)
+                .build()
+            if (!allowPricingAuthority) return chain.proceed(clean)
+            val token = currentToken() ?: return chain.proceed(clean)
             return chain.proceed(
-                chain.request().newBuilder().header("X-Pricing-Token", token).build(),
+                clean.newBuilder().header(PRICING_TOKEN_HEADER, token).build(),
             )
         }
     }
@@ -411,7 +474,7 @@ object ApiClient {
                     ApiFailureObservation(
                         status = e.status,
                         serverCode = e.code,
-                        encodedPath = chain.request().url.encodedPath,
+                        encodedPath = diagnosticEncodedPath(chain.request().url.encodedPath),
                         connectivity = DiagnosticConnectivity.UNKNOWN,
                         explicitlyCancelled = explicitlyCancelled,
                     ),
@@ -427,7 +490,7 @@ object ApiClient {
                     ApiFailureObservation(
                         status = null,
                         serverCode = "network_error",
-                        encodedPath = chain.request().url.encodedPath,
+                        encodedPath = diagnosticEncodedPath(chain.request().url.encodedPath),
                         connectivity = DiagnosticConnectivity.UNKNOWN,
                         explicitlyCancelled = explicitlyCancelled,
                     ),
@@ -454,7 +517,7 @@ object ApiClient {
             }.getOrNull()
 
             if (
-                response.request.header("X-Pricing-Token") != null &&
+                response.request.header(PRICING_TOKEN_HEADER) != null &&
                 response.code in setOf(401, 403) &&
                 envelope?.error?.message?.contains("pricing", ignoreCase = true) == true
             ) {
@@ -496,7 +559,7 @@ object ApiClient {
                 ApiFailureObservation(
                     status = classified.status,
                     serverCode = classified.code,
-                    encodedPath = response.request.url.encodedPath,
+                    encodedPath = diagnosticEncodedPath(response.request.url.encodedPath),
                     connectivity = DiagnosticConnectivity.ONLINE,
                 ),
             )
@@ -504,3 +567,20 @@ object ApiClient {
         }
     }
 }
+
+internal fun canReplayAfterBearerRefresh(encodedPath: String): Boolean =
+    !encodedPath.endsWith("/remote-assistance/device/keys/enroll")
+
+/** Never retain remote key/grant/session/command UUIDs in diagnostic observations. */
+internal fun diagnosticEncodedPath(encodedPath: String): String =
+    if (encodedPath.startsWith("/api/v1/remote-assistance/device/")) {
+        REMOTE_DIAGNOSTIC_UUID.replace(encodedPath, "{id}")
+    } else {
+        encodedPath
+    }
+
+private val REMOTE_DIAGNOSTIC_UUID = Regex(
+    "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+)
+
+internal const val PRICING_TOKEN_HEADER = "X-Pricing-Token"

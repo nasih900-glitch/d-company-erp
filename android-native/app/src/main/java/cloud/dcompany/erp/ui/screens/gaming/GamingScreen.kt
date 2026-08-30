@@ -136,6 +136,7 @@ import cloud.dcompany.erp.ui.screens.ProductConfigurationDialog
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -659,43 +660,49 @@ fun GamingScreen(
     }
 
     if (attentionCenterOpen) {
-        GamingCommandAttentionDialog(
-            state = state,
-            access = access,
-            activeTerminalPurpose = activeTerminal?.purpose,
-            startTerminalBlockMessage = startTerminalBlockMessage,
-            focusSessionId = focusSessionId,
-            focusStationId = focusStationId,
-            orphanedExtensionActions = orphanedExtensionActions,
-            onDismiss = { attentionCenterOpen = false },
-            onDismissNotice = vm::dismissNotice,
-            onDismissFocus = onDismissFocus,
-            onRefresh = vm::load,
-            onReviewOrphan = { action ->
-                attentionCenterOpen = false
-                discardingPackageExtension = PackageExtensionDiscardRequest(action)
-            },
-            onReviewCancellations = {
-                attentionCenterOpen = false
-                cancellationQueueOpen = true
-            },
-            onReviewPayments = {
-                attentionCenterOpen = false
-                paymentQueueOpen = true
-            },
-        )
+        RemoteSensitiveContent(
+            enabled = state.needsCancellation.isNotEmpty() || state.readyForPos.isNotEmpty(),
+        ) {
+            GamingCommandAttentionDialog(
+                state = state,
+                access = access,
+                activeTerminalPurpose = activeTerminal?.purpose,
+                startTerminalBlockMessage = startTerminalBlockMessage,
+                focusSessionId = focusSessionId,
+                focusStationId = focusStationId,
+                orphanedExtensionActions = orphanedExtensionActions,
+                onDismiss = { attentionCenterOpen = false },
+                onDismissNotice = vm::dismissNotice,
+                onDismissFocus = onDismissFocus,
+                onRefresh = vm::load,
+                onReviewOrphan = { action ->
+                    attentionCenterOpen = false
+                    discardingPackageExtension = PackageExtensionDiscardRequest(action)
+                },
+                onReviewCancellations = {
+                    attentionCenterOpen = false
+                    cancellationQueueOpen = true
+                },
+                onReviewPayments = {
+                    attentionCenterOpen = false
+                    paymentQueueOpen = true
+                },
+            )
+        }
     }
 
     starting?.takeIf { access.canManageSessions }?.let { station ->
-        StartSessionDialog(
-            station = station,
-            packages = state.packages.filter { it.stationType == station.type && it.kind == "base" },
-            onDismiss = { starting = null },
-            onConfirm = { phone, minutes, packageId, extraControllers ->
-                starting = null
-                vm.start(station, phone, minutes, packageId, extraControllers)
-            },
-        )
+        RemoteSensitiveContent {
+            StartSessionDialog(
+                station = station,
+                packages = state.packages.filter { it.stationType == station.type && it.kind == "base" },
+                onDismiss = { starting = null },
+                onConfirm = { phone, minutes, packageId, extraControllers ->
+                    starting = null
+                    vm.start(station, phone, minutes, packageId, extraControllers)
+                },
+            )
+        }
     }
 
     choosingAddonFor?.takeIf { access.canManageSessions }?.let { session ->
@@ -710,27 +717,30 @@ fun GamingScreen(
     }
 
     configuringAddon?.takeIf { access.canManageSessions }?.let { request ->
-        ProductConfigurationDialog(
-            item = request.item,
-            variants = state.addonVariants.filter { it.menuItemId == request.item.id },
-            modifierGroups = state.addonModifierGroups.filter { it.menuItemId == request.item.id },
-            modifiers = state.addonModifiers.filter { it.menuItemId == request.item.id },
-            onDismiss = { configuringAddon = null },
-            onAdd = { variant, modifiers, note ->
-                configuringAddon = null
-                vm.addSessionAddon(
-                    session = request.session,
-                    item = request.item,
-                    variant = variant,
-                    modifiers = modifiers,
-                    note = note,
-                    qty = request.qty,
-                )
-            },
-        )
+        RemoteSensitiveContent {
+            ProductConfigurationDialog(
+                item = request.item,
+                variants = state.addonVariants.filter { it.menuItemId == request.item.id },
+                modifierGroups = state.addonModifierGroups.filter { it.menuItemId == request.item.id },
+                modifiers = state.addonModifiers.filter { it.menuItemId == request.item.id },
+                onDismiss = { configuringAddon = null },
+                onAdd = { variant, modifiers, note ->
+                    configuringAddon = null
+                    vm.addSessionAddon(
+                        session = request.session,
+                        item = request.item,
+                        variant = variant,
+                        modifiers = modifiers,
+                        note = note,
+                        qty = request.qty,
+                    )
+                },
+            )
+        }
     }
 
     voidingAddon?.takeIf { access.canManageSessions }?.let { request ->
+        RemoteSensitiveContent {
         GamingAddonReasonDialog(
             title = "Void ${request.addon.menuItemName}?",
             detail = "The original line remains visible for audit. It will be excluded from the POS bill only after the server confirms this reason.",
@@ -741,10 +751,12 @@ fun GamingScreen(
                 vm.voidSessionAddon(request.session, request.addon, reason)
             },
         )
+        }
     }
 
     reviewingRejectedAddon?.takeIf { access.canManageSessions }?.let { action ->
         val isVoid = action.actionType == GamingSessionAddonActionType.VOID
+        RemoteSensitiveContent {
         GamingAddonReasonDialog(
             title = if (isVoid) "Review refused item void" else "Review refused item Add",
             detail = buildString {
@@ -762,6 +774,7 @@ fun GamingScreen(
                 vm.discardRejectedSessionAddonAction(action.actionId, reason)
             },
         )
+        }
     }
 
     stopping?.takeIf { access.canManageSessions }?.let { request ->
@@ -779,51 +792,56 @@ fun GamingScreen(
         val stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
             ?: "Gaming session"
         val pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(session)
-        AlertDialog(
-            containerColor = Brand.SurfaceOverlay,
-            shape = Radius.shapeLg,
-            onDismissRequest = { sending = null },
-            title = { Text("Send to POS?") },
-            text = {
-                Text(
-                    "$stationName · ${session.billableMinutes ?: 0} minutes · " +
-                        "estimated combined bill ${pendingBillSnapshotMinor.asRupees()}. " +
-                        "POS will confirm the final total and receive a separate unpaid order " +
-                        "for the cashier to review and collect. " +
-                        if (activeTerminal?.purpose == TerminalPurpose.GAMING) {
-                            "You will choose the receiving POS shift next."
-                        } else {
-                            "It will stay on the current open shift."
-                        },
-                    color = Brand.ForegroundMuted,
-                )
-            },
-            confirmButton = {
-                ErpButton(
-                    text = "Send to POS",
-                    onClick = { sending = null; vm.sendToPos(session) },
-                    leadingIcon = Icons.AutoMirrored.Filled.Send,
-                )
-            },
-            dismissButton = { TextButton(onClick = { sending = null }) { Text("Not yet") } },
-        )
+        RemoteSensitiveContent {
+            AlertDialog(
+                containerColor = Brand.SurfaceOverlay,
+                shape = Radius.shapeLg,
+                onDismissRequest = { sending = null },
+                title = { Text("Send to POS?") },
+                text = {
+                    Text(
+                        "$stationName · ${session.billableMinutes ?: 0} minutes · " +
+                            "estimated combined bill ${pendingBillSnapshotMinor.asRupees()}. " +
+                            "POS will confirm the final total and receive a separate unpaid order " +
+                            "for the cashier to review and collect. " +
+                            if (activeTerminal?.purpose == TerminalPurpose.GAMING) {
+                                "You will choose the receiving POS shift next."
+                            } else {
+                                "It will stay on the current open shift."
+                            },
+                        color = Brand.ForegroundMuted,
+                    )
+                },
+                confirmButton = {
+                    ErpButton(
+                        text = "Send to POS",
+                        onClick = { sending = null; vm.sendToPos(session) },
+                        leadingIcon = Icons.AutoMirrored.Filled.Send,
+                    )
+                },
+                dismissButton = { TextButton(onClick = { sending = null }) { Text("Not yet") } },
+            )
+        }
     }
 
     posTargetSelection?.takeIf { access.canManageSessions }?.let { selection ->
-        PosTargetShiftDialog(
-            selection = selection,
-            stationName = state.stations.firstOrNull { it.id == selection.session.stationId }?.name
-                ?: "Gaming session",
-            pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(selection.session),
-            busy = state.busyStationId == selection.session.stationId,
-            onDismiss = vm::dismissPosTargetSelection,
-            onConfirm = vm::handoffToPos,
-        )
+        RemoteSensitiveContent {
+            PosTargetShiftDialog(
+                selection = selection,
+                stationName = state.stations.firstOrNull { it.id == selection.session.stationId }?.name
+                    ?: "Gaming session",
+                pendingBillSnapshotMinor = state.pendingBillSnapshotMinor(selection.session),
+                busy = state.busyStationId == selection.session.stationId,
+                onDismiss = vm::dismissPosTargetSelection,
+                onConfirm = vm::handoffToPos,
+            )
+        }
     }
 
     cancelling?.takeIf { access.canManageSessions }?.let { session ->
         val stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
             ?: "Gaming session"
+        RemoteSensitiveContent {
         CancelUnbilledSessionDialog(
             stationName = stationName,
             amountMinor = session.amountMinor ?: 0L,
@@ -833,6 +851,7 @@ fun GamingScreen(
                 vm.cancelUnbilled(session, reason)
             },
         )
+        }
     }
 
     transferring?.takeIf { access.canManageSessions }?.let { session ->
@@ -853,18 +872,21 @@ fun GamingScreen(
     }
 
     extendingPackage?.takeIf { access.canManageSessions }?.let { request ->
-        PackageExtensionDialog(
-            extensions = request.extensions,
-            extraControllers = request.session.extraControllers,
-            onDismiss = { extendingPackage = null },
-            onSelect = { extension ->
-                extendingPackage = null
-                vm.extendWithPackage(request.session, extension)
-            },
-        )
+        RemoteSensitiveContent {
+            PackageExtensionDialog(
+                extensions = request.extensions,
+                extraControllers = request.session.extraControllers,
+                onDismiss = { extendingPackage = null },
+                onSelect = { extension ->
+                    extendingPackage = null
+                    vm.extendWithPackage(request.session, extension)
+                },
+            )
+        }
     }
 
     reconciling?.takeIf { access.canReconcileLegacySessions }?.let { session ->
+        RemoteSensitiveContent {
         ReconcileSessionDialog(
             stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
                 ?: "Gaming session",
@@ -875,9 +897,11 @@ fun GamingScreen(
                 vm.reconcileToPos(session, reason)
             },
         )
+        }
     }
 
     repairingBilling?.takeIf { access.canReconcileLegacySessions }?.let { session ->
+        RemoteSensitiveContent {
         RepairSessionBillingDialog(
             stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
                 ?: "Gaming session",
@@ -887,9 +911,11 @@ fun GamingScreen(
                 vm.repairMissingBilling(session, amountMinor, reason)
             },
         )
+        }
     }
 
     resolvingLegacyStart?.let { session ->
+        RemoteSensitiveContent {
         LegacyPackageResolutionDialog(
             session = session,
             stationName = state.stations.firstOrNull { it.id == session.stationId }?.name
@@ -908,98 +934,105 @@ fun GamingScreen(
                 )
             },
         )
+        }
     }
 
     discardingPackageExtension?.takeIf { access.canManageSessions }?.let { request ->
-        DiscardRejectedExtensionDialog(
-            errorDetail = request.action.lastError,
-            onDismiss = { discardingPackageExtension = null },
-            onConfirm = { reason ->
-                discardingPackageExtension = null
-                vm.discardRejectedPackageExtension(
-                    request.action.actionId,
-                    reason,
-                )
-            },
-        )
+        RemoteSensitiveContent {
+            DiscardRejectedExtensionDialog(
+                errorDetail = request.action.lastError,
+                onDismiss = { discardingPackageExtension = null },
+                onConfirm = { reason ->
+                    discardingPackageExtension = null
+                    vm.discardRejectedPackageExtension(
+                        request.action.actionId,
+                        reason,
+                    )
+                },
+            )
+        }
     }
 
     if (paymentQueueOpen) {
-        GamingQueueDialog(
-            title = "Sessions awaiting payment",
-            detail = "Send sessions individually so each remains a separate, traceable POS order.",
-            sessions = state.readyForPos,
-            stations = state.stations,
-            activeShiftId = state.activeShiftId,
-            pendingBillSnapshotMinor = state::pendingBillSnapshotMinor,
-            actionLabel = { session ->
-                when {
-                    session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT -> "Send"
-                    access.canReconcileLegacySessions && state.activeShiftId != null -> "Reconcile"
-                    else -> "Other terminal"
-                }
-            },
-            actionEnabled = { session ->
-                state.unresolvedAddonsFor(session).isEmpty() &&
-                    (
-                        session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
-                            (access.canReconcileLegacySessions && state.activeShiftId != null)
-                    )
-            },
-            actionDisabledReason = { session ->
-                if (state.unresolvedAddonsFor(session).isNotEmpty()) {
-                    "Saved Gaming item actions must finish syncing or be reviewed before POS handoff."
-                } else {
-                    null
-                }
-            },
-            actionIntent = ActionIntent.Primary,
-            busyStationId = state.busyStationId,
-            onDismiss = { paymentQueueOpen = false },
-            onSelect = {
-                paymentQueueOpen = false
-                if (it.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT) {
-                    sending = it
-                } else {
-                    reconciling = it
-                }
-            },
-        )
-    }
-
-    if (cancellationQueueOpen) {
-        GamingQueueDialog(
-            title = "Sessions requiring cancellation",
-            detail = "A reason is required and recorded in the audit trail.",
-            sessions = state.needsCancellation,
-            stations = state.stations,
-            activeShiftId = state.activeShiftId,
-            pendingBillSnapshotMinor = { it.amountMinor ?: 0L },
-            actionLabel = { "Review" },
-            actionEnabled = { session ->
-                sessionCancellationAddonBlockMessage(state.addonsFor(session)) == null &&
+        RemoteSensitiveContent {
+            GamingQueueDialog(
+                title = "Sessions awaiting payment",
+                detail = "Send sessions individually so each remains a separate, traceable POS order.",
+                sessions = state.readyForPos,
+                stations = state.stations,
+                activeShiftId = state.activeShiftId,
+                pendingBillSnapshotMinor = state::pendingBillSnapshotMinor,
+                actionLabel = { session ->
+                    when {
+                        session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT -> "Send"
+                        access.canReconcileLegacySessions && state.activeShiftId != null -> "Reconcile"
+                        else -> "Other terminal"
+                    }
+                },
+                actionEnabled = { session ->
                     state.unresolvedAddonsFor(session).isEmpty() &&
-                    (
-                        session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
-                            access.canReconcileLegacySessions
-                    )
-            },
-            actionDisabledReason = { session ->
-                sessionCancellationAddonBlockMessage(state.addonsFor(session))
-                    ?: if (state.unresolvedAddonsFor(session).isNotEmpty()) {
-                        "Saved Gaming item actions must finish syncing or be reviewed before session cancellation."
+                        (
+                            session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
+                                (access.canReconcileLegacySessions && state.activeShiftId != null)
+                        )
+                },
+                actionDisabledReason = { session ->
+                    if (state.unresolvedAddonsFor(session).isNotEmpty()) {
+                        "Saved Gaming item actions must finish syncing or be reviewed before POS handoff."
                     } else {
                         null
                     }
-            },
-            actionIntent = ActionIntent.Destructive,
-            busyStationId = state.busyStationId,
-            onDismiss = { cancellationQueueOpen = false },
-            onSelect = {
-                cancellationQueueOpen = false
-                cancelling = it
-            },
-        )
+                },
+                actionIntent = ActionIntent.Primary,
+                busyStationId = state.busyStationId,
+                onDismiss = { paymentQueueOpen = false },
+                onSelect = {
+                    paymentQueueOpen = false
+                    if (it.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT) {
+                        sending = it
+                    } else {
+                        reconciling = it
+                    }
+                },
+            )
+        }
+    }
+
+    if (cancellationQueueOpen) {
+        RemoteSensitiveContent {
+            GamingQueueDialog(
+                title = "Sessions requiring cancellation",
+                detail = "A reason is required and recorded in the audit trail.",
+                sessions = state.needsCancellation,
+                stations = state.stations,
+                activeShiftId = state.activeShiftId,
+                pendingBillSnapshotMinor = { it.amountMinor ?: 0L },
+                actionLabel = { "Review" },
+                actionEnabled = { session ->
+                    sessionCancellationAddonBlockMessage(state.addonsFor(session)) == null &&
+                        state.unresolvedAddonsFor(session).isEmpty() &&
+                        (
+                            session.authority(state.activeShiftId) == GamingSessionAuthority.CURRENT_SHIFT ||
+                                access.canReconcileLegacySessions
+                        )
+                },
+                actionDisabledReason = { session ->
+                    sessionCancellationAddonBlockMessage(state.addonsFor(session))
+                        ?: if (state.unresolvedAddonsFor(session).isNotEmpty()) {
+                            "Saved Gaming item actions must finish syncing or be reviewed before session cancellation."
+                        } else {
+                            null
+                        }
+                },
+                actionIntent = ActionIntent.Destructive,
+                busyStationId = state.busyStationId,
+                onDismiss = { cancellationQueueOpen = false },
+                onSelect = {
+                    cancellationQueueOpen = false
+                    cancelling = it
+                },
+            )
+        }
     }
 
     state.error?.let { message ->
@@ -2650,13 +2683,15 @@ private fun StationBody(
                 overflow = TextOverflow.Ellipsis,
             )
             sessionCustomerLabel(session)?.let { customer ->
-                Text(
-                    customer,
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                RemoteSensitiveContent {
+                    Text(
+                        customer,
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             session?.let { running ->
                 val currentAmount = estimatedCurrentAmountMinor(running, nowMillis)
@@ -2693,45 +2728,47 @@ private fun StationBody(
         StationVisualState.SendRejected,
         StationVisualState.CancellationRequired,
         -> {
-            NumericValue(
-                value = (combinedBillSnapshotMinor ?: session?.amountMinor ?: 0L).asRupees(),
-                color = if (presentation.state == StationVisualState.CancellationRequired) Brand.Danger else Brand.Foreground,
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            Text(
-                if (presentation.state == StationVisualState.CancellationRequired) {
-                    "Stopped · ${session?.billableMinutes ?: 0} min"
-                } else {
-                    "Estimated combined bill · stopped ${session?.billableMinutes ?: 0} min"
-                },
-                color = Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelMedium,
-            )
-            sessionCustomerLabel(session)?.let { customer ->
-                Text(
-                    customer,
-                    color = Brand.ForegroundMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            RemoteSensitiveContent {
+                NumericValue(
+                    value = (combinedBillSnapshotMinor ?: session?.amountMinor ?: 0L).asRupees(),
+                    color = if (presentation.state == StationVisualState.CancellationRequired) Brand.Danger else Brand.Foreground,
+                    style = MaterialTheme.typography.headlineMedium,
                 )
-            }
-            Text(
-                unbilledSessionDetail(presentation.state, session),
-                color = if (presentation.state == StationVisualState.SendRejected) Brand.Danger else Brand.ForegroundMuted,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = if (presentation.state == StationVisualState.SendRejected) 3 else 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            session?.let { ended ->
-                sessionAuthorityMessage(ended, activeShiftId)?.let { ownership ->
+                Text(
+                    if (presentation.state == StationVisualState.CancellationRequired) {
+                        "Stopped · ${session?.billableMinutes ?: 0} min"
+                    } else {
+                        "Estimated combined bill · stopped ${session?.billableMinutes ?: 0} min"
+                    },
+                    color = Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                sessionCustomerLabel(session)?.let { customer ->
                     Text(
-                        ownership,
-                        color = Brand.Warning,
+                        customer,
+                        color = Brand.ForegroundMuted,
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                Text(
+                    unbilledSessionDetail(presentation.state, session),
+                    color = if (presentation.state == StationVisualState.SendRejected) Brand.Danger else Brand.ForegroundMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = if (presentation.state == StationVisualState.SendRejected) 3 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                session?.let { ended ->
+                    sessionAuthorityMessage(ended, activeShiftId)?.let { ownership ->
+                        Text(
+                            ownership,
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }

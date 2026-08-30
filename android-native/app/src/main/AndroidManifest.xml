@@ -58,5 +58,9 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".core.remote.RemoteAssistanceStopReceiver"
+            android:exported="false" />
+
     </application>
 </manifest>

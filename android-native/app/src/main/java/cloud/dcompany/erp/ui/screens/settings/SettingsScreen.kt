@@ -74,6 +74,7 @@ fun SettingsScreen(
     canManageSystem: Boolean,
     onPasswordChanged: () -> Unit = {},
     onReportProblem: () -> Unit = {},
+    remoteAssistanceContent: (@Composable () -> Unit)? = null,
     vm: SettingsViewModel = viewModel(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
@@ -119,7 +120,12 @@ fun SettingsScreen(
             contentAlignment = Alignment.TopCenter,
         ) {
             when (activeTab) {
-                SettingsTab.Account -> AccountTab(state, vm, onReportProblem)
+                SettingsTab.Account -> AccountTab(
+                    state,
+                    vm,
+                    onReportProblem,
+                    remoteAssistanceContent,
+                )
                 SettingsTab.Company -> CompanyTab(state, vm, presentation)
                 SettingsTab.Branches -> BranchesTab(state, vm, presentation)
                 SettingsTab.Terminals -> TerminalsTab(state, vm, presentation)
@@ -182,6 +188,7 @@ private fun AccountTab(
     state: SettingsUiState,
     vm: SettingsViewModel,
     onReportProblem: () -> Unit,
+    remoteAssistanceContent: (@Composable () -> Unit)?,
 ) {
     var code by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
@@ -280,6 +287,7 @@ private fun AccountTab(
             }
             }
         }
+        remoteAssistanceContent?.invoke()
         SectionCard(
             title = "Help & feedback",
             subtitle = "Send a problem directly to the ERP web inbox for review.",

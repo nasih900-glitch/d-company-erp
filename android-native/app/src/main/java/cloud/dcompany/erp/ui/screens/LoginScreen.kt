@@ -1,7 +1,6 @@
 package cloud.dcompany.erp.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -63,7 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import cloud.dcompany.erp.R
+import cloud.dcompany.erp.ui.components.DCompanyBrandMark
 import cloud.dcompany.erp.ui.components.fieldColors
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
@@ -115,10 +113,9 @@ fun LoginScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
-                    Image(
-                        painter = painterResource(R.mipmap.ic_launcher_foreground),
+                    DCompanyBrandMark(
+                        size = 92.dp,
                         contentDescription = "D Company logo",
-                        modifier = Modifier.size(92.dp),
                     )
                     Text(
                         "D COMPANY",

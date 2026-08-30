@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,9 +105,19 @@ import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
 import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalRouteDecision
 import cloud.dcompany.erp.core.alarm.operationalTargetExistsInCurrentScope
+import cloud.dcompany.erp.core.remote.RemoteUiCommandHost
+import cloud.dcompany.erp.core.remote.remoteSemanticUiAdmission
 import cloud.dcompany.erp.core.sync.summarizeOutboxWork
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.syncAvailabilityProblem
+import cloud.dcompany.erp.ui.remote.LocalRemoteCapturePrivacyController
+import cloud.dcompany.erp.ui.remote.RemoteAssistanceConsentDialog
+import cloud.dcompany.erp.ui.remote.RemoteAssistanceSettingsCard
+import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
+import cloud.dcompany.erp.ui.remote.destination
+import cloud.dcompany.erp.ui.remote.remoteModule
+import cloud.dcompany.erp.ui.remote.remoteRouteKey
+import cloud.dcompany.erp.ui.remote.rememberRemoteNotificationAccessAction
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -119,22 +130,27 @@ class MainActivity : ComponentActivity() {
         // (and, on some OEM builds, double-inset) tablet geometry.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
-            DCompanyTheme {
-                Surface(
-                    // Android 15 enforces edge-to-edge for targetSdk 35 even
-                    // when decor fitting is requested. Paint Brand.Background
-                    // across the complete window, including the system-bar
-                    // regions, then inset only the interactive workspace.
-                    Modifier.fillMaxSize(),
-                    color = Brand.Background,
-                ) {
-                    Box(
-                        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+            CompositionLocalProvider(
+                LocalRemoteCapturePrivacyController provides
+                    DCompanyApp.instance.remoteAssistance.privacy,
+            ) {
+                DCompanyTheme {
+                    Surface(
+                        // Android 15 enforces edge-to-edge for targetSdk 35 even
+                        // when decor fitting is requested. Paint Brand.Background
+                        // across the complete window, including the system-bar
+                        // regions, then inset only the interactive workspace.
+                        Modifier.fillMaxSize(),
+                        color = Brand.Background,
                     ) {
-                        AppRoot(
-                            onOpenUpdateLink = ::openSecureUpdate,
-                            onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
-                        )
+                        Box(
+                            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+                        ) {
+                            AppRoot(
+                                onOpenUpdateLink = ::openSecureUpdate,
+                                onInstallVerifiedUpdate = ::requestVerifiedUpdateInstall,
+                            )
+                        }
                     }
                 }
             }
@@ -145,6 +161,16 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         DCompanyApp.instance.notificationRoutes.accept(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        DCompanyApp.instance.remoteAssistance.attachWindow(window)
+    }
+
+    override fun onStop() {
+        DCompanyApp.instance.remoteAssistance.detachWindow(window)
+        super.onStop()
     }
 
     private fun openSecureUpdate(rawUrl: String) {
@@ -262,6 +288,13 @@ private fun AppRoot(
     val accountSafetyNotice by session.accountSafetyNotice.collectAsStateWithLifecycle()
     val accessChangeNotice by session.accessChangeNotice.collectAsStateWithLifecycle()
     val terminalChange by session.terminalChange.collectAsStateWithLifecycle()
+    val remoteAssistance = DCompanyApp.instance.remoteAssistance
+    val remoteAssistanceState by remoteAssistance.uiState.collectAsStateWithLifecycle()
+    val remotePrivacyBlocked by remoteAssistance.privacy.blocked.collectAsStateWithLifecycle()
+    val enableRemoteNotifications = rememberRemoteNotificationAccessAction(
+        notificationReady = remoteAssistanceState.notificationReady,
+        onStatusChanged = remoteAssistance::refreshNotificationReadiness,
+    )
     val activeTerminal by DCompanyApp.instance.terminalStore.activeValidatedTerminal.collectAsStateWithLifecycle()
     val pendingNotificationTarget by DCompanyApp.instance.notificationRoutes.pending.collectAsStateWithLifecycle()
     val rejectedNotificationOpenNotice by
@@ -349,11 +382,13 @@ private fun AppRoot(
 
         is AuthState.SignedOut -> PreLoginViewModelScope {
             Box(Modifier.fillMaxSize()) {
-                LoginScreen(
-                    signingIn = signingIn,
-                    error = loginError,
-                    onSignIn = session::signIn,
-                )
+                RemoteSensitiveContent {
+                    LoginScreen(
+                        signingIn = signingIn,
+                        error = loginError,
+                        onSignIn = session::signIn,
+                    )
+                }
                 if (pendingNotificationTarget != null) {
                     PendingNotificationSignInBanner(pendingNotificationTarget!!)
                 }
@@ -512,6 +547,7 @@ private fun AppRoot(
                             )
                             if (exists) {
                                 operationalFocus = target
+                                remoteAssistance.uiGateway.markRouteTransition()
                                 currentDestination = destination
                             } else {
                                 notificationRouteNotice = if (
@@ -532,6 +568,57 @@ private fun AppRoot(
                     }
                 }
                 val visibleDestination = resolveWorkspaceDestination(currentDestination, destinations)
+                val remoteCommandHost = remember(s.me.userId, destinations, bugReportVm) {
+                    RemoteUiCommandHost(
+                        currentRouteKey = {
+                            resolveWorkspaceDestination(
+                                currentDestination,
+                                destinations,
+                            ).remoteRouteKey()
+                        },
+                        availableModules = {
+                            destinations.mapNotNull(Destination::remoteModule).toSet()
+                        },
+                        semanticActionsAllowed = {
+                            remoteSemanticUiAdmission(
+                                routeKey = resolveWorkspaceDestination(
+                                    currentDestination,
+                                    destinations,
+                                ).remoteRouteKey(),
+                                sensitiveOverlayVisible = remoteAssistance.privacy.snapshot().blocked,
+                            )
+                        },
+                        navigate = { module ->
+                            val destination = module.destination()
+                            if (destination in destinations) {
+                                remoteAssistance.uiGateway.markRouteTransition()
+                                currentDestination = destination
+                            }
+                        },
+                        refreshCurrent = {
+                            when (resolveWorkspaceDestination(currentDestination, destinations)) {
+                                Destination.Help -> {
+                                    bugReportVm.refreshHistory(silent = true)
+                                    true
+                                }
+                                else -> false
+                            }
+                        },
+                    )
+                }
+                DisposableEffect(remoteCommandHost) {
+                    remoteAssistance.uiGateway.attach(remoteCommandHost)
+                    onDispose {
+                        remoteAssistance.uiGateway.detach(remoteCommandHost)
+                        remoteAssistance.onVisibleWorkspaceUnavailable()
+                    }
+                }
+                SideEffect {
+                    remoteAssistance.uiGateway.reportVisibleRoute(
+                        remoteCommandHost,
+                        visibleDestination.remoteRouteKey(),
+                    )
+                }
                 val requiresTill = permissions.requiresOperationalWorkspace()
                 val locationLabel = workspaceLocationLabel(
                     branchId = s.me.branchId,
@@ -569,12 +656,26 @@ private fun AppRoot(
                     outboxWorkStatus = outboxWorkStatus,
                     syncing = syncing,
                     pendingSupportCount = bugReportState.pendingCount,
+                    remoteSupportRequestWaiting = remoteAssistanceState.pendingGrant != null &&
+                        Destination.Help in destinations,
+                    remoteSupportActive = remoteAssistanceState.activeSession != null,
+                    remoteSupportPrivacyProtected = remoteAssistanceState.privacyProtected,
+                    remoteSupportLastCommandLabel = remoteAssistanceState.lastCommandLabel,
                     canChangeTill = s.me.protectedAccess && requiresTill && advancedTerminalWorkflow,
                     onOpenSupport = ::openSupport,
                     onChangeTill = session::requestTerminalReassignment,
                     onSignOut = { confirmSignOut = true },
+                    onReviewRemoteSupportRequest = {
+                        if (Destination.Help in destinations) {
+                            remoteAssistance.uiGateway.markRouteTransition()
+                            currentDestination = Destination.Help
+                            operationalFocus = null
+                        }
+                    },
+                    onStopRemoteSupport = remoteAssistance::stopByUser,
                     onDestinationChanged = {
                         if (it !in destinations) return@WorkspaceScaffold
+                        remoteAssistance.uiGateway.markRouteTransition()
                         currentDestination = it
                         val focusDestination = when (operationalFocus?.destination) {
                             OperationalNotificationDestination.POS -> Destination.Pos
@@ -712,6 +813,15 @@ private fun AppRoot(
                                 canManageSystem = canManageSystemSettings(s.me),
                                 onPasswordChanged = session::expireAfterPasswordChange,
                                 onReportProblem = ::openSupport,
+                                remoteAssistanceContent = {
+                                    RemoteAssistanceSettingsCard(
+                                        state = remoteAssistanceState,
+                                        onStop = remoteAssistance::stopByUser,
+                                        onRevoke = remoteAssistance::revokeConsent,
+                                        onEnableNotifications = enableRemoteNotifications,
+                                        onReplaceDeviceKey = remoteAssistance::startDeviceKeyReplacement,
+                                    )
+                                },
                             )
                             Destination.SupportInbox -> SupportInboxScreen()
                             Destination.Help -> HelpScreen(
@@ -725,38 +835,69 @@ private fun AppRoot(
                     }
                 }
 
-                BugReportDialog(
-                    state = bugReportState,
-                    connectivity = reportConnectivity,
-                    onReasonChange = bugReportVm::reasonChanged,
-                    onContinuationChange = bugReportVm::continuationChanged,
-                    onDescriptionChange = bugReportVm::descriptionChanged,
-                    onAttachmentChange = bugReportVm::attachmentChanged,
-                    onAttachmentRejected = bugReportVm::attachmentRejected,
-                    onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
-                    onSubmit = {
-                        bugReportVm.submit(
-                            currentAndroidBugReportContext(
-                                launchContext = bugReportState.launchContext,
-                                branchId = s.me.branchId,
-                                branchName = s.me.branchName,
-                                terminalId = activeTerminal?.terminalId,
-                                terminalName = activeTerminal?.terminalName,
-                                connectivity = reportConnectivity,
-                            ),
+                var presentedRemoteGrantId by remember(s.me.userId) { mutableStateOf<String?>(null) }
+                val pendingRemoteGrant = remoteAssistanceState.pendingGrant
+                LaunchedEffect(
+                    pendingRemoteGrant?.grantId,
+                    visibleDestination,
+                    remotePrivacyBlocked,
+                ) {
+                    presentedRemoteGrantId = when {
+                        pendingRemoteGrant == null -> null
+                        !remoteSemanticUiAdmission(
+                            visibleDestination.remoteRouteKey(),
+                            sensitiveOverlayVisible = false,
+                        ) -> null
+                        presentedRemoteGrantId == pendingRemoteGrant.grantId -> presentedRemoteGrantId
+                        !remotePrivacyBlocked -> pendingRemoteGrant.grantId
+                        else -> null
+                    }
+                }
+                pendingRemoteGrant
+                    ?.takeIf { it.grantId == presentedRemoteGrantId }
+                    ?.let { grant ->
+                    RemoteSensitiveContent {
+                        RemoteAssistanceConsentDialog(
+                            grant = grant,
+                            busy = remoteAssistanceState.decisionInFlight,
+                            onDeny = remoteAssistance::denyPendingGrant,
+                            onAllow = remoteAssistance::allowPendingGrant,
                         )
-                    },
-                    onRetry = bugReportVm::retrySubmitted,
-                    onOpenHistory = bugReportVm::showHistory,
-                    onCloseHistory = bugReportVm::closeHistory,
-                    onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
-                    onRetryHistoryItem = bugReportVm::retryHistoryItem,
-                    onDiscardHistoryItem = bugReportVm::discardHistoryItem,
-                    onDismiss = bugReportVm::dismiss,
+                    }
+                }
+
+                BugReportDialog(
+                        state = bugReportState,
+                        connectivity = reportConnectivity,
+                        onReasonChange = bugReportVm::reasonChanged,
+                        onContinuationChange = bugReportVm::continuationChanged,
+                        onDescriptionChange = bugReportVm::descriptionChanged,
+                        onAttachmentChange = bugReportVm::attachmentChanged,
+                        onAttachmentRejected = bugReportVm::attachmentRejected,
+                        onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                        onSubmit = {
+                            bugReportVm.submit(
+                                currentAndroidBugReportContext(
+                                    launchContext = bugReportState.launchContext,
+                                    branchId = s.me.branchId,
+                                    branchName = s.me.branchName,
+                                    terminalId = activeTerminal?.terminalId,
+                                    terminalName = activeTerminal?.terminalName,
+                                    connectivity = reportConnectivity,
+                                ),
+                            )
+                        },
+                        onRetry = bugReportVm::retrySubmitted,
+                        onOpenHistory = bugReportVm::showHistory,
+                        onCloseHistory = bugReportVm::closeHistory,
+                        onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                        onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                        onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                        onDismiss = bugReportVm::dismiss,
                 )
 
                 if (confirmSignOut) {
-                    AlertDialog(
+                    RemoteSensitiveContent { AlertDialog(
                         onDismissRequest = { confirmSignOut = false },
                         title = { Text("Sign out of this tablet?") },
                         text = {
@@ -778,12 +919,12 @@ private fun AppRoot(
                                 Text("Stay signed in")
                             }
                         },
-                    )
+                    ) }
                 }
 
                 when (val change = terminalChange) {
                     TerminalChangeUiState.Idle -> Unit
-                    is TerminalChangeUiState.Confirm -> AlertDialog(
+                    is TerminalChangeUiState.Confirm -> RemoteSensitiveContent { AlertDialog(
                         onDismissRequest = session::dismissTerminalChange,
                         title = { Text("Change this tablet's till?") },
                         text = {
@@ -801,8 +942,8 @@ private fun AppRoot(
                         dismissButton = {
                             TextButton(onClick = session::dismissTerminalChange) { Text("Cancel") }
                         },
-                    )
-                    TerminalChangeUiState.Checking -> AlertDialog(
+                    ) }
+                    TerminalChangeUiState.Checking -> RemoteSensitiveContent { AlertDialog(
                         onDismissRequest = {},
                         title = { Text("Checking this tablet") },
                         text = {
@@ -815,15 +956,15 @@ private fun AppRoot(
                             }
                         },
                         confirmButton = {},
-                    )
-                    is TerminalChangeUiState.Blocked -> AlertDialog(
+                    ) }
+                    is TerminalChangeUiState.Blocked -> RemoteSensitiveContent { AlertDialog(
                         onDismissRequest = session::dismissTerminalChange,
                         title = { Text("Till not changed") },
                         text = { Text(change.message) },
                         confirmButton = {
                             TextButton(onClick = session::dismissTerminalChange) { Text("OK") }
                         },
-                    )
+                    ) }
                 }
             }
         }
@@ -833,25 +974,25 @@ private fun AppRoot(
         CompatibilityCheckOverlay()
     }
     if (accountSafetyNotice != null) {
-        AlertDialog(
+        RemoteSensitiveContent { AlertDialog(
             onDismissRequest = session::dismissAccountSafetyNotice,
             title = { Text("Account safety lock") },
             text = { Text(accountSafetyNotice.orEmpty()) },
             confirmButton = {
                 TextButton(onClick = session::dismissAccountSafetyNotice) { Text("OK") }
             },
-        )
+        ) }
     } else if (accessChangeNotice != null) {
-        AlertDialog(
+        RemoteSensitiveContent { AlertDialog(
             onDismissRequest = session::dismissAccessChangeNotice,
             title = { Text("Access updated") },
             text = { Text(accessChangeNotice.orEmpty()) },
             confirmButton = {
                 TextButton(onClick = session::dismissAccessChangeNotice) { Text("OK") }
             },
-        )
+        ) }
     } else if (rejectedNotificationOpenNotice != null) {
-        AlertDialog(
+        RemoteSensitiveContent { AlertDialog(
             onDismissRequest = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
             title = { Text("Alert not opened") },
             text = { Text(rejectedNotificationOpenNotice.orEmpty()) },
@@ -860,16 +1001,16 @@ private fun AppRoot(
                     onClick = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
                 ) { Text("OK") }
             },
-        )
+        ) }
     } else if (notificationRouteNotice != null) {
-        AlertDialog(
+        RemoteSensitiveContent { AlertDialog(
             onDismissRequest = { notificationRouteNotice = null },
             title = { Text("Alert could not be opened") },
             text = { Text(notificationRouteNotice.orEmpty()) },
             confirmButton = {
                 TextButton(onClick = { notificationRouteNotice = null }) { Text("OK") }
             },
-        )
+        ) }
     } else if (compatibilityState is ClientCompatibilityState.UpdateAvailable) {
         val notice = (compatibilityState as ClientCompatibilityState.UpdateAvailable).notice
         OptionalUpdateBanner(

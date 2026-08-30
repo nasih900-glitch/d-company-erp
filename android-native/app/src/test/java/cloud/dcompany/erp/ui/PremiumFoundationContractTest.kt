@@ -29,12 +29,17 @@ class PremiumFoundationContractTest {
     @Test
     fun `login uses the real brand mark and focused gaming centre language`() {
         val login = read("src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt")
+        val brandMark = read("src/main/java/cloud/dcompany/erp/ui/components/DCompanyBrandMark.kt")
 
-        assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in login)
+        assertTrue("DCompanyBrandMark(" in login)
+        assertTrue("size = 92.dp" in login)
+        assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in brandMark)
+        assertTrue("clip(CircleShape)" in brandMark)
+        assertTrue("contentScale = ContentScale.Crop" in brandMark)
+        assertTrue("scaleX = 1.5f" in brandMark)
         assertTrue("GAMING CENTRE" in login)
         assertFalse("Cafe + Gaming Lounge" in login)
         assertTrue("shape = Radius.shapeXl" in login)
-        assertTrue("modifier = Modifier.size(48.dp)" in login)
     }
 
     @Test

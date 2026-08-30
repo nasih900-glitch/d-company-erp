@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -68,6 +69,44 @@ class GamingCentreNavigationUiTest {
             "Memberships. Manage plans and member credit",
             useUnmergedTree = true,
         ).assertDoesNotExist()
+    }
+
+    @Test
+    fun pendingOwnerSupportRequestIsPassiveUntilStaffOpensHelp() {
+        val current = mutableStateOf(Destination.Pos)
+        compose.setContent {
+            DCompanyTheme {
+                WorkspaceScaffold(
+                    destinations = listOf(Destination.Pos, Destination.Help),
+                    currentDestination = current.value,
+                    employeeName = "Rafi",
+                    locationLabel = "Gaming Centre",
+                    connectivityProblem = SyncAvailabilityProblem.NONE,
+                    outboxWorkStatus = OutboxWorkStatus(),
+                    syncing = false,
+                    remoteSupportRequestWaiting = true,
+                    canChangeTill = false,
+                    onOpenSupport = {},
+                    onChangeTill = {},
+                    onSignOut = {},
+                    onReviewRemoteSupportRequest = { current.value = Destination.Help },
+                    onDestinationChanged = { current.value = it },
+                ) { destination, _ ->
+                    Text("Current: ${destination.label}")
+                }
+            }
+        }
+
+        compose.onNodeWithText("Current: POS").assertIsDisplayed()
+        compose.onNodeWithTag("remote-assistance-request-waiting").assertIsDisplayed()
+        compose.onNodeWithText(
+            "Owner support request waiting — open Help to review",
+        ).assertIsDisplayed()
+
+        compose.onNodeWithTag("remote-assistance-review-request").performClick()
+
+        compose.onNodeWithText("Current: Help").assertIsDisplayed()
+        compose.onNodeWithTag("remote-assistance-request-waiting").assertDoesNotExist()
     }
 
     @Test

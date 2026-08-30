@@ -66,6 +66,7 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -91,11 +92,12 @@ internal fun BugReportDialog(
     onDismiss: () -> Unit,
 ) {
     if (!state.isOpen) return
-    var pendingDiscardIdentity by remember { mutableStateOf<String?>(null) }
-    val submitted = state.submittedLocalId != null
-    val actionRequired = state.submittedState == BugReportOutboxState.ACTION_REQUIRED ||
-        state.submittedAttachmentState == BugReportOutboxState.ACTION_REQUIRED
-    AlertDialog(
+    RemoteSensitiveContent {
+        var pendingDiscardIdentity by remember { mutableStateOf<String?>(null) }
+        val submitted = state.submittedLocalId != null
+        val actionRequired = state.submittedState == BugReportOutboxState.ACTION_REQUIRED ||
+            state.submittedAttachmentState == BugReportOutboxState.ACTION_REQUIRED
+        AlertDialog(
         onDismissRequest = { if (!state.saving) onDismiss() },
         modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(0.96f).imePadding(),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -176,9 +178,9 @@ internal fun BugReportDialog(
                 }
             }
         },
-    )
-    pendingDiscardIdentity?.let { identity ->
-        AlertDialog(
+        )
+        pendingDiscardIdentity?.let { identity ->
+            AlertDialog(
             onDismissRequest = { pendingDiscardIdentity = null },
             containerColor = Brand.SurfaceOverlay,
             shape = Radius.shapeLg,
@@ -204,7 +206,8 @@ internal fun BugReportDialog(
             dismissButton = {
                 TextButton(onClick = { pendingDiscardIdentity = null }) { Text("Keep it") }
             },
-        )
+            )
+        }
     }
 }
 

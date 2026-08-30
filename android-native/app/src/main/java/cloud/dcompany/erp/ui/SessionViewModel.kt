@@ -1348,6 +1348,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** Header authority and its human-readable label always change together. */
     private fun deactivateTerminalRuntime() {
         cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime.onScopeUnavailable()
+        (getApplication() as DCompanyApp).remoteAssistance.onScopeUnavailable()
         ApiClient.deactivateTerminalScope()
         terminals.deactivateValidatedDisplay()
     }
