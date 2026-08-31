@@ -11,8 +11,8 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.8` |
-| Version code | `19` |
+| Version name | `3.1.9` |
+| Version code | `20` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
@@ -20,8 +20,8 @@ The signed `3.1.3` code-`14` direct-release APK remains the manual partner
 baseline. Code `15` (`3.1.4`) is immutable held audit history and the first
 server-registry-eligible identity; it is not the current activation target.
 Codes `16` (`3.1.5`) and `17` (`3.1.6`) are immutable predecessors. Tag
-`v3.1.7` / code `18` failed before signing and must not be reused. Code `19`
-(`3.1.8`) is the current direct-channel candidate only. Do not upload it to Play
+`v3.1.7` / code `18` and `v3.1.8` / code `19` failed before signing and must not
+be reused. Code `20` (`3.1.9`) is the current direct-channel candidate only. Do not upload it to Play
 or register, stage, advertise, or activate it without the green tagged workflow
 and reviewed rollout procedure. Physical Redmi Pad 2 acceptance remains a
 separate gate.
@@ -44,7 +44,7 @@ repository release workflow and verify all of the following:
 - Android JVM tests, compilation, lint, assembly, and emulator instrumentation
   pass;
 - the future bundle metadata says package `cloud.dcompany.erp`, the deliberately
-  chosen new version/code above `19`, and the production HTTPS API above;
+  chosen new version/code above `20`, and the production HTTPS API above;
 - APK/AAB signatures and the published SHA-256 checksums verify;
 - no test active session, unpaid held order, pending cancellation, or open test
   shift remains in the acceptance environment;

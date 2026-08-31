@@ -76,6 +76,9 @@ D_Company_Legal_Documents_Checklist*.docx
 *.log
 *.pid
 *.zip
+# Local release evidence can contain signed, rejected APKs. Never allow a
+# blanket stage to publish those bytes or their obsolete install instructions.
+release-artifacts/
 releases/android/*
 !releases/android/README.md
 preview-app/

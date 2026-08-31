@@ -115,6 +115,42 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             with self.subTest(task=task):
                 self.assertIn(task, workflow)
 
+    def test_release_variants_compile_sequentially_with_bounded_memory(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        build_start = workflow.index("  build-android:")
+        sign_start = workflow.index("  sign-android:")
+        build_job = workflow[build_start:sign_start]
+
+        self.assertIn("--max-workers=1", build_job)
+        self.assertIn("-Xmx4096m", build_job)
+        self.assertIn("kotlin.compiler.execution.strategy=in-process", build_job)
+        self.assertIn(
+            "gradle_release lintRelease\n          gradle_release lintDirectRelease",
+            build_job,
+        )
+        self.assertIn(
+            "gradle_release testReleaseUnitTest\n"
+            "          gradle_release testDirectReleaseUnitTest",
+            build_job,
+        )
+        self.assertIn(
+            "gradle_release assembleRelease bundleRelease\n"
+            "          gradle_release assembleDirectRelease",
+            build_job,
+        )
+        self.assertNotIn("lintRelease lintDirectRelease", build_job)
+        self.assertNotIn(
+            "testReleaseUnitTest testDirectReleaseUnitTest", build_job
+        )
+
+    def test_signing_job_requires_the_protected_release_environment(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        sign_start = workflow.index("  sign-android:")
+        release_start = workflow.index("  release:", sign_start)
+        sign_job = workflow[sign_start:release_start]
+
+        self.assertIn("environment: android-release-signing", sign_job)
+
     def test_only_the_direct_source_set_requests_installer_permission(self) -> None:
         self.assertNotIn(INSTALL_PERMISSION, MAIN_MANIFEST.read_text(encoding="utf-8"))
         self.assertIn(INSTALL_PERMISSION, DIRECT_MANIFEST.read_text(encoding="utf-8"))

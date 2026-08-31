@@ -570,6 +570,31 @@ echo
 echo "==> Building candidate images while the existing release remains live…"
 docker compose -f docker-compose.prod.yml --env-file "$ENV_CANDIDATE" build
 
+# Compose build arguments are release identity, not decoration. Prove the
+# resulting images carry the exact candidate version and checkout revision
+# before stopping writers or promoting the environment.
+CANDIDATE_APP_VERSION=$(grep '^APP_VERSION=' "$ENV_CANDIDATE" | cut -d= -f2-)
+for candidate_service in backend frontend; do
+  candidate_image=$(docker compose -f docker-compose.prod.yml \
+    --env-file "$ENV_CANDIDATE" images -q "$candidate_service")
+  if [ -z "$candidate_image" ] || [ "$(printf '%s\n' "$candidate_image" | wc -l | tr -d ' ')" -ne 1 ]; then
+    echo "Expected exactly one built image for $candidate_service." >&2
+    exit 1
+  fi
+  candidate_version=$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+    "$candidate_image")
+  candidate_revision=$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$candidate_image")
+  if [ "$candidate_version" != "$CANDIDATE_APP_VERSION" ] || \
+     [ "$candidate_revision" != "$CURRENT_REVISION" ]; then
+    echo "Candidate $candidate_service image release labels do not match the clean checkout." >&2
+    exit 1
+  fi
+done
+echo "==> Candidate backend/frontend image version and revision labels verified."
+
 if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   database_size_bytes=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc "SELECT pg_database_size('erp')")

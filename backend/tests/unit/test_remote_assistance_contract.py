@@ -371,6 +371,9 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
     assert 'find "$IMAGE_VERIFY_ROOT/app" -type l' in installer
     assert "PRIOR_DB_HEAD\" != 0060" in installer
     assert "org.opencontainers.image.revision" in installer
+    assert "CANDIDATE_APP_VERSION=$(grep '^APP_VERSION='" in installer
+    assert 'images -q "$candidate_service"' in installer
+    assert "Candidate backend/frontend image version and revision labels verified." in installer
     assert "Expected exactly one existing Postgres container" in installer
     assert "Expected exactly one running backend container" in installer
     assert "Persistent deployment evidence exists but .env is missing" in installer
@@ -389,6 +392,7 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
         "\n".join(
             (
                 "ENV=prod",
+                "APP_VERSION=3.1.9",
                 "APP_REVISION=" + "a" * 40,
                 "DOMAIN=erp.example.com",
                 'CORS_ORIGINS=["https://erp.example.com"]',
@@ -452,10 +456,12 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     prior_revision = "a" * 40
     upgrade_source = tmp_path / "upgrade-source.env"
     upgrade_source.write_text(
-        fresh_candidate.read_text(encoding="utf-8").replace(
+        fresh_candidate.read_text(encoding="utf-8")
+        .replace(
             f"APP_REVISION={current_revision}",
             f"APP_REVISION={prior_revision}",
-        ),
+        )
+        .replace("APP_VERSION=3.1.9", "APP_VERSION=3.1.3"),
         encoding="utf-8",
     )
     upgrade_candidate = tmp_path / "upgrade.env"
@@ -479,6 +485,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     }
     assert prior_revision != current_revision
     assert upgrade_values["APP_REVISION"] == current_revision
+    assert upgrade_values["APP_VERSION"] == "3.1.9"
     for retained in (
         "JWT_SECRET",
         "POSTGRES_PASSWORD",
@@ -506,6 +513,23 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     )
     assert domain_migration.returncode != 0
     assert "Normal upgrades must use the existing DOMAIN exactly" in domain_migration.stderr
+
+    stale_version = tmp_path / "stale-version.env"
+    stale_version.write_text(
+        upgrade_candidate.read_text(encoding="utf-8").replace(
+            "APP_VERSION=3.1.9", "APP_VERSION=3.1.3"
+        ),
+        encoding="utf-8",
+    )
+    stale_validation = subprocess.run(  # noqa: S603 - repository-owned fixed script
+        [str(root / "infra/scripts/validate-production-env.sh"), str(stale_version)],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert stale_validation.returncode != 0
+    assert "APP_VERSION must match the coordinated release" in stale_validation.stderr
 
 
 def test_upgrade_capacity_preflight_rejects_either_constrained_filesystem() -> None:

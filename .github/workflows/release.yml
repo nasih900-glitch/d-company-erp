@@ -198,14 +198,29 @@ jobs:
       # secret is available to this job at any point.
       - name: Lint Play and direct Android releases
         working-directory: android-native
-        run: >-
-          ./gradlew --no-daemon --max-workers=2 --stacktrace
-          lintRelease lintDirectRelease
+        run: |
+          set -euo pipefail
+          gradle_release() {
+            ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
+              -Pkotlin.compiler.execution.strategy=in-process "$@"
+          }
+          # Compile the two release variants in separate Gradle processes. The
+          # Compose compiler otherwise holds both IR trees concurrently and can
+          # exhaust the 7 GB hosted runner before lint begins.
+          gradle_release lintRelease
+          gradle_release lintDirectRelease
       - name: Run Play and direct Android release JVM tests
         working-directory: android-native
-        run: >-
-          ./gradlew --no-daemon --max-workers=2 --stacktrace
-          testReleaseUnitTest testDirectReleaseUnitTest
+        run: |
+          set -euo pipefail
+          gradle_release() {
+            ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
+              -Pkotlin.compiler.execution.strategy=in-process "$@"
+          }
+          gradle_release testReleaseUnitTest
+          gradle_release testDirectReleaseUnitTest
       # Compile distributable bytes before the long-lived signing key exists on
       # the runner. Gradle plugins and dependency code must never be able to
       # read or exfiltrate that key, even if an upstream repository is breached.
@@ -215,8 +230,13 @@ jobs:
           test ! -e android-native/keystore.properties
           test ! -e android-native/dcompany-release.keystore
           cd android-native
-          ./gradlew --no-daemon --max-workers=2 --stacktrace \
-            assembleRelease bundleRelease assembleDirectRelease
+          gradle_release() {
+            ./gradlew --no-daemon --max-workers=1 --stacktrace \
+              '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
+              -Pkotlin.compiler.execution.strategy=in-process "$@"
+          }
+          gradle_release assembleRelease bundleRelease
+          gradle_release assembleDirectRelease
       - name: Package unsigned artifacts for the isolated signer
         run: |
           set -euo pipefail
@@ -295,6 +315,9 @@ jobs:
     needs: build-android
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The repository environment requires an explicit owner approval and only
+    # permits v* tags. Signing secrets are unavailable until that gate passes.
+    environment: android-release-signing
     env:
       ANDROID_BUILD_TOOLS_VERSION: '35.0.0'
     steps:

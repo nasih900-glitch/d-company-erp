@@ -28,18 +28,18 @@ GitHub/Play release, or create an Android release-registry row for it.
 Code `15` (`3.1.4`) is the first identity allowed by the server-release registry,
 but it is a held audit build. Preserve any signed artifact and manifest exactly;
 do not rebuild, overwrite, or activate it. Codes `16` (`3.1.5`) and `17`
-(`3.1.6`) are immutable predecessors. Tag `v3.1.7` / code `18` failed before
-signing and must not be reused. Code `19` is the corrected, separately gated
+(`3.1.6`) are immutable predecessors. Tags `v3.1.7` / code `18` and `v3.1.8` /
+code `19` failed before signing and must not be reused. Code `20` is the corrected, separately gated
 server-delivery candidate:
 
 ```
-coordinate source at 3.1.8/code 19
+coordinate source at 3.1.9/code 20
         │
         ▼
 local/CI backend + web + Android candidate gates
         │
         ▼
-same-lineage Code 14 to Code 19 upgrade proof
+same-lineage Code 14 to Code 20 upgrade proof
         │
         ▼ stage exact CI artifact, then owner review and activation
 ```
@@ -100,7 +100,7 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_RELEASE_VERSION=3.1.8
+CURRENT_RELEASE_VERSION=3.1.9
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName and a new versionCode)
@@ -119,11 +119,12 @@ CURRENT_RELEASE_VERSION=3.1.8
 python3 scripts/verify_android_release_version.py --tag "v$CURRENT_RELEASE_VERSION"
 ```
 
-That command validates the coordinated code-`19` identity; it does not authorise
+That command validates the coordinated code-`20` identity; it does not authorise
 tagging, publishing, advertising, registering, staging, or activating the
 artifact. Tag `v3.1.7` is immutable rejected history and must never be moved or
-reused. Tag `v3.1.8` may be created only after every product-version field is
-coordinated and the local release gates pass. Keep codes `14` through `18`
+reused. Tag `v3.1.8` is also immutable rejected history. Tag `v3.1.9` may be
+created only after every product-version field is coordinated and the local
+release gates pass. Keep codes `14` through `19`
 immutable. Never use a blanket version replacement: dependency versions and
 Android rollout policy intentionally differ from the product version.
 
@@ -139,7 +140,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, immutable predecessors, and code-19 candidate
+## Version-code-8 floor, immutable predecessors, and code-20 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -167,8 +168,8 @@ installed code-`14` app is now the update-capable baseline. Code `15` is the
 first version accepted by the immutable server-release registry, but `3.1.4`
 code `15` is a held audit build and is not the current activation target. The
 signed `3.1.5` code-`16` and `3.1.6` code-`17` artifacts are immutable
-predecessors. Code `18` has no authorised artifact because its tagged release
-failed before signing. The current candidate is `3.1.8` with version code `19`.
+predecessors. Codes `18` and `19` have no authorised artifact because their
+tagged releases failed before signing. The current candidate is `3.1.9` with version code `20`.
 It may be staged only from the exact green tagged workflow and becomes an
 optional server offer only after authenticated owner activation.
 
@@ -182,11 +183,21 @@ Treat the app and backend as one coordinated release:
    pending work.
 3. Keep the verified version-code-14 APK private and unadvertised. Do not host
    it on the VPS, GitHub, or Play while preparing the production migration.
-4. Back up the database and follow the `0056` maintenance sequence below:
-   stop writers, upgrade only through `0055`, review and apply the explicit
-   terminal consolidation, and only then upgrade through `0056` to the
-   repository's release head. Verify the database crosses revision `0056`
-   safely and reaches the current head before starting the backend. Deploy with
+4. Rehearse the current database upgrade and downgrade path against a restored
+   production dump. During the scheduled write outage, use the hardened
+   installer—not the historical `0056` sequence below—and select the exact
+   one-time Code14 provenance bridge observed in production:
+
+   ```bash
+   sudo bash infra/scripts/install-on-vm.sh dcompany.duckdns.org \
+     --maintenance-confirmed \
+     --legacy-code14-revision e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9
+   ```
+
+   The installer must prove the prior Code14 image/source/database identity,
+   stop writers, verify the offline outbox is empty, create and restore-check a
+   backup, preserve rollback images and configuration, apply migrations, and
+   pass readiness before reopening ingress. Deploy with
    `ANDROID_MIN_SUPPORTED_VERSION_CODE=8`,
    `REQUIRE_NATIVE_VERSION_HEADERS=true`,
    `ANDROID_UPDATE_ALLOWED_ORIGIN=https://dcompany.duckdns.org`, and the last
@@ -198,7 +209,7 @@ Treat the app and backend as one coordinated release:
    older receive HTTP 426 before a write handler and version `8` remains
    compatible. The owner may then send that same APK manually to the partner;
    no optional release is active.
-6. For code `19`, build and sign `3.1.8` only through the tagged trusted
+6. For code `20`, build and sign `3.1.9` only through the tagged trusted
    workflow. Deploy the coordinated backend/web release first. Then stage the
    exact CI APK and manifest, review them in the owner ERP, and activate the
    staged row. Verify an in-place upgrade from the installed code `14` baseline
@@ -396,8 +407,8 @@ do not replay it as a Code17 deployment procedure:
 Do not lower the compatibility minimum to keep an older APK operating against
 this backend. Do not raise the minimum merely because an optional update exists.
 Code `15` remains the server-registry admission floor and immutable held audit
-history; codes `16` and `17` are immutable predecessors. Code `18` has no
-authorised artifact or activation target. Code `19` may be activated only after
+history; codes `16` and `17` are immutable predecessors. Codes `18` and `19`
+have no authorised artifact or activation target. Code `20` may be activated only after
 its tagged release, production deployment, staging, and review pass. Protected-owner status alone
 grants no global release authority: only the exact company/user identity
 configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and
@@ -411,8 +422,8 @@ returns a newer, non-cacheable `supported` policy that explicitly includes code
 
 ## Android artifacts
 
-Server-release registration begins at code `15`. Code `18` failed before
-signing and is never registered. Code `19` must first pass the complete backend
+Server-release registration begins at code `15`. Codes `18` and `19` failed
+before signing and are never registered. Code `20` must first pass the complete backend
 migration/test and web lint/typecheck/test/build gates. It then runs Android release lint, JVM
 tests, emulator instrumentation, and signature verification. The resulting
 draft release contains:

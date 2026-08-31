@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 ENV_FILE="${1:-.env}"
+EXPECTED_APP_VERSION="${2:-}"
 if [ ! -f "$ENV_FILE" ]; then
   echo "Production environment file not found: $ENV_FILE" >&2
   exit 1
@@ -34,6 +35,25 @@ require_secret() {
 env_name=$(value_for ENV)
 if [ "$env_name" != prod ]; then
   echo "ENV must be prod for docker-compose.prod.yml (found: $env_name)." >&2
+  exit 1
+fi
+
+if [ -z "$EXPECTED_APP_VERSION" ]; then
+  version_source=.env.production.example
+  version_count=$(grep -c '^APP_VERSION=' "$version_source" || true)
+  if [ "$version_count" -ne 1 ]; then
+    echo "Expected exactly one APP_VERSION entry in $version_source; found $version_count." >&2
+    exit 1
+  fi
+  EXPECTED_APP_VERSION=$(grep '^APP_VERSION=' "$version_source" | cut -d= -f2-)
+fi
+if ! [[ "$EXPECTED_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Expected APP_VERSION must be a release version such as 3.1.9." >&2
+  exit 1
+fi
+app_version=$(value_for APP_VERSION)
+if [ "$app_version" != "$EXPECTED_APP_VERSION" ]; then
+  echo "APP_VERSION must match the coordinated release ($EXPECTED_APP_VERSION); found: $app_version." >&2
   exit 1
 fi
 

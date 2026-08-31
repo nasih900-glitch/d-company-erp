@@ -8,6 +8,7 @@ SOURCE_ENV=${1:--}
 CANDIDATE_ENV=${2:?candidate environment path is required}
 DOMAIN=${3:?domain is required}
 APP_REVISION=${4:?release revision is required}
+VERSION_SOURCE=.env.production.example
 
 if [ "${#DOMAIN}" -gt 253 ] || \
    ! [[ "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
@@ -17,6 +18,16 @@ fi
 DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')
 if ! [[ "$APP_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "APP_REVISION must be an exact 40-character Git commit." >&2
+  exit 1
+fi
+version_count=$(grep -c '^APP_VERSION=' "$VERSION_SOURCE" || true)
+if [ "$version_count" -ne 1 ]; then
+  echo "Expected exactly one APP_VERSION entry in $VERSION_SOURCE; found $version_count." >&2
+  exit 1
+fi
+APP_VERSION=$(grep '^APP_VERSION=' "$VERSION_SOURCE" | cut -d= -f2-)
+if ! [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "APP_VERSION in $VERSION_SOURCE must be a release version such as 3.1.9." >&2
   exit 1
 fi
 if [ -e "$CANDIDATE_ENV" ]; then
@@ -52,8 +63,8 @@ cleanup() {
 }
 trap cleanup EXIT
 chmod 600 "$NEXT_ENV"
-awk -v domain="$DOMAIN" -v revision="$APP_REVISION" '
-  BEGIN { saw_domain = 0; saw_revision = 0 }
+awk -v domain="$DOMAIN" -v revision="$APP_REVISION" -v version="$APP_VERSION" '
+  BEGIN { saw_domain = 0; saw_revision = 0; saw_version = 0 }
   /^DOMAIN=/ {
     if (saw_domain) { print "duplicate DOMAIN entry" > "/dev/stderr"; exit 2 }
     print "DOMAIN=" domain
@@ -66,6 +77,12 @@ awk -v domain="$DOMAIN" -v revision="$APP_REVISION" '
     saw_revision = 1
     next
   }
+  /^APP_VERSION=/ {
+    if (saw_version) { print "duplicate APP_VERSION entry" > "/dev/stderr"; exit 2 }
+    print "APP_VERSION=" version
+    saw_version = 1
+    next
+  }
   {
     gsub(/CHANGE_ME\.com/, domain)
     print
@@ -73,9 +90,10 @@ awk -v domain="$DOMAIN" -v revision="$APP_REVISION" '
   END {
     if (!saw_domain) print "DOMAIN=" domain
     if (!saw_revision) print "APP_REVISION=" revision
+    if (!saw_version) print "APP_VERSION=" version
   }
 ' "$CANDIDATE_ENV" > "$NEXT_ENV"
 mv "$NEXT_ENV" "$CANDIDATE_ENV"
 NEXT_ENV=""
 chmod 600 "$CANDIDATE_ENV"
-bash infra/scripts/validate-production-env.sh "$CANDIDATE_ENV"
+bash infra/scripts/validate-production-env.sh "$CANDIDATE_ENV" "$APP_VERSION"

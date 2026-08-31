@@ -108,10 +108,18 @@ jobs:
       # exhaust the 7 GB hosted-runner memory before instrumentation starts.
       - name: Build and lint Android release
         working-directory: android-native
-        run: ./gradlew --no-daemon --max-workers=2 --stacktrace lintRelease assembleRelease bundleRelease
+        run: >-
+          ./gradlew --no-daemon --max-workers=1 --stacktrace
+          '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
+          -Pkotlin.compiler.execution.strategy=in-process
+          lintRelease assembleRelease bundleRelease
       - name: Run Android JVM tests
         working-directory: android-native
-        run: ./gradlew --no-daemon --max-workers=2 --stacktrace testDebugUnitTest
+        run: >-
+          ./gradlew --no-daemon --max-workers=1 --stacktrace
+          '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
+          -Pkotlin.compiler.execution.strategy=in-process
+          testDebugUnitTest
       # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
       # consistently granted access. Without KVM the API-35 emulator can take
       # several minutes to boot and the instrumentation process may be killed

@@ -1,6 +1,13 @@
-# D Company ERP 3.1.8 (code 19) release candidate
+# D Company ERP 3.1.8 (code 19) rejected release attempt
 
-Code 19 is the corrected immutable identity for the standard-premium Android,
+Status: **rejected before signing**. The coordinated backend/web and Android
+instrumentation gates passed, but the unsigned Android job compiled both
+release variants concurrently and exhausted the hosted runner. It produced no
+authorised APK and was never staged or advertised. Do not move or reuse tag
+`v3.1.8`. The corrected identity is `3.1.9` / code `20`; see
+[`CODE20_RELEASE_CANDIDATE.md`](CODE20_RELEASE_CANDIDATE.md).
+
+Code 19 was the corrected immutable identity for the standard-premium Android,
 backend, and web release. Tag `v3.1.7` / code `18` failed its backend release
 gate before signing and produced no authorised APK; it must never be moved or
 reused.
@@ -17,11 +24,10 @@ reused.
 
 ## Release authority
 
-Only a fully green tagged `v3.1.8` GitHub Actions run may produce the signed APK
-and `release-manifest.json` used for staging. Local builds and old evidence
-bundles are not release artifacts. Staging is non-advertising; activation is a
-separate authenticated owner action after production deployment and smoke
-testing.
+The release contract required a fully green tagged workflow before signing, so
+this failed run produced no APK or `release-manifest.json` that can be staged.
+Local builds and old evidence bundles are not substitutes. Code 20 retains the
+same non-advertising staging and separate authenticated-owner activation rules.
 
 Keep the compatibility minimum at code `8`. The tablet must update in place from
 the installed, same-signer code `14` app; do not uninstall or clear app data.
