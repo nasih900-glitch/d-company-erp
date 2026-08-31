@@ -75,7 +75,7 @@ def _auth_headers(seed: dict, *, roles: list[str], android: bool) -> dict[str, s
         headers.update(
             {
                 "X-Client-Platform": "android",
-                "X-Client-Version-Code": "17",
+                "X-Client-Version-Code": "18",
                 "X-Client-Distribution-Channel": "direct",
             }
         )
@@ -93,8 +93,8 @@ async def _installation(session, seed: dict) -> ClientInstallation:
         terminal_id=seed["terminal"].id,
         platform="android",
         distribution_channel="direct",
-        version_name="3.1.6",
-        version_code=17,
+        version_name="3.1.7",
+        version_code=18,
         pending_outbox_count=0,
         last_successful_sync_at=now,
         update_state="idle",

@@ -34,8 +34,8 @@ function device(
     installation_id: INSTALLATION_ID,
     terminal_id: '2e05212a-7f1c-4d33-a2bc-e918d0e84e4c',
     terminal_name: 'Front desk tablet',
-    version_name: '3.1.6',
-    version_code: 17,
+    version_name: '3.1.7',
+    version_code: 18,
     last_user_id: 'ae5c8060-b147-4837-92d8-61d174e34a53',
     last_user_name: 'Employee',
     last_seen_at: '2026-08-30T12:00:00Z',
@@ -161,6 +161,8 @@ describe('Device Centre protected presentation', () => {
     expect(markup).not.toContain('>Open Help<');
     expect(markup).toContain('Refresh Help');
     expect(markup).toContain('Operational screens stay private');
+    expect(markup).toContain('Code 18 cannot remotely open or control');
+    expect(markup).not.toContain('Code 17 cannot remotely open or control');
     expect(markup).toContain('Collect diagnostics');
     expect(markup).toContain('Device key verified');
     expect(markup).toContain('a'.repeat(64));

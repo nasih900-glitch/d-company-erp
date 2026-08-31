@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.6` |
-| Version code | `17` |
+| Version name | `3.1.7` |
+| Version code | `18` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,27 +23,26 @@ build.
 
 ## Release status
 
-Version `3.1.6` (`17`) is the consent-gated ERP-only remote-assistance candidate
-following the immutable `3.1.5` (`16`) reliability predecessor. It preserves
-stable connectivity presentation, privacy-preserving crash/ANR/API/sync
-diagnostics with an offline outbox, actionable recovery guidance, stricter
-real-time authentication handling, and the final tablet runtime/layout fixes.
-It still requires exactly one server-confirmed Hybrid Gaming + POS workspace
-for the active shop. A green local build does not prove the server channel, a
-physical Redmi Pad 2, or production deployment: those remain explicit rollout
-gates.
+Version `3.1.7` (`18`) is the standard-premium Android visual candidate
+following the immutable `3.1.6` (`17`) remote-assistance predecessor. It must
+preserve Code 17's connectivity, privacy-preserving diagnostics, offline
+outbox, recovery, authentication, remote-assistance, and operational business
+contracts while refining the native presentation. It still requires exactly
+one server-confirmed Hybrid Gaming + POS workspace for the active shop. A green
+local build does not prove authenticated workflows on a physical Redmi Pad 2
+or production deployment: those remain explicit release gates.
 
 Android client code `8` remains the minimum-compatible floor. Preserve the
 signed `3.1.1` (`12`) and `3.1.2` (`13`) predecessors as immutable artifacts.
 Code `14` is installed manually and must never be registered or advertised as a
-server update. Code `16` remains immutable upgrade history. This server-driven
-successor, `3.1.6` (code `17`), must be a newly signed immutable APK with a
-verified HTTPS
-URL, SHA-256, byte size, package, version, and expected signer. The server may
-offer that future artifact only after the stage-only operator checks and a
-protected owner activation re-verifies its public bytes. Android will still
-require the employee to approve installation. Do not raise the minimum merely
-because the manual baseline or a future optional release exists.
+server update. Codes `16` and `17` remain immutable upgrade history. Code `18`
+is a new local candidate identity only; preparing or testing it does not
+authorise hosting, registering, staging, advertising, or activating it through
+the server. Any later rollout requires a separately reviewed immutable APK,
+verified URL, SHA-256, byte size, package, version, expected signer, and
+same-lineage upgrade proof. Android will still require the employee to approve
+installation. Do not raise the compatibility minimum merely because a newer
+candidate exists.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in

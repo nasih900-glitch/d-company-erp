@@ -54,6 +54,12 @@ activate them as a shortcut. Code `16` (`3.1.5`) remains the immutable
 predecessor used for upgrade proof. The current server-delivery candidate is the
 distinct `3.1.6` (version code `17`) artifact with a new immutable filename.
 
+The source tree's `3.1.7` (version code `18`) identity is a separate local
+visual candidate. This guide does not authorise hosting, registering, staging,
+advertising, or activating Code 18. The Code 17 procedure below remains a
+historical, version-specific record and must not be applied to Code 18 by
+substitution.
+
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
 authority to change that floor.
@@ -110,7 +116,7 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Build and stage code 17
+## Historical Code 17 staging procedure — not Code 18 authorisation
 
 1. Confirm the code-`16` installation is signed by the trusted certificate, can check
    for updates, and has no pending offline work.

@@ -27,27 +27,20 @@ GitHub/Play release, or create an Android release-registry row for it.
 
 Code `15` (`3.1.4`) is the first identity allowed by the server-release registry,
 but it is a held audit build. Preserve any signed artifact and manifest exactly;
-do not rebuild, overwrite, or activate it. Code `16` (`3.1.5`) is the immutable
-predecessor for upgrade proof. The current server-delivery rollout starts with a
-distinct immutable code-`17` artifact:
+do not rebuild, overwrite, or activate it. Codes `16` (`3.1.5`) and `17`
+(`3.1.6`) are immutable predecessors. Code `18` is a local candidate only; this
+pass deliberately stops before publication or server delivery:
 
 ```
-bump to 3.1.6/code 17, then tag v3.1.6
+bump source to 3.1.7/code 18 without tagging
         │
         ▼
-GitHub Actions: backend + web + Android gates
+local/CI backend + web + Android candidate gates
         │
         ▼
-newly signed native Android APK + verified release manifest
+same-lineage Code 17 to Code 18 upgrade proof
         │
-        ▼
-immutable controlled HTTPS release URL
-        │
-        ▼ guarded stage-only tool verifies bytes and registers staged row
-explicitly bound release controller activates after a second public-byte verification
-        │
-        ▼
-employee approves Android's installer prompt
+        ▼ stop: keep artifacts private and the server channel unchanged
 ```
 
 The Tauri desktop and iOS projects are not built or published by the supported
@@ -106,7 +99,7 @@ minimum supported version until that proof passes. See
 Choose one version and apply it consistently. For the current candidate:
 
 ```bash
-CURRENT_RELEASE_VERSION=3.1.6
+CURRENT_RELEASE_VERSION=3.1.7
 
 # Update the coordinated product version in:
 # - android-native/app/build.gradle.kts (versionName and a new versionCode)
@@ -125,13 +118,13 @@ CURRENT_RELEASE_VERSION=3.1.6
 python3 scripts/verify_android_release_version.py --tag "v$CURRENT_RELEASE_VERSION"
 ```
 
-That command validates the coordinated code-`17` identity; it does not authorise
-publishing or activating the artifact. Commit and tag `v3.1.6` only after every
-product-version field is coordinated and the full release gates pass. Keep the
-manual code-`14` baseline untagged and unadvertised, and keep the code-`15` audit
-identity immutable and held. Never use a blanket version replacement: many
-dependency versions and the Android rollout policy intentionally differ from
-the product version.
+That command validates the coordinated code-`18` identity; it does not authorise
+tagging, publishing, advertising, registering, staging, or activating the
+artifact. This candidate-preparation pass must not create tag `v3.1.7`. A later
+release approval may create it only after every product-version field is
+coordinated and the complete release gates pass. Keep codes `14` through `17`
+immutable. Never use a blanket version replacement: dependency versions and
+Android rollout policy intentionally differ from the product version.
 
 The workflow rejects a release unless all of these are true:
 
@@ -145,7 +138,7 @@ than the last published one; the repository cannot verify Play's remote history,
 so increment it for every release. A manual workflow dispatch must target an
 existing tag. Dispatches from branches are rejected.
 
-## Version-code-8 floor, code-14 baseline, code-15 audit, and code-17 candidate
+## Version-code-8 floor, immutable predecessors, and code-18 candidate
 
 Version `3.0.7` with version code `8` introduced authoritative terminal
 purposes (`cafe_pos`, `gaming`, and `hybrid`) and the explicit Gaming-to-POS
@@ -172,10 +165,10 @@ Code `11` first introduced the verified in-app direct updater. The manually
 installed code-`14` app is now the update-capable baseline. Code `15` is the
 first version accepted by the immutable server-release registry, but `3.1.4`
 code `15` is a held audit build and is not the current activation target. The
-signed `3.1.5` code-`16` artifact is the immutable predecessor. The current
-server-delivery candidate is a newly built and signed `3.1.6` APK with version
-code `17`. An optional offer exists only after that exact artifact is staged and
-explicitly activated.
+signed `3.1.5` code-`16` and `3.1.6` code-`17` artifacts are immutable
+predecessors. The current source candidate is `3.1.7` with version code `18`.
+It is not an optional server offer and must not be hosted, registered, staged,
+advertised, or activated during this refinement pass.
 
 Treat the app and backend as one coordinated release:
 
@@ -203,14 +196,13 @@ Treat the app and backend as one coordinated release:
    older receive HTTP 426 before a write handler and version `8` remains
    compatible. The owner may then send that same APK manually to the partner;
    no optional release is active.
-6. For the current server-driven update, create `3.1.6` with version code `17`,
-   sign it with the trusted lineage, verify an in-place upgrade from code `16`,
-   and use `ops/stage_android_release.py` to publish it once at an
-   immutable HTTPS URL and register a staged row. Only the exact company/user
-   identity configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with
-   `admin.system` and audit access, may activate it after review and the
-   backend's second public-byte verification;
-   Android still requires the employee to approve installation.
+6. For the Code `18` local candidate, build `3.1.7` under the trusted lineage
+   and verify an in-place upgrade from the exact Code `17` predecessor without
+   clearing app data. Stop there: do not invoke `ops/stage_android_release.py`,
+   copy the APK to a public URL, create a registry row, change the compatibility
+   defaults, or call the activation endpoint. Any future rollout requires a
+   separate reviewed decision, and Android still requires the employee to
+   approve installation.
 
 ### Historical migration 0056 record (not a current deployment path)
 
@@ -403,13 +395,11 @@ do not replay it as a Code17 deployment procedure:
 Do not lower the compatibility minimum to keep an older APK operating against
 this backend. Do not raise the minimum merely because an optional update exists.
 Code `15` remains the server-registry admission floor and immutable held audit
-history; code `16` is the immutable predecessor and the current activation
-target is `3.1.6` (`17`). Its immutable row may
-be staged only after the distinct signed artifact and same-lineage upgrade proof
-exist. Protected-owner status alone grants no global release authority: only
-the exact company/user identity configured in
-`ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and audit access, may
-activate it.
+history; codes `16` and `17` are immutable predecessors. Code `18` has no server
+activation target or registry row in this pass. Protected-owner status alone
+grants no global release authority: only the exact company/user identity
+configured in `ANDROID_RELEASE_CONTROLLER_BINDINGS`, with `admin.system` and
+audit access, may activate a separately approved future release.
 
 If an erroneous minimum must be rolled back, deploy the lower minimum together
 with a strictly higher `CLIENT_COMPATIBILITY_POLICY_REVISION`. A code-`14`
@@ -419,12 +409,12 @@ returns a newer, non-cacheable `supported` policy that explicitly includes code
 
 ## Android artifacts
 
-Server-release registration begins at code `15`. For the current tagged
-`3.1.6` (`17`) candidate, the Android job first reruns the complete backend
-migration/test and web
-lint/typecheck/test/build gates. It then runs Android release lint, JVM tests,
-emulator instrumentation, and signature verification. It stages a draft
-release containing:
+Server-release registration begins at code `15`, but Code `18` is not registered
+or tagged during this pass. If `3.1.7` (`18`) later receives separate release
+approval, the Android job must first rerun the complete backend migration/test
+and web lint/typecheck/test/build gates. It then runs Android release lint, JVM
+tests, emulator instrumentation, and signature verification. The resulting
+draft release contains:
 
 - a signed `.apk` for controlled direct installation;
 - a signed `.aab` for Play Console;
