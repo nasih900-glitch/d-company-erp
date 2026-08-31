@@ -10,7 +10,6 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.PlatformTextStyle
@@ -22,41 +21,34 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
 /**
- * D Company native palette. Android keeps its calm navy operational surfaces
- * rather than copying the web UI; the shared gold brand accent is reserved for
- * selection, identity and primary actions.
+ * D Company executive palette.
  *
- * The tonal-elevation ladder and restrained secondary text tiers provide the
- * depth and hierarchy that a large tablet needs without adding more colours.
+ * The interface is a neutral business tool: navy establishes hierarchy, brass
+ * is reserved for brand identity and primary actions, and semantic colours are
+ * reserved for operational state. Gaming remains a workflow, not a visual
+ * theme, so there are no decorative gradients, glows or neon treatments.
  */
 object Brand {
-    // Neutral navy surfaces match the approved operational dashboard.  They
-    // keep large tablet screens calm and let semantic status colours carry
-    // meaning without competing with a brown/yellow cast across the app.
-    val Background = Color(0xFF061016)
-    val BackgroundSecondary = Color(0xFF08141B)
-    val Surface = Color(0xFF0A171E)
-    val SurfaceRaised = Color(0xFF0E1E27)
-    val SurfaceHover = Color(0xFF132731)
-    // One tier above SurfaceRaised — dialogs and popovers floating over an
-    // already-raised card need their own step, or they visually merge into it.
-    val SurfaceOverlay = Color(0xFF152A35)
-    val Gold = Color(0xFFF2B63D)
-    val GoldBright = Color(0xFFFFD166)
-    // Status/help copy uses this token on cards and dialogs, not just the base
-    // background. Keep it muted relative to Gold while meeting 4.5:1 on the
-    // darkest raised surface.
-    val GoldMuted = Color(0xFFC99B3D)
-    val Foreground = Color(0xFFF3F7F8)
-    val ForegroundMuted = Color(0xFFAAB7BD)
-    // A third text tier for genuinely tertiary labels (timestamps, hints) —
-    // ForegroundMuted was doing double duty as both "secondary" and "barely
-    // visible," which flattened the hierarchy on text-dense screens.
-    // Still visibly tertiary, but no longer below WCAG AA: #8C8170 remains
-    // at least 4.58:1 even on SurfaceOverlay, where timestamps and recovery
-    // hints are commonly rendered at 11sp.
-    val ForegroundFaint = Color(0xFF8E9DA4)
-    val Disabled = Color(0xFF56656C)
+    // Five deliberate surface steps keep dense tablet screens structured
+    // without relying on shadows or colour effects.
+    val Background = Color(0xFF08131B)
+    val BackgroundSecondary = Color(0xFF0B1821)
+    val Surface = Color(0xFF0F1D26)
+    val SurfaceRaised = Color(0xFF162832)
+    val SurfaceHover = Color(0xFF1A2E39)
+    val SurfaceOverlay = Color(0xFF1D333F)
+
+    // Legacy token names are retained to avoid screen-level churn. Together
+    // they form one restrained brass family rather than multiple yellow CTAs.
+    val Gold = Color(0xFFC6A15B)
+    val GoldBright = Color(0xFFD2B675)
+    val GoldMuted = Color(0xFFB99A5F)
+
+    val Foreground = Color(0xFFF4F6F7)
+    val ForegroundMuted = Color(0xFF9BA8B0)
+    // Minimum 4.5:1 contrast on SurfaceOverlay for 11sp timestamps and hints.
+    val ForegroundFaint = Color(0xFF8D9AA2)
+    val Disabled = Color(0xFF65727A)
 
     // Semantic colours are deliberately independent of the brand accent.
     // State must always be paired with an icon or label in UI components.
@@ -69,18 +61,12 @@ object Brand {
     val Information = Color(0xFF5AA7FF)
     val InformationMuted = Color(0xFF142F4B)
 
-    val Border = Color(0xFF29404B)
-    val BorderSubtle = Color(0xFF172C36)
-
-    /** The one recurring "premium" accent — a gold sheen on primary actions
-     * and selected nav state, instead of a flat fill. Used sparingly: one
-     * hero surface per screen, not every gold-colored element. */
-    val GoldSheen = Brush.linearGradient(listOf(GoldBright, Gold))
-
-    /** A faint top-down fade used behind headers/hero panels so they read as
-     * sitting slightly above the base background rather than flush with it. */
-    fun surfaceFade(top: Color = SurfaceRaised, bottom: Color = Surface) =
-        Brush.verticalGradient(listOf(top, bottom))
+    val Border = Color(0xFF314752)
+    val BorderSubtle = Color(0xFF223640)
+    // Actionable control boundaries must remain at least 3:1 against their
+    // SurfaceRaised fill; decorative card borders intentionally stay quieter.
+    val ControlBorder = Color(0xFF527483)
+    val FocusRing = Gold
 }
 
 /** 4px base spacing scale — every screen in this app hand-rolled its own
@@ -101,9 +87,9 @@ object Spacing {
 /** Corner-radius scale — small controls vs. cards vs. dialogs vs. pills. */
 object Radius {
     val sm = 8.dp
-    val md = 12.dp
-    val lg = 16.dp
-    val xl = 20.dp
+    val md = 10.dp
+    val lg = 14.dp
+    val xl = 18.dp
     val pill = 999.dp
 
     val shapeSm = RoundedCornerShape(sm)
@@ -174,34 +160,33 @@ private val PreciseTextStyle = TextStyle(
 
 private val DCompanyTypography = Typography(
     displayLarge = PreciseTextStyle.copy(
-        fontSize = 42.sp,
-        lineHeight = 48.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.7).sp,
+        fontSize = 40.sp,
+        lineHeight = 46.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = (-0.6).sp,
     ),
     headlineLarge = PreciseTextStyle.copy(
-        fontSize = 32.sp,
-        lineHeight = 38.sp,
+        fontSize = 30.sp,
+        lineHeight = 36.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.5).sp,
+        letterSpacing = (-0.4).sp,
     ),
     headlineMedium = PreciseTextStyle.copy(
-        fontSize = 27.sp,
-        lineHeight = 33.sp,
+        fontSize = 26.sp,
+        lineHeight = 32.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.35).sp,
+        letterSpacing = (-0.3).sp,
     ),
     headlineSmall = PreciseTextStyle.copy(
-        fontSize = 22.sp,
+        fontSize = 21.sp,
         lineHeight = 27.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.2).sp,
+        letterSpacing = (-0.1).sp,
     ),
     titleLarge = PreciseTextStyle.copy(
         fontSize = 20.sp,
-        lineHeight = 25.sp,
+        lineHeight = 26.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.1).sp,
     ),
     titleMedium = PreciseTextStyle.copy(
         fontSize = 16.sp,

@@ -113,7 +113,7 @@ enum class Destination(
     val description: String,
     val icon: ImageVector,
 ) {
-    Dashboard("Dashboard", "See today's Gaming Centre overview", Icons.Filled.Analytics),
+    Dashboard("Dashboard", "See today's operating overview", Icons.Filled.Analytics),
     Pos("POS", "Take orders and payments", Icons.Filled.PointOfSale),
     Gaming("Gaming", "Manage stations and sessions", Icons.Filled.SportsEsports),
     Tables("Tables", "Open and manage table orders", Icons.Filled.TableRestaurant),
@@ -297,7 +297,7 @@ private fun WorkspaceSidebar(
                         maxLines = 1,
                     )
                     Text(
-                        "GAMING CENTRE",
+                        "OPERATIONS",
                         color = Brand.GoldMuted,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 10.sp,
@@ -520,7 +520,7 @@ private fun WorkspaceHeader(
             Row(
                 Modifier.widthIn(min = 280.dp, max = 380.dp).heightIn(min = 48.dp)
                     .clip(Radius.shapeMd).background(Brand.Surface)
-                    .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                    .border(1.dp, Brand.ControlBorder, Radius.shapeMd)
                     .clickable(onClick = onOpenCommand)
                     .semantics { role = Role.Button; contentDescription = "Find a module" }
                     .padding(horizontal = Spacing.md),
@@ -570,7 +570,7 @@ private fun WorkspaceHeader(
             Surface(
                 color = Brand.Surface,
                 shape = Radius.shapePill,
-                border = BorderStroke(1.dp, Brand.BorderSubtle),
+                border = BorderStroke(1.dp, Brand.ControlBorder),
                 modifier = Modifier.heightIn(min = 48.dp)
                     .clickable(onClick = onOpenSupport)
                     .semantics {
@@ -618,7 +618,7 @@ private fun WorkspaceHeader(
                 Surface(
                     color = Brand.Surface,
                     shape = Radius.shapeMd,
-                    border = BorderStroke(1.dp, Brand.BorderSubtle),
+                    border = BorderStroke(1.dp, Brand.ControlBorder),
                     modifier = Modifier.height(48.dp)
                         .clickable { accountMenuOpen = true }
                         .semantics {
@@ -690,7 +690,7 @@ private fun HeaderIconAction(
     Surface(
         color = Brand.Surface,
         shape = Radius.shapeMd,
-        border = BorderStroke(1.dp, Brand.BorderSubtle),
+        border = BorderStroke(1.dp, Brand.ControlBorder),
         modifier = Modifier.size(48.dp)
             .clickable(onClick = onClick)
             .semantics {

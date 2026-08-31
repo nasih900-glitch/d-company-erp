@@ -204,7 +204,7 @@ fun ErpButton(
         ActionIntent.Quiet -> Color.Transparent to Brand.ForegroundMuted
     }
     val border = when (intent) {
-        ActionIntent.Secondary -> BorderStroke(1.dp, Brand.Border)
+        ActionIntent.Secondary -> BorderStroke(1.dp, Brand.ControlBorder)
         else -> null
     }
     Button(

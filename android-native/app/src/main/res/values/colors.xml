@@ -4,5 +4,5 @@
          styles.xml but was never defined here, so it silently resolved to
          capacitor-android's library defaults (a light blue/teal) — which is
          why the status bar rendered white above a near-black app. -->
-    <color name="brandBackground">#061016</color>
+    <color name="brandBackground">#08131B</color>
 </resources>

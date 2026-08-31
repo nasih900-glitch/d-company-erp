@@ -125,7 +125,7 @@ fun LoginScreen(
                         letterSpacing = 0.6.sp,
                     )
                     Text(
-                        "GAMING CENTRE",
+                        "BUSINESS OPERATIONS",
                         style = MaterialTheme.typography.labelMedium,
                         color = Brand.GoldMuted,
                         fontWeight = FontWeight.SemiBold,

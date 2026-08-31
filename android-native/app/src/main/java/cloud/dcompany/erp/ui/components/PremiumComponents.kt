@@ -118,7 +118,7 @@ private fun PageHeaderIdentity(
                 title,
                 color = Brand.Foreground,
                 style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
             )
             Text(
                 subtitle,
@@ -349,12 +349,12 @@ fun SearchInput(
             focusedContainerColor = Brand.SurfaceRaised,
             unfocusedContainerColor = Brand.SurfaceRaised,
             disabledContainerColor = Brand.Surface,
-            focusedIndicatorColor = Brand.GoldMuted,
-            unfocusedIndicatorColor = Brand.BorderSubtle,
+            focusedIndicatorColor = Brand.FocusRing,
+            unfocusedIndicatorColor = Brand.ControlBorder,
             disabledIndicatorColor = Brand.BorderSubtle,
             focusedTextColor = Brand.Foreground,
             unfocusedTextColor = Brand.Foreground,
-            cursorColor = Brand.Gold,
+            cursorColor = Brand.FocusRing,
         ),
     )
 }
@@ -380,6 +380,11 @@ fun PremiumTabBar(
             Row(
                 Modifier.heightIn(min = 48.dp).clip(Radius.shapeSm)
                     .background(if (selected) Brand.SurfaceHover else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (selected) Brand.FocusRing else Color.Transparent,
+                        Radius.shapeSm,
+                    )
                     .selectable(
                         selected = selected,
                         role = Role.Tab,

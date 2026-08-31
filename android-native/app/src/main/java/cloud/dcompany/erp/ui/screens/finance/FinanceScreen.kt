@@ -1346,6 +1346,7 @@ private fun StatCard(stat: StatSpec, surface: Color, modifier: Modifier = Modifi
         modifier = modifier
             .clip(Radius.shapeLg)
             .background(surface)
+            .border(1.dp, Brand.BorderSubtle, Radius.shapeLg)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -1417,13 +1418,7 @@ private fun Panel(
             .fillMaxWidth()
             .clip(Radius.shapeLg)
             .background(Brand.Surface)
-            .then(
-                if (border != null) {
-                    Modifier.border(1.dp, border, Radius.shapeLg)
-                } else {
-                    Modifier
-                },
-            )
+            .border(1.dp, border ?: Brand.BorderSubtle, Radius.shapeLg)
             .padding(14.dp),
         content = content,
     )
@@ -1961,19 +1956,19 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         busy = state.busy,
         error = localError ?: state.formError,
         onDismiss = vm::closeDialog,
-        onConfirm = {
+        onConfirm = confirmExpense@{
             val amountMinor = parseRupeesToMinor(amountRupees)
             if (amountMinor == null) {
                 localError = "Amount must be rupees with no more than 2 decimal places."
-                return@FormDialog
+                return@confirmExpense
             }
             if (amountMinor <= 0) {
                 localError = "Enter an amount greater than ₹0."
-                return@FormDialog
+                return@confirmExpense
             }
             if (branchId.isBlank() || categoryId.isBlank()) {
                 localError = "Pick a branch and a category."
-                return@FormDialog
+                return@confirmExpense
             }
             localError = null
             vm.postExpense(
