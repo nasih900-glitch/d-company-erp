@@ -72,7 +72,8 @@ data-derived navigation destination.
 
 The final Code 18 frontend gate passed typecheck, zero-warning lint, all 318
 tests, and the verified production build. The build toolchain was also moved to
-the supported Vite 6 / Vitest 3 line and both committed lockfiles were refreshed.
+the pinned, audited and repository-tested Vite 6 / Vitest 3 compatibility line,
+and both committed lockfiles were refreshed.
 Full and production-only audits through both npm and pnpm report zero known
 dependency vulnerabilities; this is no longer carried as a deferred Code 17
 exception.

@@ -75,14 +75,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: '22', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
       - run: cd frontend && npm ci --no-audit --no-fund
-      # Blocking: only prod dependencies are gated (--omit=dev). As of 2026-07-19, npm audit finds
-      # real high/critical CVEs in vite/vitest, but both are devDependencies used only by the local
-      # dev server and test runner — never built into or run by the shipped app. Blocking on those
-      # would make CI permanently red over an accepted, non-exploitable-in-prod risk. Revisit by
-      # upgrading vite/vitest during a routine dependency bump; `npm audit --audit-level=high`
-      # (without --omit=dev) shows the full picture.
-      - name: Dependency vulnerability scan (npm audit, prod deps)
-        run: cd frontend && npm audit --omit=dev --audit-level=high
+      # Gate both shipped dependencies and the build/test supply chain. Code 18
+      # removed the temporary Code 17 Vite/Vitest exception, so a future
+      # high/critical development-tool advisory must fail CI as well.
+      - name: Dependency vulnerability scan (npm audit, full tree)
+        run: cd frontend && npm audit --audit-level=high
       - run: cd frontend && npm run lint
       - run: cd frontend && npm run typecheck
       - run: cd frontend && npm run test

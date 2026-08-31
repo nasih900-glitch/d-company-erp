@@ -347,4 +347,3 @@ production deployment/migration and server-advertised update delivery remain
 outside this pass and are not represented as proven.
 
 final result: passed
-

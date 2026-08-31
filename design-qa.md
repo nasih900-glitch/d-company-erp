@@ -2,11 +2,11 @@
 
 ## Comparison target
 
-- Source visual truth: `/Users/mohammednasih/Documents/New project/release-artifacts/d-company-erp-3.1.6-code17/evidence/code17-final-after-code12-upgrade-2560x1600.png`
-- Selected visual specification: `/Users/mohammednasih/Documents/New project/d-company-erp-code18-premium/docs/CODE18_STANDARD_PREMIUM.md`
-- Rendered implementation: `/Users/mohammednasih/Documents/New project/d-company-erp-code18-premium/release-artifacts/d-company-erp-3.1.7-code18/evidence/code18-login-idle-2560x1600.png`
-- Full-view comparison: `/Users/mohammednasih/Documents/New project/d-company-erp-code18-premium/release-artifacts/d-company-erp-3.1.7-code18/evidence/code17-vs-code18-login-comparison-5120x1600.png`
-- Focused comparison: `/Users/mohammednasih/Documents/New project/d-company-erp-code18-premium/release-artifacts/d-company-erp-3.1.7-code18/evidence/code17-vs-code18-login-focused-2048x1200.png`
+- Source visual truth: `release-artifacts/d-company-erp-3.1.7-code18/evidence/source-code17-final-after-code12-upgrade-2560x1600.png`
+- Selected visual specification: `docs/CODE18_STANDARD_PREMIUM.md`
+- Rendered implementation: `release-artifacts/d-company-erp-3.1.7-code18/evidence/code18-login-idle-2560x1600.png`
+- Full-view comparison: `release-artifacts/d-company-erp-3.1.7-code18/evidence/code17-vs-code18-login-comparison-5120x1600.png`
+- Focused comparison: `release-artifacts/d-company-erp-3.1.7-code18/evidence/code17-vs-code18-login-focused-2048x1200.png`
 
 The source and implementation are native Android app captures of the same logged-out,
 idle login state. Both use a 2560 x 1600 pixel landscape viewport at 320 dpi. No

@@ -142,10 +142,10 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.6/release-manifest.json \
-     --apk /secure/release-3.1.6/d-company-erp-v3.1.6-direct.apk \
-     --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
-     --release-notes "Gaming Centre reliability and update delivery" \
+     --manifest /secure/release-3.1.7/release-manifest.json \
+     --apk /secure/release-3.1.7/d-company-erp-v3.1.7-direct.apk \
+     --expected-signer-sha256 <trusted-code-17-certificate-sha256> \
+     --release-notes "Standard-premium Android refinement and reliability hardening" \
      --ssh-key ~/.ssh/dcompany_erp \
      --apply
    ```
@@ -157,14 +157,14 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence. Activate only the staged code-`16` row.
+   size, signer and source evidence. Activate only the staged code-`18` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
-6. On one code-`14` tablet, refresh the update check, download, install and
-   reopen code `16`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+6. On one code-`17` tablet, refresh the update check, download, install and
+   reopen code `18`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
-Do not activate code `14` as its own update. Do not stage from an arbitrary
+Do not activate code `17` as its own update. Do not stage from an arbitrary
 local Gradle build, a renamed APK, a different workflow run, or a candidate
 whose signer merely matches itself.
 

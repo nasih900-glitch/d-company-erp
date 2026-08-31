@@ -41,6 +41,7 @@ class PremiumFoundationContractTest {
         assertTrue("BUSINESS OPERATIONS" in login)
         assertTrue("OPERATIONS" in navigation)
         assertFalse("GAMING CENTRE" in login)
+        assertFalse("GAMING CENTRE" in navigation)
         assertFalse("Cafe + Gaming Lounge" in login)
         assertTrue("shape = Radius.shapeXl" in login)
     }

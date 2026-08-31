@@ -100,11 +100,11 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install and audit production web dependencies
+      - name: Install and audit complete web dependency tree
         working-directory: frontend
         run: |
           npm ci --no-audit --no-fund
-          npm audit --omit=dev --audit-level=high
+          npm audit --audit-level=high
       - name: Run complete web gates
         working-directory: frontend
         run: |
