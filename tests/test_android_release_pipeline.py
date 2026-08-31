@@ -362,7 +362,8 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("python -m pip_audit -r backend/requirements.lock", coordinated_job)
         self.assertIn("run: alembic upgrade head", coordinated_job)
         self.assertIn("run: pytest", coordinated_job)
-        self.assertIn("npm audit --omit=dev --audit-level=high", coordinated_job)
+        self.assertIn("npm audit --audit-level=high", coordinated_job)
+        self.assertNotIn("npm audit --omit=dev", coordinated_job)
         for gate in ("npm run lint", "npm run typecheck", "npm run test", "npm run build"):
             with self.subTest(gate=gate):
                 self.assertIn(gate, coordinated_job)

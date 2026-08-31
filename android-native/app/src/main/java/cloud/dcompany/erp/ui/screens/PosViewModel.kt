@@ -194,6 +194,16 @@ private data class PosMenuSnapshot(
     val customers: List<CustomerCacheEntity>,
 )
 
+/**
+ * Receipt lists are replaceable UI projections, not payment/outbox workers.
+ * The session ViewModel survives route changes, so eager sharing would keep
+ * Room queries, sync-error combination and canonical JSON decoding alive for
+ * the rest of the login after the cashier leaves POS. Keep a short grace
+ * period for transient recomposition, then stop until POS is visible again.
+ * Durable receipt rows remain in Room and are replayed on the next collection.
+ */
+private val receiptUiSharing = SharingStarted.WhileSubscribed(5_000)
+
 data class PosUiState(
     /** Full available catalogue retained for durable draft/retry reconstruction. */
     val categories: List<MenuCategoryEntity> = emptyList(),
@@ -322,14 +332,14 @@ class PosViewModel : ViewModel() {
 
     val recentReceipts: StateFlow<List<PosReceiptEntity>> = db.posReceiptDao()
         .observeRecent()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(viewModelScope, receiptUiSharing, emptyList())
 
     private val _receiptHistoryLoading = MutableStateFlow(false)
     val receiptHistoryLoading: StateFlow<Boolean> = _receiptHistoryLoading.asStateFlow()
 
     val receiptHistorySyncState: StateFlow<CanonicalReceiptSyncStateEntity?> =
         db.canonicalReceiptDao().observeSyncState()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+            .stateIn(viewModelScope, receiptUiSharing, null)
 
     /**
      * Receipts from every web/Android till in the current company and branch.
@@ -354,7 +364,10 @@ class PosViewModel : ViewModel() {
             )
         }
     }.map { rows -> rows.mapNotNull { it.decodedReceipt() } }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        // A history page contains complete receipt payloads. Decoding it on
+        // Main can stall input/rendering when a page arrives or is refreshed.
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, receiptUiSharing, emptyList())
 
     val receiptHistoryError: StateFlow<String?> = combine(
         receiptHistorySyncState,
@@ -363,11 +376,11 @@ class PosViewModel : ViewModel() {
         // A later network/auth/server failure is more current than a cached
         // staged-rollout 404 notice and must not be hidden by it.
         errors["receipts"] ?: state?.unavailableMessage
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    }.stateIn(viewModelScope, receiptUiSharing, null)
 
     val unacknowledgedReceipt: StateFlow<PosReceiptEntity?> = db.posReceiptDao()
         .observeOldestUnacknowledged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(viewModelScope, receiptUiSharing, null)
 
     /**
      * The UI reads Room, never the network. That is what makes the screen work

@@ -31,6 +31,14 @@ val debugApiBaseUrl = providers.gradleProperty("dcompany.debugApiBaseUrl")
     ?.takeIf(String::isNotEmpty)
     ?: productionApiBaseUrl
 val debugApiUri = runCatching { URI(debugApiBaseUrl) }.getOrNull()
+val androidTestBuildType = providers.gradleProperty("dcompany.androidTestBuildType")
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?: "debug"
+require(androidTestBuildType in setOf("debug", "physicalAudit")) {
+    "dcompany.androidTestBuildType must be 'debug' or 'physicalAudit'."
+}
 require(debugApiBaseUrl.endsWith("/")) {
     "dcompany.debugApiBaseUrl must end with '/'."
 }
@@ -100,7 +108,31 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // Never shipped. This gives physical-device QA release-like runtime
+        // behaviour without pointing a test APK at live business data. It is
+        // selected only with -Pdcompany.androidTestBuildType=physicalAudit.
+        create("physicalAudit") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            applicationIdSuffix = ".physicalaudit"
+            versionNameSuffix = "-physical-audit"
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                buildConfigString("https://invalid.dcompany.test/api/v1/"),
+            )
+            buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
+            // Reuse the already-supported managed-client wire value. The
+            // isolated application id and invalid HTTPS endpoint distinguish
+            // this QA build without weakening the production API contract.
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
+        }
     }
+
+    // Debug remains the normal developer/CI target. Physical QA opts into the
+    // isolated release-like target explicitly, so ordinary builds do not
+    // silently change test behaviour.
+    testBuildType = androidTestBuildType
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -171,6 +203,12 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // Compose UI Test 1.7.5 still brings Espresso 3.5.0 transitively. That
+    // release reflectively calls InputManager.getInstance(), which was removed
+    // on Android 16/API 36, so every physical Pixel Tablet test fails before
+    // its body runs. Espresso 3.7.0 uses Context.getSystemService instead.
+    // Keep this test-only: it changes neither the partner APK nor production.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     // Critical cashier forms must be exercised as rendered Compose UI.  The
     // database/sync instrumentation suite cannot prove that a staff member can
     // focus a field, enter text, or complete a no-keyboard fallback flow.
@@ -179,4 +217,5 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    add("physicalAuditImplementation", "androidx.compose.ui:ui-test-manifest")
 }

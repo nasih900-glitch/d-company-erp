@@ -48,17 +48,14 @@ unadvertised; it is the package from which the server-delivery upgrade is
 tested.
 
 Code `15` (`3.1.4`) is the first identity accepted by the server-release
-registry. It is a held audit build, not the current activation target. Preserve
-any signed Code `15` APK and manifest exactly and never rebuild, overwrite, or
-activate them as a shortcut. Code `16` (`3.1.5`) remains the immutable
-predecessor used for upgrade proof. The current server-delivery candidate is the
-distinct `3.1.6` (version code `17`) artifact with a new immutable filename.
+registry. It remains a held audit build and must never be activated as a
+shortcut. Codes `16` (`3.1.5`) and `17` (`3.1.6`) remain immutable upgrade-proof
+predecessors.
 
-The source tree's `3.1.7` (version code `18`) identity is a separate local
-visual candidate. This guide does not authorise hosting, registering, staging,
-advertising, or activating Code 18. The Code 17 procedure below remains a
-historical, version-specific record and must not be applied to Code 18 by
-substitution.
+The approved server-delivery candidate is `3.1.7` (version code `18`). Only the
+exact signed artifact and release manifest produced together by the tagged
+GitHub Actions workflow may be staged. A local Gradle build or local evidence
+bundle is not release authority, even when its package and signer are correct.
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
@@ -116,11 +113,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Historical Code 17 staging procedure — not Code 18 authorisation
+## Code 18 staging procedure
 
-1. Confirm the code-`16` installation is signed by the trusted certificate, can check
-   for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.6` / code `17`. Run the complete
+1. Confirm the code-`14` partner installation is signed by the trusted
+   certificate, can check for updates, and has no pending offline work.
+2. Coordinate the application at `3.1.7` / code `18`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
 3. Download both files without renaming or modifying either one. First run a
@@ -128,10 +125,10 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.6/release-manifest.json \
-     --apk /secure/release-3.1.6/d-company-erp-v3.1.6-direct.apk \
+     --manifest /secure/release-3.1.7/release-manifest.json \
+     --apk /secure/release-3.1.7/d-company-erp-v3.1.7-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
-     --release-notes "Gaming Centre reliability and update delivery"
+     --release-notes "Standard-premium Android refinement and reliability hardening"
    ```
 
    This checks the manifest, byte size, SHA-256, package
@@ -144,7 +141,7 @@ responses and network uncertainty remain blocked. The APK itself must return:
    python3 ops/stage_android_release.py \
      --manifest /secure/release-3.1.7/release-manifest.json \
      --apk /secure/release-3.1.7/d-company-erp-v3.1.7-direct.apk \
-     --expected-signer-sha256 <trusted-code-17-certificate-sha256> \
+     --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Standard-premium Android refinement and reliability hardening" \
      --ssh-key ~/.ssh/dcompany_erp \
      --apply
@@ -160,11 +157,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
    size, signer and source evidence. Activate only the staged code-`18` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
-6. On one code-`17` tablet, refresh the update check, download, install and
+6. On one code-`14` tablet, refresh the update check, download, install and
    reopen code `18`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
-Do not activate code `17` as its own update. Do not stage from an arbitrary
+Do not activate an intermediate held build as its own update. Do not stage from an arbitrary
 local Gradle build, a renamed APK, a different workflow run, or a candidate
 whose signer merely matches itself.
 

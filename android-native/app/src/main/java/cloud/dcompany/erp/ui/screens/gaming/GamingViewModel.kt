@@ -51,11 +51,13 @@ import cloud.dcompany.erp.ui.screens.CartModifierSelection
 import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -978,6 +980,7 @@ class GamingViewModel : ViewModel() {
     ) { references, cache, local, ui, syncState ->
         val (actionState, currentShift, addons) = ui
         val (meta, online) = syncState
+        val categoryNameById = references.categories.associate { it.id to it.name }
         // Overlay an in-flight local stop/send on the older server cache row;
         // otherwise a successfully stopped session still renders "active"
         // and its ENDED_UNBILLED handoff disappears until another pull.
@@ -1020,9 +1023,7 @@ class GamingViewModel : ViewModel() {
             },
             addonCatalog = references.items.filter { item ->
                 WorkspaceFeatureProfiles.Active.operationalCatalogPolicy.allows(
-                    categoryName = references.categories
-                        .firstOrNull { it.id == item.categoryId }
-                        ?.name,
+                    categoryName = categoryNameById[item.categoryId],
                     itemType = item.type,
                     isAvailable = item.isAvailable,
                 )
@@ -1043,7 +1044,12 @@ class GamingViewModel : ViewModel() {
                 )
             },
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GamingUiState())
+    }
+        // Room rows, local overlays and add-on catalogue policy are UI
+        // projections. Keep their list mapping/indexing away from Main while
+        // preserving the source flow's emission order before StateFlow sharing.
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GamingUiState())
 
     init {
         val recoveryLease = appCtx.cacheIsolation.currentLease()
@@ -1071,14 +1077,10 @@ class GamingViewModel : ViewModel() {
                 }
             )
         }
-        // Reconciles on every meaningful session change, not just once at
-        // start. This both schedules new deadlines and cancels an alarm when
-        // another terminal (or a queued local stop) ends the session early.
-        viewModelScope.launch {
-            state.map { it.sessions.map { s -> Triple(s.id, s.status, s.timerEndsAt) } }
-                .distinctUntilChanged()
-                .collect { GamingAlarmReconciler.reconcile(appCtx) }
-        }
+        // DCompanyApp is the single reactive alarm owner. It observes the
+        // minimal Room session/station flows even when this feature has never
+        // been opened. Collecting the full screen state here would keep every
+        // Gaming projection active after navigation and duplicate that work.
     }
 
     fun load() {
@@ -1623,23 +1625,42 @@ class GamingViewModel : ViewModel() {
             return
         }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val actionOwner = state.value.sessions.firstOrNull { session ->
+            session.id == action.serverSessionId || session.id == action.localSessionId
+        }?.stationId ?: "addon-review:$actionId"
+        busyStationId.value = actionOwner
+        error.value = null
+        notice.value = null
         viewModelScope.launch {
-            val changed = appCtx.cacheIsolation.commitResultIfCurrent(scopeLease) {
-                db.gamingDao().discardRejectedSessionAddonAction(
-                    actionId,
-                    normalizedReason,
-                    System.currentTimeMillis(),
-                )
-            }
-            if (changed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed && changed.value == 1) {
-                notice.value = if (action.actionType == GamingSessionAddonActionType.VOID) {
-                    "Rejected item Void acknowledged. The item remains billable; void it again if removal is still required."
-                } else {
-                    "Rejected item Add acknowledged. The server did not add it, and no request was rewritten or replayed."
+            try {
+                val changed = appCtx.cacheIsolation.commitResultIfCurrent(scopeLease) {
+                    db.gamingDao().discardRejectedSessionAddonAction(
+                        actionId,
+                        normalizedReason,
+                        System.currentTimeMillis(),
+                    )
                 }
-                appCtx.sync.requestSync()
-            } else {
-                error.value = "The rejected action changed state. Refresh Gaming before reviewing it again."
+                if (
+                    changed is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed &&
+                    changed.value == 1
+                ) {
+                    notice.value = if (action.actionType == GamingSessionAddonActionType.VOID) {
+                        "Rejected item Void acknowledged. The item remains billable; void it again if removal is still required."
+                    } else {
+                        "Rejected item Add acknowledged. The server did not add it, and no request was rewritten or replayed."
+                    }
+                    appCtx.sync.requestSync()
+                } else {
+                    error.value =
+                        "The rejected action changed state. Refresh Gaming before reviewing it again."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                error.value =
+                    "The rejected item review was not saved. Nothing was removed; try again."
+            } finally {
+                if (busyStationId.value == actionOwner) busyStationId.value = null
             }
         }
     }
@@ -2845,7 +2866,10 @@ class GamingViewModel : ViewModel() {
     }
 
     fun dismissError() { error.value = null }
-    fun dismissNotice() { notice.value = null }
+    /** A cancelled older snackbar must never clear a newer action result. */
+    fun dismissNotice(expected: String) {
+        notice.compareAndSet(expected, null)
+    }
 }
 
 private fun GamingStationEntity.toStation() = Station(

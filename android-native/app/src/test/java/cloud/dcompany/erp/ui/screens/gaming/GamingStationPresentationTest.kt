@@ -78,12 +78,11 @@ class GamingStationPresentationTest {
     @Test
     fun `command attention count retains every independent operational item`() {
         assertEquals(
-            6,
+            5,
             gamingCommandAttentionCount(
                 canManageSessions = false,
                 terminalBlocked = true,
                 focusRequested = false,
-                hasNotice = true,
                 hasRefreshError = false,
                 orphanedExtensionCount = 2,
                 needsCancellation = true,
@@ -97,7 +96,6 @@ class GamingStationPresentationTest {
                 canManageSessions = true,
                 terminalBlocked = false,
                 focusRequested = false,
-                hasNotice = false,
                 hasRefreshError = false,
                 orphanedExtensionCount = 0,
                 needsCancellation = false,
@@ -105,6 +103,33 @@ class GamingStationPresentationTest {
                 busy = false,
             ),
         )
+    }
+
+    @Test
+    fun `busy save progress never changes the global attention count`() {
+        val idleCount = gamingCommandAttentionCount(
+            canManageSessions = true,
+            terminalBlocked = false,
+            focusRequested = false,
+            hasRefreshError = false,
+            orphanedExtensionCount = 0,
+            needsCancellation = false,
+            awaitingPayment = false,
+            busy = false,
+        )
+        val busyCount = gamingCommandAttentionCount(
+            canManageSessions = true,
+            terminalBlocked = false,
+            focusRequested = false,
+            hasRefreshError = false,
+            orphanedExtensionCount = 0,
+            needsCancellation = false,
+            awaitingPayment = false,
+            busy = true,
+        )
+
+        assertEquals(0, idleCount)
+        assertEquals(idleCount, busyCount)
     }
 
     @Test

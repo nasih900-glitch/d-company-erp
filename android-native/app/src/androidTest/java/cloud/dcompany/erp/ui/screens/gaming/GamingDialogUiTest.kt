@@ -58,6 +58,76 @@ class GamingDialogUiTest {
     val compose = createComposeRule()
 
     @Test
+    fun globalWriteLockExplainsWhyOtherStationActionsArePaused() {
+        compose.setContent {
+            DCompanyTheme {
+                GamingSavingOverlay(stationName = "PS5 Station 1")
+            }
+        }
+
+        compose.onNodeWithText("Saving PS5 Station 1")
+            .assertIsDisplayed()
+        compose.onNodeWithText(
+            "Other station actions are paused until this change is safely stored.",
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun busyStationKeepsProgressOnItsOwnAction() {
+        val station = Station(
+            id = "station-busy",
+            code = "PS5-BUSY",
+            name = "PS5 Station Busy",
+            type = "ps5",
+            ratePerHourMinor = 20_000,
+            isActive = true,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(270.dp)) {
+                    GamingStationCard(
+                        station = station,
+                        session = null,
+                        packageExtensionAction = null,
+                        wallClock = rememberedWallClock(Instant.parse("2026-08-26T18:00:00Z").toEpochMilli()),
+                        actionInProgress = true,
+                        busyHere = true,
+                        focused = false,
+                        canWrite = true,
+                        canReconcileLegacy = false,
+                        activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true,
+                        packages = emptyList(),
+                        hasTransferTarget = true,
+                        onStart = {},
+                        onStop = {},
+                        onSend = {},
+                        onCancelUnbilled = {},
+                        onExtendTimer = {},
+                        onExtendPackage = { _, _ -> },
+                        onTransfer = {},
+                        onReconcile = {},
+                        onRepairBilling = {},
+                        onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("Start session…")
+            .assertIsDisplayed()
+            .assertIsNotEnabled()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Start session in progress",
+                ),
+            )
+    }
+
+    @Test
     fun activeCompactCardKeepsRunningAmountAndSessionDetailsVisible() {
         val start = Instant.parse("2026-08-26T17:00:00Z")
         val now = start.plusSeconds(60 * 60).toEpochMilli()

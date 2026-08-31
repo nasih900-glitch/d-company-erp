@@ -43,12 +43,17 @@ import cloud.dcompany.erp.core.sync.summarizeOutboxWork
 import cloud.dcompany.erp.core.update.UpdateTelemetryCoordinator
 import cloud.dcompany.erp.ui.screens.settings.BugReportPrivacyScheduler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Job
@@ -158,6 +163,21 @@ internal class ForegroundActivityTracker {
     }
 }
 
+private data class GamingAlarmCacheFingerprint(
+    val id: String,
+    val stationId: String,
+    val status: String,
+    val timerEndsAtMillis: Long?,
+)
+
+private data class GamingAlarmLocalFingerprint(
+    val localId: String,
+    val serverId: String?,
+    val stationId: String,
+    val state: String,
+    val timerEndsAtMillis: Long?,
+)
+
 class DCompanyApp : Application() {
 
     companion object {
@@ -210,6 +230,7 @@ class DCompanyApp : Application() {
         private set
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val operationalAlarmReconciliationGeneration = MutableStateFlow(0L)
     private val compatibilityRecheckThrottle = CompatibilityRecheckThrottle()
     private val reconnectCompatibilityLock = Any()
     private var reconnectCompatibilityJob: Job? = null
@@ -543,6 +564,7 @@ class DCompanyApp : Application() {
     internal fun onVerifiedScopeAvailable() {
         DiagnosticsRuntime.onVerifiedScopeAvailable()
         remoteAssistance.onVerifiedScopeAvailable()
+        requestOperationalAlarmReconciliation()
         appScope.launch {
             recordCurrentDiagnosticSyncHealth()
             recordCompatibilityOfferIfScoped(clientCompatibility.state.value)
@@ -584,10 +606,13 @@ class DCompanyApp : Application() {
     }.getOrDefault(false)
 
     /**
+     * Single process-wide reactive owner for held-order and Gaming alarms.
      * Room changes are cancellation signals too: a paid/voided/removed order
      * or ended session must withdraw its alarm without that feature screen
-     * being open. Scope readiness prevents scheduling an old employee's cache
-     * during cold-start isolation.
+     * being open. Feature ViewModels may still request a one-shot reconcile
+     * after an action, but must not collect their full UI state for this job.
+     * Scope readiness prevents scheduling an old employee's cache during
+     * cold-start isolation.
      */
     private fun startAlarmReconciliation() {
         appScope.launch {
@@ -595,10 +620,19 @@ class DCompanyApp : Application() {
                 db.heldOrderDao().observeAll(),
                 db.heldOrderDao().observeConfirmedTargetIds(),
             ) { orders, confirmed ->
-                orders.map { Triple(it.id, it.heldAt, it.checkoutVersion) } to confirmed.sorted()
-            }.distinctUntilChanged().collect {
-                if (cacheIsolation.isReady()) HeldOrderAlarmReconciler.reconcile(this@DCompanyApp)
-            }
+                orders.map { Triple(it.id, it.heldAt, it.checkoutVersion) }
+                    .sortedBy { it.first } to confirmed.sorted()
+            }.distinctUntilChanged()
+                .combine(operationalAlarmReconciliationGeneration) { snapshot, _ -> snapshot }
+                .onEach {
+                    if (cacheIsolation.isReady()) {
+                        check(HeldOrderAlarmReconciler.reconcile(this@DCompanyApp)) {
+                            "Held-order alarm ledger could not be persisted"
+                        }
+                    }
+                }
+                .retryAlarmObservation("held-order")
+                .collect { }
         }
         appScope.launch {
             combine(
@@ -607,14 +641,70 @@ class DCompanyApp : Application() {
                 db.gamingDao().observeStations(),
             ) { cache, local, stations ->
                 Triple(
-                    cache.map { Triple(it.id, it.status, it.timerEndsAtMillis) },
-                    local.map { Triple(it.localId, it.state, it.timerEndsAtMillis) },
-                    stations.map { it.id to it.name },
+                    cache.map {
+                        GamingAlarmCacheFingerprint(
+                            id = it.id,
+                            stationId = it.stationId,
+                            status = it.status,
+                            timerEndsAtMillis = it.timerEndsAtMillis,
+                        )
+                    }.sortedBy { it.id },
+                    local.map {
+                        GamingAlarmLocalFingerprint(
+                            localId = it.localId,
+                            serverId = it.serverId,
+                            stationId = it.stationId,
+                            state = it.state,
+                            timerEndsAtMillis = it.timerEndsAtMillis,
+                        )
+                    }.sortedBy { it.localId },
+                    stations.map { it.id to it.name }.sortedBy { it.first },
                 )
-            }.distinctUntilChanged().collect {
-                if (cacheIsolation.isReady()) GamingAlarmReconciler.reconcile(this@DCompanyApp)
-            }
+            }.distinctUntilChanged()
+                .combine(operationalAlarmReconciliationGeneration) { snapshot, _ -> snapshot }
+                .onEach {
+                    if (cacheIsolation.isReady()) {
+                        check(GamingAlarmReconciler.reconcile(this@DCompanyApp)) {
+                            "Gaming alarm ledger could not be persisted"
+                        }
+                    }
+                }
+                .retryAlarmObservation("gaming")
+                .collect { }
         }
+    }
+
+    /**
+     * Room may publish its unchanged startup snapshot before authentication
+     * proves which employee owns the cache. Advancing this generation makes
+     * both process-owned observers replay that exact snapshot once the scope
+     * is safe, while their retry operators continue to own platform failures.
+     */
+    internal fun requestOperationalAlarmReconciliation() {
+        operationalAlarmReconciliationGeneration.update { generation ->
+            if (generation == Long.MAX_VALUE) 0L else generation + 1L
+        }
+    }
+
+    /**
+     * Room flows are cold and immediately re-emit their current snapshot when
+     * collected again. Retrying the whole observation therefore repairs both
+     * an upstream Room failure and an AlarmManager/preferences failure without
+     * requiring another user action or reopening a feature screen.
+     */
+    private fun <T> kotlinx.coroutines.flow.Flow<T>.retryAlarmObservation(
+        alarmKind: String,
+    ): kotlinx.coroutines.flow.Flow<T> = retryWhen { cause, attempt ->
+        if (cause is CancellationException) return@retryWhen false
+        val delayMillis = (1_000L shl attempt.coerceAtMost(5L).toInt())
+            .coerceAtMost(30_000L)
+        Log.e(
+            PERFORMANCE_LOG_TAG,
+            "$alarmKind alarm observation failed; retrying in ${delayMillis}ms",
+            cause,
+        )
+        delay(delayMillis)
+        true
     }
 
     private fun createAlarmChannel() {

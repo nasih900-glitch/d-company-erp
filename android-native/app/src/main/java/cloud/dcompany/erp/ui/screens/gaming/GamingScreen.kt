@@ -64,6 +64,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -259,7 +262,24 @@ fun GamingScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val activeTerminal by vm.activeTerminal.collectAsStateWithLifecycle()
     val posTargetSelection by vm.posTargetSelection.collectAsStateWithLifecycle()
+    val noticeHostState = remember { SnackbarHostState() }
     SideEffect { vm.updateAccess(access) }
+
+    LaunchedEffect(state.notice) {
+        val message = state.notice ?: return@LaunchedEffect
+        try {
+            noticeHostState.currentSnackbarData?.dismiss()
+            noticeHostState.showSnackbar(
+                message = message,
+                actionLabel = "Dismiss",
+                duration = SnackbarDuration.Short,
+            )
+        } finally {
+            // Navigation cancels this effect. Consume only the message this
+            // effect owned so it cannot replay later or erase a newer result.
+            vm.dismissNotice(message)
+        }
+    }
 
     // One lifecycle-aware clock drives every visible active station. This
     // avoids one coroutine per card and stops all timer wakeups while the app
@@ -342,12 +362,10 @@ fun GamingScreen(
         (if (!access.canManageSessions) 1 else 0) +
         (if (startTerminalBlockMessage != null) 1 else 0) +
         (if (focusSessionId != null && focusStationId != null) 1 else 0) +
-        (if (state.notice != null) 1 else 0) +
         (if (state.refreshError != null) 1 else 0) +
         orphanedExtensionActions.size +
         (if (state.needsCancellation.isNotEmpty()) 1 else 0) +
-        (if (state.readyForPos.isNotEmpty()) 1 else 0) +
-        (if (state.busyStationId != null) 1 else 0)
+        (if (state.readyForPos.isNotEmpty()) 1 else 0)
     val focusIndex = focusStationId?.let { id -> visibleStations.indexOfFirst { it.id == id } }
         ?.takeIf { it >= 0 }
     LaunchedEffect(focusStationId, focusIndex, gridHeaderCount) {
@@ -357,7 +375,6 @@ fun GamingScreen(
         canManageSessions = access.canManageSessions,
         terminalBlocked = startTerminalBlockMessage != null,
         focusRequested = focusSessionId != null && focusStationId != null,
-        hasNotice = state.notice != null,
         hasRefreshError = state.refreshError != null,
         orphanedExtensionCount = orphanedExtensionActions.size,
         needsCancellation = state.needsCancellation.isNotEmpty(),
@@ -368,10 +385,11 @@ fun GamingScreen(
         if (commandAttentionCount == 0) attentionCenterOpen = false
     }
 
-    if (state.stations.isEmpty() && orphanedExtensionActions.isEmpty()) {
-        GamingEmptyState(state = state, onRefresh = vm::load)
-    } else {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
+        if (state.stations.isEmpty() && orphanedExtensionActions.isEmpty()) {
+            GamingEmptyState(state = state, onRefresh = vm::load)
+        } else {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
             if (useGamingCommandWorkspace(maxWidth.value.toInt(), maxHeight.value.toInt())) {
                 GamingCommandWorkspace(
                     state = state,
@@ -459,19 +477,6 @@ fun GamingScreen(
             }
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                 GamingAlarmPermissionCard()
-            }
-
-            state.notice?.let { message ->
-                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    OperationalBanner(
-                        title = "Gaming action completed",
-                        detail = message,
-                        tone = UiTone.Success,
-                        icon = Icons.Filled.CheckCircle,
-                    ) {
-                        TextButton(onClick = vm::dismissNotice) { Text("Dismiss") }
-                    }
-                }
             }
 
             if (focusSessionId != null && focusStationId != null) {
@@ -572,17 +577,6 @@ fun GamingScreen(
                 }
             }
 
-            if (state.busyStationId != null) {
-                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    OperationalBanner(
-                        title = "Saving gaming action",
-                        detail = "Other station actions are paused until this change is safely stored.",
-                        tone = UiTone.Information,
-                        icon = Icons.Filled.CloudUpload,
-                    )
-                }
-            }
-
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                 GamingFilterRow(
                     filters = filters,
@@ -657,6 +651,21 @@ fun GamingScreen(
             }
             }
         }
+        }
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            state.busyStationId?.let { stationId ->
+                GamingSavingOverlay(
+                    stationName = state.stations.firstOrNull { it.id == stationId }?.name
+                        ?: "Gaming station",
+                )
+            }
+            SnackbarHost(hostState = noticeHostState)
+        }
     }
 
     if (attentionCenterOpen) {
@@ -672,7 +681,6 @@ fun GamingScreen(
                 focusStationId = focusStationId,
                 orphanedExtensionActions = orphanedExtensionActions,
                 onDismiss = { attentionCenterOpen = false },
-                onDismissNotice = vm::dismissNotice,
                 onDismissFocus = onDismissFocus,
                 onRefresh = vm::load,
                 onReviewOrphan = { action ->
@@ -1298,22 +1306,22 @@ internal fun gamingCommandAttentionCount(
     canManageSessions: Boolean,
     terminalBlocked: Boolean,
     focusRequested: Boolean,
-    hasNotice: Boolean,
     hasRefreshError: Boolean,
     orphanedExtensionCount: Int,
     needsCancellation: Boolean,
     awaitingPayment: Boolean,
+    // Saving is deliberately local progress on the affected station/button.
+    // Keep it out of this count so a save cannot insert or remove global UI.
+    @Suppress("UNUSED_PARAMETER")
     busy: Boolean,
 ): Int =
     listOf(
         !canManageSessions,
         terminalBlocked,
         focusRequested,
-        hasNotice,
         hasRefreshError,
         needsCancellation,
         awaitingPayment,
-        busy,
     ).count { it } + orphanedExtensionCount
 
 @Composable
@@ -1645,7 +1653,6 @@ private fun GamingCommandAttentionBar(
     val tone = when {
         danger -> UiTone.Danger
         warning -> UiTone.Warning
-        state.busyStationId != null -> UiTone.Information
         else -> UiTone.Success
     }
     val accent = statusColor(tone)
@@ -1657,8 +1664,6 @@ private fun GamingCommandAttentionBar(
         if (terminalBlocked) add("terminal setup")
         if (!access.canManageSessions) add("view only")
         if (focusRequested) add("session alert")
-        if (state.busyStationId != null) add("saving action")
-        if (state.notice != null) add("latest action saved")
     }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 60.dp)
@@ -1709,6 +1714,48 @@ private fun GamingCommandAttentionBar(
             intent = if (danger) ActionIntent.Warning else ActionIntent.Secondary,
             leadingIcon = Icons.Filled.Visibility,
         )
+    }
+}
+
+/**
+ * Global writes are intentionally serialized to protect session and billing
+ * ordering. Keep that temporary lock visible without inserting a row into the
+ * station board: adding/removing a banner there was the source of a full-screen
+ * jump that staff perceived as flicker.
+ */
+@Composable
+internal fun GamingSavingOverlay(stationName: String) {
+    Row(
+        Modifier.widthIn(max = 560.dp)
+            .clip(Radius.shapeLg)
+            .background(Brand.SurfaceOverlay)
+            .border(1.dp, Brand.Information.copy(alpha = 0.62f), Radius.shapeLg)
+            .semantics {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = "Saving $stationName. Other station actions are temporarily paused."
+            }
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            color = Brand.Information,
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(22.dp),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Saving $stationName",
+                color = Brand.Foreground,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Other station actions are paused until this change is safely stored.",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
     }
 }
 
@@ -1859,7 +1906,6 @@ private fun GamingCommandAttentionDialog(
     focusStationId: String?,
     orphanedExtensionActions: List<PackageExtensionActionUi>,
     onDismiss: () -> Unit,
-    onDismissNotice: () -> Unit,
     onDismissFocus: () -> Unit,
     onRefresh: () -> Unit,
     onReviewOrphan: (PackageExtensionActionUi) -> Unit,
@@ -1899,16 +1945,6 @@ private fun GamingCommandAttentionDialog(
                         tone = UiTone.Warning,
                         icon = Icons.Filled.Warning,
                     )
-                }
-                state.notice?.let { message ->
-                    OperationalBanner(
-                        title = "Gaming action completed",
-                        detail = message,
-                        tone = UiTone.Success,
-                        icon = Icons.Filled.CheckCircle,
-                    ) {
-                        TextButton(onClick = onDismissNotice) { Text("Dismiss") }
-                    }
                 }
                 if (focusSessionId != null && focusStationId != null) {
                     GamingNotificationFocusBanner(
@@ -1980,14 +2016,6 @@ private fun GamingCommandAttentionDialog(
                                 },
                         )
                     }
-                }
-                if (state.busyStationId != null) {
-                    OperationalBanner(
-                        title = "Saving gaming action",
-                        detail = "Other station actions are paused until this change is safely stored.",
-                        tone = UiTone.Information,
-                        icon = Icons.Filled.CloudUpload,
-                    )
                 }
             }
         },

@@ -439,6 +439,7 @@ private fun AppRoot(
                 onDescriptionChange = bugReportVm::descriptionChanged,
                 onAttachmentChange = bugReportVm::attachmentChanged,
                 onAttachmentRejected = bugReportVm::attachmentRejected,
+                onAttachmentPreviewReadyChange = bugReportVm::attachmentPreviewReadyChanged,
                 onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
                 onSubmit = {
                     bugReportVm.submit(
@@ -871,6 +872,7 @@ private fun AppRoot(
                         onDescriptionChange = bugReportVm::descriptionChanged,
                         onAttachmentChange = bugReportVm::attachmentChanged,
                         onAttachmentRejected = bugReportVm::attachmentRejected,
+                        onAttachmentPreviewReadyChange = bugReportVm::attachmentPreviewReadyChanged,
                         onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
                         onSubmit = {
                             bugReportVm.submit(

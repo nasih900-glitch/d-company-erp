@@ -1,11 +1,10 @@
 package cloud.dcompany.erp.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
-import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
-import cloud.dcompany.erp.core.alarm.HeldOrderAlarmReconciler
 import cloud.dcompany.erp.core.alarm.OperationalAlarmRegistry
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
@@ -1332,17 +1331,29 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // notification. Never redirect a different employee after purge.
             (getApplication() as DCompanyApp).notificationRoutes.clearAllForScopeChange()
             // AlarmManager is outside Room. Reconciliation against the now-empty
-            // caches removes A's tags; an alarm-service failure must not
-            // roll back an already committed cache scope transition.
-            reconcileOperationalAlarms()
-        } else {
-            reconcileOperationalAlarms()
+            // caches eventually removes A's tags, but a process observer may
+            // be in backoff. Withdraw A's scheduled and already-visible alerts
+            // before B can render, then let the process owner arm B below.
+            try {
+                withContext(Dispatchers.IO) {
+                    check(OperationalAlarmRegistry.cancelAll(getApplication())) {
+                        "The previous workspace alarm ledger could not be cleared"
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // The scope transition is already durable and cannot be rolled
+                // back. The generation trigger below immediately enters the
+                // process-owned retry path instead of silently abandoning it.
+                Log.e("DCompanyAlarms", "Immediate scope-change alarm cleanup failed", failure)
+            }
         }
+        reconcileOperationalAlarms()
     }
 
-    private suspend fun reconcileOperationalAlarms() {
-        runCatching { GamingAlarmReconciler.reconcile(getApplication()) }
-        runCatching { HeldOrderAlarmReconciler.reconcile(getApplication()) }
+    private fun reconcileOperationalAlarms() {
+        (getApplication() as DCompanyApp).requestOperationalAlarmReconciliation()
     }
 
     /** Header authority and its human-readable label always change together. */

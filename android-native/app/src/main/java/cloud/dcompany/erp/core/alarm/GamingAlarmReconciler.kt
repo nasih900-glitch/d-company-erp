@@ -6,8 +6,10 @@ import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.GamingStationEntity
 import cloud.dcompany.erp.core.db.LocalGamingSessionEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 internal data class GamingAlarmCandidate(
     val sessionId: String,
@@ -109,12 +111,17 @@ object GamingAlarmReconciler {
             ?: emptyList()
     }
 
-    suspend fun reconcile(context: Context) = mutex.withLock {
-        val appContext = context.applicationContext
-        OperationalAlarmRegistry.reconcile(
-            context = appContext,
-            kind = OperationalAlarmKind.GAMING,
-            desired = currentAlarms(appContext),
-        )
+    suspend fun reconcile(context: Context): Boolean = mutex.withLock {
+        // AlarmManager calls and the durable registry commit are blocking
+        // platform operations. Feature ViewModels may request a one-shot
+        // reconcile after an action, so never run the adapter on Main.
+        withContext(Dispatchers.IO) {
+            val appContext = context.applicationContext
+            OperationalAlarmRegistry.reconcile(
+                context = appContext,
+                kind = OperationalAlarmKind.GAMING,
+                desired = currentAlarms(appContext),
+            )
+        }
     }
 }
