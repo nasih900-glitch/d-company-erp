@@ -264,7 +264,7 @@ Send your friend the login through a separate approved channel:
 > Password: `[temporary password you generated]`
 > Tell them to change it on first login.
 
-**Auditor role gets read-only access to:** POS receipts, tables, menu, inventory, gaming, finance, staff list, analytics, audit log. They cannot create orders, modify the menu, or change settings — perfect for a partner watching from another country.
+**Auditor role gets read-only access to:** POS receipts, tables, menu, inventory, gaming, finance, staff list, and analytics. They cannot create orders, modify the menu, change settings, or read the protected audit log. Audit-log authority remains restricted to the protected owner.
 
 ---
 

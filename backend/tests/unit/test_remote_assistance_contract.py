@@ -170,6 +170,8 @@ def test_production_compose_isolates_and_authenticates_backend_data_plane() -> N
     assert "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli --user erp_backend ping" in compose
     assert "backend_data:\n    internal: true" in compose
     assert "REMOTE_ASSISTANCE_RELAY_SECRET: ${REMOTE_ASSISTANCE_RELAY_SECRET}" in compose
+    assert "infra/scripts/install-on-vm.sh <domain> --maintenance-confirmed" in compose
+    assert "docker compose -f docker-compose.prod.yml --env-file .env up -d --build" not in compose
     for placeholder in (
         "CHANGE_ME_48_char_dedicated_pairing_secret",
         "CHANGE_ME_32_byte_base64_relay_key",
@@ -1043,6 +1045,8 @@ def test_official_production_docs_do_not_bypass_code17_safety_boundaries() -> No
         assert "scripts.reset_owner_password" in guide
         assert "--role owner --password" not in guide
         assert "up -d --build" not in guide
+    assert "or read the protected audit log" in live_deploy
+    assert "Audit-log authority remains restricted to the protected owner" in live_deploy
     assert "up -d --build" not in distribution
     assert "Code17 status: unsupported planning document" in cloud_deploy
 

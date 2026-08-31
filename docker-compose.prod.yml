@@ -8,8 +8,10 @@
 #   - Restart policies set to "unless-stopped" so the stack survives reboots
 #   - Bounded Docker logs so a noisy service cannot fill the VPS disk
 #
-# Bring up with:
-#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+# Production deployment and upgrades must use the hardened installer:
+#   sudo bash infra/scripts/install-on-vm.sh <domain> --maintenance-confirmed
+# Direct `docker compose up`/`--build` is unsupported in production because it
+# bypasses release provenance, preflight, quiesced backup, and rollback gates.
 
 x-default-logging: &default-logging
   driver: json-file
