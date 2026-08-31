@@ -70,15 +70,12 @@ patched anyway rather than relying on non-applicability alone. The strict
 `internalAppRouteOr` boundary remains as defense in depth for every
 data-derived navigation destination.
 
-The focused Code 18 migration passed frontend typecheck, zero-warning lint,
-all 318 tests, and the verified production build. `npm audit --omit=dev` and
-`pnpm audit --prod` each reported zero production dependency vulnerabilities.
-The full `npm audit` is not zero: it reports five development-tool findings
-(three moderate, one high, and one critical) in the Vite 5 / Vitest 2 toolchain.
-Those tools are not shipped or run in the production application; replacing
-them requires a separate breaking toolchain migration and remains visible in
-the existing CI disposition rather than being misreported as resolved by the
-Router upgrade.
+The final Code 18 frontend gate passed typecheck, zero-warning lint, all 318
+tests, and the verified production build. The build toolchain was also moved to
+the supported Vite 6 / Vitest 3 line and both committed lockfiles were refreshed.
+Full and production-only audits through both npm and pnpm report zero known
+dependency vulnerabilities; this is no longer carried as a deferred Code 17
+exception.
 
 ## Acceptance language
 
