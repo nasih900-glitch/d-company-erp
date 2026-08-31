@@ -211,14 +211,17 @@ Replace `yourdomain.in` with your actual domain.
 The script:
 1. Installs Docker (~3 min)
 2. Opens ports 80 + 443 in iptables
-3. Generates strong random secrets (saved to `.env`)
-4. Builds the containers (~5 min first time)
-5. Starts the stack
-6. Waits for the backend to be healthy
-7. Waits for Caddy to issue your Let's Encrypt HTTPS certificate
-8. **Prints your owner login email + password**
+3. Generates independent strong secrets in a root-readable, mode-`0600` `.env`
+4. Validates the release commit, configuration, storage capacity, and Compose graph
+5. Builds and starts the containers (~5 min first time)
+6. Runs fatal-on-error migrations, seed, and role setup
+7. Proves internal and public `/readyz` plus protected owner access
+8. Prints the login email and secret-file location, but never the password
 
-**Write down the password it prints** — it's only shown once.
+For a fresh install, retrieve `SEED_OWNER_PASSWORD` only through the approved
+root host-secret workflow (for example, open the mode-`0600` `.env` in a
+non-recorded root session and transfer the value directly into a password
+manager). Never print it to stdout, shell history, logs, or a ticket.
 
 If the cert step fails, it's almost always DNS. Wait 10 minutes and re-run.
 
@@ -228,7 +231,8 @@ If the cert step fails, it's almost always DNS. Wait 10 minutes and re-run.
 
 Open <https://yourdomain.in> in your browser.
 
-- Login with `owner@yourdomain.in` + the password the installer printed
+- Login with the `SEED_OWNER_EMAIL` and `SEED_OWNER_PASSWORD` stored in the
+  mode-`0600` `.env`
 - Go to **Staff → Add user → set a new password for yourself**
 - Sign out, sign back in with the new password
 - You're done. The default seed password is gone.
@@ -244,11 +248,15 @@ cd /opt/d-company-erp
 docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user \
   --email friend@example.com \
   --name "Mo's Friend" \
-  --role auditor \
-  --password "$(openssl rand -base64 24)"
+  --role auditor
 ```
 
-Email your friend:
+The command reads and confirms the temporary password with terminal echo
+disabled and never prints it. Transfer it through an approved
+password-manager/secret channel. It is create-only and refuses existing
+accounts; use authenticated Staff/OTP workflows for later changes.
+
+Send your friend the login through a separate approved channel:
 
 > Hi! You can now see D Company ERP live at
 > **<https://yourdomain.in>**
@@ -313,11 +321,42 @@ cd /opt/d-company-erp
 | Status | `docker compose -f docker-compose.prod.yml ps` |
 | Live logs | `docker compose -f docker-compose.prod.yml logs -f backend` |
 | Restart backend | `docker compose -f docker-compose.prod.yml restart backend` |
-| Stop everything | `docker compose -f docker-compose.prod.yml down` |
-| Start again | `docker compose -f docker-compose.prod.yml up -d` |
+| Stop existing containers | `docker compose -f docker-compose.prod.yml stop` |
+| Start the same images/config | `docker compose -f docker-compose.prod.yml start` |
 | Create another user | `docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user --help` |
 | Manual backup | `docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U erp erp | gzip > /root/backups/manual-$(date +%F).sql.gz` |
-| Update to new code | `rsync` from your Mac again, then `docker compose -f docker-compose.prod.yml up -d --build` |
+| Upgrade to reviewed code | Use the maintenance installer procedure below; direct `rsync`/Compose rebuilds are unsupported |
+
+### Safe production upgrade
+
+Schedule a write outage and verify every tablet outbox has synced. On the VM,
+move only to an independently reviewed, exact release commit; the installer
+rejects dirty or ambiguous source:
+
+```bash
+cd /opt/d-company-erp
+git fetch --tags --prune
+git checkout --detach REVIEWED_40_HEX_RELEASE_COMMIT
+test -z "$(git status --porcelain --untracked-files=normal)"
+sudo bash infra/scripts/install-on-vm.sh yourdomain.in \
+  --maintenance-confirmed
+```
+
+For an untouched Code16 installation whose running image has the known
+historical placeholder revision label, use the verified one-time bridge:
+
+```bash
+sudo bash infra/scripts/install-on-vm.sh yourdomain.in \
+  --maintenance-confirmed \
+  --legacy-code16-revision 2ac3fc88e4ce14d0f05d049b443a6a09c387a78a
+```
+
+Do not use direct `rsync`, `git pull` on a dirty checkout, or a Compose rebuild
+as an upgrade. The supported installer validates/backfills secrets, snapshots
+the prior immutable images and exact database head, quiesces writes, proves a
+full backup restore, and holds ingress closed through migration and internal
+acceptance. Follow the rollback and recovery contract in
+[`backend/docs/REMOTE_ASSISTANCE_API.md`](../backend/docs/REMOTE_ASSISTANCE_API.md).
 
 ---
 
@@ -330,18 +369,30 @@ DNS hasn't fully propagated. Wait 30 minutes, try again. Confirm at dnschecker.o
 Either DNS isn't pointing at the VM yet, or Oracle's firewall ports aren't open. Verify with `curl http://yourdomain.in` from your Mac. If it hangs, firewall. If you see Caddy's HTML, DNS is good.
 
 **Out of memory / VM is slow**
-Run `docker compose -f docker-compose.prod.yml down` and bring up only what you need. Or upgrade the VM shape (still free if under the Always Free allocation: 4 OCPUs, 24 GB total).
+Stop the existing containers, investigate pressure, and resize the VM if needed;
+do not recreate a partial production stack ad hoc. Restart the same accepted
+images/config with `docker compose -f docker-compose.prod.yml start`.
 
 **Friend can't log in**
-On the VM, run the `create_user` command again with the same email — it updates the password.
+Use the centrally approved OTP password-reset flow or an authenticated owner
+workflow in **Staff**. `scripts.create_user` intentionally refuses every
+existing identity and never changes a password or role.
 
 **I forgot the owner password**
-On the VM:
+Use the normal centrally approved OTP reset when available. For an emergency
+local-console recovery, run the dedicated role-preserving command from an
+interactive, non-recorded root session:
 ```bash
 cd /opt/d-company-erp
-docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user \
-  --email owner@example.com --name "Owner" --role owner --password "$(openssl rand -base64 24)"
+docker compose -f docker-compose.prod.yml --env-file .env exec backend \
+  python -m scripts.reset_owner_password
 ```
+
+The command targets only `SEED_OWNER_EMAIL`, verifies the existing
+`super_owner`, reads and confirms the secret without terminal echo, preserves
+all roles, rotates `auth_version`, revokes active refresh sessions, and records
+an audit event. It never creates or demotes an owner and fails closed if the
+configured protected identity is missing. Never put a password in argv/history.
 
 ---
 

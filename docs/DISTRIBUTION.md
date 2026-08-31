@@ -212,15 +212,15 @@ Treat the app and backend as one coordinated release:
    backend's second public-byte verification;
    Android still requires the employee to approve installation.
 
-### Required production order for migration 0056
+### Historical migration 0056 record (not a current deployment path)
 
 Migration `0056` intentionally refuses legacy split-terminal data; it never
 chooses a keeper or rewrites production history. Do not run the generic
 `alembic upgrade head` sequence against split data. Use this maintenance-window
-order instead:
+order instead. This records the already-completed Code14 maintenance decision;
+do not replay it as a Code17 deployment procedure:
 
-> **Do not use `docker compose -f docker-compose.prod.yml up -d --build` as
-> the first release command.** The backend image's normal entrypoint
+> **Do not start a production release with a direct Compose rebuild.** The backend image's normal entrypoint
 > automatically runs `alembic upgrade head`, so it would reach `0056` before
 > the reviewed terminal consolidation. The maintenance commands below override
 > that entrypoint deliberately.
@@ -382,13 +382,12 @@ order instead:
      --entrypoint alembic backend current
    ```
 
-9. Only now may the normal auto-migrating startup run:
-
-    ```bash
-    docker compose -f docker-compose.prod.yml up -d --build
-    ```
-
-    Verify health, then smoke-test login, shift open, Gaming start/stop, add-on,
+9. The historical Code14 release then used the old direct startup flow. Do not
+    reuse that flow: all current production upgrades must run the hardened
+    `infra/scripts/install-on-vm.sh DOMAIN --maintenance-confirmed` procedure
+    from an exact reviewed commit, as documented in
+    [`FREE_DEPLOY.md`](FREE_DEPLOY.md). Verify health, then smoke-test login,
+    shift open, Gaming start/stop, add-on,
     Send to POS, cash and UPI settlement, receipt, Finance, sync recovery, and
     shift close on the retained Hybrid workspace. Install the exact private
     code-`14` APK through Android's normal installer for its authenticated app

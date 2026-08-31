@@ -2,6 +2,16 @@
 
 Since you chose **cloud-hosted backend + native client apps**, the backend has to live somewhere always-on with a real domain name. This is the playbook.
 
+> **Code17 status: unsupported planning document. Do not deploy from this
+> guide.** The current production contract requires a Redis ACL user named
+> `erp_backend`, strict key-prefix/command restrictions, seven pairwise-distinct
+> managed secrets (including device pairing and frame-relay AEAD keys), fatal
+> seed validation, quiesced backup/restore proof, and exact rollback evidence.
+> The generic managed services described below do not prove those properties.
+> Use [`FREE_DEPLOY.md`](FREE_DEPLOY.md) and the hardened
+> `infra/scripts/install-on-vm.sh` flow until a provider-specific Code17
+> deployment and rollback runbook has been reviewed and tested.
+
 ## What you're deploying
 
 - **API** (the FastAPI app from `backend/`) — needs to be reachable at `https://api.dcompany.cloud`
@@ -34,29 +44,27 @@ That's enough for the first 6-12 months of a single café. Scale up when traffic
 | CDN + DNS | Cloudflare | Free or Pro | $0–$20 |
 | **Total** | | | **~$100/mo** |
 
-## Deploy steps (Render — easiest path)
+## Managed-cloud deployment status
 
-1. Push the repo to GitHub.
-2. Create a new **Web Service** on Render → connect the repo.
-3. Set:
-   - **Build command**: `cd backend && pip install -r requirements.txt`
-   - **Start command**: `cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers`
-   - **Dockerfile path** (alternative): `infra/docker/backend.Dockerfile`
-4. Create a new **PostgreSQL** instance. Render gives you a `DATABASE_URL`.
-5. Create a **Redis** instance.
-6. On the Web Service, set environment variables (from `.env.example`):
-   - `ENV=prod`
-   - `DATABASE_URL` (paste from Render Postgres)
-   - `REDIS_URL` (paste from Render Redis)
-   - `JWT_SECRET` (generate: `openssl rand -base64 48`)
-   - `S3_*` (Cloudflare R2 creds)
-   - `CORS_ORIGINS=["https://app.dcompany.cloud","https://get.dcompany.cloud"]`
-7. Render gives you `your-app.onrender.com`. Add a custom domain (`api.dcompany.cloud`) and point a CNAME in Cloudflare.
-8. SSH into the running container once to seed:
-   ```bash
-   python -m scripts.seed
-   ```
-   ⚠️ Change the seeded owner password on first login.
+There is no supported one-click Render/Upstash/managed-Redis procedure for
+Code17. Do not paste an arbitrary provider `REDIS_URL`, run migrations in a web
+process start command, or seed interactively after opening public traffic.
+
+A future provider-specific runbook must, at minimum, prove all of the following
+before this section can become executable:
+
+- an authenticated `erp_backend` Redis identity with the documented command
+  allowlist and `dcompany:*` key scope, plus negative ACL tests;
+- independent production-valid JWT, Postgres, object-storage, owner, device
+  pairing, frame relay, and Redis credentials, supplied through a secret
+  manager without logging;
+- `SEED_OWNER_EMAIL` and `SEED_OWNER_PASSWORD` validation and a secret-safe
+  internal login proving `admin.system` and audit access;
+- a maintenance/write gate, drained tablet outboxes, a final quiesced database
+  backup, full disposable restore validation, exact migration head, and tested
+  rollback that cannot discard post-cutover financial writes;
+- private database/Redis/object-store networking, public `/readyz`, immutable
+  image/source provenance, and release-specific acceptance evidence.
 
 ## Going from dev to production
 

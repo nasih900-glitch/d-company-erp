@@ -1,56 +1,39 @@
-# Deployment
+# Deployment — Code17 supported paths
 
-D Company ERP is cloud-native by design. The same Docker images run on a single Linux VPS or behind a managed load balancer.
+The root `docker-compose.yml` and `.env.example` are localhost-only development
+assets. They contain development credentials/plaintext HTTP and are bound to
+`127.0.0.1`; never expose or use them for café, employee, payment, or other
+production data.
 
-## Local dev
+## Production VM
 
-```bash
-docker compose up --build
-docker compose exec backend python -m scripts.seed
-```
+Use one of the maintained guides:
 
-## Single VPS (Linux)
+- [`FREE_DEPLOY.md`](FREE_DEPLOY.md) for the Oracle/Ubuntu path.
+- [`DEPLOY_LIVE.md`](DEPLOY_LIVE.md) for the general Ubuntu/VPS path.
 
-1. Provision Ubuntu 22.04+. Install Docker.
-2. Clone repo, `cp .env.example .env`, edit secrets.
-3. Bring up the stack: `docker compose up -d`.
-4. Apply migrations and seed: `docker compose exec backend alembic upgrade head && docker compose exec backend python -m scripts.seed`.
-5. Front the stack with Caddy or Cloudflare Tunnel for TLS.
+Both converge on `infra/scripts/install-on-vm.sh` from a clean exact reviewed
+commit. Existing installations require a scheduled write outage and
+`--maintenance-confirmed`; untouched Code16 placeholder-labelled images use
+only the documented verified legacy bridge. The installer validates/backfills
+secrets, proves capacity and prior provenance, quiesces writes, drains outboxes,
+verifies a full database restore, holds ingress closed through migration and
+internal acceptance, and records an exact recovery snapshot.
 
-## Cloud-native (recommended for production)
+Do not copy `.env.example`, run a direct Compose rebuild, replace `/opt`, or
+regenerate an existing `.env` as a production deployment/upgrade.
 
-Replace the in-compose services with managed equivalents:
+## Managed cloud
 
-| Concern | Local (compose) | Cloud |
-|---|---|---|
-| Postgres | `postgres:16-alpine` | AWS RDS / GCP Cloud SQL / Render PG |
-| Redis | `redis:7-alpine` | AWS ElastiCache / Upstash / Render Redis |
-| Object storage | MinIO | S3 / R2 / GCS |
-| App | `backend` container | Fargate / Cloud Run / Render |
-| Frontend | `frontend` (nginx) | CDN-served static (CloudFront / Cloudflare Pages) |
-| Worker | (separate compose service to add) | Same container, different command |
+[`CLOUD_DEPLOY.md`](CLOUD_DEPLOY.md) is an unsupported planning document for
+Code17. No Render/Upstash/generic managed-cloud route is approved until a
+provider-specific runbook proves the required `erp_backend` Redis ACL, private
+networking, independent secret policy, quiesced backup/full restore, exact
+migration rollback, and protected-owner acceptance.
 
-Set the corresponding env vars in your platform's secrets manager:
+## Recovery and health
 
-- `DATABASE_URL` (managed Postgres DSN, asyncpg or psycopg compatible)
-- `REDIS_URL`
-- `S3_*` (endpoint + creds)
-- `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` (use RS256; rotate quarterly)
-- `CORS_ORIGINS` (list)
-
-## Backup & restore
-
-- DB: managed daily snapshots + 7-day PITR. Test restore monthly into a staging environment.
-- Object storage: enable versioning + lifecycle policy to cold storage after 90 days.
-- Application backup (self-hosted): `pg_dump erp > /backups/erp-$(date +%F).sql.gz`. Off-site via rclone to S3.
-
-## Observability
-
-- Logs: structured JSON to stdout. Ship via Loki / CloudWatch / Datadog.
-- Metrics: `/metrics` endpoint (Prometheus) — to add in V2.
-- Tracing: OpenTelemetry hooks land with the worker module.
-- Healthchecks: `/healthz` (process alive), `/readyz` (DB + Redis reachable).
-
-## Performance budgets
-
-See `ARCHITECTURE.md §19`. Failing budgets in CI block merges (perf-test job in V2).
+Use `/readyz` for acceptance; `/healthz` proves process liveness only. The exact
+Code16-head rollback, pre-/post-ingress failure boundaries, and production
+recovery contract live in
+[`backend/docs/REMOTE_ASSISTANCE_API.md`](../backend/docs/REMOTE_ASSISTANCE_API.md).

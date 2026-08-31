@@ -185,14 +185,17 @@ Replace `dcompany.duckdns.org` with your actual DuckDNS subdomain.
 The installer:
 1. Installs Docker
 2. Opens ports 80 + 443 in iptables (Oracle Ubuntu gotcha)
-3. Generates strong random secrets (saved to `.env`)
-4. Builds the containers (~5 min first time)
-5. Starts the stack
-6. Runs database migrations + seeds Kerala/India reference data
-7. Waits for Caddy to issue your Let's Encrypt HTTPS certificate (~30 seconds)
-8. **Prints your owner login email + password**
+3. Generates independent strong secrets in a root-readable, mode-`0600` `.env`
+4. Validates the domain, secret policy, Compose graph, storage capacity, and release commit
+5. Builds and starts the containers (~5 min first time)
+6. Runs database migrations and fatal-on-error seed/role setup
+7. Proves internal and public `/readyz` plus the protected owner login
+8. Prints the login email and secret-file location, but never the password
 
-**Write down the password it prints** — only shown once.
+For a fresh install, retrieve `SEED_OWNER_PASSWORD` only through the approved
+root host-secret workflow (for example, open the mode-`0600` `.env` in a
+non-recorded root session and move the value directly into a password manager).
+Do not print it to stdout, paste it into shell history, or put it in a ticket.
 
 ---
 
@@ -202,7 +205,8 @@ Open **`https://dcompany.duckdns.org`** in your browser (yours will be different
 
 ✅ You should see the **D Company login screen** — full HTTPS, real lock icon.
 
-- Login: `owner@dcompany.duckdns.org` + the password the installer printed
+- Login: the `SEED_OWNER_EMAIL` and `SEED_OWNER_PASSWORD` stored in the
+  mode-`0600` `.env`
 - Go to **Staff** → reset your own password to something you'll remember
 - Sign out, sign in with the new password
 - The default seed password is gone forever.
@@ -243,18 +247,23 @@ cd /opt/d-company-erp
 # Example — your manager
 docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user \
   --email manager@example.com --name "Manager Name" \
-  --role manager --password "$(openssl rand -base64 24)"
+  --role manager
 
 # Example — a cashier
 docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user \
   --email cashier@example.com --name "Cashier Name" \
-  --role cashier --password "$(openssl rand -base64 24)"
+  --role cashier
 
 # Example — your friend overseas (read-only)
 docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user \
   --email auditor@example.com --name "Auditor Name" \
-  --role auditor --password "$(openssl rand -base64 24)"
+  --role auditor
 ```
+
+Each command reads and confirms a temporary password with terminal echo
+disabled. Transfer it through an approved password-manager/secret channel; the
+ERP never prints it. The command is create-only and fails if the email already
+exists, so role/password changes must use authenticated Staff/OTP workflows.
 
 **Roles:**
 - `owner` — you, full access
@@ -314,23 +323,15 @@ scp -i ~/Documents/oracle-keys/ssh-key-*.key \
 
 ### Buy a real domain (recommended after 3-6 months of use)
 
-When you want `dcompany.in` instead of `dcompany.duckdns.org`:
+Do not change `DOMAIN` directly or use the ordinary installer for a domain
+migration. The Code17 installer deliberately requires the supplied domain to
+equal the existing validated domain; changing only `DOMAIN`/`CORS_ORIGINS`
+would leave public URLs, update origins, reports, DNS, and TLS inconsistent.
 
-1. Buy the domain at Namecheap / Hostinger (₹400-700/year).
-2. Point its A record at your existing Oracle VM IP.
-3. On the VM, edit `/opt/d-company-erp/.env`:
-   ```bash
-   nano /opt/d-company-erp/.env
-   # Change DOMAIN=dcompany.duckdns.org to DOMAIN=dcompany.in
-   # Change CORS_ORIGINS to ["https://dcompany.in","https://www.dcompany.in"]
-   ```
-4. Restart:
-   ```bash
-   docker compose -f docker-compose.prod.yml --env-file .env up -d
-   ```
-5. Caddy issues a fresh Let's Encrypt cert for the new domain automatically.
-
-Your old DuckDNS URL still works during transition — keep both for a week, then drop DuckDNS.
+Buy and configure the replacement domain only as part of a separately reviewed
+atomic domain-migration runbook covering DNS, certificates, every allowed
+origin/public URL, client updates, traffic cutover, and rollback. That runbook
+is not provided here. Stop and escalate rather than improvising a live change.
 
 ### Mobile distribution
 
@@ -351,8 +352,8 @@ cd /opt/d-company-erp
 docker compose -f docker-compose.prod.yml ps                 # status
 docker compose -f docker-compose.prod.yml logs -f backend    # live logs
 docker compose -f docker-compose.prod.yml restart backend    # restart one service
-docker compose -f docker-compose.prod.yml down               # stop everything
-docker compose -f docker-compose.prod.yml up -d              # start again
+docker compose -f docker-compose.prod.yml stop               # stop existing containers
+docker compose -f docker-compose.prod.yml start              # restart same images/config
 ```
 
 Create users any time:
@@ -360,18 +361,31 @@ Create users any time:
 docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user --help
 ```
 
-Update to new code from your Mac:
+Upgrade to a reviewed release commit:
 ```bash
-# On Mac (in project folder):
-rsync -avz --exclude 'node_modules' --exclude 'preview-app' --exclude '*.zip' \
-  -e "ssh -i ~/Documents/oracle-keys/ssh-key-*.key" \
-  ./ ubuntu@YOUR_VM_IP:/tmp/d-company-erp/
-
-# Then SSH in and:
-sudo rsync -av /tmp/d-company-erp/ /opt/d-company-erp/
 cd /opt/d-company-erp
-docker compose -f docker-compose.prod.yml up -d --build
+git fetch --tags --prune
+git checkout --detach REVIEWED_40_HEX_RELEASE_COMMIT
+test -z "$(git status --porcelain --untracked-files=normal)"
+sudo bash infra/scripts/install-on-vm.sh dcompany.duckdns.org \
+  --maintenance-confirmed
 ```
+
+Schedule a write outage first and ensure every tablet outbox is synced. The
+installer keeps ingress closed across the final verified backup, migration, and
+internal acceptance; direct `rsync` or Compose rebuilds are unsupported. For an
+untouched Code16 installation whose image carries the historical placeholder
+revision label, use the one-time verified bridge only after confirming the
+known Code16 source and database head:
+
+```bash
+sudo bash infra/scripts/install-on-vm.sh dcompany.duckdns.org \
+  --maintenance-confirmed \
+  --legacy-code16-revision 2ac3fc88e4ce14d0f05d049b443a6a09c387a78a
+```
+
+See [`backend/docs/REMOTE_ASSISTANCE_API.md`](../backend/docs/REMOTE_ASSISTANCE_API.md)
+for the backup, acceptance, exact-Code16-head rollback, and recovery contract.
 
 ---
 
@@ -392,9 +406,17 @@ Oracle Mumbai gets oversubscribed. Try at 6 AM IST. Or switch home region to Hyd
 Shouldn't happen with Always Free ephemeral IPs *while the VM is running*, but if you stop the VM you may get a new IP. Fix: update the IP at DuckDNS (Step 4 again). 30 seconds.
 
 **Forgot owner password**
-On the VM:
+Use the normal centrally approved OTP reset when available. For an emergency
+local-console recovery, run the dedicated role-preserving command from an
+interactive, non-recorded root session:
 ```bash
 cd /opt/d-company-erp
-docker compose -f docker-compose.prod.yml exec backend python -m scripts.create_user \
-  --email owner@example.com --name "Owner" --role owner --password "$(openssl rand -base64 24)"
+docker compose -f docker-compose.prod.yml --env-file .env exec backend \
+  python -m scripts.reset_owner_password
 ```
+
+The command targets only `SEED_OWNER_EMAIL`, verifies that the existing account
+still has `super_owner`, reads and confirms the new password without terminal
+echo, preserves every role, rotates `auth_version`, revokes active refresh
+sessions, and writes an audit event. It fails closed instead of creating or
+demoting an account. Never pass a password as a command-line argument.

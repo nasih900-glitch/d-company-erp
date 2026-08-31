@@ -63,32 +63,24 @@ cd backend
 python -m compileall -q app                                # compile-check
 python -m pytest tests/ -q --no-header --no-cov            # all tests
 python -m scripts.seed                                     # seed (idempotent)
-python -m scripts.create_user --email x --name X --role owner --password Y
+python -m scripts.create_user --email x@example.com --name X --role owner  # no-echo prompt
 
 # === Frontend ===
 cd frontend
 npx tsc --noEmit                                           # strict type check
 npx vite build                                             # production bundle
 
-# === Deploy to droplet ===
-DROPLET_IP="YOUR_DROPLET_IP"
-KEY="${SSH_KEY:-~/.ssh/dcompany_erp}"
-PROJECT_DIR="${PROJECT_DIR:-$PWD}"
-
-rsync -avz --quiet \
-  --exclude 'node_modules' --exclude '.venv' --exclude '__pycache__' \
-  --exclude 'dist' --exclude 'package-lock.json' \
-  -e "ssh -i $KEY" \
-  "$PROJECT_DIR/" \
-  root@$DROPLET_IP:/tmp/d-company-erp/
-
-ssh -i $KEY root@$DROPLET_IP << 'EOF'
-rsync -a /tmp/d-company-erp/ /opt/d-company-erp/
+# === Production upgrade on the VM (never rsync/direct Compose) ===
 cd /opt/d-company-erp
-docker compose -f docker-compose.prod.yml --env-file .env build backend frontend
-docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate backend frontend
-EOF
+git fetch --tags --prune
+git checkout --detach REVIEWED_40_HEX_RELEASE_COMMIT
+test -z "$(git status --porcelain --untracked-files=normal)"
+sudo bash infra/scripts/install-on-vm.sh EXISTING_DOMAIN --maintenance-confirmed
 ```
+
+Fresh installs omit `--maintenance-confirmed`. Existing installations preserve
+`/opt`, `.env`, volumes, and rollback evidence and use only the hardened
+installer/verified Code16 bridge documented in `backend/docs/REMOTE_ASSISTANCE_API.md`.
 
 ---
 

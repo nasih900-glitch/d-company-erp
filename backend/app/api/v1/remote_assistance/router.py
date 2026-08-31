@@ -9,11 +9,16 @@ relay and is required before starting or controlling a session.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
+from functools import partial
+from math import ceil
 from typing import TYPE_CHECKING, Annotated, Literal, cast, get_args
 from uuid import UUID, uuid4
 
+from anyio import CapacityLimiter, to_thread
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.responses import Response as BinaryResponse
 from pydantic import (
@@ -25,15 +30,17 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import func, select, text
-from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.core.db import SessionDep  # noqa: TC001 - FastAPI dependency annotation
 from app.core.errors import (
-    BusinessRuleError,
+    AuthError,
     ConflictError,
     ForbiddenError,
     NotFoundError,
+    RemoteActionGoneError,
+    RemoteFrameTimeoutError,
+    RemotePairingCodeMismatchError,
     ValidationError,
 )
 from app.core.permissions import requires
@@ -42,6 +49,7 @@ from app.models import (
     AuditLog,
     ClientInstallation,
     RemoteAssistanceCommand,
+    RemoteAssistanceDeviceKey,
     RemoteAssistanceGrant,
     RemoteAssistanceSession,
     Terminal,
@@ -52,6 +60,7 @@ from app.models.remote_assistance import (
     REMOTE_ASSISTANCE_COMMAND_REJECTION_REASONS,
     REMOTE_ASSISTANCE_COMMAND_STATUSES,
     REMOTE_ASSISTANCE_COMMAND_TYPES,
+    REMOTE_ASSISTANCE_DEVICE_KEY_STATUSES,
     REMOTE_ASSISTANCE_END_REASONS,
     REMOTE_ASSISTANCE_GRANT_KINDS,
     REMOTE_ASSISTANCE_GRANT_STATUSES,
@@ -60,6 +69,14 @@ from app.models.remote_assistance import (
 )
 from app.services.audit.recorder import actor_ctx
 from app.services.client_updates.rate_limit import enforce_client_heartbeat_rate_limit
+from app.services.remote_assistance.consent import reconcile_remote_assistance_user_binding
+from app.services.remote_assistance.device_auth import (
+    authenticate_device_request,
+    authenticate_enrollment_request,
+    pairing_code,
+    parse_p256_spki,
+    verify_actual_content,
+)
 from app.services.remote_assistance.relay import (
     admit_frame_upload,
     delete_latest_frame,
@@ -79,8 +96,9 @@ GrantKind = Literal["one_time", "anytime"]
 GrantStatus = Literal["requested", "active", "declined", "revoked", "expired", "consumed"]
 SessionStatus = Literal["requested", "active", "ended", "expired"]
 SharingCapability = Literal["available", "permission_required", "unsupported"]
-CommandType = Literal["navigate", "refresh", "sync_now", "collect_diagnostics"]
-NavigationModule = Literal["dashboard", "gaming", "pos", "shift", "help"]
+CommandType = Literal["navigate", "refresh", "collect_diagnostics"]
+DeviceKeyStatus = Literal["pending", "active", "revoked", "expired"]
+NavigationModule = Literal["help"]
 CommandStatus = Literal["pending", "acknowledged", "rejected"]
 CommandOutcome = Literal["acknowledged", "rejected"]
 CommandRejectionReason = Literal[
@@ -104,6 +122,7 @@ assert set(get_args(GrantStatus)) == set(REMOTE_ASSISTANCE_GRANT_STATUSES)
 assert set(get_args(SessionStatus)) == set(REMOTE_ASSISTANCE_SESSION_STATUSES)
 assert set(get_args(SharingCapability)) == set(REMOTE_ASSISTANCE_CAPABILITIES)
 assert set(get_args(CommandType)) == set(REMOTE_ASSISTANCE_COMMAND_TYPES)
+assert set(get_args(DeviceKeyStatus)) == set(REMOTE_ASSISTANCE_DEVICE_KEY_STATUSES)
 assert set(get_args(NavigationModule)) == set(REMOTE_ASSISTANCE_NAVIGATION_MODULES)
 assert set(get_args(CommandStatus)) == set(REMOTE_ASSISTANCE_COMMAND_STATUSES)
 assert set(get_args(CommandRejectionReason)) == set(REMOTE_ASSISTANCE_COMMAND_REJECTION_REASONS)
@@ -112,6 +131,9 @@ assert set(get_args(DeviceEndReason)) < set(REMOTE_ASSISTANCE_END_REASONS)
 _MAX_COMMANDS_PER_SESSION = 100
 _ONE_TIME_GRANT_MAX_SECONDS = 900
 _FRAME_SEQUENCE_MAX = 9_223_372_036_854_775_807
+_COMMAND_ISSUE_COOLDOWN_SECONDS = 2
+_DIAGNOSTICS_COMMAND_COOLDOWN_SECONDS = 60
+_FRAME_DECODER_LIMITER = CapacityLimiter(2)
 
 
 def _uuid4(value: UUID, *, label: str) -> UUID:
@@ -141,13 +163,94 @@ class DeviceHeartbeatRead(BaseModel):
     sharing_capability: SharingCapability
 
 
+class DeviceKeyEnrollmentWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: UUID
+    enrollment_id: UUID
+    installation_id: UUID
+    public_key_spki: str = Field(min_length=100, max_length=256)
+    signed_at_epoch_seconds: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    nonce: UUID
+    signature: str = Field(min_length=80, max_length=112)
+
+    @field_validator("key_id", "enrollment_id", "installation_id", "nonce")
+    @classmethod
+    def validate_random_ids(cls, value: UUID, info: ValidationInfo) -> UUID:
+        return _uuid4(value, label=info.field_name or "identifier")
+
+
+class DeviceKeyApproveWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approval_id: UUID
+    pairing_code: str = Field(
+        min_length=12,
+        max_length=12,
+        pattern=r"^[0-9A-HJKMNP-TV-Z]{12}$",
+    )
+
+    @field_validator("pairing_code", mode="before")
+    @classmethod
+    def canonicalize_pairing_code(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.replace(" ", "").replace("-", "").upper()
+        return value
+
+    @field_validator("approval_id")
+    @classmethod
+    def validate_approval_id(cls, value: UUID) -> UUID:
+        return _uuid4(value, label="approval_id")
+
+
+class DeviceKeyRevokeWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revocation_id: UUID
+
+    @field_validator("revocation_id")
+    @classmethod
+    def validate_revocation_id(cls, value: UUID) -> UUID:
+        return _uuid4(value, label="revocation_id")
+
+
+class DeviceKeyAdminRead(BaseModel):
+    key_id: UUID
+    installation_id: UUID
+    status: DeviceKeyStatus
+    fingerprint_sha256: str | None
+    enrolled_by_user_id: UUID
+    enrolled_by_name: str | None
+    enrolled_at: datetime
+    pending_expires_at: datetime
+    approved_by_user_id: UUID | None
+    approved_by_name: str | None
+    approved_at: datetime | None
+    revoked_by_user_id: UUID | None
+    revoked_by_name: str | None
+    revoked_at: datetime | None
+
+
+class DeviceKeyStatusRead(BaseModel):
+    server_time: datetime
+    key_id: UUID
+    installation_id: UUID
+    status: DeviceKeyStatus
+    fingerprint_sha256: str
+    enrolled_at: datetime
+    pending_expires_at: datetime
+    approved_at: datetime | None
+    revoked_at: datetime | None
+    pairing_code: str | None
+
+
 class RemoteRequestCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: UUID
     installation_id: UUID
     grant_kind: GrantKind
-    grant_ttl_seconds: int = Field(ge=60, le=30 * 24 * 60 * 60)
+    grant_ttl_seconds: int = Field(ge=60, le=24 * 60 * 60)
     session_ttl_seconds: int = Field(ge=60, le=900)
 
     @field_validator("request_id", "installation_id")
@@ -298,6 +401,8 @@ class GrantRead(BaseModel):
     status: GrantStatus
     requested_by_user_id: UUID
     requested_by_name: str | None
+    requested_for_user_id: UUID
+    requested_for_name: str | None
     responded_by_user_id: UUID | None
     responded_by_name: str | None
     requested_at: datetime
@@ -360,6 +465,16 @@ class DeviceRead(BaseModel):
     is_remote_online: bool
     protocol_version: int | None
     sharing_capability: SharingCapability | None
+    device_key_id: UUID | None
+    device_key_status: DeviceKeyStatus | None
+    device_key_fingerprint_sha256: str | None
+    device_key_approved_at: datetime | None
+    pending_device_key_id: UUID | None
+    pending_device_key_enrolled_by_user_id: UUID | None
+    pending_device_key_enrolled_by_name: str | None
+    pending_device_key_enrolled_at: datetime | None
+    pending_device_key_expires_at: datetime | None
+    pairing_required: bool
     grant_status: GrantStatus | None
     current_grant_id: UUID | None
     current_grant_kind: GrantKind | None
@@ -449,6 +564,17 @@ async def _lock_device(session: AsyncSession, company_id: UUID, device_id: UUID)
     )
 
 
+async def _lock_device_key_action(
+    session: AsyncSession,
+    company_id: UUID,
+    action_id: UUID,
+) -> None:
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+        {"scope": f"dcompany-remote-assistance-key-action:{company_id}:{action_id}"},
+    )
+
+
 async def _installation_by_public_id(
     session: AsyncSession,
     *,
@@ -482,6 +608,19 @@ def _require_device_actor(installation: ClientInstallation, tenant: TenantContex
         raise ForbiddenError("This support device is registered to a different terminal.")
 
 
+def _require_device_mutation_actor(
+    installation: ClientInstallation,
+    tenant: TenantContext,
+) -> None:
+    """Return a terminal response for a signed action queued before user handoff."""
+
+    if installation.last_user_id != tenant.user_id:
+        raise RemoteActionGoneError(
+            "This remote-support action belongs to a former tablet user."
+        )
+    _require_device_actor(installation, tenant)
+
+
 def _require_android_request(request: Request) -> None:
     if request.headers.get("X-Client-Platform", "").strip().lower() != "android":
         raise ForbiddenError("Remote device endpoints are available only to the Android ERP app.")
@@ -506,6 +645,146 @@ def _require_device_ready(installation: ClientInstallation, *, now: datetime) ->
         )
 
 
+async def _require_active_device_key(
+    session: AsyncSession,
+    *,
+    installation: ClientInstallation,
+) -> None:
+    active = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.id).where(
+                RemoteAssistanceDeviceKey.company_id == installation.company_id,
+                RemoteAssistanceDeviceKey.client_installation_id == installation.id,
+                RemoteAssistanceDeviceKey.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if active is None:
+        raise ConflictError("The tablet must complete physical device-key pairing first.")
+
+
+async def _require_exact_active_device_key(
+    session: AsyncSession,
+    *,
+    installation: ClientInstallation,
+    key_id: UUID,
+) -> RemoteAssistanceDeviceKey:
+    row = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey)
+            .where(
+                RemoteAssistanceDeviceKey.company_id == installation.company_id,
+                RemoteAssistanceDeviceKey.client_installation_id == installation.id,
+                RemoteAssistanceDeviceKey.id == key_id,
+                RemoteAssistanceDeviceKey.status == "active",
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise RemoteActionGoneError(
+            "The device key used for this support action is no longer active."
+        )
+    return row
+
+
+async def _locked_active_frame_session(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    session_id: UUID,
+    installation: ClientInstallation,
+    now: datetime,
+) -> tuple[RemoteAssistanceSession, RemoteAssistanceGrant] | None:
+    """Lock and authorize the exact active session/consent user for a frame."""
+
+    row = (
+        await session.execute(
+            select(RemoteAssistanceSession, RemoteAssistanceGrant)
+            .join(
+                RemoteAssistanceGrant,
+                RemoteAssistanceGrant.id == RemoteAssistanceSession.grant_id,
+            )
+            .where(
+                RemoteAssistanceSession.company_id == company_id,
+                RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceSession.client_installation_id == installation.id,
+                RemoteAssistanceSession.status == "active",
+                RemoteAssistanceSession.expires_at > now,
+                RemoteAssistanceGrant.company_id == company_id,
+                RemoteAssistanceGrant.status.in_(("active", "consumed")),
+                RemoteAssistanceGrant.requested_for_user_id == installation.last_user_id,
+                RemoteAssistanceGrant.responded_by_user_id == installation.last_user_id,
+            )
+            .with_for_update(of=(RemoteAssistanceGrant, RemoteAssistanceSession))
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return row[0], row[1]
+
+
+async def _reconcile_consent_user(
+    session: AsyncSession,
+    *,
+    installation: ClientInstallation,
+    now: datetime,
+    device_actor: TenantContext | None = None,
+) -> None:
+    """Invalidate consent that belongs to a former user of this installation."""
+
+    current_user_id = installation.last_user_id
+    if current_user_id is None:
+        return
+    await reconcile_remote_assistance_user_binding(
+        session,
+        installation=installation,
+        current_user_id=current_user_id,
+        terminal_id=(
+            device_actor.terminal_id
+            if device_actor is not None
+            else installation.terminal_id
+        ),
+        now=now,
+    )
+
+
+def _require_current_consent_user(
+    grant: RemoteAssistanceGrant,
+    installation: ClientInstallation,
+    *,
+    device_user_id: UUID | None = None,
+) -> None:
+    current_user_id = installation.last_user_id
+    if (
+        grant.responded_by_user_id is None
+        or grant.responded_by_user_id != current_user_id
+        or (device_user_id is not None and grant.responded_by_user_id != device_user_id)
+    ):
+        raise ConflictError(
+            "Support consent belongs to a different tablet user and is no longer valid."
+        )
+
+
+def _command_cooldown_conflict(
+    *,
+    message: str,
+    issued_at: datetime,
+    now: datetime,
+    cooldown_seconds: int,
+    existing_command_id: UUID,
+) -> ConflictError:
+    remaining = cooldown_seconds - (now - issued_at).total_seconds()
+    return ConflictError(
+        message,
+        details={
+            "existing_command_id": str(existing_command_id),
+            "retry_after_seconds": max(1, ceil(remaining)),
+        },
+        headers={"Retry-After": str(max(1, ceil(remaining)))},
+    )
+
+
 async def _names(session: AsyncSession, ids: set[UUID | None]) -> dict[UUID, str]:
     real_ids = {value for value in ids if value is not None}
     if not real_ids:
@@ -515,6 +794,138 @@ async def _names(session: AsyncSession, ids: set[UUID | None]) -> dict[UUID, str
     for user_id, name in rows:
         names[user_id] = name
     return names
+
+
+def _key_ref(company_id: UUID, row: RemoteAssistanceDeviceKey) -> str:
+    material = f"{company_id}:{row.id}:{row.public_key_fingerprint_sha256}"
+    return hashlib.sha256(material.encode("ascii")).hexdigest()[:20]
+
+
+async def _expire_pending_device_keys(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    now: datetime,
+    client_installation_id: UUID | None = None,
+) -> None:
+    predicates = [
+        RemoteAssistanceDeviceKey.company_id == company_id,
+        RemoteAssistanceDeviceKey.status == "pending",
+        RemoteAssistanceDeviceKey.pending_expires_at <= now,
+    ]
+    if client_installation_id is not None:
+        predicates.append(
+            RemoteAssistanceDeviceKey.client_installation_id == client_installation_id
+        )
+    rows = (
+        (
+            await session.execute(
+                select(RemoteAssistanceDeviceKey, ClientInstallation.installation_id)
+                .join(
+                    ClientInstallation,
+                    ClientInstallation.id == RemoteAssistanceDeviceKey.client_installation_id,
+                )
+                .where(*predicates)
+                # The join supplies the public id for audit only. Locking the
+                # installation here would invert the installation -> key order.
+                .with_for_update(of=RemoteAssistanceDeviceKey)
+            )
+        )
+        .all()
+    )
+    for row, installation_id in rows:
+        row.status = "expired"
+        _audit(
+            session,
+            company_id=company_id,
+            actor_user_id=None,
+            action="remote_assistance.device_key.expired",
+            entity_type="RemoteAssistanceDeviceKey",
+            entity_id=row.id,
+            device_ref=_device_ref(company_id, installation_id),
+            before_status="pending",
+            after_status="expired",
+            extra={"key_ref": _key_ref(company_id, row)},
+        )
+    if rows:
+        await session.flush()
+
+
+def _device_key_admin_read(
+    row: RemoteAssistanceDeviceKey,
+    *,
+    installation_id: UUID,
+    names: dict[UUID, str],
+) -> DeviceKeyAdminRead:
+    # Before physical pairing succeeds, the full fingerprint is tablet-only.
+    # This prevents the owner channel becoming an alternate pairing display.
+    fingerprint = row.public_key_fingerprint_sha256 if row.approved_at is not None else None
+    return DeviceKeyAdminRead(
+        key_id=row.id,
+        installation_id=installation_id,
+        status=cast("DeviceKeyStatus", row.status),
+        fingerprint_sha256=fingerprint,
+        enrolled_by_user_id=row.enrolled_by_user_id,
+        enrolled_by_name=names.get(row.enrolled_by_user_id),
+        enrolled_at=row.enrolled_at,
+        pending_expires_at=row.pending_expires_at,
+        approved_by_user_id=row.approved_by_user_id,
+        approved_by_name=(
+            names.get(row.approved_by_user_id) if row.approved_by_user_id is not None else None
+        ),
+        approved_at=row.approved_at,
+        revoked_by_user_id=row.revoked_by_user_id,
+        revoked_by_name=(
+            names.get(row.revoked_by_user_id) if row.revoked_by_user_id is not None else None
+        ),
+        revoked_at=row.revoked_at,
+    )
+
+
+def _device_key_status_read(
+    row: RemoteAssistanceDeviceKey,
+    *,
+    installation: ClientInstallation,
+) -> DeviceKeyStatusRead:
+    return DeviceKeyStatusRead(
+        server_time=datetime.now(UTC),
+        key_id=row.id,
+        installation_id=installation.installation_id,
+        status=cast("DeviceKeyStatus", row.status),
+        fingerprint_sha256=row.public_key_fingerprint_sha256,
+        enrolled_at=row.enrolled_at,
+        pending_expires_at=row.pending_expires_at,
+        approved_at=row.approved_at,
+        revoked_at=row.revoked_at,
+        pairing_code=(
+            pairing_code(
+                company_id=row.company_id,
+                installation_id=installation.installation_id,
+                key_id=row.id,
+                fingerprint_sha256=row.public_key_fingerprint_sha256,
+            )
+            if row.status == "pending"
+            else None
+        ),
+    )
+
+
+async def _authenticate_device_json(
+    *,
+    request: Request,
+    session: AsyncSession,
+    tenant: TenantContext,
+    installation: ClientInstallation,
+    now: datetime | None = None,
+) -> None:
+    await authenticate_device_request(
+        request=request,
+        session=session,
+        company_id=tenant.company_id,
+        client_installation_id=installation.id,
+        actual_content=await request.body(),
+        now=now,
+    )
 
 
 def _grant_read(
@@ -530,6 +941,8 @@ def _grant_read(
         status=cast("GrantStatus", row.status),
         requested_by_user_id=row.requested_by_user_id,
         requested_by_name=names.get(row.requested_by_user_id),
+        requested_for_user_id=row.requested_for_user_id,
+        requested_for_name=names.get(row.requested_for_user_id),
         responded_by_user_id=row.responded_by_user_id,
         responded_by_name=names.get(row.responded_by_user_id) if row.responded_by_user_id else None,
         requested_at=row.requested_at,
@@ -659,17 +1072,23 @@ async def _expire_stale(
     *,
     company_id: UUID,
     now: datetime,
+    client_installation_id: UUID | None = None,
 ) -> None:
     changed = False
+    grant_predicates = [
+        RemoteAssistanceGrant.company_id == company_id,
+        RemoteAssistanceGrant.status.in_(("requested", "active")),
+        RemoteAssistanceGrant.expires_at <= now,
+    ]
+    if client_installation_id is not None:
+        grant_predicates.append(
+            RemoteAssistanceGrant.client_installation_id == client_installation_id
+        )
     grants = (
         (
             await session.execute(
                 select(RemoteAssistanceGrant)
-                .where(
-                    RemoteAssistanceGrant.company_id == company_id,
-                    RemoteAssistanceGrant.status.in_(("requested", "active")),
-                    RemoteAssistanceGrant.expires_at <= now,
-                )
+                .where(*grant_predicates)
                 .with_for_update()
             )
         )
@@ -706,19 +1125,29 @@ async def _expire_stale(
         & (RemoteAssistanceSession.request_expires_at <= now),
         (RemoteAssistanceSession.status == "active") & (RemoteAssistanceSession.expires_at <= now),
     ]
-    session_statement = select(RemoteAssistanceSession).where(
+    session_predicates = [
         RemoteAssistanceSession.company_id == company_id,
         conditions[0] | conditions[1],
-    )
-    if expired_grant_ids:
-        session_statement = select(RemoteAssistanceSession).where(
-            RemoteAssistanceSession.company_id == company_id,
-            (conditions[0] | conditions[1])
-            | (
-                RemoteAssistanceSession.grant_id.in_(expired_grant_ids)
-                & RemoteAssistanceSession.status.in_(("requested", "active"))
-            ),
+    ]
+    if client_installation_id is not None:
+        session_predicates.append(
+            RemoteAssistanceSession.client_installation_id == client_installation_id
         )
+    session_statement = select(RemoteAssistanceSession).where(*session_predicates)
+    if expired_grant_ids:
+        scoped_condition = (conditions[0] | conditions[1]) | (
+            RemoteAssistanceSession.grant_id.in_(expired_grant_ids)
+            & RemoteAssistanceSession.status.in_(("requested", "active"))
+        )
+        session_predicates = [
+            RemoteAssistanceSession.company_id == company_id,
+            scoped_condition,
+        ]
+        if client_installation_id is not None:
+            session_predicates.append(
+                RemoteAssistanceSession.client_installation_id == client_installation_id
+            )
+        session_statement = select(RemoteAssistanceSession).where(*session_predicates)
     stale_sessions = (await session.execute(session_statement.with_for_update())).scalars().all()
     for support_session in stale_sessions:
         if support_session.status not in {"requested", "active"}:
@@ -767,7 +1196,12 @@ async def _grant_response(
 ) -> GrantRead:
     names = await _names(
         session,
-        {row.requested_by_user_id, row.responded_by_user_id, row.revoked_by_user_id},
+        {
+            row.requested_by_user_id,
+            row.requested_for_user_id,
+            row.responded_by_user_id,
+            row.revoked_by_user_id,
+        },
     )
     return _grant_read(row, installation_id=installation.installation_id, names=names)
 
@@ -913,6 +1347,500 @@ async def _revoke_grant(
         )
 
 
+async def _terminate_device_support(
+    session: AsyncSession,
+    *,
+    installation: ClientInstallation,
+    actor_user_id: UUID,
+) -> None:
+    """Revoke every usable consent and stop the one possible open session."""
+
+    grants = (
+        (
+            await session.execute(
+                select(RemoteAssistanceGrant)
+                .where(
+                    RemoteAssistanceGrant.company_id == installation.company_id,
+                    RemoteAssistanceGrant.client_installation_id == installation.id,
+                    RemoteAssistanceGrant.status.in_(("requested", "active", "consumed")),
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for grant in grants:
+        await _revoke_grant(
+            session,
+            row=grant,
+            installation=installation,
+            actor_user_id=actor_user_id,
+            revocation_id=uuid4(),
+        )
+        await delete_latest_frame_for_grant(session, grant)
+
+    if grants:
+        # Autoflush is intentionally disabled in this service. Persist grant
+        # and session terminal states before the defensive open-session query.
+        await session.flush()
+
+    # Defensive reconciliation for any legacy/open session whose grant was
+    # already terminal before key revocation.
+    open_sessions = (
+        (
+            await session.execute(
+                select(RemoteAssistanceSession)
+                .where(
+                    RemoteAssistanceSession.company_id == installation.company_id,
+                    RemoteAssistanceSession.client_installation_id == installation.id,
+                    RemoteAssistanceSession.status.in_(("requested", "active")),
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for support_session in open_sessions:
+        if support_session.status not in {"requested", "active"}:
+            continue
+        await _end_session(
+            session,
+            row=support_session,
+            installation=installation,
+            actor_user_id=actor_user_id,
+            end_id=uuid4(),
+            reason="grant_revoked",
+        )
+        await delete_latest_frame(
+            company_id=installation.company_id,
+            session_id=support_session.id,
+        )
+
+
+@router.post("/device/keys/enroll", response_model=DeviceKeyStatusRead)
+async def enroll_device_key(
+    request: Request,
+    response: Response,
+    payload: DeviceKeyEnrollmentWrite,
+    session: SessionDep,
+    tenant: TenantDep,
+) -> DeviceKeyStatusRead:
+    """Enroll proof-verified public material as pending; never self-approve it."""
+
+    _require_android_request(request)
+    response.headers["Cache-Control"] = "private, no-store"
+    now = datetime.now(UTC)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=payload.installation_id,
+    )
+    _require_device_actor(installation, tenant)
+    public_key = parse_p256_spki(payload.public_key_spki)
+    await authenticate_enrollment_request(
+        company_id=tenant.company_id,
+        installation_id=installation.installation_id,
+        key_id=payload.key_id,
+        enrollment_id=payload.enrollment_id,
+        signed_at_epoch_seconds=payload.signed_at_epoch_seconds,
+        nonce=payload.nonce,
+        public_key=public_key,
+        signature=payload.signature,
+        now=now,
+    )
+    await _lock_device(session, tenant.company_id, installation.id)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=payload.installation_id,
+        for_update=True,
+    )
+    _require_device_actor(installation, tenant)
+    await _reconcile_consent_user(session, installation=installation, now=now)
+    await _lock_device_key_action(session, tenant.company_id, payload.enrollment_id)
+    await _expire_pending_device_keys(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+
+    existing_id = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey)
+            .where(RemoteAssistanceDeviceKey.id == payload.key_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if existing_id is not None:
+        if (
+            existing_id.company_id != tenant.company_id
+            or existing_id.client_installation_id != installation.id
+            or existing_id.enrollment_id != payload.enrollment_id
+            or existing_id.public_key_spki != public_key.spki_der
+            or existing_id.public_key_fingerprint_sha256 != public_key.fingerprint_sha256
+        ):
+            raise ConflictError("The device key id is already in use.")
+        return _device_key_status_read(existing_id, installation=installation)
+
+    reused_identity = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.id).where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                (
+                    (RemoteAssistanceDeviceKey.enrollment_id == payload.enrollment_id)
+                    | (
+                        RemoteAssistanceDeviceKey.public_key_fingerprint_sha256
+                        == public_key.fingerprint_sha256
+                    )
+                    | (RemoteAssistanceDeviceKey.approval_id == payload.enrollment_id)
+                    | (RemoteAssistanceDeviceKey.revocation_id == payload.enrollment_id)
+                ),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if reused_identity is not None:
+        raise ConflictError("The enrollment id or public key was already used.")
+    open_pending = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.id).where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                RemoteAssistanceDeviceKey.client_installation_id == installation.id,
+                RemoteAssistanceDeviceKey.status == "pending",
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if open_pending is not None:
+        raise ConflictError("This device already has an unexpired pending key enrollment.")
+
+    row = RemoteAssistanceDeviceKey(
+        id=payload.key_id,
+        company_id=tenant.company_id,
+        client_installation_id=installation.id,
+        public_key_spki=public_key.spki_der,
+        public_key_fingerprint_sha256=public_key.fingerprint_sha256,
+        status="pending",
+        enrollment_id=payload.enrollment_id,
+        enrolled_by_user_id=tenant.user_id,
+        enrolled_at=now,
+        pending_expires_at=now
+        + timedelta(seconds=get_settings().remote_assistance_device_key_pending_seconds),
+    )
+    session.add(row)
+    _audit(
+        session,
+        company_id=tenant.company_id,
+        actor_user_id=tenant.user_id,
+        action="remote_assistance.device_key.enrolled",
+        entity_type="RemoteAssistanceDeviceKey",
+        entity_id=row.id,
+        device_ref=_device_ref(tenant.company_id, installation.installation_id),
+        after_status="pending",
+        extra={"key_ref": _key_ref(tenant.company_id, row)},
+    )
+    await session.flush()
+    return _device_key_status_read(row, installation=installation)
+
+
+@router.get("/device/keys/{key_id}/status", response_model=DeviceKeyStatusRead)
+async def device_key_status(
+    request: Request,
+    response: Response,
+    key_id: UUID,
+    session: SessionDep,
+    tenant: TenantDep,
+    installation_id: Annotated[UUID, Query()],
+) -> DeviceKeyStatusRead:
+    _require_android_request(request)
+    response.headers["Cache-Control"] = "private, no-store"
+    now = datetime.now(UTC)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=installation_id,
+    )
+    _require_device_actor(installation, tenant)
+    await _expire_pending_device_keys(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    proof = await authenticate_device_request(
+        request=request,
+        session=session,
+        company_id=tenant.company_id,
+        client_installation_id=installation.id,
+        allowed_statuses=frozenset(REMOTE_ASSISTANCE_DEVICE_KEY_STATUSES),
+        actual_content=b"",
+        now=now,
+    )
+    if proof.device_key.id != key_id:
+        raise AuthError("The signed device key does not match the requested key status.")
+    return _device_key_status_read(proof.device_key, installation=installation)
+
+
+async def _device_key_admin_response(
+    session: AsyncSession,
+    *,
+    row: RemoteAssistanceDeviceKey,
+    installation: ClientInstallation,
+) -> DeviceKeyAdminRead:
+    names = await _names(
+        session,
+        {row.enrolled_by_user_id, row.approved_by_user_id, row.revoked_by_user_id},
+    )
+    return _device_key_admin_read(
+        row,
+        installation_id=installation.installation_id,
+        names=names,
+    )
+
+
+@router.post("/device-keys/{key_id}/approve", response_model=DeviceKeyAdminRead)
+async def approve_device_key(
+    key_id: UUID,
+    payload: DeviceKeyApproveWrite,
+    session: SessionDep,
+    tenant: AdminTenantDep,
+) -> DeviceKeyAdminRead:
+    now = datetime.now(UTC)
+    initial_installation_id = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.client_installation_id).where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                RemoteAssistanceDeviceKey.id == key_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if initial_installation_id is None:
+        raise NotFoundError("Pending device key not found.")
+    await _lock_device(session, tenant.company_id, initial_installation_id)
+    installation = (
+        await session.execute(
+            select(ClientInstallation)
+            .where(
+                ClientInstallation.company_id == tenant.company_id,
+                ClientInstallation.id == initial_installation_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one()
+    await _lock_device_key_action(session, tenant.company_id, payload.approval_id)
+    await _expire_pending_device_keys(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    row = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey)
+            .where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                RemoteAssistanceDeviceKey.id == key_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    if row.client_installation_id != installation.id:
+        raise ConflictError("The device key changed installation scope.")
+    if row.status == "active":
+        if row.approval_id == payload.approval_id:
+            return await _device_key_admin_response(
+                session,
+                row=row,
+                installation=installation,
+            )
+        raise ConflictError("This device key was already approved by a different action.")
+    if row.status != "pending":
+        raise ConflictError("This device key is no longer awaiting pairing approval.")
+    reused_action = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.id).where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                (
+                    (RemoteAssistanceDeviceKey.id == payload.approval_id)
+                    | (RemoteAssistanceDeviceKey.enrollment_id == payload.approval_id)
+                    | (RemoteAssistanceDeviceKey.approval_id == payload.approval_id)
+                    | (RemoteAssistanceDeviceKey.revocation_id == payload.approval_id)
+                ),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if reused_action is not None:
+        raise ConflictError("The approval id is already in use.")
+    expected_code = pairing_code(
+        company_id=tenant.company_id,
+        installation_id=installation.installation_id,
+        key_id=row.id,
+        fingerprint_sha256=row.public_key_fingerprint_sha256,
+    )
+    if not hmac.compare_digest(payload.pairing_code, expected_code):
+        raise RemotePairingCodeMismatchError("The tablet pairing code does not match.")
+
+    previous_active = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey)
+            .where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                RemoteAssistanceDeviceKey.client_installation_id == installation.id,
+                RemoteAssistanceDeviceKey.status == "active",
+                RemoteAssistanceDeviceKey.id != row.id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if previous_active is not None:
+        previous_active.status = "revoked"
+        previous_active.revoked_at = now
+        previous_active.revoked_by_user_id = tenant.user_id
+        # Rotation revocation is a distinct internal action. Reusing the owner
+        # approval UUID here would make one action identity resolve to two rows.
+        previous_active.revocation_id = uuid4()
+        _audit(
+            session,
+            company_id=tenant.company_id,
+            actor_user_id=tenant.user_id,
+            action="remote_assistance.device_key.rotated",
+            entity_type="RemoteAssistanceDeviceKey",
+            entity_id=previous_active.id,
+            device_ref=_device_ref(tenant.company_id, installation.installation_id),
+            before_status="active",
+            after_status="revoked",
+            extra={"key_ref": _key_ref(tenant.company_id, previous_active)},
+        )
+        # The active-key partial unique index is immediate. Flush the old key's
+        # revocation before promoting its replacement; both remain in this one
+        # transaction and therefore rotate atomically to other connections.
+        await session.flush([previous_active])
+
+    row.status = "active"
+    row.approval_id = payload.approval_id
+    row.approved_by_user_id = tenant.user_id
+    row.approved_at = now
+    _audit(
+        session,
+        company_id=tenant.company_id,
+        actor_user_id=tenant.user_id,
+        action="remote_assistance.device_key.approved",
+        entity_type="RemoteAssistanceDeviceKey",
+        entity_id=row.id,
+        device_ref=_device_ref(tenant.company_id, installation.installation_id),
+        before_status="pending",
+        after_status="active",
+        extra={
+            "key_ref": _key_ref(tenant.company_id, row),
+            "fingerprint_sha256": row.public_key_fingerprint_sha256,
+        },
+    )
+    if previous_active is not None:
+        await _terminate_device_support(
+            session,
+            installation=installation,
+            actor_user_id=tenant.user_id,
+        )
+    await session.flush()
+    return await _device_key_admin_response(session, row=row, installation=installation)
+
+
+@router.post("/device-keys/{key_id}/revoke", response_model=DeviceKeyAdminRead)
+async def revoke_device_key(
+    key_id: UUID,
+    payload: DeviceKeyRevokeWrite,
+    session: SessionDep,
+    tenant: AdminTenantDep,
+) -> DeviceKeyAdminRead:
+    initial_installation_id = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.client_installation_id).where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                RemoteAssistanceDeviceKey.id == key_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if initial_installation_id is None:
+        raise NotFoundError("Device key not found.")
+    await _lock_device(session, tenant.company_id, initial_installation_id)
+    installation = (
+        await session.execute(
+            select(ClientInstallation)
+            .where(
+                ClientInstallation.company_id == tenant.company_id,
+                ClientInstallation.id == initial_installation_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one()
+    await _lock_device_key_action(session, tenant.company_id, payload.revocation_id)
+    row = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey)
+            .where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                RemoteAssistanceDeviceKey.id == key_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    if row.client_installation_id != installation.id:
+        raise ConflictError("The device key changed installation scope.")
+    if row.status == "revoked":
+        if row.revocation_id == payload.revocation_id:
+            return await _device_key_admin_response(
+                session,
+                row=row,
+                installation=installation,
+            )
+        raise ConflictError("This device key was already revoked by a different action.")
+    if row.status not in {"pending", "active"}:
+        raise ConflictError("This device key can no longer be revoked.")
+    reused_action = (
+        await session.execute(
+            select(RemoteAssistanceDeviceKey.id).where(
+                RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                (
+                    (RemoteAssistanceDeviceKey.id == payload.revocation_id)
+                    | (RemoteAssistanceDeviceKey.enrollment_id == payload.revocation_id)
+                    | (RemoteAssistanceDeviceKey.approval_id == payload.revocation_id)
+                    | (RemoteAssistanceDeviceKey.revocation_id == payload.revocation_id)
+                ),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if reused_action is not None:
+        raise ConflictError("The revocation id is already in use.")
+    was_active = row.status == "active"
+    row.status = "revoked"
+    row.revocation_id = payload.revocation_id
+    row.revoked_by_user_id = tenant.user_id
+    row.revoked_at = datetime.now(UTC)
+    _audit(
+        session,
+        company_id=tenant.company_id,
+        actor_user_id=tenant.user_id,
+        action="remote_assistance.device_key.revoked",
+        entity_type="RemoteAssistanceDeviceKey",
+        entity_id=row.id,
+        device_ref=_device_ref(tenant.company_id, installation.installation_id),
+        before_status="active" if was_active else "pending",
+        after_status="revoked",
+        extra={"key_ref": _key_ref(tenant.company_id, row)},
+    )
+    if was_active:
+        await _terminate_device_support(
+            session,
+            installation=installation,
+            actor_user_id=tenant.user_id,
+        )
+    await session.flush()
+    return await _device_key_admin_response(session, row=row, installation=installation)
+
+
 @router.post("/device/heartbeat", response_model=DeviceHeartbeatRead)
 async def device_heartbeat(
     request: Request,
@@ -921,10 +1849,6 @@ async def device_heartbeat(
     tenant: TenantDep,
 ) -> DeviceHeartbeatRead:
     _require_android_request(request)
-    await enforce_client_heartbeat_rate_limit(
-        company_id=tenant.company_id,
-        user_id=tenant.user_id,
-    )
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
@@ -933,6 +1857,23 @@ async def device_heartbeat(
     )
     _require_device_actor(installation, tenant)
     now = datetime.now(UTC)
+    await _authenticate_device_json(
+        request=request,
+        session=session,
+        tenant=tenant,
+        installation=installation,
+        now=now,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=now,
+        device_actor=tenant,
+    )
+    await enforce_client_heartbeat_rate_limit(
+        company_id=tenant.company_id,
+        user_id=tenant.user_id,
+    )
     installation.remote_support_protocol_version = payload.protocol_version
     installation.remote_support_capability = payload.sharing_capability
     installation.remote_support_last_seen_at = now
@@ -954,6 +1895,7 @@ async def list_devices(
     response.headers["Cache-Control"] = "private, no-store"
     now = datetime.now(UTC)
     await _expire_stale(session, company_id=tenant.company_id, now=now)
+    await _expire_pending_device_keys(session, company_id=tenant.company_id, now=now)
     rows = (
         await session.execute(
             select(ClientInstallation, Terminal.name, User.name)
@@ -967,6 +1909,54 @@ async def list_devices(
         )
     ).all()
     internal_ids = {installation.id for installation, _, _ in rows}
+    current_key_rows = (
+        (
+            await session.execute(
+                select(RemoteAssistanceDeviceKey).where(
+                    RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                    RemoteAssistanceDeviceKey.client_installation_id.in_(internal_ids),
+                    RemoteAssistanceDeviceKey.status.in_(("active", "pending")),
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if internal_ids
+        else []
+    )
+    terminal_key_rows = (
+        (
+            await session.execute(
+                select(RemoteAssistanceDeviceKey)
+                .where(
+                    RemoteAssistanceDeviceKey.company_id == tenant.company_id,
+                    RemoteAssistanceDeviceKey.client_installation_id.in_(internal_ids),
+                    RemoteAssistanceDeviceKey.status.in_(("revoked", "expired")),
+                )
+                .order_by(
+                    RemoteAssistanceDeviceKey.client_installation_id,
+                    RemoteAssistanceDeviceKey.enrolled_at.desc(),
+                    RemoteAssistanceDeviceKey.id.desc(),
+                )
+                .distinct(RemoteAssistanceDeviceKey.client_installation_id)
+            )
+        )
+        .scalars()
+        .all()
+        if internal_ids
+        else []
+    )
+    active_keys = {
+        row.client_installation_id: row for row in current_key_rows if row.status == "active"
+    }
+    pending_keys = {
+        row.client_installation_id: row for row in current_key_rows if row.status == "pending"
+    }
+    terminal_keys = {row.client_installation_id: row for row in terminal_key_rows}
+    pending_key_names = await _names(
+        session,
+        {row.enrolled_by_user_id for row in pending_keys.values()},
+    )
     grant_rows = (
         (
             await session.execute(
@@ -1059,6 +2049,76 @@ async def list_devices(
                 "SharingCapability | None",
                 installation.remote_support_capability,
             ),
+            device_key_id=(
+                active_keys.get(installation.id)
+                or pending_keys.get(installation.id)
+                or terminal_keys.get(installation.id)
+            ).id
+            if (
+                active_keys.get(installation.id)
+                or pending_keys.get(installation.id)
+                or terminal_keys.get(installation.id)
+            )
+            is not None
+            else None,
+            device_key_status=cast(
+                "DeviceKeyStatus | None",
+                (
+                    active_keys.get(installation.id)
+                    or pending_keys.get(installation.id)
+                    or terminal_keys.get(installation.id)
+                ).status
+                if (
+                    active_keys.get(installation.id)
+                    or pending_keys.get(installation.id)
+                    or terminal_keys.get(installation.id)
+                )
+                is not None
+                else None,
+            ),
+            device_key_fingerprint_sha256=(
+                active_keys[installation.id].public_key_fingerprint_sha256
+                if installation.id in active_keys
+                else (
+                    terminal_keys[installation.id].public_key_fingerprint_sha256
+                    if installation.id in terminal_keys
+                    and terminal_keys[installation.id].approved_at is not None
+                    else None
+                )
+            ),
+            device_key_approved_at=(
+                active_keys[installation.id].approved_at
+                if installation.id in active_keys
+                else (
+                    terminal_keys[installation.id].approved_at
+                    if installation.id in terminal_keys
+                    else None
+                )
+            ),
+            pending_device_key_id=(
+                pending_keys[installation.id].id if installation.id in pending_keys else None
+            ),
+            pending_device_key_enrolled_by_user_id=(
+                pending_keys[installation.id].enrolled_by_user_id
+                if installation.id in pending_keys
+                else None
+            ),
+            pending_device_key_enrolled_by_name=(
+                pending_key_names.get(pending_keys[installation.id].enrolled_by_user_id)
+                if installation.id in pending_keys
+                else None
+            ),
+            pending_device_key_enrolled_at=(
+                pending_keys[installation.id].enrolled_at
+                if installation.id in pending_keys
+                else None
+            ),
+            pending_device_key_expires_at=(
+                pending_keys[installation.id].pending_expires_at
+                if installation.id in pending_keys
+                else None
+            ),
+            pairing_required=installation.id in pending_keys,
             grant_status=cast(
                 "GrantStatus | None",
                 latest_grant[installation.id].status if installation.id in latest_grant else None,
@@ -1153,13 +2213,25 @@ async def request_assistance(
     ):
         raise ValidationError("grant_ttl_seconds exceeds the configured anytime maximum.")
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=payload.installation_id,
     )
     await _lock_device(session, tenant.company_id, installation.id)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=payload.installation_id,
+        for_update=True,
+    )
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
     existing_any_tenant = (
         await session.execute(
             select(RemoteAssistanceGrant).where(RemoteAssistanceGrant.id == payload.request_id)
@@ -1186,6 +2258,7 @@ async def request_assistance(
         )
         if (
             existing_any_tenant.client_installation_id != installation.id
+            or existing_any_tenant.requested_for_user_id != installation.last_user_id
             or existing_any_tenant.kind != payload.grant_kind
             or actual_grant_ttl != payload.grant_ttl_seconds
             or initial_session.duration_seconds != payload.session_ttl_seconds
@@ -1195,6 +2268,7 @@ async def request_assistance(
             session,
             {
                 existing_any_tenant.requested_by_user_id,
+                existing_any_tenant.requested_for_user_id,
                 existing_any_tenant.responded_by_user_id,
                 initial_session.requested_by_user_id,
                 initial_session.started_by_user_id,
@@ -1215,8 +2289,9 @@ async def request_assistance(
             ),
         )
 
+    await _require_active_device_key(session, installation=installation)
     if installation.remote_support_capability in {None, "unsupported"}:
-        raise BusinessRuleError(
+        raise ConflictError(
             "This registered Android device has not advertised remote-assistance support."
         )
     _require_device_online(installation, now=now)
@@ -1243,12 +2318,15 @@ async def request_assistance(
     if open_session is not None:
         raise ConflictError("This device already has a requested or active support session.")
 
+    if installation.last_user_id is None:
+        raise ConflictError("The tablet has no authenticated user for a consent request.")
     grant_expires = now + timedelta(seconds=payload.grant_ttl_seconds)
     grant = RemoteAssistanceGrant(
         id=payload.request_id,
         company_id=tenant.company_id,
         client_installation_id=installation.id,
         requested_by_user_id=tenant.user_id,
+        requested_for_user_id=installation.last_user_id,
         kind=payload.grant_kind,
         status="requested",
         requested_at=now,
@@ -1291,7 +2369,7 @@ async def request_assistance(
         device_ref=ref,
         after_status="requested",
     )
-    names = await _names(session, {tenant.user_id})
+    names = await _names(session, {tenant.user_id, grant.requested_for_user_id})
     return RemoteRequestRead(
         grant=_grant_read(grant, installation_id=installation.installation_id, names=names),
         session=_session_read(
@@ -1313,13 +2391,25 @@ async def create_session(
     if payload.session_ttl_seconds > settings.remote_assistance_session_max_seconds:
         raise ValidationError("session_ttl_seconds exceeds the configured session maximum.")
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=payload.installation_id,
     )
     await _lock_device(session, tenant.company_id, installation.id)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=payload.installation_id,
+        for_update=True,
+    )
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
     existing = (
         await session.execute(
             select(RemoteAssistanceSession).where(RemoteAssistanceSession.id == payload.session_id)
@@ -1335,6 +2425,7 @@ async def create_session(
             raise ConflictError("The session id was already used with different support terms.")
         return await _session_response(session, existing, installation)
 
+    await _require_active_device_key(session, installation=installation)
     grant = (
         await session.execute(
             select(RemoteAssistanceGrant)
@@ -1350,6 +2441,7 @@ async def create_session(
         raise NotFoundError("Active anytime support grant not found.")
     if grant.kind != "anytime" or grant.status != "active" or grant.expires_at <= now:
         raise ConflictError("A currently active anytime grant is required for another session.")
+    _require_current_consent_user(grant, installation)
     open_session = (
         await session.execute(
             select(RemoteAssistanceSession.id).where(
@@ -1397,7 +2489,6 @@ async def start_session(
     tenant: AdminTenantDep,
 ) -> SessionRead:
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     support_scope = (
         await session.execute(
             select(
@@ -1413,6 +2504,7 @@ async def start_session(
     if support_scope is None:
         raise NotFoundError("Support session not found.")
     client_installation_id, grant_id = support_scope
+    await _lock_device(session, tenant.company_id, client_installation_id)
     installation = (
         await session.execute(
             select(ClientInstallation)
@@ -1420,6 +2512,13 @@ async def start_session(
             .with_for_update()
         )
     ).scalar_one()
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
     grant = (
         await session.execute(
             select(RemoteAssistanceGrant)
@@ -1444,6 +2543,7 @@ async def start_session(
         if support_session.start_id != payload.start_id:
             raise ConflictError("This session was already started by a different action.")
         return await _session_response(session, support_session, installation)
+    await _require_active_device_key(session, installation=installation)
     reused_start_id = (
         await session.execute(
             select(RemoteAssistanceSession.id).where(
@@ -1459,6 +2559,7 @@ async def start_session(
         raise ConflictError("This support session is no longer awaiting start.")
     if grant.status != "active" or grant.expires_at <= now:
         raise ConflictError("The device user has not granted active support access.")
+    _require_current_consent_user(grant, installation)
     _require_device_ready(installation, now=now)
     await ensure_relay_available()
 
@@ -1605,7 +2706,7 @@ async def owner_revoke_grant(
     session: SessionDep,
     tenant: AdminTenantDep,
 ) -> GrantRead:
-    await _expire_stale(session, company_id=tenant.company_id, now=datetime.now(UTC))
+    now = datetime.now(UTC)
     client_installation_id = (
         await session.execute(
             select(RemoteAssistanceGrant.client_installation_id)
@@ -1617,6 +2718,7 @@ async def owner_revoke_grant(
     ).scalar_one_or_none()
     if client_installation_id is None:
         raise NotFoundError("Support grant not found.")
+    await _lock_device(session, tenant.company_id, client_installation_id)
     installation = (
         await session.execute(
             select(ClientInstallation)
@@ -1624,6 +2726,13 @@ async def owner_revoke_grant(
             .with_for_update()
         )
     ).scalar_one()
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
     grant = (
         await session.execute(
             select(RemoteAssistanceGrant)
@@ -1652,7 +2761,7 @@ async def owner_end_session(
     session: SessionDep,
     tenant: AdminTenantDep,
 ) -> SessionRead:
-    await _expire_stale(session, company_id=tenant.company_id, now=datetime.now(UTC))
+    now = datetime.now(UTC)
     client_installation_id = (
         await session.execute(
             select(RemoteAssistanceSession.client_installation_id)
@@ -1664,6 +2773,7 @@ async def owner_end_session(
     ).scalar_one_or_none()
     if client_installation_id is None:
         raise NotFoundError("Support session not found.")
+    await _lock_device(session, tenant.company_id, client_installation_id)
     installation = (
         await session.execute(
             select(ClientInstallation)
@@ -1671,6 +2781,13 @@ async def owner_end_session(
             .with_for_update()
         )
     ).scalar_one()
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
     support_session = (
         await session.execute(
             select(RemoteAssistanceSession)
@@ -1704,7 +2821,6 @@ async def issue_command(
     tenant: AdminTenantDep,
 ) -> CommandRead:
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     client_installation_id = (
         await session.execute(
             select(RemoteAssistanceSession.client_installation_id)
@@ -1716,6 +2832,7 @@ async def issue_command(
     ).scalar_one_or_none()
     if client_installation_id is None:
         raise NotFoundError("Active support session not found.")
+    await _lock_device(session, tenant.company_id, client_installation_id)
     installation = (
         await session.execute(
             select(ClientInstallation)
@@ -1723,6 +2840,13 @@ async def issue_command(
             .with_for_update()
         )
     ).scalar_one()
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
     support_session = (
         await session.execute(
             select(RemoteAssistanceSession)
@@ -1748,10 +2872,85 @@ async def issue_command(
         ):
             raise ConflictError("The command id was already used with a different command.")
         return _command_read(existing)
+    await _require_active_device_key(session, installation=installation)
     if support_session.status != "active" or (
         support_session.expires_at is not None and support_session.expires_at <= now
     ):
         raise ConflictError("Commands require an active, unexpired support session.")
+    command_grant = (
+        await session.execute(
+            select(RemoteAssistanceGrant).where(
+                RemoteAssistanceGrant.company_id == tenant.company_id,
+                RemoteAssistanceGrant.id == support_session.grant_id,
+            )
+        )
+    ).scalar_one()
+    _require_current_consent_user(command_grant, installation)
+    pending_command = (
+        await session.execute(
+            select(RemoteAssistanceCommand.id).where(
+                RemoteAssistanceCommand.company_id == tenant.company_id,
+                RemoteAssistanceCommand.session_id == support_session.id,
+                RemoteAssistanceCommand.status == "pending",
+            )
+        )
+    ).scalar_one_or_none()
+    if pending_command is not None:
+        raise ConflictError(
+            "Resolve the pending support command before issuing another.",
+            details={"existing_command_id": str(pending_command)},
+        )
+    latest_command = (
+        await session.execute(
+            select(RemoteAssistanceCommand.id, RemoteAssistanceCommand.issued_at)
+            .where(
+                RemoteAssistanceCommand.company_id == tenant.company_id,
+                RemoteAssistanceCommand.session_id == support_session.id,
+            )
+            .order_by(RemoteAssistanceCommand.issued_at.desc(), RemoteAssistanceCommand.id.desc())
+            .limit(1)
+        )
+    ).one_or_none()
+    if (
+        latest_command is not None
+        and latest_command.issued_at
+        > now - timedelta(seconds=_COMMAND_ISSUE_COOLDOWN_SECONDS)
+    ):
+        raise _command_cooldown_conflict(
+            message="Support commands are being issued too quickly.",
+            issued_at=latest_command.issued_at,
+            now=now,
+            cooldown_seconds=_COMMAND_ISSUE_COOLDOWN_SECONDS,
+            existing_command_id=latest_command.id,
+        )
+    if payload.type == "collect_diagnostics":
+        latest_diagnostics = (
+            await session.execute(
+                select(RemoteAssistanceCommand.id, RemoteAssistanceCommand.issued_at)
+                .where(
+                    RemoteAssistanceCommand.company_id == tenant.company_id,
+                    RemoteAssistanceCommand.session_id == support_session.id,
+                    RemoteAssistanceCommand.command_type == "collect_diagnostics",
+                )
+                .order_by(
+                    RemoteAssistanceCommand.issued_at.desc(),
+                    RemoteAssistanceCommand.id.desc(),
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if (
+            latest_diagnostics is not None
+            and latest_diagnostics.issued_at
+            > now - timedelta(seconds=_DIAGNOSTICS_COMMAND_COOLDOWN_SECONDS)
+        ):
+            raise _command_cooldown_conflict(
+                message="A recent diagnostics request already covers this session.",
+                issued_at=latest_diagnostics.issued_at,
+                now=now,
+                cooldown_seconds=_DIAGNOSTICS_COMMAND_COOLDOWN_SECONDS,
+                existing_command_id=latest_diagnostics.id,
+            )
     _require_device_ready(installation, now=now)
     await ensure_relay_available()
     expected = await _next_sequence(session, support_session.id)
@@ -1823,13 +3022,33 @@ async def device_state(
     _require_android_request(request)
     response.headers["Cache-Control"] = "private, no-store"
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=installation_id,
+        for_update=True,
     )
     _require_device_actor(installation, tenant)
+    await authenticate_device_request(
+        request=request,
+        session=session,
+        company_id=tenant.company_id,
+        client_installation_id=installation.id,
+        actual_content=b"",
+        now=now,
+    )
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=now,
+        device_actor=tenant,
+    )
     grants = (
         (
             await session.execute(
@@ -1838,6 +3057,7 @@ async def device_state(
                     RemoteAssistanceGrant.company_id == tenant.company_id,
                     RemoteAssistanceGrant.client_installation_id == installation.id,
                     RemoteAssistanceGrant.status == "requested",
+                    RemoteAssistanceGrant.requested_for_user_id == tenant.user_id,
                 )
                 .order_by(RemoteAssistanceGrant.requested_at)
             )
@@ -1848,9 +3068,15 @@ async def device_state(
     support_session = (
         await session.execute(
             select(RemoteAssistanceSession)
+            .join(
+                RemoteAssistanceGrant,
+                RemoteAssistanceGrant.id == RemoteAssistanceSession.grant_id,
+            )
             .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.client_installation_id == installation.id,
+                RemoteAssistanceSession.status.in_(("requested", "active")),
+                RemoteAssistanceGrant.requested_for_user_id == tenant.user_id,
             )
             .order_by(RemoteAssistanceSession.requested_at.desc())
             .limit(1)
@@ -1879,7 +3105,11 @@ async def device_state(
     actor_ids = {
         actor
         for grant in grants
-        for actor in (grant.requested_by_user_id, grant.responded_by_user_id)
+        for actor in (
+            grant.requested_by_user_id,
+            grant.requested_for_user_id,
+            grant.responded_by_user_id,
+        )
     }
     if support_session is not None:
         actor_ids.update(
@@ -1920,14 +3150,32 @@ async def decide_grant(
 ) -> GrantRead:
     _require_android_request(request)
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=payload.installation_id,
         for_update=True,
     )
-    _require_device_actor(installation, tenant)
+    _require_device_mutation_actor(installation, tenant)
+    await _authenticate_device_json(
+        request=request,
+        session=session,
+        tenant=tenant,
+        installation=installation,
+        now=now,
+    )
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=now,
+        device_actor=tenant,
+    )
     grant = (
         await session.execute(
             select(RemoteAssistanceGrant)
@@ -1959,7 +3207,14 @@ async def decide_grant(
             raise ConflictError("This grant request already has a different decision.")
         return await _grant_response(session, grant, installation)
     if grant.status != "requested" or grant.expires_at <= now:
-        raise ConflictError("This support grant request is no longer awaiting a decision.")
+        raise RemoteActionGoneError(
+            "This support grant request is no longer awaiting a decision."
+        )
+    if (
+        grant.requested_for_user_id != tenant.user_id
+        or grant.requested_for_user_id != installation.last_user_id
+    ):
+        raise ConflictError("This support request was issued for a different tablet user.")
     grant.status = desired_status
     grant.responded_at = now
     grant.responded_by_user_id = tenant.user_id
@@ -2009,14 +3264,38 @@ async def device_revoke_grant(
     tenant: TenantDep,
 ) -> GrantRead:
     _require_android_request(request)
-    await _expire_stale(session, company_id=tenant.company_id, now=datetime.now(UTC))
+    now = datetime.now(UTC)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=payload.installation_id,
+    )
+    await _lock_device(session, tenant.company_id, installation.id)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=payload.installation_id,
         for_update=True,
     )
-    _require_device_actor(installation, tenant)
+    _require_device_mutation_actor(installation, tenant)
+    await _authenticate_device_json(
+        request=request,
+        session=session,
+        tenant=tenant,
+        installation=installation,
+    )
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=now,
+        device_actor=tenant,
+    )
     grant = (
         await session.execute(
             select(RemoteAssistanceGrant)
@@ -2030,6 +3309,10 @@ async def device_revoke_grant(
     ).scalar_one_or_none()
     if grant is None:
         raise NotFoundError("Support grant not found for this device.")
+    if grant.status == "revoked" and grant.revocation_id != payload.revocation_id:
+        raise RemoteActionGoneError("This support grant was already revoked.")
+    if grant.status not in {"requested", "active", "consumed", "revoked"}:
+        raise RemoteActionGoneError("This support grant is no longer revocable.")
     await _revoke_grant(
         session,
         row=grant,
@@ -2074,14 +3357,38 @@ async def device_end_session(
     tenant: TenantDep,
 ) -> SessionRead:
     _require_android_request(request)
-    await _expire_stale(session, company_id=tenant.company_id, now=datetime.now(UTC))
+    now = datetime.now(UTC)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=payload.installation_id,
+    )
+    await _lock_device(session, tenant.company_id, installation.id)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=payload.installation_id,
         for_update=True,
     )
-    _require_device_actor(installation, tenant)
+    _require_device_mutation_actor(installation, tenant)
+    await _authenticate_device_json(
+        request=request,
+        session=session,
+        tenant=tenant,
+        installation=installation,
+    )
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=now,
+        device_actor=tenant,
+    )
     support_session = (
         await session.execute(
             select(RemoteAssistanceSession)
@@ -2102,9 +3409,15 @@ async def device_end_session(
         ):
             return await _session_response(session, support_session, installation)
         if support_session.status == "ended":
-            raise ConflictError("This support session already has a different terminal outcome.")
+            if support_session.end_reason in get_args(DeviceEndReason):
+                raise ConflictError(
+                    "This end action id or reason conflicts with the recorded device outcome."
+                )
+            raise RemoteActionGoneError(
+                "This support session was ended by another terminal action."
+            )
     if support_session.status == "expired":
-        raise ConflictError("This support session already expired.")
+        raise RemoteActionGoneError("This support session already expired.")
     if support_session.status in {"requested", "active"}:
         await _end_session(
             session,
@@ -2133,7 +3446,19 @@ async def command_result(
         installation_id=payload.installation_id,
         for_update=True,
     )
-    _require_device_actor(installation, tenant)
+    _require_device_mutation_actor(installation, tenant)
+    await _authenticate_device_json(
+        request=request,
+        session=session,
+        tenant=tenant,
+        installation=installation,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=datetime.now(UTC),
+        device_actor=tenant,
+    )
     row = (
         await session.execute(
             select(RemoteAssistanceCommand, RemoteAssistanceSession)
@@ -2159,6 +3484,10 @@ async def command_result(
             command.status != payload.outcome
             or command.rejection_reason_code != payload.reason_code
         ):
+            if command.rejection_reason_code == "session_ended":
+                raise RemoteActionGoneError(
+                    "This support command became terminal when its session ended."
+                )
             raise ConflictError("This command already has a different result.")
         return _command_read(command)
     now = datetime.now(UTC)
@@ -2217,28 +3546,63 @@ async def upload_frame(
             "The support frame exceeds the configured byte limit.",
             details={"max_bytes": settings.remote_assistance_frame_max_bytes},
         )
+    # Phase 1 authenticates the signed request and snapshots authority in a
+    # short transaction. No installation/session lock is retained while an
+    # untrusted client streams bytes or while Pillow performs CPU work.
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
     installation = await _installation_by_public_id(
         session,
         company_id=tenant.company_id,
         installation_id=x_installation_id,
     )
-    _require_device_actor(installation, tenant)
+    device_proof = await authenticate_device_request(
+        request=request,
+        session=session,
+        company_id=tenant.company_id,
+        client_installation_id=installation.id,
+        # Verify the signed asserted hash and claim the nonce before admission;
+        # compare that hash to the bounded stream immediately after reading it.
+        actual_content=None,
+        now=now,
+    )
+    await _lock_device(session, tenant.company_id, installation.id)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=x_installation_id,
+        for_update=True,
+    )
+    _require_device_mutation_actor(installation, tenant)
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=now,
+        device_actor=tenant,
+    )
     _require_device_ready(installation, now=now)
-    support_session = (
-        await session.execute(
-            select(RemoteAssistanceSession).where(
-                RemoteAssistanceSession.company_id == tenant.company_id,
-                RemoteAssistanceSession.id == session_id,
-                RemoteAssistanceSession.client_installation_id == installation.id,
-                RemoteAssistanceSession.status == "active",
-                RemoteAssistanceSession.expires_at > now,
-            )
-        )
-    ).scalar_one_or_none()
-    if support_session is None:
-        raise NotFoundError("Active support session not found for this device.")
+    await _require_exact_active_device_key(
+        session,
+        installation=installation,
+        key_id=device_proof.device_key.id,
+    )
+    frame_scope = await _locked_active_frame_session(
+        session,
+        company_id=tenant.company_id,
+        session_id=session_id,
+        installation=installation,
+        now=now,
+    )
+    if frame_scope is None:
+        raise RemoteActionGoneError("The support session is no longer active for this user.")
+    support_session, _grant = frame_scope
+    await session.commit()
+
     # Admission is Redis-backed and fail-closed before body streaming or
     # Pillow work, so a compromised authenticated tablet cannot turn malformed
     # frames into an unbounded CPU queue shared with POS/payment requests.
@@ -2248,18 +3612,70 @@ async def upload_frame(
         frame_id=x_frame_id,
         sequence=x_frame_sequence,
     )
-    content = await _read_bounded_body(
-        request,
-        max_bytes=settings.remote_assistance_frame_max_bytes,
+    try:
+        async with asyncio.timeout(settings.remote_assistance_frame_read_timeout_seconds):
+            content = await _read_bounded_body(
+                request,
+                max_bytes=settings.remote_assistance_frame_max_bytes,
+            )
+    except TimeoutError as exc:
+        raise RemoteFrameTimeoutError(
+            "The support frame upload did not finish within the allowed time."
+        ) from exc
+    verify_actual_content(device_proof, content)
+    # The two-worker global limiter bounds CPU/memory pressure for the small
+    # VPS; per-session Redis admission prevents one session filling both slots.
+    frame = await to_thread.run_sync(
+        partial(
+            validate_and_sanitize_jpeg,
+            content,
+            declared_width=x_frame_width,
+            declared_height=x_frame_height,
+        ),
+        limiter=_FRAME_DECODER_LIMITER,
     )
-    # Pillow decoding/re-encoding is CPU work and must not stall the async API
-    # loop shared by POS/payment traffic.
-    frame = await run_in_threadpool(
-        validate_and_sanitize_jpeg,
-        content,
-        declared_width=x_frame_width,
-        declared_height=x_frame_height,
+
+    # Phase 2 linearizes frame publication against Stop, key rotation/revoke,
+    # grant revoke, expiry, and account handoff. Only the final fail-fast Redis
+    # store occurs while these locks are held; body and image work are outside.
+    final_now = datetime.now(UTC)
+    await _lock_device(session, tenant.company_id, installation.id)
+    installation = await _installation_by_public_id(
+        session,
+        company_id=tenant.company_id,
+        installation_id=x_installation_id,
+        for_update=True,
     )
+    _require_device_mutation_actor(installation, tenant)
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=final_now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session,
+        installation=installation,
+        now=final_now,
+        device_actor=tenant,
+    )
+    _require_device_ready(installation, now=final_now)
+    await _require_exact_active_device_key(
+        session,
+        installation=installation,
+        key_id=device_proof.device_key.id,
+    )
+    if (
+        await _locked_active_frame_session(
+            session,
+            company_id=tenant.company_id,
+            session_id=session_id,
+            installation=installation,
+            now=final_now,
+        )
+        is None
+    ):
+        raise RemoteActionGoneError("The support session ended before the frame was published.")
     metadata = await store_latest_frame(
         company_id=tenant.company_id,
         session_id=support_session.id,
@@ -2284,19 +3700,49 @@ async def latest_frame(
     tenant: AdminTenantDep,
 ) -> BinaryResponse:
     now = datetime.now(UTC)
-    await _expire_stale(session, company_id=tenant.company_id, now=now)
-    active = (
+    client_installation_id = (
         await session.execute(
-            select(RemoteAssistanceSession.id).where(
+            select(RemoteAssistanceSession.client_installation_id)
+            .where(
                 RemoteAssistanceSession.company_id == tenant.company_id,
                 RemoteAssistanceSession.id == session_id,
-                RemoteAssistanceSession.status == "active",
-                RemoteAssistanceSession.expires_at > now,
             )
         )
     ).scalar_one_or_none()
-    if active is None:
+    if client_installation_id is None:
         raise NotFoundError("Active support session not found.")
+    await _lock_device(session, tenant.company_id, client_installation_id)
+    installation = (
+        await session.execute(
+            select(ClientInstallation)
+            .where(
+                ClientInstallation.company_id == tenant.company_id,
+                ClientInstallation.id == client_installation_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one()
+    await _expire_stale(
+        session,
+        company_id=tenant.company_id,
+        now=now,
+        client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(session, installation=installation, now=now)
+    await _require_active_device_key(session, installation=installation)
+    if (
+        await _locked_active_frame_session(
+            session,
+            company_id=tenant.company_id,
+            session_id=session_id,
+            installation=installation,
+            now=now,
+        )
+        is None
+    ):
+        raise NotFoundError("Active support session not found.")
+    # Keep the device/session locks through the fail-fast Redis read so revoke,
+    # Stop, key rotation, and user handoff are linearizable with disclosure.
     frame = await get_latest_frame(company_id=tenant.company_id, session_id=session_id)
     if frame is None:
         raise NotFoundError("No unexpired support frame is available.")

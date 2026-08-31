@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     UniqueConstraint,
     text,
@@ -40,10 +41,10 @@ REMOTE_ASSISTANCE_SESSION_STATUSES = ("requested", "active", "ended", "expired")
 REMOTE_ASSISTANCE_COMMAND_TYPES = (
     "navigate",
     "refresh",
-    "sync_now",
     "collect_diagnostics",
 )
-REMOTE_ASSISTANCE_NAVIGATION_MODULES = ("dashboard", "gaming", "pos", "shift", "help")
+REMOTE_ASSISTANCE_DEVICE_KEY_STATUSES = ("pending", "active", "revoked", "expired")
+REMOTE_ASSISTANCE_NAVIGATION_MODULES = ("help",)
 REMOTE_ASSISTANCE_COMMAND_STATUSES = ("pending", "acknowledged", "rejected")
 REMOTE_ASSISTANCE_END_REASONS = (
     "owner_ended",
@@ -67,6 +68,121 @@ REMOTE_ASSISTANCE_COMMAND_REJECTION_REASONS = (
 
 def _quoted(values: tuple[str, ...]) -> str:
     return ", ".join(f"'{value}'" for value in values)
+
+
+class RemoteAssistanceDeviceKey(Base, TimestampMixin, TenantMixin):
+    """Tenant/device-bound P-256 public key; private material never reaches the server."""
+
+    __tablename__ = "remote_assistance_device_keys"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["company_id", "client_installation_id"],
+            ["client_installations.company_id", "client_installations.id"],
+            name="fk_remote_assistance_device_keys_scoped_installation",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "company_id", "id", name="uq_remote_assistance_device_keys_company_id_id"
+        ),
+        UniqueConstraint(
+            "company_id",
+            "enrollment_id",
+            name="uq_remote_assistance_device_keys_company_enrollment_id",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "approval_id",
+            name="uq_remote_assistance_device_keys_company_approval_id",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "revocation_id",
+            name="uq_remote_assistance_device_keys_company_revocation_id",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "public_key_fingerprint_sha256",
+            name="uq_remote_assistance_device_keys_company_fingerprint",
+        ),
+        CheckConstraint(
+            f"status IN ({_quoted(REMOTE_ASSISTANCE_DEVICE_KEY_STATUSES)})",
+            name="ck_remote_assistance_device_keys_status",
+        ),
+        CheckConstraint(
+            "octet_length(public_key_spki) BETWEEN 80 AND 160",
+            name="ck_remote_assistance_device_keys_spki_length",
+        ),
+        CheckConstraint(
+            "public_key_fingerprint_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_remote_assistance_device_keys_fingerprint_length",
+        ),
+        CheckConstraint(
+            "pending_expires_at > enrolled_at AND "
+            "pending_expires_at <= enrolled_at + interval '15 minutes'",
+            name="ck_remote_assistance_device_keys_pending_expiry",
+        ),
+        CheckConstraint(
+            "(status IN ('pending', 'expired') AND approved_at IS NULL "
+            "AND approved_by_user_id IS NULL AND approval_id IS NULL) OR "
+            "(status IN ('active', 'revoked') AND approved_at IS NOT NULL "
+            "AND approved_by_user_id IS NOT NULL AND approval_id IS NOT NULL) OR "
+            "(status = 'revoked' AND approved_at IS NULL "
+            "AND approved_by_user_id IS NULL AND approval_id IS NULL)",
+            name="ck_remote_assistance_device_keys_approval_evidence",
+        ),
+        CheckConstraint(
+            "(status <> 'revoked' AND revoked_at IS NULL "
+            "AND revoked_by_user_id IS NULL AND revocation_id IS NULL) OR "
+            "(status = 'revoked' AND revoked_at IS NOT NULL "
+            "AND revoked_by_user_id IS NOT NULL AND revocation_id IS NOT NULL)",
+            name="ck_remote_assistance_device_keys_revocation_evidence",
+        ),
+        Index(
+            "uq_remote_assistance_device_keys_installation_active",
+            "company_id",
+            "client_installation_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+        Index(
+            "uq_remote_assistance_device_keys_installation_pending",
+            "company_id",
+            "client_installation_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_remote_assistance_device_keys_pending_expiry",
+            "pending_expires_at",
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+    # Client-selected UUIDv4. The row is public-key and lifecycle evidence only.
+    id: Mapped[UUID] = _uuid_pk()
+    client_installation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    public_key_spki: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    public_key_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    enrollment_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    enrolled_by_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pending_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    approval_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    approved_by_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revocation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    revoked_by_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class RemoteAssistanceGrant(Base, TimestampMixin, TenantMixin):
@@ -107,6 +223,11 @@ class RemoteAssistanceGrant(Base, TimestampMixin, TenantMixin):
         CheckConstraint(
             "expires_at > requested_at",
             name="ck_remote_assistance_grants_expiry",
+        ),
+        CheckConstraint(
+            "responded_by_user_id IS NULL OR "
+            "responded_by_user_id = requested_for_user_id",
+            name="ck_remote_assistance_grants_consent_user_binding",
         ),
         CheckConstraint(
             "(status = 'requested' AND responded_at IS NULL "
@@ -153,6 +274,9 @@ class RemoteAssistanceGrant(Base, TimestampMixin, TenantMixin):
     id: Mapped[UUID] = _uuid_pk()
     client_installation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     requested_by_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_for_user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     responded_by_user_id: Mapped[UUID | None] = mapped_column(
@@ -342,6 +466,14 @@ class RemoteAssistanceCommand(Base, TenantMixin):
             "company_id",
             "issued_at",
         ),
+        Index(
+            "uq_remote_assistance_commands_session_pending",
+            "company_id",
+            "session_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
     )
 
     # The client-supplied UUIDv4 is both primary identity and idempotency key.
@@ -367,12 +499,14 @@ __all__ = [
     "REMOTE_ASSISTANCE_COMMAND_REJECTION_REASONS",
     "REMOTE_ASSISTANCE_COMMAND_STATUSES",
     "REMOTE_ASSISTANCE_COMMAND_TYPES",
+    "REMOTE_ASSISTANCE_DEVICE_KEY_STATUSES",
     "REMOTE_ASSISTANCE_END_REASONS",
     "REMOTE_ASSISTANCE_GRANT_KINDS",
     "REMOTE_ASSISTANCE_GRANT_STATUSES",
     "REMOTE_ASSISTANCE_NAVIGATION_MODULES",
     "REMOTE_ASSISTANCE_SESSION_STATUSES",
     "RemoteAssistanceCommand",
+    "RemoteAssistanceDeviceKey",
     "RemoteAssistanceGrant",
     "RemoteAssistanceSession",
 ]

@@ -1,135 +1,58 @@
-# Adding partners (India + Canada)
+# Partner access — Code17 safe provisioning
 
-D Company ERP runs from a single droplet in Bangalore — **anyone in the world with a login can use it**. Your partners in India and Canada open the same URL, install it as a PWA, and they're in.
+Partners use individual ERP identities; never share the protected owner login.
+Choose the least-privileged role that matches the work they actually perform.
+Prefer the authenticated **Staff** workflow because it records the acting owner
+and applies the same role policy as the API.
 
-## Step 1 — Create partner accounts (one SSH command per partner)
+## Create a new partner identity
 
-You said you want partners to have **full owner-level access** (not read-only). The commands below create them with the `owner` role.
-
-SSH into your droplet:
-
-```bash
-ssh -i ~/.ssh/dcompany_erp root@YOUR_DROPLET_IP
-```
-
-Then for each partner, run:
+If the authenticated Staff workflow is unavailable, an authorized VM operator
+may create a new, non-protected account from an interactive, non-recorded
+terminal:
 
 ```bash
-# ===== Partner 1: India =====
-docker compose -f /opt/d-company-erp/docker-compose.prod.yml exec -T backend \
+cd /opt/d-company-erp
+docker compose -f docker-compose.prod.yml --env-file .env exec backend \
   python -m scripts.create_user \
-  --email "partner-india@example.com" \
-  --name "Partner Name In India" \
-  --role owner \
-  --password "$(openssl rand -base64 24)"
-
-# ===== Partner 2: Canada =====
-docker compose -f /opt/d-company-erp/docker-compose.prod.yml exec -T backend \
-  python -m scripts.create_user \
-  --email "partner-canada@example.com" \
-  --name "Partner Name In Canada" \
-  --role owner \
-  --password "$(openssl rand -base64 24)"
+  --email partner@example.com \
+  --name "Partner Name" \
+  --role partner
 ```
 
-**Replace the email/name/password** with their real values before pasting.
+The command reads and confirms a temporary password with terminal echo
+disabled. It never prints the secret or accepts it in argv. Transfer the
+password through an approved password-manager/secret channel separately from
+the login URL, require a change after first login, and never include it in
+email, chat history, tickets, or shell logs.
 
-Each command prints `Created user <email>` followed by `• role=owner` and `• company=D Company`. That confirms they're in.
+The console command is create-only. It refuses any existing email and cannot
+create the internal `super_owner`/`co_owner` roles. It never overwrites a
+password or role, so it cannot silently demote the protected owner. If the
+deployment contains more than one company, pass the exact tenant UUID with
+`--company-id`.
 
-## Step 2 — Email the partners their access
+## Select a role
 
-Send each partner an email like this:
+- `partner`: business/finance visibility and explicitly granted partner work;
+  no protected Audit/Access Control authority.
+- `auditor`: read-only operational and finance review.
+- `owner`: broad business operations; grant only after a separate approval.
 
-> **Subject:** Your D Company ERP login
->
-> Hi [name],
->
-> You now have access to D Company ERP — the café + gaming-lounge management system. You can see today's revenue, gaming sessions, events, P&L, and reports from anywhere in the world.
->
-> 1. Open **https://dcompany.duckdns.org** on your phone or laptop.
-> 2. Email: `[partner email]`
-> 3. Password: `[temporary password you generated]` (please change it immediately)
-> 4. Once logged in, go to **Staff → your account → change password** and set something memorable.
->
-> **Install as a phone app (optional):**
-> - **iPhone (Safari):** open the URL → Share button → "Add to Home Screen" → Add.
-> - **Android (Chrome):** open the URL → tap ⋮ menu → "Install app".
-> - **Mac/Windows:** open in Chrome or Edge → click the install icon in the address bar.
->
-> After installing, the D Company icon appears on your home screen and opens full-screen like a native app.
->
-> Anything I can help with, let me know.
+Role permissions remain server-authoritative. Review the effective access in
+the protected Access Control screen before issuing credentials; do not rely on
+an old role table copied into a message or document.
 
-## Step 3 — What partners can do once they log in
+## Change access or recover credentials
 
-With the **owner** role, they have the same access as you:
+Use authenticated **Staff** role management for an existing user. Use the
+centrally approved OTP password-reset flow for a forgotten partner password.
+Do not rerun `scripts.create_user`; an existing identity is intentionally a
+hard error.
 
-- **POS** — take orders, see live cart, charge
-- **Tables** — manage floor plan, reservations
-- **Menu** — edit prices, items, categories
-- **Inventory** — see stock levels, low-stock alerts
-- **Gaming** — start/stop PS5 sessions, see revenue
-- **Events** — create screenings, sell tickets, check-in at door
-- **Finance** — see daily P&L, expenses, partner balance
-- **OCR** — upload bills, approve into expenses
-- **Staff** — add/remove users, change roles
-- **Analytics** — KPIs, top items, trends
-- **Reports** — daily/monthly/quarterly/yearly P&L, **print** or **save as PDF** or **push to Google Sheets**
-- **Settings → Google Sheets** — connect the integration once, all entries flow into your sheet
+`scripts.reset_owner_password` is an emergency local-console tool only for the
+single configured `SEED_OWNER_EMAIL` protected super owner. It is not a general
+partner reset mechanism.
 
-⚠️ **With owner access, your partners can also:**
-- Add or remove other users
-- Change any password
-- Delete data
-- Modify the menu and prices
-
-If you want stricter control later, switch them to the `partner` role (read-only finance + capital write) or `auditor` role (read-only everything):
-
-```bash
-# Demote to partner (finance read + capital write, no POS)
-docker compose -f /opt/d-company-erp/docker-compose.prod.yml exec -T backend \
-  python -m scripts.create_user \
-  --email "partner@example.com" --name "..." \
-  --role partner --password "..."
-
-# Or auditor (read-only)
-docker compose -f /opt/d-company-erp/docker-compose.prod.yml exec -T backend \
-  python -m scripts.create_user \
-  --email "partner@example.com" --name "..." \
-  --role auditor --password "..."
-```
-
-The `create_user` script is idempotent: re-running it with the same email **updates** the existing user's name/password/role.
-
-## Step 4 — Daily / monthly reports for partners
-
-Open **Reports** in the sidebar. Pick the period (daily/monthly/quarterly/yearly), pick the date or fiscal year, and you get a real-time P&L.
-
-- **Print or save PDF:** click "Print / Save PDF" → Cmd+P → choose printer or "Save as PDF".
-- **Email to partner:** save as PDF first, then attach to email.
-- **Auto-sync to Google Sheets:** click "Push to Sheets" → the report appears as a new row in the **ERP Entries** tab of your Google Sheet. Partners with access to the sheet see it without logging into the ERP.
-
-## Step 5 — Partner can change their own password
-
-Once logged in:
-
-1. Click **Staff** in the sidebar
-2. Click their own name
-3. **Change password**
-4. Pick something they'll remember; the temporary password we created is gone.
-
-## Roles reference
-
-| Role | POS | Tables | Inventory | Gaming | Finance | Reports | Staff write |
-|---|---|---|---|---|---|---|---|
-| `owner` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `partner` | — | — | — | — | ✓ (capital write) | ✓ | — |
-| `manager` | ✓ | ✓ | ✓ | ✓ | — | — | ✓ |
-| `cashier` | ✓ (POS only) | ✓ (read) | ✓ (read) | — | — | — | — |
-| `kitchen` | ✓ (read) | — | — | — | — | — | — |
-| `gaming_supervisor` | ✓ | ✓ (read) | — | ✓ | — | — | — |
-| `auditor` | ✓ (read) | ✓ (read) | ✓ (read) | ✓ (read) | ✓ (read) | ✓ | — |
-
-## If a partner forgets their password
-
-You (with owner access) can reset it any time with the same `create_user` command — it overwrites the password.
+Every partner should sign in with their own account, install only the approved
+client, and sign out/revoke access promptly when the relationship changes.

@@ -37,6 +37,7 @@ from app.models.client_update import (
     CLIENT_UPDATE_STATES,
 )
 from app.services.client_updates.rate_limit import enforce_client_heartbeat_rate_limit
+from app.services.remote_assistance.consent import reconcile_remote_assistance_user_binding
 
 router = APIRouter()
 
@@ -385,15 +386,15 @@ async def heartbeat(
     )
     await _lock_company_telemetry(session, tenant.company_id)
 
-    existing_installation_id = (
+    existing_identity = (
         await session.execute(
-            select(ClientInstallation.id).where(
+            select(ClientInstallation.id, ClientInstallation.last_user_id).where(
                 ClientInstallation.company_id == tenant.company_id,
                 ClientInstallation.installation_id == payload.installation_id,
             )
         )
-    ).scalar_one_or_none()
-    if existing_installation_id is None:
+    ).one_or_none()
+    if existing_identity is None:
         await _enforce_new_installation_capacity(
             session,
             company_id=tenant.company_id,
@@ -442,6 +443,31 @@ async def heartbeat(
         .returning(ClientInstallation.id)
     )
     installation_row_id = (await session.execute(statement)).scalar_one()
+    installation = (
+        await session.execute(
+            select(ClientInstallation)
+            .where(ClientInstallation.id == installation_row_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+    ).scalar_one()
+    user_changed = (
+        existing_identity is not None and existing_identity.last_user_id != tenant.user_id
+    )
+    if user_changed:
+        # A heartbeat from the newly authenticated tablet user is the
+        # serialized identity handoff point. Prior remote-presence evidence and
+        # consent cannot carry across that user boundary.
+        installation.remote_support_protocol_version = None
+        installation.remote_support_capability = None
+        installation.remote_support_last_seen_at = None
+        await reconcile_remote_assistance_user_binding(
+            session,
+            installation=installation,
+            current_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            now=now,
+        )
 
     accepted_event_ids: set[UUID] = set()
     duplicate_event_ids: set[UUID] = set()

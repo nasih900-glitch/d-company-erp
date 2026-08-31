@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError as PydanticValidationError
 
 from app.api.v1.accounting.router import _trial_balance_lines
 from app.api.v1.reports.router import _allocated_component, _refund_adjustments_by_rate
@@ -21,10 +22,10 @@ from app.services.reports.aggregator import month_range
 
 
 def _settings(**over):
-    base = dict(
-        database_url="postgresql+psycopg://e:e@localhost:5432/e",
-        account_security_email="b@x.com",
-    )
+    base = {
+        "database_url": "postgresql+psycopg://e:e@localhost:5432/e",
+        "account_security_email": "b@x.com",
+    }
     base.update(over)
     return Settings(**base)
 
@@ -41,12 +42,25 @@ def test_month_range_valid():
 
 
 def test_prod_rejects_default_jwt_secret():
-    with pytest.raises(Exception):
-        _settings(env="prod", jwt_secret="CHANGE_ME_IN_PROD_AT_LEAST_32_CHARS")
+    with pytest.raises(PydanticValidationError, match="JWT_SECRET"):
+        _settings(
+            env="prod",
+            jwt_secret="CHANGE_ME_IN_PROD_AT_LEAST_32_CHARS",
+            remote_assistance_pairing_secret="independent-pairing-secret-longer-than-32-characters",
+        )
 
 
 def test_prod_accepts_strong_jwt_secret():
-    s = _settings(env="prod", jwt_secret="k" * 48)
+    s = _settings(
+        env="prod",
+        jwt_secret="k" * 48,
+        remote_assistance_pairing_secret="independent-pairing-secret-longer-than-32-characters",
+        remote_assistance_relay_secret="cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+        redis_url=(
+            "redis://erp_backend:0123456789abcdef0123456789abcdef"
+            "0123456789abcdef0123456789abcdef@redis:6379/0"
+        ),
+    )
     assert s.env == "prod"
 
 
@@ -70,12 +84,12 @@ def test_kerala_calendar_day_uses_local_midnight() -> None:
         "Asia/Kolkata",
     )
 
-    assert start == datetime(2026, 3, 30, 18, 30, tzinfo=timezone.utc)
-    assert end == datetime(2026, 3, 31, 18, 30, tzinfo=timezone.utc)
+    assert start == datetime(2026, 3, 30, 18, 30, tzinfo=UTC)
+    assert end == datetime(2026, 3, 31, 18, 30, tzinfo=UTC)
 
 
 def test_local_today_respects_company_timezone() -> None:
-    now = datetime(2026, 3, 31, 20, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 31, 20, 0, tzinfo=UTC)
     assert local_today("Asia/Kolkata", now=now) == date(2026, 4, 1)
     assert local_today("Europe/London", now=now) == date(2026, 3, 31)
 
@@ -129,7 +143,7 @@ async def test_refund_adjustments_by_rate_excludes_tip_from_taxable_denominator(
     refund = SimpleNamespace(
         order_id=order_id,
         amount_minor=472,
-        created_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 20, tzinfo=UTC),
     )
     line = SimpleNamespace(
         order_id=order_id,
@@ -149,8 +163,8 @@ async def test_refund_adjustments_by_rate_excludes_tip_from_taxable_denominator(
     adjustments = await _refund_adjustments_by_rate(
         session,
         company_id=uuid4(),
-        start_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
-        end_exclusive=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        start_at=datetime(2026, 7, 1, tzinfo=UTC),
+        end_exclusive=datetime(2026, 8, 1, tzinfo=UTC),
         eco=False,
     )
 
@@ -164,7 +178,7 @@ async def test_refund_adjustments_by_rate_excludes_tip_from_taxable_denominator(
 
 
 def test_trial_balance_groups_to_equal_debits_and_credits() -> None:
-    occurred_at = datetime(2026, 7, 12, 10, tzinfo=timezone.utc)
+    occurred_at = datetime(2026, 7, 12, 10, tzinfo=UTC)
     ref_id = uuid4()
     lines = [
         LedgerLine(

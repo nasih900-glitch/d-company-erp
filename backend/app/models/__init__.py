@@ -111,6 +111,7 @@ from app.models.pos import (
 )
 from app.models.remote_assistance import (
     RemoteAssistanceCommand,
+    RemoteAssistanceDeviceKey,
     RemoteAssistanceGrant,
     RemoteAssistanceSession,
 )
@@ -210,6 +211,7 @@ __all__ = [
     "RecipeLine",
     "Refund",
     "RemoteAssistanceCommand",
+    "RemoteAssistanceDeviceKey",
     "RemoteAssistanceGrant",
     "RemoteAssistanceSession",
     "RefundLoyaltyAdjustment",

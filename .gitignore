@@ -5,6 +5,9 @@ __pycache__/
 .venv/
 venv/
 .env
+.deployment-rollbacks/
+.env.pre-code17.*
+.env.code17.candidate.*
 .env.*
 !.env.example
 !.env.production.example

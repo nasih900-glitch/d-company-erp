@@ -1,5 +1,7 @@
-# D Company ERP — local dev / single-host deployment.
-# For cloud, swap postgres/redis/minio for managed services and keep the app containers.
+# D Company ERP — localhost-only developer sandbox.
+# This stack intentionally uses development credentials and plaintext HTTP.
+# Never expose it to a LAN or use it for café/financial operations. Production
+# deployments must use docker-compose.prod.yml via install-on-vm.sh.
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,7 +10,7 @@ services:
       POSTGRES_PASSWORD: erp
       POSTGRES_DB: erp
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,7 +22,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -34,8 +36,8 @@ services:
       MINIO_ROOT_USER: erp
       MINIO_ROOT_PASSWORD: erp_change_me
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
 
@@ -59,7 +61,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   frontend:
     build:
@@ -68,7 +70,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
 
 volumes:
   pgdata:

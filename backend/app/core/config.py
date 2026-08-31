@@ -5,14 +5,26 @@ Loaded from environment variables (12-factor). Never hardcode secrets.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ANDROID_COMPATIBILITY_FLOOR_VERSION_CODE = 8
+_DEV_REMOTE_RELAY_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # noqa: S105
 
 
 class Settings(BaseSettings):
@@ -93,6 +105,7 @@ class Settings(BaseSettings):
         ge=500,
         le=5_000,
     )
+    remote_assistance_frame_read_timeout_seconds: int = Field(default=5, ge=2, le=10)
     # Android heartbeats every 20 seconds while the support coordinator is in
     # foreground scope. 45 seconds tolerates two normal intervals plus jitter
     # while still exposing a genuinely stale tablet promptly.
@@ -100,10 +113,31 @@ class Settings(BaseSettings):
     remote_assistance_request_ttl_seconds: int = Field(default=300, ge=60, le=900)
     remote_assistance_session_max_seconds: int = Field(default=900, ge=60, le=900)
     remote_assistance_anytime_grant_max_seconds: int = Field(
-        default=30 * 24 * 60 * 60,
+        default=24 * 60 * 60,
         ge=3_600,
-        le=30 * 24 * 60 * 60,
+        le=24 * 60 * 60,
     )
+    # This secret protects the human pairing comparison from the public-key
+    # fingerprint exposed after approval. It is deliberately separate from JWT
+    # signing so either credential can rotate without expanding the other's use.
+    remote_assistance_pairing_secret: SecretStr = Field(
+        default="CHANGE_ME_REMOTE_PAIRING_SECRET_AT_LEAST_32_CHARS",
+        min_length=32,
+    )
+    # AES-256-GCM key for the Redis-only frame envelope. It is independent of
+    # JWT and pairing secrets so each authority can rotate separately.
+    remote_assistance_relay_secret: SecretStr = Field(
+        default=_DEV_REMOTE_RELAY_SECRET,
+        min_length=44,
+        max_length=44,
+    )
+    remote_assistance_device_key_pending_seconds: int = Field(default=600, ge=60, le=900)
+    remote_assistance_device_signature_max_skew_seconds: int = Field(
+        default=90,
+        ge=30,
+        le=300,
+    )
+    remote_assistance_device_nonce_ttl_seconds: int = Field(default=240, ge=120, le=900)
     max_request_body_bytes: int = Field(
         default=25 * 1024 * 1024,
         ge=1024,
@@ -184,16 +218,94 @@ class Settings(BaseSettings):
         # In prod, this should be set from a secret manager.
         return v
 
+    @field_validator("remote_assistance_relay_secret")
+    @classmethod
+    def _validate_remote_relay_secret(cls, value: SecretStr) -> SecretStr:
+        encoded = value.get_secret_value()
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(
+                "REMOTE_ASSISTANCE_RELAY_SECRET must be standard base64"
+            ) from exc
+        if len(decoded) != 32:
+            raise ValueError(
+                "REMOTE_ASSISTANCE_RELAY_SECRET must decode to exactly 32 bytes"
+            )
+        return value
+
     @model_validator(mode="after")
-    def _enforce_prod_secret(self) -> "Settings":
+    def _enforce_prod_secret(self) -> Settings:
         # Fail closed: a prod/staging boot must never fall back to the public
         # default HS256 secret, or tokens become forgeable by anyone.
-        if self.env in {"prod", "staging"} and self.jwt_algorithm == "HS256":
-            if self.jwt_secret.startswith("CHANGE_ME") or len(self.jwt_secret) < 32:
+        if (
+            self.env in {"prod", "staging"}
+            and self.jwt_algorithm == "HS256"
+            and (self.jwt_secret.startswith("CHANGE_ME") or len(self.jwt_secret) < 32)
+        ):
+            raise ValueError(
+                "JWT_SECRET must be set to a strong non-default value "
+                "(>=32 chars) when ENV is prod or staging"
+            )
+        pairing_secret = self.remote_assistance_pairing_secret.get_secret_value()
+        relay_secret = self.remote_assistance_relay_secret.get_secret_value()
+        if self.env in {"prod", "staging"} and (
+            pairing_secret.startswith("CHANGE_ME") or pairing_secret == self.jwt_secret
+        ):
+            raise ValueError(
+                "REMOTE_ASSISTANCE_PAIRING_SECRET must be a dedicated production secret "
+                "and must not reuse JWT_SECRET"
+            )
+        if self.env in {"prod", "staging"} and (
+            relay_secret == _DEV_REMOTE_RELAY_SECRET
+            or relay_secret in {self.jwt_secret, pairing_secret}
+        ):
+            raise ValueError(
+                "REMOTE_ASSISTANCE_RELAY_SECRET must be a dedicated random AES-256 key"
+            )
+        if self.env in {"prod", "staging"}:
+            redis_username = self.redis_url.username
+            redis_password = self.redis_url.password
+            if (
+                redis_username != "erp_backend"
+                or redis_password is None
+                or len(redis_password) < 32
+                or redis_password.startswith("CHANGE_ME")
+                or redis_password in {self.jwt_secret, pairing_secret, relay_secret}
+            ):
                 raise ValueError(
-                    "JWT_SECRET must be set to a strong non-default value "
-                    "(>=32 chars) when ENV is prod or staging"
+                    "REDIS_URL must authenticate as erp_backend with a strong dedicated "
+                    "password in prod or staging"
                 )
+            runtime_secrets = {
+                "JWT_SECRET": self.jwt_secret,
+                "REMOTE_ASSISTANCE_PAIRING_SECRET": pairing_secret,
+                "REMOTE_ASSISTANCE_RELAY_SECRET": relay_secret,
+                "REDIS_URL password": redis_password,
+                "DATABASE_URL password": unquote(
+                    urlsplit(str(self.database_url)).password or ""
+                ),
+                "S3_SECRET_KEY": self.s3_secret_key,
+            }
+            populated = [
+                (name, value)
+                for name, value in runtime_secrets.items()
+                if value is not None and value != ""
+            ]
+            for index, (left_name, left_value) in enumerate(populated):
+                for right_name, right_value in populated[index + 1 :]:
+                    if left_value == right_value:
+                        raise ValueError(
+                            f"{left_name} and {right_name} must use independent secrets"
+                        )
+        if (
+            self.remote_assistance_device_nonce_ttl_seconds
+            <= 2 * self.remote_assistance_device_signature_max_skew_seconds
+        ):
+            raise ValueError(
+                "REMOTE_ASSISTANCE_DEVICE_NONCE_TTL_SECONDS must exceed twice the "
+                "signature clock-skew window"
+            )
         if self.android_latest_version_code < self.android_min_supported_version_code:
             raise ValueError(
                 "ANDROID_LATEST_VERSION_CODE cannot be lower than "

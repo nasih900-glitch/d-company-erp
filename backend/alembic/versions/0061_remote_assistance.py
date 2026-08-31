@@ -306,12 +306,11 @@ def upgrade() -> None:
         sa.Column("rejection_reason_code", sa.String(length=32)),
         sa.Column("company_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.CheckConstraint(
-            "command_type IN "
-            "('navigate', 'refresh', 'sync_now', 'collect_diagnostics')",
+            "command_type IN ('navigate', 'refresh', 'collect_diagnostics')",
             name="ck_remote_assistance_commands_type",
         ),
         sa.CheckConstraint(
-            "module IS NULL OR module IN ('dashboard', 'gaming', 'pos', 'shift', 'help')",
+            "module IS NULL OR module = 'help'",
             name="ck_remote_assistance_commands_module",
         ),
         sa.CheckConstraint(

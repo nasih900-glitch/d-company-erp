@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI, Request
 
 from app.core.logging import get_logger
 
@@ -112,19 +114,39 @@ class ForbiddenError(AppError):
     code = "forbidden"
 
 
-class IdempotencyConflict(AppError):
+class RemotePairingCodeMismatchError(ForbiddenError):
+    """Physical-tablet pairing code did not match the pending public key."""
+
+    code = "remote_pairing_code_mismatch"
+
+
+class RemoteActionGoneError(AppError):
+    """A signed device mutation targeted support state that is now terminal."""
+
+    status_code = 410
+    code = "remote_action_gone"
+
+
+class RemoteFrameTimeoutError(AppError):
+    """A tablet did not finish its bounded frame upload promptly."""
+
+    status_code = 408
+    code = "remote_frame_timeout"
+
+
+class IdempotencyConflict(AppError):  # noqa: N818 - retained public exception name
     status_code = 409
     code = "idempotency_conflict"
 
 
-class IdempotencyInProgress(AppError):
+class IdempotencyInProgress(AppError):  # noqa: N818 - retained public exception name
     """The same request may still be committing; retry with the same key."""
 
     status_code = 409
     code = "idempotency_in_progress"
 
 
-class TenantViolation(AppError):
+class TenantViolation(AppError):  # noqa: N818 - retained public exception name
     status_code = 403
     code = "tenant_violation"
 

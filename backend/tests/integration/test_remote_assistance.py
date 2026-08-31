@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID, uuid1, uuid4
 
 import pytest
@@ -26,6 +27,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.services.remote_assistance.relay import ValidatedJpeg
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -41,13 +43,21 @@ async def require_remote_assistance_migration(session) -> None:
 
 @pytest.fixture(autouse=True)
 def bypass_external_coordination(monkeypatch) -> None:
-    async def allow(**_kwargs) -> None:
+    async def allow(*_args, **_kwargs) -> None:
         return None
 
     monkeypatch.setattr(remote_router, "enforce_client_heartbeat_rate_limit", allow)
     monkeypatch.setattr(remote_router, "ensure_relay_available", allow)
     monkeypatch.setattr(remote_router, "admit_frame_upload", allow)
     monkeypatch.setattr(remote_router, "delete_latest_frame", allow)
+    monkeypatch.setattr(remote_router, "_authenticate_device_json", allow)
+    monkeypatch.setattr(remote_router, "_require_active_device_key", allow)
+
+    async def allow_signed_request(**_kwargs):
+        return None
+
+    monkeypatch.setattr(remote_router, "authenticate_device_request", allow_signed_request)
+    monkeypatch.setattr(remote_router, "verify_actual_content", lambda *_args: None)
 
 
 def _headers(
@@ -144,6 +154,39 @@ async def _second_tenant(session) -> dict:
     return {"company": company, "branch": branch, "terminal": terminal, "owner": user}
 
 
+async def _same_tenant_user(session, seed: dict, *, name: str) -> dict:
+    user = User(
+        id=uuid4(),
+        company_id=seed["company"].id,
+        email=f"{name.lower()}-{uuid4().hex[:8]}@test.local",
+        name=name,
+        password_hash=hash_password("password1234"),
+        status="active",
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return {**seed, "owner": user}
+
+
+async def _client_heartbeat(client, *, headers: dict[str, str], installation_id: UUID):
+    return await client.post(
+        "/api/v1/client-installations/heartbeat",
+        headers=headers,
+        json={
+            "installation_id": str(installation_id),
+            "platform": "android",
+            "distribution_channel": "direct",
+            "version_name": "3.1.6",
+            "version_code": 16,
+            "pending_outbox_count": 0,
+            "last_successful_sync_at": datetime.now(UTC).isoformat(),
+            "update_state": "idle",
+            "events": [],
+        },
+    )
+
+
 def _request_payload(installation_id: UUID, *, request_id: UUID | None = None) -> dict:
     return {
         "request_id": str(request_id or uuid4()),
@@ -152,6 +195,42 @@ def _request_payload(installation_id: UUID, *, request_id: UUID | None = None) -
         "grant_ttl_seconds": 86_400,
         "session_ttl_seconds": 900,
     }
+
+
+async def _active_support_session(session, seed: dict, installation: ClientInstallation):
+    now = datetime.now(UTC)
+    grant = RemoteAssistanceGrant(
+        id=uuid4(),
+        company_id=seed["company"].id,
+        client_installation_id=installation.id,
+        requested_by_user_id=seed["owner"].id,
+        requested_for_user_id=seed["owner"].id,
+        responded_by_user_id=seed["owner"].id,
+        kind="anytime",
+        status="active",
+        requested_at=now - timedelta(minutes=1),
+        expires_at=now + timedelta(hours=1),
+        responded_at=now - timedelta(seconds=30),
+        decision_id=uuid4(),
+    )
+    support = RemoteAssistanceSession(
+        id=uuid4(),
+        company_id=seed["company"].id,
+        grant_id=grant.id,
+        client_installation_id=installation.id,
+        requested_by_user_id=seed["owner"].id,
+        started_by_user_id=seed["owner"].id,
+        status="active",
+        duration_seconds=900,
+        requested_at=now - timedelta(seconds=30),
+        request_expires_at=now + timedelta(minutes=2),
+        started_at=now - timedelta(seconds=20),
+        expires_at=now + timedelta(minutes=14),
+        start_id=uuid4(),
+    )
+    session.add_all([grant, support])
+    await session.commit()
+    return grant, support
 
 
 @pytest.mark.integration
@@ -204,6 +283,13 @@ async def test_consent_session_command_and_audit_contract(
     )
     assert invalid_header.status_code == 422
     assert invalid_header.json()["error"]["code"] == "validation_error"
+
+    overlong_anytime = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=admin_headers,
+        json={**_request_payload(installation_id), "grant_ttl_seconds": 86_401},
+    )
+    assert overlong_anytime.status_code == 422
 
     request_id = uuid4()
     request_payload = _request_payload(installation_id, request_id=request_id)
@@ -330,7 +416,7 @@ async def test_consent_session_command_and_audit_contract(
         "command_id": str(command_id),
         "sequence": 1,
         "type": "navigate",
-        "module": "gaming",
+        "module": "help",
     }
     issued = await client.post(
         f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
@@ -348,7 +434,7 @@ async def test_consent_session_command_and_audit_contract(
     command_conflict = await client.post(
         f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
         headers=admin_headers,
-        json={**command_payload, "module": "help"},
+        json={**command_payload, "type": "refresh", "module": None},
     )
     assert command_conflict.status_code == 409
 
@@ -511,6 +597,7 @@ async def test_expiration_and_cross_scope_idempotency_are_reconciled(
         company_id=company_id,
         client_installation_id=installation_db_id,
         requested_by_user_id=owner_id,
+        requested_for_user_id=owner_id,
         kind="one_time",
         status="requested",
         requested_at=now - timedelta(minutes=10),
@@ -537,7 +624,7 @@ async def test_expiration_and_cross_scope_idempotency_are_reconciled(
     )
     assert state.status_code == 200, state.text
     assert state.json()["pending_grants"] == []
-    assert state.json()["session"]["status"] == "expired"
+    assert state.json()["session"] is None
     await session.rollback()
     await session.refresh(expired_grant)
     await session.refresh(expired_session)
@@ -723,6 +810,367 @@ async def test_expiration_and_cross_scope_idempotency_are_reconciled(
         ).scalar_one()
     )
     assert command_count == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pending_consent_is_terminalized_on_tablet_user_handoff(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    installation_id = installation.installation_id
+    company_id = seed_owner["company"].id
+    terminal_id = seed_owner["terminal"].id
+    user_a_id = seed_owner["owner"].id
+    user_b_seed = await _same_tenant_user(session, seed_owner, name="User B")
+    user_b_id = user_b_seed["owner"].id
+    admin_headers = _headers(
+        seed_owner,
+        roles=["super_owner"],
+        audit_access=True,
+        android=False,
+    )
+    user_a_headers = _headers(
+        seed_owner,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+    user_b_headers = _headers(
+        user_b_seed,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+
+    requested = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=admin_headers,
+        json=_request_payload(installation_id),
+    )
+    assert requested.status_code == 200, requested.text
+    grant_id = UUID(requested.json()["grant"]["id"])
+    assert requested.json()["grant"]["requested_for_user_id"] == str(user_a_id)
+
+    handoff = await _client_heartbeat(
+        client,
+        headers=user_b_headers,
+        installation_id=installation_id,
+    )
+    assert handoff.status_code == 200, handoff.text
+    state = await client.get(
+        "/api/v1/remote-assistance/device/state",
+        headers=user_b_headers,
+        params={"installation_id": str(installation_id)},
+    )
+    assert state.status_code == 200, state.text
+    assert state.json()["pending_grants"] == []
+    assert state.json()["session"] is None
+
+    queued_a_decision = await client.post(
+        f"/api/v1/remote-assistance/device/grants/{grant_id}/decision",
+        headers=user_a_headers,
+        json={
+            "installation_id": str(installation_id),
+            "decision": "accepted",
+            "decision_id": str(uuid4()),
+        },
+    )
+    assert queued_a_decision.status_code == 410, queued_a_decision.text
+    assert queued_a_decision.json()["error"]["code"] == "remote_action_gone"
+
+    # The general heartbeat resets remote presence. B must prove fresh active
+    # key possession through the remote heartbeat before a new prompt is sent.
+    stale_new_request = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=admin_headers,
+        json=_request_payload(installation_id),
+    )
+    assert stale_new_request.status_code == 409
+    remote_heartbeat = await client.post(
+        "/api/v1/remote-assistance/device/heartbeat",
+        headers=user_b_headers,
+        json={
+            "installation_id": str(installation_id),
+            "protocol_version": 1,
+            "sharing_capability": "available",
+        },
+    )
+    assert remote_heartbeat.status_code == 200, remote_heartbeat.text
+    fresh = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=admin_headers,
+        json=_request_payload(installation_id),
+    )
+    assert fresh.status_code == 200, fresh.text
+    assert fresh.json()["grant"]["requested_for_user_id"] == str(user_b_id)
+
+    await session.rollback()
+    expired = await session.get(RemoteAssistanceGrant, grant_id)
+    assert expired is not None
+    assert expired.status == "expired"
+    audit = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.company_id == company_id,
+                AuditLog.action == "remote_assistance.grant.expired",
+                AuditLog.entity_id == str(grant_id),
+            )
+        )
+    ).scalar_one()
+    assert audit.actor_user_id == user_b_id
+    assert audit.terminal_id == terminal_id
+    assert audit.after["reason"] == "device_user_changed"
+    assert len(audit.after["device_ref"]) == 20
+    assert str(installation_id) not in str(audit.after)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_active_consent_session_and_command_end_on_tablet_user_handoff(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    installation_id = installation.installation_id
+    user_b_seed = await _same_tenant_user(session, seed_owner, name="User B Active")
+    user_b_id = user_b_seed["owner"].id
+    admin_headers = _headers(
+        seed_owner,
+        roles=["super_owner"],
+        audit_access=True,
+        android=False,
+    )
+    user_a_headers = _headers(
+        seed_owner,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+    user_b_headers = _headers(
+        user_b_seed,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+    requested = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=admin_headers,
+        json=_request_payload(installation_id),
+    )
+    grant_id = requested.json()["grant"]["id"]
+    support_session_id = requested.json()["session"]["id"]
+    accepted = await client.post(
+        f"/api/v1/remote-assistance/device/grants/{grant_id}/decision",
+        headers=user_a_headers,
+        json={
+            "installation_id": str(installation_id),
+            "decision": "accepted",
+            "decision_id": str(uuid4()),
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    started = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/start",
+        headers=admin_headers,
+        json={"start_id": str(uuid4())},
+    )
+    assert started.status_code == 200, started.text
+    command_id = uuid4()
+    issued = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(command_id),
+            "sequence": 1,
+            "type": "refresh",
+            "module": None,
+        },
+    )
+    assert issued.status_code == 200, issued.text
+
+    handoff = await _client_heartbeat(
+        client,
+        headers=user_b_headers,
+        installation_id=installation_id,
+    )
+    assert handoff.status_code == 200, handoff.text
+    stale_result = await client.post(
+        f"/api/v1/remote-assistance/device/commands/{command_id}/result",
+        headers=user_a_headers,
+        json={
+            "installation_id": str(installation_id),
+            "sequence": 1,
+            "outcome": "acknowledged",
+            "reason_code": None,
+        },
+    )
+    assert stale_result.status_code == 410, stale_result.text
+
+    await session.rollback()
+    grant = await session.get(RemoteAssistanceGrant, UUID(grant_id))
+    support = await session.get(RemoteAssistanceSession, UUID(support_session_id))
+    command = await session.get(RemoteAssistanceCommand, command_id)
+    assert grant is not None
+    assert grant.status == "revoked"
+    assert grant.revoked_by_user_id == user_b_id
+    assert support is not None
+    assert support.status == "ended"
+    assert support.end_reason == "grant_revoked"
+    assert support.ended_by_user_id == user_b_id
+    assert command is not None
+    assert command.status == "rejected"
+    assert command.rejection_reason_code == "session_ended"
+    assert command.resolved_by_user_id == user_b_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_store(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    grant, support = await _active_support_session(session, seed_owner, installation)
+    admin_headers = _headers(
+        seed_owner,
+        roles=["super_owner"],
+        audit_access=True,
+        android=False,
+    )
+    device_headers = _headers(
+        seed_owner,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+    body_read_started = asyncio.Event()
+    release_body = asyncio.Event()
+    store_calls: list[UUID] = []
+    key_id = uuid4()
+
+    async def authenticate(**_kwargs):
+        return SimpleNamespace(device_key=SimpleNamespace(id=key_id))
+
+    async def allow_exact_key(*_args, **_kwargs) -> None:
+        return None
+
+    async def slow_body(*_args, **_kwargs) -> bytes:
+        body_read_started.set()
+        await release_body.wait()
+        return b"bounded-jpeg-body"
+
+    async def decode_off_loop(*_args, **_kwargs) -> ValidatedJpeg:
+        return ValidatedJpeg(content=b"sanitized", width=256, height=180)
+
+    async def forbidden_store(*, session_id: UUID, **_kwargs):
+        store_calls.append(session_id)
+        raise AssertionError("a frame revoked during upload must never be stored")
+
+    monkeypatch.setattr(remote_router, "authenticate_device_request", authenticate)
+    monkeypatch.setattr(remote_router, "_require_exact_active_device_key", allow_exact_key)
+    monkeypatch.setattr(remote_router, "_read_bounded_body", slow_body)
+    monkeypatch.setattr(remote_router.to_thread, "run_sync", decode_off_loop)
+    monkeypatch.setattr(remote_router, "store_latest_frame", forbidden_store)
+
+    upload_task = asyncio.create_task(
+        client.put(
+            f"/api/v1/remote-assistance/device/sessions/{support.id}/frame",
+            headers={
+                **device_headers,
+                "Content-Type": "image/jpeg",
+                "X-Installation-Id": str(installation.installation_id),
+                "X-Frame-Id": str(uuid4()),
+                "X-Frame-Sequence": "1",
+                "X-Frame-Width": "256",
+                "X-Frame-Height": "180",
+                "X-ERP-Frame-Redacted": "true",
+            },
+            content=b"bounded-jpeg-body",
+        )
+    )
+    await asyncio.wait_for(body_read_started.wait(), timeout=2)
+    try:
+        revoked = await asyncio.wait_for(
+            client.post(
+                f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
+                headers=admin_headers,
+                json={"revoke_id": str(uuid4())},
+            ),
+            timeout=2,
+        )
+        assert revoked.status_code == 200, revoked.text
+    finally:
+        release_body.set()
+    upload = await asyncio.wait_for(upload_task, timeout=2)
+    assert upload.status_code == 410, upload.text
+    assert upload.json()["error"]["code"] == "remote_action_gone"
+    assert store_calls == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    grant, support = await _active_support_session(session, seed_owner, installation)
+    admin_headers = _headers(
+        seed_owner,
+        roles=["super_owner"],
+        audit_access=True,
+        android=False,
+    )
+    revoke_terminalized = asyncio.Event()
+    allow_revoke_commit = asyncio.Event()
+    relay_reads: list[UUID] = []
+
+    async def pause_frame_delete(*_args, **_kwargs) -> None:
+        revoke_terminalized.set()
+        await allow_revoke_commit.wait()
+
+    async def forbidden_read(*, session_id: UUID, **_kwargs):
+        relay_reads.append(session_id)
+        raise AssertionError("terminal support must be rejected before Redis disclosure")
+
+    monkeypatch.setattr(
+        remote_router,
+        "delete_latest_frame_for_grant",
+        pause_frame_delete,
+    )
+    monkeypatch.setattr(remote_router, "get_latest_frame", forbidden_read)
+
+    revoke_task = asyncio.create_task(
+        client.post(
+            f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
+            headers=admin_headers,
+            json={"revoke_id": str(uuid4())},
+        )
+    )
+    await asyncio.wait_for(revoke_terminalized.wait(), timeout=2)
+    frame_task = asyncio.create_task(
+        client.get(
+            f"/api/v1/remote-assistance/sessions/{support.id}/frame",
+            headers=admin_headers,
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert not frame_task.done()
+    allow_revoke_commit.set()
+
+    revoked = await asyncio.wait_for(revoke_task, timeout=2)
+    assert revoked.status_code == 200, revoked.text
+    frame = await asyncio.wait_for(frame_task, timeout=2)
+    assert frame.status_code == 404, frame.text
+    assert relay_reads == []
 
 
 @pytest.mark.integration
@@ -935,7 +1383,7 @@ async def test_concurrent_exact_retries_return_the_same_request_session_and_comm
     command_payload = {
         "command_id": str(command_id),
         "sequence": 1,
-        "type": "sync_now",
+        "type": "refresh",
         "module": None,
     }
     command_results = await asyncio.gather(
@@ -966,3 +1414,175 @@ async def test_concurrent_exact_retries_return_the_same_request_session_and_comm
     assert rejected.json()["status"] == "rejected"
     assert rejected.json()["rejection_reason_code"] == "session_ended"
     assert rejected.json()["resolved_by_user_id"] == str(owner_id)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_command_flood_is_serialized_and_cooldowns_are_enforced(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+) -> None:
+    installation = await _installation(session, seed_owner)
+    installation_id = installation.installation_id
+    admin_headers = _headers(
+        seed_owner,
+        roles=["super_owner"],
+        audit_access=True,
+        android=False,
+    )
+    device_headers = _headers(
+        seed_owner,
+        roles=["staff"],
+        audit_access=False,
+        android=True,
+    )
+    requested = await client.post(
+        "/api/v1/remote-assistance/requests",
+        headers=admin_headers,
+        json=_request_payload(installation_id),
+    )
+    grant_id = requested.json()["grant"]["id"]
+    support_session_id = requested.json()["session"]["id"]
+    accepted = await client.post(
+        f"/api/v1/remote-assistance/device/grants/{grant_id}/decision",
+        headers=device_headers,
+        json={
+            "installation_id": str(installation_id),
+            "decision": "accepted",
+            "decision_id": str(uuid4()),
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    started = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/start",
+        headers=admin_headers,
+        json={"start_id": str(uuid4())},
+    )
+    assert started.status_code == 200, started.text
+
+    command_ids = (uuid4(), uuid4())
+    raced = await asyncio.gather(
+        *(
+            client.post(
+                f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+                headers=admin_headers,
+                json={
+                    "command_id": str(command_id),
+                    "sequence": 1,
+                    "type": "refresh",
+                    "module": None,
+                },
+            )
+            for command_id in command_ids
+        )
+    )
+    assert sorted(response.status_code for response in raced) == [200, 409]
+    winner = next(response for response in raced if response.status_code == 200)
+    winner_id = UUID(winner.json()["command_id"])
+    loser = next(response for response in raced if response.status_code == 409)
+    assert loser.json()["error"]["details"]["existing_command_id"] == str(winner_id)
+
+    immediate = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(uuid4()),
+            "sequence": 2,
+            "type": "refresh",
+            "module": None,
+        },
+    )
+    assert immediate.status_code == 409
+    assert immediate.json()["error"]["details"]["existing_command_id"] == str(winner_id)
+    invalid_sequence = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(uuid4()),
+            "sequence": 101,
+            "type": "refresh",
+            "module": None,
+        },
+    )
+    assert invalid_sequence.status_code == 422
+
+    resolved = await client.post(
+        f"/api/v1/remote-assistance/device/commands/{winner_id}/result",
+        headers=device_headers,
+        json={
+            "installation_id": str(installation_id),
+            "sequence": 1,
+            "outcome": "acknowledged",
+            "reason_code": None,
+        },
+    )
+    assert resolved.status_code == 200, resolved.text
+    issue_cooldown = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(uuid4()),
+            "sequence": 2,
+            "type": "refresh",
+            "module": None,
+        },
+    )
+    assert issue_cooldown.status_code == 409
+    assert int(issue_cooldown.headers["retry-after"]) >= 1
+    # Advance the policy boundary without mutating immutable command identity
+    # evidence in the database.
+    monkeypatch.setattr(remote_router, "_COMMAND_ISSUE_COOLDOWN_SECONDS", 0)
+
+    diagnostics_id = uuid4()
+    diagnostics = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(diagnostics_id),
+            "sequence": 2,
+            "type": "collect_diagnostics",
+            "module": None,
+        },
+    )
+    assert diagnostics.status_code == 200, diagnostics.text
+    diagnostics_result = await client.post(
+        f"/api/v1/remote-assistance/device/commands/{diagnostics_id}/result",
+        headers=device_headers,
+        json={
+            "installation_id": str(installation_id),
+            "sequence": 2,
+            "outcome": "acknowledged",
+            "reason_code": None,
+        },
+    )
+    assert diagnostics_result.status_code == 200, diagnostics_result.text
+    coalesced = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(uuid4()),
+            "sequence": 3,
+            "type": "collect_diagnostics",
+            "module": None,
+        },
+    )
+    assert coalesced.status_code == 409, coalesced.text
+    assert coalesced.json()["error"]["details"]["existing_command_id"] == str(
+        diagnostics_id
+    )
+    assert int(coalesced.headers["retry-after"]) >= 1
+
+    monkeypatch.setattr(remote_router, "_DIAGNOSTICS_COMMAND_COOLDOWN_SECONDS", 0)
+    after_cooldown = await client.post(
+        f"/api/v1/remote-assistance/sessions/{support_session_id}/commands",
+        headers=admin_headers,
+        json={
+            "command_id": str(uuid4()),
+            "sequence": 3,
+            "type": "collect_diagnostics",
+            "module": None,
+        },
+    )
+    assert after_cooldown.status_code == 200, after_cooldown.text

@@ -15,6 +15,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.core.db import AsyncSessionLocal
+from app.core.errors import BusinessRuleError
 from app.core.security import hash_password
 from app.models import (
     Account,
@@ -39,6 +40,7 @@ from app.services.accounting.accounts import (
     DEFAULT_CHART_OF_ACCOUNTS,
     DEFAULT_EXPENSE_CATEGORY_ACCOUNTS,
 )
+from app.services.auth.otp import normalize_account_email
 
 DEFAULT_ACCOUNTS: list[dict[str, str]] = [
     account.seed_dict() for account in DEFAULT_CHART_OF_ACCOUNTS
@@ -76,6 +78,27 @@ def _seed_owner_password() -> str:
     if os.getenv("ENV", "").lower() == "prod":
         raise RuntimeError("SEED_OWNER_PASSWORD must be set for production bootstrap")
     return "local-dev-only-password"
+
+
+def _seed_owner_email() -> str:
+    configured = os.getenv("SEED_OWNER_EMAIL")
+    if not configured:
+        if os.getenv("ENV", "").lower() == "prod":
+            raise RuntimeError("SEED_OWNER_EMAIL must be set for production bootstrap")
+        configured = "owner@dcompany.local"
+    try:
+        normalized = normalize_account_email(configured)
+    except BusinessRuleError as exc:
+        raise RuntimeError("SEED_OWNER_EMAIL must be a valid normalized login email") from exc
+    if normalized != configured and os.getenv("ENV", "").lower() == "prod":
+        raise RuntimeError("SEED_OWNER_EMAIL must already be lowercase with no whitespace")
+    if os.getenv("ENV", "").lower() == "prod":
+        domain = normalized.rsplit("@", 1)[1]
+        if "change_me" in normalized or domain.endswith(
+            (".local", ".lan", ".test", ".invalid", ".example")
+        ):
+            raise RuntimeError("SEED_OWNER_EMAIL must use the real production login domain")
+    return normalized
 
 
 async def seed() -> None:
@@ -150,7 +173,7 @@ async def seed() -> None:
         owner = User(
             id=uuid4(),
             company_id=company.id,
-            email="owner@dcompany.local",
+            email=_seed_owner_email(),
             password_hash=hash_password(_seed_owner_password()),
             name="Owner",
             status="active",

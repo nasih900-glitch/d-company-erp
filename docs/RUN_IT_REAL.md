@@ -1,6 +1,11 @@
-# Run the real D Company ERP on your Mac
+# Run the D Company ERP localhost developer sandbox on your Mac
 
-This is the version that **actually saves data**. Orders persist. Receipt numbers are sequential and never repeat. Multiple devices on your WiFi see the same data. Real Kerala GST math, real invoice numbering, real audit trail.
+This developer sandbox persists local test data so engineers can exercise the
+real backend behavior. It uses development credentials and plaintext HTTP and
+is bound to `127.0.0.1`; it is **not approved for café, payment, employee, or
+other production data**, and it must not be exposed to WiFi/LAN devices. Live
+operations use the hardened production VM installer in
+[`FREE_DEPLOY.md`](FREE_DEPLOY.md).
 
 Three steps total. ~5 minutes the first time, ~10 seconds every time after.
 
@@ -31,12 +36,14 @@ In the project folder, find **`Install D Company ERP (Mac).command`**.
    - "Opening http://localhost:5173"
 3. Your browser pops up at <http://localhost:5173>. **Log in with:**
    - Email: `owner@dcompany.local`
-   - Password: the `SEED_OWNER_PASSWORD` value printed by the installer or stored in your local `.env`
+   - Password: the `SEED_OWNER_PASSWORD` stored in the mode-`0600` local `.env`
+     (the installer never prints or logs it; retrieve it through your local
+     password-manager/secret workflow)
    - ⚠️ **Change this password immediately** from the Staff screen.
 
 ## Step 3 — Use it
 
-You're on the real app now. The yellow **"Demo mode"** badge is gone.
+You're on the persistent localhost sandbox now. The yellow **"Demo mode"** badge is gone.
 
 What's wired to the real backend in this build:
 
@@ -53,25 +60,18 @@ What's wired to the real backend in this build:
 | **Staff** | 🟡 Demo roster; live in next session |
 | **Analytics** | 🟡 Demo charts; live aggregates next session |
 
-**The POS pipeline is end-to-end live.** That's the most important one for actually taking sales.
+The POS pipeline is connected end to end for development testing. This is not
+authorization to take real sales on the insecure localhost stack.
 
 ---
 
-## Using it from a phone or tablet (same WiFi)
+## Network boundary
 
-The app runs on your Mac but other devices on the same WiFi can use it too — that's how a real café works (cashier on a tablet, manager on a laptop, kitchen on a TV).
-
-1. On your Mac, open Terminal and run:
-   ```bash
-   ipconfig getifaddr en0
-   ```
-   You'll see something like `192.168.1.42`.
-
-2. On the other device, open Safari/Chrome and go to **`http://192.168.1.42:5173`**.
-
-3. The app loads. Add it to the home screen (Share → Add to Home Screen on iPhone/iPad; ⋮ → Install app on Android Chrome) for an app-icon experience.
-
-You can have as many devices using it as your WiFi can handle. They all hit the same backend on your Mac, so they all see the same orders, the same inventory, the same shift.
+Every published service is deliberately bound to `127.0.0.1`. Do not change
+those bindings to `0.0.0.0` or a LAN address: this sandbox has fixed development
+database/object-store credentials, unauthenticated development Redis, and no
+TLS. Tablet and multi-device operational testing belongs on a production-like
+secured environment, not this Compose file.
 
 ---
 
@@ -86,7 +86,7 @@ Run these in Terminal, inside the project folder.
 | See live backend logs | `docker compose logs -f backend` |
 | See live database logs | `docker compose logs -f postgres` |
 | Restart just the backend (after a code change) | `docker compose restart backend` |
-| **Wipe all data and start fresh** | `docker compose down -v` ← careful, deletes Postgres volume |
+| Permanently tear down test data | Follow **Removing the sandbox completely** below; there is intentionally no one-line recovery command |
 | Open the backend's API docs | <http://localhost:8000/docs> |
 
 ---
@@ -109,84 +109,35 @@ gunzip < ~/Downloads/dcompany-backup-YYYY-MM-DD.sql.gz | docker compose exec -T 
 
 This `gunzip | psql` restore only works for backups made with the plain-SQL command directly above. It will **not** work on the production off-site backups described below — those are a different (custom) dump format that `psql` can't read.
 
-### Production VPS (automated)
+### Production recovery is intentionally not documented here
 
-`ops/backup_to_b2.py` runs nightly at 22:00 UTC via the tracked systemd timer
-`dcompany-backup.timer` and:
-
-- Runs `pg_dump -F c` (Postgres **custom format**, not plain SQL) inside the `postgres` container
-- Uploads the resulting `.dump` file to the Backblaze B2 bucket `dcompany-erp-backups` (S3-compatible endpoint `https://s3.us-east-005.backblazeb2.com`), named `dcompany-erp-<UTC timestamp>.dump` (e.g. `dcompany-erp-2026-08-08T020000Z.dump`)
-- Keeps 30 days of history both locally (`/var/lib/dcompany-erp/backups/auto/`) and in B2, pruning anything older
-- Emails the account-security address if a nightly run fails
-
-Because these are **custom-format** dumps, restoring them needs `pg_restore`, not `psql`/`gunzip` — `psql` cannot parse a `-F c` file at all.
-
-Install or repair the runtime monitor and backup timers after provisioning a
-VPS with:
-
-```bash
-cd /opt/d-company-erp
-sudo sh infra/scripts/install-operations-monitor.sh
-```
-
-The installer creates a pinned, hash-verified boto3 environment under
-`/var/lib/dcompany-erp/backup-runtime/`, outside the replaceable application
-snapshot. It also copies any legacy `.dump` files from
-`/opt/d-company-erp/backups/auto/` into the persistent backup directory without
-deleting or overwriting the originals. If no non-empty persistent restore point
-exists, or the previous backup unit failed, the installer runs
-`dcompany-backup.service` synchronously before it enables monitoring. This
-fails the repair visibly when either `pg_dump` or the B2 upload is still broken,
-while an existing healthy restore point is preserved without an extra backup.
-Because the timer is persistent, systemd may still immediately catch up a
-genuinely missed 22:00 UTC run when the timer is re-enabled.
-
-Verify the timer and the most recent run with:
-
-```bash
-systemctl status dcompany-backup.timer
-systemctl status dcompany-backup.service
-journalctl -u dcompany-backup.service -n 100 --no-pager
-```
-
-**To restore a production backup** (run on the VPS, from `/opt/d-company-erp`):
-
-1. Download the `.dump` file you want from B2. The credentials are the same `B2_KEY_ID` / `B2_APPLICATION_KEY` already in `/opt/d-company-erp/.env` (the ones `backup_to_b2.py` uses):
-
-   ```bash
-   # list available backups
-   AWS_ACCESS_KEY_ID=<B2_KEY_ID> AWS_SECRET_ACCESS_KEY=<B2_APPLICATION_KEY> \
-     aws s3 --endpoint-url https://s3.us-east-005.backblazeb2.com ls s3://dcompany-erp-backups/
-
-   # download the one you want
-   AWS_ACCESS_KEY_ID=<B2_KEY_ID> AWS_SECRET_ACCESS_KEY=<B2_APPLICATION_KEY> \
-     aws s3 --endpoint-url https://s3.us-east-005.backblazeb2.com \
-     cp s3://dcompany-erp-backups/dcompany-erp-2026-08-08T020000Z.dump ./dcompany-erp-2026-08-08T020000Z.dump
-   ```
-
-   (Requires the AWS CLI — `brew install awscli` — pointed at B2's S3-compatible API; no separate Backblaze tool needed since `backup_to_b2.py` talks to B2 over the same S3 protocol.)
-
-2. Restore it into the `postgres` container using the **production** compose file and env file (same pattern `backup_to_b2.py` itself uses to run `pg_dump`):
-
-   ```bash
-   docker compose -f docker-compose.prod.yml --env-file .env exec -T postgres \
-     pg_restore --clean --if-exists -U erp -d erp < dcompany-erp-2026-08-08T020000Z.dump
-   ```
-
-   `--clean --if-exists` drops existing objects before recreating them, so this **overwrites current production data**. Coordinate with the other partners first, and consider `docker compose -f docker-compose.prod.yml --env-file .env stop backend` beforehand so nothing writes to the database mid-restore.
+Never restore a production dump in place from this localhost guide. Production
+recovery requires a scheduled write gate, drained device outboxes, verified
+checksums, a full disposable restore proof, exact migration-head handling,
+traffic isolation, and a rehearsed rollback. Follow only the approved recovery
+contract in
+[`backend/docs/REMOTE_ASSISTANCE_API.md`](../backend/docs/REMOTE_ASSISTANCE_API.md)
+with an authorized operator; do not improvise `pg_restore --clean` against a
+live database.
 
 ---
 
-## When you run out of your Mac
+## Moving beyond the localhost sandbox
 
-Running on your Mac is fine for trying the system and even for a single café for a while. But your Mac has to be **awake and on the WiFi** for the café to take orders. The day you want:
+The Mac Compose path is for development/trial data only, never a temporary
+single-café production server. For staff, payment, multi-device, remote-support,
+or public-internet use, move to the hardened production VM path before entering
+real data. That is required when you want:
 
 - The café to keep working when your Mac is off
 - Two branches to share the same data
 - A delivery partner integration that hits us from the public internet
 - Cloud backups happening automatically
 
-…you migrate the backend to a real cloud server. The code is identical — you just point the frontend at `https://api.yourdomain.com/api/v1` instead of `http://localhost:8000/api/v1`. See [`docs/CLOUD_DEPLOY.md`](CLOUD_DEPLOY.md) when you get there. (Cheapest free path: Oracle Cloud Always Free; cheapest paid: Render at ~$15/mo.)
+Use [`FREE_DEPLOY.md`](FREE_DEPLOY.md) and its exact-commit
+`install-on-vm.sh` procedure. [`CLOUD_DEPLOY.md`](CLOUD_DEPLOY.md) is explicitly
+an unsupported planning document for Code17 until its managed Redis ACL,
+secrets, backup, and rollback controls are provider-tested.
 
 ---
 
@@ -202,7 +153,18 @@ Open Docker Desktop from Applications. Wait for the whale icon to stop animating
 First-time build is slow (containers downloading + compiling). Wait 60 more seconds and refresh.
 
 **The login button says "invalid credentials."**
-Use the `SEED_OWNER_PASSWORD` value in your local `.env`. If you've already changed it and forgot, run: `docker compose down -v && docker compose up -d` to reset (deletes ALL data), then set a fresh `SEED_OWNER_PASSWORD` before seeding again.
+Use the `SEED_OWNER_PASSWORD` value in your local mode-`0600` `.env` only if
+you have not changed it. If the protected owner password was changed and lost,
+use the normal OTP recovery or run this interactive, no-echo, role-preserving
+local-console reset:
+
+```bash
+docker compose exec backend python -m scripts.reset_owner_password
+```
+
+It targets only `SEED_OWNER_EMAIL`, requires the existing active
+`super_owner`, preserves roles, rotates `auth_version`, revokes refresh
+sessions, and audits the action. Never delete volumes to recover a credential.
 
 **Port 8000 or 5173 is already in use.**
 Another app is using that port. Find it with `lsof -nP -iTCP -sTCP:LISTEN | grep 5173`. Quit that app, or edit `docker-compose.yml` to change the port mapping (e.g. `"5174:80"`).
@@ -218,11 +180,25 @@ Stop the conflicting container: `docker ps`, find the one on the port, `docker s
 
 ---
 
-## Removing it completely
+## Removing the sandbox completely
+
+This is permanent test-data teardown, never password recovery. First create and
+validate a final custom-format backup; then require an explicit typed
+confirmation before deleting volumes:
 
 ```bash
-docker compose down -v        # stop + delete volumes
-docker rmi $(docker images "*d-company-erp*" -q)  # delete the built images
+mkdir -p "$HOME/Downloads/d-company-erp-backups"
+BACKUP="$HOME/Downloads/d-company-erp-backups/local-$(date -u +%Y%m%dT%H%M%SZ).dump"
+docker compose exec -T postgres pg_dump -U erp -Fc erp > "$BACKUP"
+test -s "$BACKUP"
+docker compose exec -T postgres pg_restore --list < "$BACKUP" >/dev/null
+shasum -a 256 "$BACKUP" > "$BACKUP.sha256"
+
+printf 'Type DELETE LOCAL ERP DATA to destroy the sandbox volumes: '
+read -r CONFIRM
+test "$CONFIRM" = 'DELETE LOCAL ERP DATA' || { echo 'Cancelled.'; exit 1; }
+docker compose down -v
 ```
 
-Now Docker is back to its initial state for this project.
+Keep the backup and checksum until you have independently restored or reviewed
+them. Image deletion is optional and does not need to be coupled to data loss.

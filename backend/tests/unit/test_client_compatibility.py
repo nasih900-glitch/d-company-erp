@@ -168,6 +168,12 @@ def test_production_native_update_url_requires_https() -> None:
         Settings(
             env="prod",
             jwt_secret="production-secret-that-is-longer-than-thirty-two-characters",
+            remote_assistance_pairing_secret="independent-pairing-secret-longer-than-32-characters",
+            remote_assistance_relay_secret="cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+            redis_url=(
+                "redis://erp_backend:0123456789abcdef0123456789abcdef"
+                "0123456789abcdef0123456789abcdef@redis:6379/0"
+            ),
             android_update_url="http://downloads.example.test/erp.apk",
         )
 
@@ -176,6 +182,16 @@ def test_production_required_floor_needs_recovery_url_but_optional_registry_does
     production = {
         "env": "prod",
         "jwt_secret": "production-secret-that-is-longer-than-thirty-two-characters",
+        "remote_assistance_pairing_secret": (
+            "independent-pairing-secret-longer-than-32-characters"
+        ),
+        "remote_assistance_relay_secret": (
+            "cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI="
+        ),
+        "redis_url": (
+            "redis://erp_backend:0123456789abcdef0123456789abcdef"
+            "0123456789abcdef0123456789abcdef@redis:6379/0"
+        ),
     }
     baseline = Settings(**production)
     assert baseline.android_min_supported_version_code == 8

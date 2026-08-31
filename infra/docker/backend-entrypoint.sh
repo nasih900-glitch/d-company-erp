@@ -35,13 +35,13 @@ echo "Applying migrations…"
 alembic upgrade head
 
 echo "Seeding base data…"
-python -m scripts.seed || echo "  (seed already applied)"
+python -m scripts.seed
 
 echo "Seeding Kerala/India reference data…"
-python -m scripts.seed_india || echo "  (seed already applied)"
+python -m scripts.seed_india
 
 echo "Ensuring role catalog is up to date…"
-python -m scripts.ensure_roles || echo "  (roles already up to date)"
+python -m scripts.ensure_roles
 
 echo "============================================================"
 echo "  Backend ready at http://localhost:8000"
