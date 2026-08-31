@@ -67,6 +67,9 @@ No actionable P0, P1 or P2 issue was found in the focused comparison.
 - UPI payment and receipt: `code18-gaming-upi-payment-2560x1600.png`,
   `code18-gaming-upi-receipt-2560x1600.png`
 - Finance: `code18-finance-reconciled-2560x1600.png`
+- Closed shift and reconciled history: `code18-shift-closed-2560x1600.png`
+- Signed Code 17 to Code 18 replacement install:
+  `code18-signed-code17-upgrade-login-2560x1600.png`
 - Server failure/reconnect with stable content geometry:
   `code18-server-issue-stable-layout-2560x1600.png`,
   `code18-reconnected-stable-layout-2560x1600.png`
