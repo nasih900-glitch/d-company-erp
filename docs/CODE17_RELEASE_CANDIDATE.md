@@ -73,6 +73,29 @@ Redmi Pad 2 / HyperOS acceptance, and it does not prove an authenticated live
 owner-to-tablet session unless a dedicated staging backend and test identities
 are used.
 
+## Time-bounded web dependency disposition
+
+Code 17 pins `react-router-dom` and `react-router` to `6.30.5`. This removes the
+actionable v6.30.4 XSS/open-redirect advisory. Two moderate upstream advisories
+remain without a v6 patch:
+
+- `GHSA-wrjc-x8rr-h8h6` (backslash open redirect); and
+- `GHSA-337j-9hxr-rhxg` (SSR hydration constructor injection).
+
+The SSR advisory is not reachable because this is a client-only Vite SPA with
+no server rendering or hydration. The redirect advisory is contained by the
+closed `internalAppRouteOr` boundary at every data-driven Router destination;
+it rejects absolute and scheme-relative URLs, raw/encoded separators,
+backslashes, scripts, dot segments, query strings, fragments, whitespace and
+control characters. Focused tests cover 20 accepted/rejected cases, and the
+remaining Link/Navigate destinations are fixed source constants.
+
+This exception expires on **2026-09-30 or before Code 18, whichever comes
+first**, and is owned by the release maintainer. React Router 7.18+ must be
+evaluated in a separate compatibility cycle. Introducing SSR or any
+user/server-controlled return URL, redirect, `to`, `navigate`, or Router
+basename reopens this as a release blocker immediately.
+
 ## Deployment prerequisites
 
 Before the backend portion can be deployed, production must receive a dedicated
