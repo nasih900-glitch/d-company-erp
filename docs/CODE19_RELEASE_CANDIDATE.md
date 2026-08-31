@@ -4,8 +4,8 @@ Status: **rejected before signing**. The coordinated backend/web and Android
 instrumentation gates passed, but the unsigned Android job compiled both
 release variants concurrently and exhausted the hosted runner. It produced no
 authorised APK and was never staged or advertised. Do not move or reuse tag
-`v3.1.8`. The corrected identity is `3.1.9` / code `20`; see
-[`CODE20_RELEASE_CANDIDATE.md`](CODE20_RELEASE_CANDIDATE.md).
+`v3.1.8`. The current corrected identity is `3.1.10` / code `21`; see
+[`CODE21_RELEASE_CANDIDATE.md`](CODE21_RELEASE_CANDIDATE.md).
 
 Code 19 was the corrected immutable identity for the standard-premium Android,
 backend, and web release. Tag `v3.1.7` / code `18` failed its backend release
@@ -26,7 +26,7 @@ reused.
 
 The release contract required a fully green tagged workflow before signing, so
 this failed run produced no APK or `release-manifest.json` that can be staged.
-Local builds and old evidence bundles are not substitutes. Code 20 retains the
+Local builds and old evidence bundles are not substitutes. Code 21 retains the
 same non-advertising staging and separate authenticated-owner activation rules.
 
 Keep the compatibility minimum at code `8`. The tablet must update in place from

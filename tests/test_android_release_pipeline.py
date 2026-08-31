@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -183,11 +186,17 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            "apkanalyzer manifest permissions unsigned/play-unsigned.apk", workflow
+            '"$apkanalyzer" manifest permissions unsigned/play-unsigned.apk',
+            workflow,
         )
         self.assertIn(
-            "apkanalyzer manifest permissions unsigned/direct-unsigned.apk", workflow
+            '"$apkanalyzer" manifest permissions unsigned/direct-unsigned.apk',
+            workflow,
         )
+        self.assertIn('play_permissions="$("$apkanalyzer" manifest permissions', workflow)
+        self.assertIn('direct_permissions="$("$apkanalyzer" manifest permissions', workflow)
+        self.assertIn('grep -Fxq "$install_permission" <<< "$play_permissions"', workflow)
+        self.assertIn('grep -Fxq "$install_permission" <<< "$direct_permissions"', workflow)
         self.assertIn(
             'grep -Fq \'android:name="android.permission.REQUEST_INSTALL_PACKAGES"\' '
             "unsigned/play-AndroidManifest.xml",
@@ -212,11 +221,11 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn('signed_dir="$RUNNER_TEMP/signed-android"', sign_job)
         self.assertIn(
-            'play_version_code="$(apkanalyzer manifest version-code "$play_apk")"',
+            'play_version_code="$("$apkanalyzer" manifest version-code "$play_apk")"',
             sign_job,
         )
         self.assertIn(
-            'direct_version_code="$(apkanalyzer manifest version-code "$direct_apk")"',
+            'direct_version_code="$("$apkanalyzer" manifest version-code "$direct_apk")"',
             sign_job,
         )
         self.assertIn('readarray -t expected_version', workflow)
@@ -367,6 +376,15 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("test ! -e android-native/dcompany-release.keystore", build_job)
         self.assertIn("sha256sum --check --strict UNSIGNED_SHA256SUMS", sign_job)
         self.assertIn("ANDROID_BUILD_TOOLS_VERSION: '35.0.0'", sign_job)
+        self.assertEqual(
+            2,
+            sign_job.count(
+                'apkanalyzer="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"'
+            ),
+        )
+        self.assertEqual(2, sign_job.count('test -x "$apkanalyzer"'))
+        self.assertNotIn("command -v apkanalyzer", sign_job)
+        self.assertIsNone(re.search(r"(?m)^\s*apkanalyzer\s", sign_job))
         self.assertIn(
             'build_tools="$ANDROID_SDK_ROOT/build-tools/'
             '$ANDROID_BUILD_TOOLS_VERSION"',
@@ -379,6 +397,46 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn("-keypass:env ANDROID_KEY_PASSWORD", sign_job)
         self.assertNotIn("storePassword=", sign_job)
         self.assertNotIn("keyPassword=", sign_job)
+
+    def test_signer_uses_sdk_root_when_cmdline_tools_are_not_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk_root = Path(temporary) / "sdk"
+            apkanalyzer = (
+                sdk_root / "cmdline-tools" / "latest" / "bin" / "apkanalyzer"
+            )
+            apkanalyzer.parent.mkdir(parents=True)
+            apkanalyzer.write_text(
+                "#!/bin/sh\nprintf '%s\\n' cloud.dcompany.erp\n",
+                encoding="utf-8",
+            )
+            apkanalyzer.chmod(0o755)
+            script = """
+                set -euo pipefail
+                apkanalyzer="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+                test -x "$apkanalyzer"
+                test "$("$apkanalyzer" manifest application-id ignored.apk)" = cloud.dcompany.erp
+            """
+            environment = {
+                "ANDROID_SDK_ROOT": str(sdk_root),
+                "PATH": "/usr/bin:/bin",
+            }
+
+            subprocess.run(
+                ["/bin/bash", "-c", script],
+                check=True,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            apkanalyzer.chmod(0o644)
+            with self.assertRaises(subprocess.CalledProcessError):
+                subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
 
     def test_release_signer_is_pinned_to_out_of_band_fingerprint(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

@@ -392,7 +392,7 @@ def test_production_installer_preflights_before_stack_mutation_and_hides_credent
         "\n".join(
             (
                 "ENV=prod",
-                "APP_VERSION=3.1.9",
+                "APP_VERSION=3.1.10",
                 "APP_REVISION=" + "a" * 40,
                 "DOMAIN=erp.example.com",
                 'CORS_ORIGINS=["https://erp.example.com"]',
@@ -461,7 +461,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
             f"APP_REVISION={current_revision}",
             f"APP_REVISION={prior_revision}",
         )
-        .replace("APP_VERSION=3.1.9", "APP_VERSION=3.1.3"),
+        .replace("APP_VERSION=3.1.10", "APP_VERSION=3.1.3"),
         encoding="utf-8",
     )
     upgrade_candidate = tmp_path / "upgrade.env"
@@ -485,7 +485,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     }
     assert prior_revision != current_revision
     assert upgrade_values["APP_REVISION"] == current_revision
-    assert upgrade_values["APP_VERSION"] == "3.1.9"
+    assert upgrade_values["APP_VERSION"] == "3.1.10"
     for retained in (
         "JWT_SECRET",
         "POSTGRES_PASSWORD",
@@ -517,7 +517,7 @@ def test_candidate_environment_labels_fresh_and_upgrade_as_current_source(
     stale_version = tmp_path / "stale-version.env"
     stale_version.write_text(
         upgrade_candidate.read_text(encoding="utf-8").replace(
-            "APP_VERSION=3.1.9", "APP_VERSION=3.1.3"
+            "APP_VERSION=3.1.10", "APP_VERSION=3.1.3"
         ),
         encoding="utf-8",
     )

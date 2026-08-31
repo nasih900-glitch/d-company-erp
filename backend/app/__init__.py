@@ -1,3 +1,3 @@
 """D Company ERP backend application package."""
 
-__version__ = "3.1.9"
+__version__ = "3.1.10"

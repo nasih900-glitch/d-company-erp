@@ -63,6 +63,7 @@ miniodata/
 backups/
 secrets/
 ops/venv/
+/ops/.runtime_monitor_state.json
 *.dump
 
 # Private operational/company documents kept locally, not in the public repo

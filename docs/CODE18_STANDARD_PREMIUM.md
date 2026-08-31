@@ -1,7 +1,8 @@
 # Code 18 standard-premium Android direction
 
 Status: selected visual direction, carried unchanged into the corrected Android
-`3.1.9` / code `20` candidate after `v3.1.7` and `v3.1.8` failed before signing.
+`3.1.10` / code `21` candidate after `v3.1.7`, `v3.1.8`, and `v3.1.9` failed
+before signing.
 
 ## Outcome
 
@@ -14,11 +15,9 @@ Gaming remains an operational module. It is not the global visual identity.
 
 ## Visual reference
 
-The structural reference is the verified Code 17 tablet render:
-
-`release-artifacts/d-company-erp-3.1.6-code17/evidence/code17-final-after-code12-upgrade-2560x1600.png`
-
-Code 18 preserves that layout and hierarchy while applying the tokens below.
+The structural reference is the verified Code 17 tablet layout recorded in the
+release audit. Code 18 preserves that layout and hierarchy while applying the
+tokens below; the source tree does not depend on a private local evidence path.
 
 ## Core palette
 
@@ -47,7 +46,7 @@ appear with text or icon semantics.
 - Keep minimum 48 dp operational touch targets.
 - Do not change permissions, navigation routes, API calls, financial logic,
   offline queues or remote-assistance authority.
-- Do not advertise or activate the corrected Code 20 build through the server
+- Do not advertise or activate the corrected Code 21 build through the server
   update channel until
   the signed artifact and upgrade proof have passed.
 
@@ -58,6 +57,6 @@ appear with text or icon semantics.
 - Focus, pressed, disabled, error, loading and offline states remain explicit.
 - Tablet landscape has no clipping, overflow or reduced tap targets.
 - Android unit, connected UI, lint and signed build gates pass.
-- A signed Code 14 to Code 20 replacement install preserves package identity and
+- A signed Code 14 to Code 21 replacement install preserves package identity and
   retained app state on the emulator.
 - Physical Redmi Pad 2 / HyperOS remains a separate final acceptance gate.

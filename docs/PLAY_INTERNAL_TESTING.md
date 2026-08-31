@@ -11,8 +11,8 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.9` |
-| Version code | `20` |
+| Version name | `3.1.10` |
+| Version code | `21` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
@@ -20,8 +20,8 @@ The signed `3.1.3` code-`14` direct-release APK remains the manual partner
 baseline. Code `15` (`3.1.4`) is immutable held audit history and the first
 server-registry-eligible identity; it is not the current activation target.
 Codes `16` (`3.1.5`) and `17` (`3.1.6`) are immutable predecessors. Tag
-`v3.1.7` / code `18` and `v3.1.8` / code `19` failed before signing and must not
-be reused. Code `20` (`3.1.9`) is the current direct-channel candidate only. Do not upload it to Play
+`v3.1.7` / code `18`, `v3.1.8` / code `19`, and `v3.1.9` / code `20` failed before
+signing and must not be reused. Code `21` (`3.1.10`) is the current direct-channel candidate only. Do not upload it to Play
 or register, stage, advertise, or activate it without the green tagged workflow
 and reviewed rollout procedure. Physical Redmi Pad 2 acceptance remains a
 separate gate.

@@ -356,11 +356,14 @@ jobs:
             --metadata unsigned/direct-output-metadata.json
           test -n "${ANDROID_SDK_ROOT:-}"
           test -d "$ANDROID_SDK_ROOT"
-          command -v apkanalyzer >/dev/null
-          test "$(apkanalyzer manifest application-id unsigned/play-unsigned.apk)" = 'cloud.dcompany.erp'
-          test "$(apkanalyzer manifest application-id unsigned/direct-unsigned.apk)" = 'cloud.dcompany.erp'
+          apkanalyzer="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          test -x "$apkanalyzer"
+          test "$("$apkanalyzer" manifest application-id unsigned/play-unsigned.apk)" = 'cloud.dcompany.erp'
+          test "$("$apkanalyzer" manifest application-id unsigned/direct-unsigned.apk)" = 'cloud.dcompany.erp'
           install_permission='android.permission.REQUEST_INSTALL_PACKAGES'
-          if apkanalyzer manifest permissions unsigned/play-unsigned.apk | grep -Fxq "$install_permission"; then
+          play_permissions="$("$apkanalyzer" manifest permissions unsigned/play-unsigned.apk)"
+          direct_permissions="$("$apkanalyzer" manifest permissions unsigned/direct-unsigned.apk)"
+          if grep -Fxq "$install_permission" <<< "$play_permissions"; then
             echo 'Play release APK unexpectedly requests package-install permission.' >&2
             exit 1
           fi
@@ -368,7 +371,7 @@ jobs:
             echo 'Play release/AAB merged manifest unexpectedly requests package-install permission.' >&2
             exit 1
           fi
-          apkanalyzer manifest permissions unsigned/direct-unsigned.apk | grep -Fxq "$install_permission"
+          grep -Fxq "$install_permission" <<< "$direct_permissions"
           grep -Fq 'android:name="android.permission.REQUEST_INSTALL_PACKAGES"' unsigned/direct-AndroidManifest.xml
       - name: Require Android signing secrets
         env:
@@ -499,15 +502,17 @@ jobs:
           build_tools="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
           apksigner="$build_tools/apksigner"
           test -x "$apksigner"
+          apkanalyzer="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          test -x "$apkanalyzer"
           "$apksigner" verify --verbose "$play_apk"
           "$apksigner" verify --verbose "$direct_apk"
           jarsigner -verify "$aab" > "$RUNNER_TEMP/aab-signature-verification.txt"
           grep -q '^jar verified\.$' "$RUNNER_TEMP/aab-signature-verification.txt"
 
-          play_version_code="$(apkanalyzer manifest version-code "$play_apk")"
-          direct_version_code="$(apkanalyzer manifest version-code "$direct_apk")"
-          play_version_name="$(apkanalyzer manifest version-name "$play_apk")"
-          direct_version_name="$(apkanalyzer manifest version-name "$direct_apk")"
+          play_version_code="$("$apkanalyzer" manifest version-code "$play_apk")"
+          direct_version_code="$("$apkanalyzer" manifest version-code "$direct_apk")"
+          play_version_name="$("$apkanalyzer" manifest version-name "$play_apk")"
+          direct_version_name="$("$apkanalyzer" manifest version-name "$direct_apk")"
           readarray -t expected_version < <(
             python3 - "$direct_metadata" <<'PY'
           import json

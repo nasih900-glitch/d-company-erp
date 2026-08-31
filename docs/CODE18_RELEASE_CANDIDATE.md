@@ -2,8 +2,9 @@
 
 Status: **rejected before signing**. The immutable `v3.1.7` workflow failed its
 backend release gate, so it produced no authorised APK and was never staged or
-advertised. Do not move or reuse that tag. The corrected release identity is
-`3.1.9` / code `20`; see [`CODE20_RELEASE_CANDIDATE.md`](CODE20_RELEASE_CANDIDATE.md).
+advertised. Do not move or reuse that tag. The current corrected release identity
+is `3.1.10` / code `21`; see
+[`CODE21_RELEASE_CANDIDATE.md`](CODE21_RELEASE_CANDIDATE.md).
 
 Code 18 is a new Android and coordinated product identity for the
 standard-premium visual refinement. Code 17 (`3.1.6`) remains immutable: do not
