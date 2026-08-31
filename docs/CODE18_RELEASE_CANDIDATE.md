@@ -52,14 +52,33 @@ Before any partner handoff or rollout decision, record current evidence for:
 - confirmation that no production deployment, production data mutation, or
   server-update activation occurred during candidate preparation.
 
-## Open release-security gate
+## React Router security disposition
 
-The Code 17 React Router 6.30.5 exception explicitly expired before Code 18.
-It does not carry forward automatically. Before Code 18 can be described as a
-release-ready coordinated product, either complete the separately tested React
-Router 7 migration or record a new evidence-backed, time-bounded security
-disposition approved for Code 18. The Android visual work does not waive this
-web release gate.
+Code 18 closes the expired Code 17 exception by pinning `react-router-dom` to
+`7.18.2`; both committed lockfiles resolve `react-router` and
+`react-router-dom` to `7.18.2`. React 18 and the existing declarative
+`BrowserRouter` / `HashRouter` architecture are preserved.
+
+The upstream
+[`GHSA-qwww-vcr4-c8h2`](https://github.com/remix-run/react-router/security/advisories/GHSA-qwww-vcr4-c8h2)
+advisory affects `react-router` versions from `7.12.0` through `7.18.1` and
+names `7.18.2` as the first patched v7 release. The advisory only applies to
+unstable React Server Component APIs.
+D Company is a client-only Vite SPA and does not use those APIs, SSR, or
+hydration, so that vulnerable path was not reachable here; the dependency is
+patched anyway rather than relying on non-applicability alone. The strict
+`internalAppRouteOr` boundary remains as defense in depth for every
+data-derived navigation destination.
+
+The focused Code 18 migration passed frontend typecheck, zero-warning lint,
+all 318 tests, and the verified production build. `npm audit --omit=dev` and
+`pnpm audit --prod` each reported zero production dependency vulnerabilities.
+The full `npm audit` is not zero: it reports five development-tool findings
+(three moderate, one high, and one critical) in the Vite 5 / Vitest 2 toolchain.
+Those tools are not shipped or run in the production application; replacing
+them requires a separate breaking toolchain migration and remains visible in
+the existing CI disposition rather than being misreported as resolved by the
+Router upgrade.
 
 ## Acceptance language
 

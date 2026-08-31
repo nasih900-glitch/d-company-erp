@@ -1,9 +1,9 @@
 /**
  * Closed validation for destinations rendered by React Router.
  *
- * React Router v6 has no patched release for its backslash open-redirect
- * advisory. D Company therefore admits only ordinary in-app path segments at
- * every data-driven navigation boundary. Absolute URLs, scheme-relative URLs,
+ * D Company admits only ordinary in-app path segments at every data-driven
+ * navigation boundary. This defense-in-depth policy remains in place after the
+ * React Router 7.18.2 security upgrade: absolute URLs, scheme-relative URLs,
  * backslashes, encoded separators, dot segments, query strings, fragments,
  * whitespace, and control characters all fail closed to a known local route.
  */
