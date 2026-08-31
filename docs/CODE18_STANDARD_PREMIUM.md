@@ -1,6 +1,7 @@
 # Code 18 standard-premium Android direction
 
-Status: selected visual direction for the Android `3.1.7` / code `18` candidate.
+Status: selected visual direction, carried unchanged into the corrected Android
+`3.1.8` / code `19` candidate after `v3.1.7` failed before signing.
 
 ## Outcome
 
@@ -46,7 +47,8 @@ appear with text or icon semantics.
 - Keep minimum 48 dp operational touch targets.
 - Do not change permissions, navigation routes, API calls, financial logic,
   offline queues or remote-assistance authority.
-- Do not advertise or activate Code 18 through the server update channel until
+- Do not advertise or activate the corrected Code 19 build through the server
+  update channel until
   the signed artifact and upgrade proof have passed.
 
 ## Acceptance
@@ -56,6 +58,6 @@ appear with text or icon semantics.
 - Focus, pressed, disabled, error, loading and offline states remain explicit.
 - Tablet landscape has no clipping, overflow or reduced tap targets.
 - Android unit, connected UI, lint and signed build gates pass.
-- A signed Code 17 to Code 18 replacement install preserves package identity and
+- A signed Code 14 to Code 19 replacement install preserves package identity and
   retained app state on the emulator.
 - Physical Redmi Pad 2 / HyperOS remains a separate final acceptance gate.

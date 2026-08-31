@@ -344,7 +344,14 @@ async def test_authenticated_reports_align_order_stock_and_gaming_to_token_branc
     )
     await session.flush()
 
-    sold_at = now - timedelta(minutes=5)
+    # Keep the settlement inside the selected local business day even when CI
+    # runs during the first five minutes after Asia/Kolkata midnight.
+    business_day_start = (
+        now.astimezone(local_zone)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(UTC)
+    )
+    sold_at = max(now - timedelta(minutes=5), business_day_start)
     order_a.status = "paid"
     order_a.closed_at = sold_at
     order_a.invoice_issued_at = sold_at

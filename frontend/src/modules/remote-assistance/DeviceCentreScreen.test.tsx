@@ -161,7 +161,7 @@ describe('Device Centre protected presentation', () => {
     expect(markup).not.toContain('>Open Help<');
     expect(markup).toContain('Refresh Help');
     expect(markup).toContain('Operational screens stay private');
-    expect(markup).toContain('Code 18 cannot remotely open or control');
+    expect(markup).toContain('Remote assistance cannot open or control');
     expect(markup).not.toContain('Code 17 cannot remotely open or control');
     expect(markup).toContain('Collect diagnostics');
     expect(markup).toContain('Device key verified');

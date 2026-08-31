@@ -10,9 +10,9 @@
 # Then:
 #   cd /opt/d-company-erp
 #   sudo bash infra/scripts/install-on-vm.sh yourdomain.com
-# Existing installs additionally require: --maintenance-confirmed. An untouched
-# Code16 install whose historical image label is the known placeholder also
-# requires: --legacy-code16-revision 2ac3fc88e4ce14d0f05d049b443a6a09c387a78a
+# Existing installs additionally require: --maintenance-confirmed. Historical
+# Code14 and Code16 installs whose image labels predate full-SHA provenance also
+# require their exact, one-time legacy revision flag documented below.
 #
 # What it does:
 #   1. Installs Docker + docker compose plugin
@@ -41,7 +41,10 @@ fi
 shift
 
 MAINTENANCE_CONFIRMED=false
+LEGACY_CODE14_REVISION=""
 LEGACY_CODE16_REVISION=""
+KNOWN_CODE14_REVISION="e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9"
+KNOWN_CODE14_SHORT_REVISION="e5e90df"
 KNOWN_CODE16_REVISION="2ac3fc88e4ce14d0f05d049b443a6a09c387a78a"
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -57,12 +60,24 @@ while [ "$#" -gt 0 ]; do
       LEGACY_CODE16_REVISION=$2
       shift 2
       ;;
+    --legacy-code14-revision)
+      if [ "$#" -lt 2 ]; then
+        echo "--legacy-code14-revision requires the exact 40-character revision." >&2
+        exit 1
+      fi
+      LEGACY_CODE14_REVISION=$2
+      shift 2
+      ;;
     *)
       echo "Unknown installer option: $1" >&2
       exit 1
       ;;
   esac
 done
+if [ -n "$LEGACY_CODE14_REVISION" ] && [ -n "$LEGACY_CODE16_REVISION" ]; then
+  echo "Only one legacy revision bridge may be selected." >&2
+  exit 1
+fi
 if [ "${#DOMAIN}" -gt 253 ] || \
    ! [[ "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
   echo "Domain must be a plain DNS hostname (for example erp.example.com)." >&2
@@ -91,12 +106,14 @@ if [ -f .env ] && [ "$MAINTENANCE_CONFIRMED" != true ]; then
   echo "Stop staff activity, sync every tablet outbox, then rerun with --maintenance-confirmed." >&2
   exit 1
 fi
-if [ ! -f .env ] && { [ "$MAINTENANCE_CONFIRMED" = true ] || [ -n "$LEGACY_CODE16_REVISION" ]; }; then
+if [ ! -f .env ] && { [ "$MAINTENANCE_CONFIRMED" = true ] || \
+   [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; }; then
   echo "Maintenance and legacy-upgrade flags are valid only for an existing installation." >&2
   exit 1
 fi
-if [ -n "$LEGACY_CODE16_REVISION" ] && [ "$MAINTENANCE_CONFIRMED" != true ]; then
-  echo "Legacy Code16 verification requires --maintenance-confirmed." >&2
+if { [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; } && \
+   [ "$MAINTENANCE_CONFIRMED" != true ]; then
+  echo "Legacy deployment verification requires --maintenance-confirmed." >&2
   exit 1
 fi
 echo "=== D Company ERP — production install ==="
@@ -202,11 +219,28 @@ if [ -f .env ]; then
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
     "$PRIOR_BACKEND_IMAGE")
   if [[ "$IMAGE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
-    if [ -n "$LEGACY_CODE16_REVISION" ]; then
-      echo "Legacy Code16 override is not allowed for an image with an exact revision label." >&2
+    if [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; then
+      echo "A legacy override is not allowed for an image with an exact revision label." >&2
       exit 1
     fi
     PRIOR_REVISION=$IMAGE_REVISION
+  elif [ -n "$LEGACY_CODE14_REVISION" ]; then
+    if [ "$LEGACY_CODE14_REVISION" != "$KNOWN_CODE14_REVISION" ] || \
+       [ "$IMAGE_REVISION" != "$KNOWN_CODE14_SHORT_REVISION" ] || \
+       [ "$PRIOR_DB_HEAD" != 0058 ]; then
+      echo "The historical Code14 short-label bridge requires:" >&2
+      echo "  --legacy-code14-revision $KNOWN_CODE14_REVISION" >&2
+      echo "the exact image label $KNOWN_CODE14_SHORT_REVISION and database head 0058." >&2
+      exit 1
+    fi
+    image_version=$(docker image inspect \
+      --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+      "$PRIOR_BACKEND_IMAGE")
+    if [ "$image_version" != 3.1.3 ]; then
+      echo "Legacy Code14 bridge requires the immutable backend image version 3.1.3." >&2
+      exit 1
+    fi
+    PRIOR_REVISION=$LEGACY_CODE14_REVISION
   else
     if [ "$LEGACY_CODE16_REVISION" != "$KNOWN_CODE16_REVISION" ] || \
        [ "$PRIOR_DB_HEAD" != 0060 ]; then

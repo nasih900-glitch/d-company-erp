@@ -10,7 +10,7 @@ internal data class RemoteAssistanceNotificationCopy(
  *
  * Keep this copy independent from Android framework classes so the security
  * promise can be verified by ordinary JVM tests. The notification never
- * implies whole-app or whole-device visibility: Code 18 shares Help only.
+ * implies whole-app or whole-device visibility: remote assistance shares Help only.
  */
 internal fun remoteAssistanceNotificationCopy(
     sharingPaused: Boolean,

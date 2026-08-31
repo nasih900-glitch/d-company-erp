@@ -1,4 +1,9 @@
-# D Company ERP 3.1.7 (code 18) local release candidate
+# D Company ERP 3.1.7 (code 18) rejected release attempt
+
+Status: **rejected before signing**. The immutable `v3.1.7` workflow failed its
+backend release gate, so it produced no authorised APK and was never staged or
+advertised. Do not move or reuse that tag. The corrected release identity is
+`3.1.8` / code `19`; see [`CODE19_RELEASE_CANDIDATE.md`](CODE19_RELEASE_CANDIDATE.md).
 
 Code 18 is a new Android and coordinated product identity for the
 standard-premium visual refinement. Code 17 (`3.1.6`) remains immutable: do not
@@ -80,6 +85,6 @@ exception.
 
 ## Acceptance language
 
-Until all gates pass, describe Code 18 as a local candidate, not as deployed,
+Code 18 must be described as a rejected pre-signing attempt, not as deployed,
 published, server-delivered, production-ready, physical-device verified, or
 bug-free.

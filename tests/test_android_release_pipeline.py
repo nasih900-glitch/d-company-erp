@@ -15,6 +15,7 @@ DIRECT_MANIFEST = (
 INSTALL_PERMISSION = "android.permission.REQUEST_INSTALL_PACKAGES"
 CADDYFILE = ROOT / "infra" / "caddy" / "Caddyfile"
 PROD_COMPOSE = ROOT / "docker-compose.prod.yml"
+PRODUCTION_INSTALLER = ROOT / "infra" / "scripts" / "install-on-vm.sh"
 GRADLE_WRAPPER = (
     ROOT / "android-native" / "gradle" / "wrapper" / "gradle-wrapper.properties"
 )
@@ -33,6 +34,30 @@ ANDROID_APPLICATION = (
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+    def test_code14_legacy_bridge_is_exactly_pinned_and_fail_closed(self) -> None:
+        installer = PRODUCTION_INSTALLER.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'KNOWN_CODE14_REVISION="e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9"',
+            installer,
+        )
+        self.assertIn('KNOWN_CODE14_SHORT_REVISION="e5e90df"', installer)
+        self.assertIn('[ "$PRIOR_DB_HEAD" != 0058 ]', installer)
+        self.assertIn('[ "$image_version" != 3.1.3 ]', installer)
+        self.assertIn(
+            '[ "$IMAGE_REVISION" != "$KNOWN_CODE14_SHORT_REVISION" ]', installer
+        )
+        self.assertIn(
+            'PRIOR_REVISION=$LEGACY_CODE14_REVISION', installer
+        )
+        self.assertIn(
+            'git cat-file -e "$PRIOR_REVISION^{commit}"', installer
+        )
+        self.assertIn(
+            'Immutable backend image contents do not match the selected prior commit.',
+            installer,
+        )
+
     def test_ci_and_release_prove_the_target_tablet_viewport(self) -> None:
         ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         release_workflow = WORKFLOW.read_text(encoding="utf-8")

@@ -33,8 +33,9 @@ and must not be hosted, registered, or advertised through the server.
 
 Code `15` (`3.1.4`) is the first identity eligible for this server-hosted
 registry, but it remains a held audit build. Codes `16` and `17` are immutable
-upgrade-proof predecessors. The approved server-delivery candidate is the
-distinct, tagged CI artifact `3.1.7` (code `18`). Before activation, verify the
+upgrade-proof predecessors. Tag `v3.1.7` (code `18`) failed before signing and
+must not be reused. The approved server-delivery candidate is the distinct,
+tagged CI artifact `3.1.8` (code `19`). Before activation, verify the
 immutable HTTPS bytes, SHA-256, byte size, package, version, expected signer and
 an in-place upgrade from the manually installed code-`14` baseline. Android
 still requires the employee to approve installation.

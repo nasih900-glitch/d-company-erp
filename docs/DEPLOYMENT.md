@@ -14,8 +14,9 @@ Use one of the maintained guides:
 
 Both converge on `infra/scripts/install-on-vm.sh` from a clean exact reviewed
 commit. Existing installations require a scheduled write outage and
-`--maintenance-confirmed`; untouched Code16 placeholder-labelled images use
-only the documented verified legacy bridge. The installer validates/backfills
+`--maintenance-confirmed`; the known Code14 short-label and untouched Code16
+placeholder-label deployments use only their documented, exact legacy bridge.
+The installer validates/backfills
 secrets, proves capacity and prior provenance, quiesces writes, drains outboxes,
 verifies a full database restore, holds ingress closed through migration and
 internal acceptance, and records an exact recovery snapshot.

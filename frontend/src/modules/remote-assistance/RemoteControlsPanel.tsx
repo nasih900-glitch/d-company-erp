@@ -176,7 +176,7 @@ export function RemoteControls({
           <InlineNotice
             tone="neutral"
             title="Operational screens stay private"
-            message="Code 18 cannot remotely open or control Gaming, POS, Shift, payments, settings or financial records."
+            message="Remote assistance cannot open or control Gaming, POS, Shift, payments, settings or financial records."
           />
           <InlineNotice
             tone={helpFrameLive ? 'neutral' : 'warning'}

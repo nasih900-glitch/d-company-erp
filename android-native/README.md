@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.7` |
-| Version code | `18` |
+| Version name | `3.1.8` |
+| Version code | `19` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,8 +23,9 @@ build.
 
 ## Release status
 
-Version `3.1.7` (`18`) is the standard-premium Android visual candidate
-following the immutable `3.1.6` (`17`) remote-assistance predecessor. It must
+Version `3.1.8` (`19`) is the corrected standard-premium Android delivery
+candidate following the immutable `3.1.6` (`17`) remote-assistance predecessor
+and the failed pre-signing `v3.1.7` (`18`) tag. It must
 preserve Code 17's connectivity, privacy-preserving diagnostics, offline
 outbox, recovery, authentication, remote-assistance, and operational business
 contracts while refining the native presentation. It still requires exactly
@@ -36,9 +37,10 @@ Android client code `8` remains the minimum-compatible floor. Preserve the
 signed `3.1.1` (`12`) and `3.1.2` (`13`) predecessors as immutable artifacts.
 Code `14` is installed manually and must never be registered or advertised as a
 server update. Codes `16` and `17` remain immutable upgrade history. Code `18`
-is a new local candidate identity only; preparing or testing it does not
-authorise hosting, registering, staging, advertising, or activating it through
-the server. Any later rollout requires a separately reviewed immutable APK,
+has no authorised APK and its failed tag must not be reused. Code `19` is the
+separately gated server-delivery candidate; source preparation alone does not
+authorise hosting, registering, staging, advertising, or activating it. Rollout
+requires a separately reviewed immutable APK,
 verified URL, SHA-256, byte size, package, version, expected signer, and
 same-lineage upgrade proof. Android will still require the employee to approve
 installation. Do not raise the compatibility minimum merely because a newer

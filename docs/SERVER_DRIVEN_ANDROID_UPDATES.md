@@ -52,10 +52,13 @@ registry. It remains a held audit build and must never be activated as a
 shortcut. Codes `16` (`3.1.5`) and `17` (`3.1.6`) remain immutable upgrade-proof
 predecessors.
 
-The approved server-delivery candidate is `3.1.7` (version code `18`). Only the
-exact signed artifact and release manifest produced together by the tagged
-GitHub Actions workflow may be staged. A local Gradle build or local evidence
-bundle is not release authority, even when its package and signer are correct.
+Tag `v3.1.7` (version code `18`) failed its pre-signing release gate and produced
+no authorised APK. The tag is immutable and must never be moved, rebuilt, or
+reused. The corrected server-delivery candidate is `3.1.8` (version code `19`).
+Only the exact signed artifact and release manifest produced together by the
+green `v3.1.8` GitHub Actions workflow may be staged. A local Gradle build or
+local evidence bundle is not release authority, even when its package and
+signer are correct.
 
 Keep the minimum-compatible floor at code `8` during the initial rollout. A
 new build, a green workflow, a hosted APK, or a staged registry row is not
@@ -113,11 +116,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code 18 staging procedure
+## Code 19 staging procedure
 
 1. Confirm the code-`14` partner installation is signed by the trusted
    certificate, can check for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.7` / code `18`. Run the complete
+2. Coordinate the application at `3.1.8` / code `19`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
 3. Download both files without renaming or modifying either one. First run a
@@ -125,8 +128,8 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.7/release-manifest.json \
-     --apk /secure/release-3.1.7/d-company-erp-v3.1.7-direct.apk \
+     --manifest /secure/release-3.1.8/release-manifest.json \
+     --apk /secure/release-3.1.8/d-company-erp-v3.1.8-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Standard-premium Android refinement and reliability hardening"
    ```
@@ -139,11 +142,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.7/release-manifest.json \
-     --apk /secure/release-3.1.7/d-company-erp-v3.1.7-direct.apk \
+     --manifest /secure/release-3.1.8/release-manifest.json \
+     --apk /secure/release-3.1.8/d-company-erp-v3.1.8-direct.apk \
      --expected-signer-sha256 <trusted-code-14-certificate-sha256> \
      --release-notes "Standard-premium Android refinement and reliability hardening" \
-     --ssh-key ~/.ssh/dcompany_erp \
+     --ssh-key ~/.ssh/dcompany_do \
      --apply
    ```
 
@@ -154,11 +157,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence. Activate only the staged code-`18` row.
+   size, signer and source evidence. Activate only the staged code-`19` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
 6. On one code-`14` tablet, refresh the update check, download, install and
-   reopen code `18`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+   reopen code `19`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary

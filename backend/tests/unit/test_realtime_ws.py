@@ -6,8 +6,10 @@ broadcast-on-write test, which needs a real Postgres connection.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+import time as system_time
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -40,14 +42,20 @@ def test_ws_rejects_stale_or_garbage_token():
 
 def test_ws_closes_when_the_authenticated_access_token_expires():
     app = create_app()
+    now_epoch = system_time.time()
     token = issue_access_token(
         user_id=uuid4(),
         company_id=uuid4(),
         roles=["staff"],
-        extra={"exp": datetime.now(UTC) + timedelta(seconds=1)},
+        extra={"exp": datetime.fromtimestamp(now_epoch + 60, UTC)},
+    )
+    controlled_clock = SimpleNamespace(
+        time=Mock(side_effect=[now_epoch, now_epoch + 120]),
+        monotonic=system_time.monotonic,
     )
 
     with (
+        patch("app.api.v1.ws.router.time", controlled_clock),
         patch(
             "app.api.v1.ws.router._server_session_is_active",
             new=AsyncMock(return_value=True),

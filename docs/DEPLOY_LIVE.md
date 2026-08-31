@@ -351,6 +351,20 @@ sudo bash infra/scripts/install-on-vm.sh yourdomain.in \
   --legacy-code16-revision 2ac3fc88e4ce14d0f05d049b443a6a09c387a78a
 ```
 
+For the known Code14 production deployment whose immutable `3.1.3` backend
+image records the historical short label `e5e90df` and whose database is at
+`0058`, use its separate one-time bridge:
+
+```bash
+sudo bash infra/scripts/install-on-vm.sh yourdomain.in \
+  --maintenance-confirmed \
+  --legacy-code14-revision e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9
+```
+
+The bridge still exports and hashes the stopped immutable image against that
+full commit before it creates rollback evidence. It rejects every other short
+label, image version, database head or revision.
+
 Do not use direct `rsync`, `git pull` on a dirty checkout, or a Compose rebuild
 as an upgrade. The supported installer validates/backfills secrets, snapshots
 the prior immutable images and exact database head, quiesces writes, proves a
