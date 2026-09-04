@@ -136,6 +136,70 @@ class GamingDaoRecoveryTest {
     }
 
     @Test
+    fun webCancellationClearsCode21StopFailureAndReleasesStation() = runBlocking {
+        val failedStop = localRow(
+            localId = "code21-stop-failed",
+            serverId = "session-cancelled-on-web",
+            state = GamingSessionState.STOP_REJECTED,
+            stationId = "station-ps5-2",
+        ).copy(
+            status = "active",
+            endAtMillis = 42_123,
+            shiftId = "server-shift-code21",
+        )
+        dao.insertLocalSession(failedStop)
+
+        assertEquals(1, db.outboxSafetyDao().unresolvedGroups().single().count)
+        assertEquals(
+            1,
+            db.shiftCloseSafetyDao().blockersForExactShift(
+                localShiftId = "local-shift-code21",
+                serverShiftId = failedStop.shiftId,
+                terminalId = "hybrid-terminal",
+            ).attentionLocalCount,
+        )
+
+        dao.replaceSessionCache(
+            listOf(
+                serverRow(
+                    id = "session-cancelled-on-web",
+                    status = "cancelled",
+                    amountMinor = 0,
+                ).copy(stationId = failedStop.stationId),
+            ),
+        )
+
+        val reconciled = dao.localSessionById(failedStop.localId)!!
+        assertEquals(GamingSessionState.CANCELLED, reconciled.state)
+        assertEquals("cancelled", reconciled.status)
+        assertEquals(2_000L, reconciled.endAtMillis)
+        assertNull(reconciled.lastError)
+        assertTrue(db.outboxSafetyDao().unresolvedGroups().isEmpty())
+        assertEquals(
+            0,
+            db.shiftCloseSafetyDao().blockersForExactShift(
+                localShiftId = "local-shift-code21",
+                serverShiftId = failedStop.shiftId,
+                terminalId = "hybrid-terminal",
+            ).attentionLocalCount,
+        )
+        assertTrue(dao.observeActiveLocalSessions().first().isEmpty())
+        assertFalse(
+            dao.localSessionsForServerReconciliation().any { it.localId == failedStop.localId },
+        )
+        assertTrue(
+            dao.insertStartIfStationAvailable(
+                localRow(
+                    "replacement",
+                    serverId = null,
+                    state = GamingSessionState.START_PENDING,
+                    stationId = failedStop.stationId,
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun authoritativePullRefreshesSyncedOverlayWithoutLosingPendingStopCapture() = runBlocking {
         dao.insertLocalSession(
             localRow("refresh", "session-refresh", GamingSessionState.STOP_PENDING)

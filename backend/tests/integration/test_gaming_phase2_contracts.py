@@ -760,6 +760,113 @@ async def test_offline_stop_uses_exact_tap_time_and_replays_once(
 
 
 @pytest.mark.asyncio
+async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_work(
+    client,
+    session,
+    seed_owner,
+) -> None:
+    """The shipped Code 21 can observe a web cancellation without hiding work."""
+    started_at = datetime.now(UTC) - timedelta(minutes=30)
+    station = _station(seed_owner)
+    active_station = _station(seed_owner)
+    ended_station = _station(seed_owner)
+    shift = _shift(seed_owner, opened_at=started_at - timedelta(minutes=1))
+    cancelled_session = _running_session(
+        seed_owner,
+        station=station,
+        shift=shift,
+        start_at=started_at,
+        status="cancelled",
+        amount_minor=0,
+    )
+    cancelled_at = started_at + timedelta(minutes=1)
+    cancelled_session.end_at = cancelled_at
+    cancelled_session.cancelled_at = cancelled_at
+    cancelled_session.cancelled_by = seed_owner["owner"].id
+    cancelled_session.cancel_reason = "Owner cancelled mistaken test session from web"
+    active_session = _running_session(
+        seed_owner,
+        station=active_station,
+        shift=shift,
+        start_at=started_at - timedelta(minutes=2),
+    )
+    ended_session = _running_session(
+        seed_owner,
+        station=ended_station,
+        shift=shift,
+        start_at=started_at - timedelta(minutes=3),
+        status="ended",
+        amount_minor=2_000,
+    )
+    ended_session.end_at = ended_session.start_at + timedelta(minutes=10)
+    ended_session.billable_minutes = 10
+    session.add_all([station, active_station, ended_station, shift])
+    await session.flush()
+    session.add_all([cancelled_session, active_session, ended_session])
+    await session.commit()
+    token = await _login(client, seed_owner)
+    read_headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Terminal-Id": str(seed_owner["terminal"].id),
+    }
+
+    web = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=500",
+        headers=read_headers,
+    )
+    code22 = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=500",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "22",
+        },
+    )
+    code21 = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=500",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "21",
+        },
+    )
+    code21_limited = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=2",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "21",
+        },
+    )
+
+    assert web.status_code == 200, web.text
+    assert code22.status_code == 200, code22.text
+    assert code21.status_code == 200, code21.text
+    assert code21_limited.status_code == 200, code21_limited.text
+    assert str(cancelled_session.id) not in {row["id"] for row in web.json()}
+    assert str(cancelled_session.id) not in {row["id"] for row in code22.json()}
+    assert str(cancelled_session.id) in {row["id"] for row in code21.json()}
+    assert {row["id"] for row in code21_limited.json()} == {
+        str(active_session.id),
+        str(ended_session.id),
+    }
+
+    cancelled_stop = await client.post(
+        f"/api/v1/gaming/sessions/{cancelled_session.id}/stop",
+        headers=_headers(seed_owner, token, f"cancelled-stop:{uuid4()}"),
+    )
+    assert cancelled_stop.status_code == 422, cancelled_stop.text
+    assert cancelled_stop.json()["error"]["code"] == "business_rule"
+    assert cancelled_stop.json()["error"]["message"] == "session was cancelled"
+
+    await session.refresh(cancelled_session)
+    assert cancelled_session.status == "cancelled"
+    assert cancelled_session.end_at == cancelled_at
+    assert cancelled_session.amount_minor == 0
+    assert cancelled_session.order_id is None
+
+
+@pytest.mark.asyncio
 async def test_missing_ended_amount_fails_closed_until_owner_repairs_it(
     client,
     session,

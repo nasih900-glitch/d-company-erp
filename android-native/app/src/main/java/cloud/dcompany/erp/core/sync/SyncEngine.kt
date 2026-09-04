@@ -133,6 +133,7 @@ import cloud.dcompany.erp.ui.screens.finance.FinanceApi
 import cloud.dcompany.erp.ui.screens.finance.FinanceCacheScope
 import cloud.dcompany.erp.ui.screens.finance.FinanceSnapshotKeys
 import cloud.dcompany.erp.ui.screens.finance.financeCacheScopeForLease
+import cloud.dcompany.erp.ui.screens.gaming.GameSession
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.gaming.SessionAddonVoidBody
 import cloud.dcompany.erp.ui.screens.gaming.SessionStartBody
@@ -731,7 +732,7 @@ internal fun gamingAddonFailureMessage(failure: Exception): String = when (failu
  * or already-billed rows despite `unbilled_only=true`.
  */
 internal fun gamingAddonSessionIdsForPull(
-    sessions: List<cloud.dcompany.erp.ui.screens.gaming.GameSession>,
+    sessions: List<GameSession>,
 ): List<String> {
     val byStation = linkedMapOf<String, String>()
     sessions.forEach { session ->
@@ -742,6 +743,57 @@ internal fun gamingAddonSessionIdsForPull(
         }
     }
     return byStation.values.toList()
+}
+
+/**
+ * Select the tablet-owned lifecycle rows that disappeared from the ordinary
+ * unbilled Gaming board and therefore require an exact authoritative lookup.
+ */
+internal fun missingGamingSessionResolutionIds(
+    boardSessionIds: Iterable<String>,
+    localServerIds: Iterable<String?>,
+): List<String> {
+    val visibleIds = boardSessionIds.filter(String::isNotBlank).toHashSet()
+    return localServerIds.asSequence()
+        .mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+        .filterNot { it in visibleIds }
+        .distinct()
+        .toList()
+}
+
+/**
+ * Resolve tablet-owned lifecycle rows omitted from the bounded unbilled board.
+ *
+ * A 404 is definitive absence within the authenticated branch, so the caller
+ * may refresh shared board data while retaining the local recovery row. Every
+ * other failure leaves the previous cache intact. Exact identity validation
+ * prevents a malformed response from resolving the wrong durable action.
+ */
+internal suspend fun resolveMissingGamingSessions(
+    boardSessions: List<GameSession>,
+    localServerIds: Iterable<String?>,
+    fetchExact: suspend (String) -> GameSession,
+    onNotFound: (String) -> Unit = {},
+): List<GameSession> {
+    val missingIds = missingGamingSessionResolutionIds(
+        boardSessionIds = boardSessions.map(GameSession::id),
+        localServerIds = localServerIds,
+    )
+    val resolved = buildList {
+        for (serverId in missingIds) {
+            try {
+                val session = fetchExact(serverId)
+                check(session.id == serverId) {
+                    "Exact Gaming session response did not match the requested session."
+                }
+                add(session)
+            } catch (failure: ApiException) {
+                if (failure.status != 404) throw failure
+                onNotFound(serverId)
+            }
+        }
+    }
+    return (boardSessions + resolved).distinctBy(GameSession::id)
 }
 
 enum class RejectedShiftOpenVerificationStatus {
@@ -3078,6 +3130,26 @@ class SyncEngine(
         val stations = gamingApi.stations()
         val packages = gamingApi.packages()
         val sessions = gamingApi.sessions()
+        // An owner can cancel a session from web, or another client can finish
+        // its POS handoff, while this tablet retains a pending/rejected local
+        // lifecycle. Those terminal rows are deliberately absent from the
+        // unbilled board query. Resolve only the exact server IDs referenced by
+        // this tablet's durable overlays. A definitive 404 retains that local
+        // evidence without preventing the shared board from refreshing; every
+        // other failure keeps the previous cache intact for a later retry.
+        val authoritativeSessions = resolveMissingGamingSessions(
+            boardSessions = sessions,
+            localServerIds = db.gamingDao()
+                .localSessionsForServerReconciliation()
+                .map { it.serverId },
+            fetchExact = gamingApi::session,
+            onNotFound = { serverId ->
+                Log.w(
+                    "SyncEngine",
+                    "Exact Gaming session was not found; retaining local recovery evidence for $serverId",
+                )
+            },
+        )
         // Fetch the complete staged-item ledger for the bounded Gaming board
         // projection before replacing anything. Billed/history sessions are
         // deliberately absent so each refresh cannot become an N+1 history
@@ -3123,7 +3195,7 @@ class SyncEngine(
                     },
                 )
                 db.gamingDao().replaceSessionCache(
-                    sessions.map {
+                    authoritativeSessions.map {
                         GamingSessionCacheEntity(
                             id = it.id,
                             stationId = it.stationId,

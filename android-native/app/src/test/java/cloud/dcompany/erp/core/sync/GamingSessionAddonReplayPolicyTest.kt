@@ -273,6 +273,25 @@ class GamingSessionAddonReplayPolicyTest {
     }
 
     @Test
+    fun `exact reconciliation selects only distinct local sessions missing from board`() {
+        assertEquals(
+            listOf("cancelled-on-web", "sent-on-other-device"),
+            missingGamingSessionResolutionIds(
+                boardSessionIds = listOf("active", "ended-unbilled", " "),
+                localServerIds = listOf(
+                    "active",
+                    "cancelled-on-web",
+                    null,
+                    "",
+                    " cancelled-on-web ",
+                    "sent-on-other-device",
+                    "ended-unbilled",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `UI merge retains pending Void and rejected Add recovery evidence`() {
         val cached = cache(clientLineId = "cached-line")
         val pendingVoid = action(
