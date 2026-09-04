@@ -1574,6 +1574,7 @@ async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_wor
     station = _station(seed_owner)
     active_station = _station(seed_owner)
     ended_station = _station(seed_owner)
+    recently_cancelled_station = _station(seed_owner)
     shift = _shift(seed_owner, opened_at=started_at - timedelta(minutes=1))
     cancelled_session = _running_session(
         seed_owner,
@@ -1588,6 +1589,19 @@ async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_wor
     cancelled_session.cancelled_at = cancelled_at
     cancelled_session.cancelled_by = seed_owner["owner"].id
     cancelled_session.cancel_reason = "Owner cancelled mistaken test session from web"
+    recently_cancelled_session = _running_session(
+        seed_owner,
+        station=recently_cancelled_station,
+        shift=shift,
+        start_at=started_at - timedelta(days=2),
+        status="cancelled",
+        amount_minor=0,
+    )
+    recently_cancelled_at = datetime.now(UTC)
+    recently_cancelled_session.end_at = recently_cancelled_at
+    recently_cancelled_session.cancelled_at = recently_cancelled_at
+    recently_cancelled_session.cancelled_by = seed_owner["owner"].id
+    recently_cancelled_session.cancel_reason = "Recently cancelled older session"
     active_session = _running_session(
         seed_owner,
         station=active_station,
@@ -1604,9 +1618,13 @@ async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_wor
     )
     ended_session.end_at = ended_session.start_at + timedelta(minutes=10)
     ended_session.billable_minutes = 10
-    session.add_all([station, active_station, ended_station, shift])
+    session.add_all(
+        [station, active_station, ended_station, recently_cancelled_station, shift]
+    )
     await session.flush()
-    session.add_all([cancelled_session, active_session, ended_session])
+    session.add_all(
+        [cancelled_session, recently_cancelled_session, active_session, ended_session]
+    )
     await session.commit()
     token = await _login(client, seed_owner)
     read_headers = {
@@ -1642,11 +1660,20 @@ async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_wor
             "X-Client-Version-Code": "21",
         },
     )
+    code21_recent_cancel = await client.get(
+        "/api/v1/gaming/sessions?status=cancelled&unbilled_only=true&limit=1",
+        headers={
+            **read_headers,
+            "X-Client-Platform": "android",
+            "X-Client-Version-Code": "21",
+        },
+    )
 
     assert web.status_code == 200, web.text
     assert code22.status_code == 200, code22.text
     assert code21.status_code == 200, code21.text
     assert code21_limited.status_code == 200, code21_limited.text
+    assert code21_recent_cancel.status_code == 200, code21_recent_cancel.text
     assert str(cancelled_session.id) not in {row["id"] for row in web.json()}
     assert str(cancelled_session.id) not in {row["id"] for row in code22.json()}
     assert str(cancelled_session.id) in {row["id"] for row in code21.json()}
@@ -1654,6 +1681,17 @@ async def test_code21_unbilled_pull_includes_cancelled_resolution_after_live_wor
         str(active_session.id),
         str(ended_session.id),
     }
+    assert [row["id"] for row in code21_recent_cancel.json()] == [
+        str(recently_cancelled_session.id)
+    ]
+
+    cancelled_stop = await client.post(
+        f"/api/v1/gaming/sessions/{cancelled_session.id}/stop",
+        headers=_headers(seed_owner, token, f"cancelled-stop:{uuid4()}"),
+    )
+    assert cancelled_stop.status_code == 422, cancelled_stop.text
+    assert cancelled_stop.json()["error"]["code"] == "business_rule"
+    assert cancelled_stop.json()["error"]["message"] == "session was cancelled"
 
     await session.refresh(cancelled_session)
     assert cancelled_session.status == "cancelled"

@@ -2126,11 +2126,15 @@ async def list_sessions(
             )
         stmt = stmt.where(unbilled_filter)
     if unbilled_only and include_cancelled_for_code21:
-        # Preserve every operational obligation ahead of compatibility-only
-        # cancellation history when the caller supplies a bounded limit.
+        # Never let compatibility history consume the limit before active or
+        # ended-unbilled obligations. PostgreSQL orders False before True.
         stmt = stmt.order_by(
             (GamingSession.status == "cancelled").asc(),
-            GamingSession.start_at.desc(),
+            func.coalesce(
+                GamingSession.cancelled_at,
+                GamingSession.end_at,
+                GamingSession.start_at,
+            ).desc(),
         )
     else:
         stmt = stmt.order_by(GamingSession.start_at.desc())
