@@ -2405,4 +2405,36 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate41To42PreservesShiftHistoryAndAddsCloserAttribution() {
+        helper.createDatabase(dbName, 41).apply {
+            execSQL(
+                "INSERT INTO shift_history_cache " +
+                    "(id, branchId, terminalId, status, openedAtMillis, closedAtMillis, " +
+                    "openingFloatMinor, expectedMinor, countedMinor, varianceMinor, posSalesMinor, " +
+                    "membershipSalesMinor, grossCollectionsMinor, cashCollectionsMinor, " +
+                    "cardCollectionsMinor, upiCollectionsMinor, otherCollectionsMinor, " +
+                    "settledPosRefundsMinor, settledMembershipRefundsMinor, totalRefundsMinor, " +
+                    "netCollectionsMinor, openedByUserId, openedByName, openedByEmail, fetchedAtMillis) " +
+                    "VALUES ('shift-1', 'branch-1', 'terminal-1', 'closed', 1000, 2000, " +
+                    "5000, 7000, 7000, 0, 2000, 0, 2000, 2000, 0, 0, 0, 0, 0, 0, " +
+                    "2000, 'user-open', 'Rafi', 'rafi@example.test', 3000)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 42, true, MIGRATION_41_42)
+        migrated.query(
+            "SELECT openedByName, closedByUserId, closedByName, closedByEmail " +
+                "FROM shift_history_cache WHERE id = 'shift-1'",
+        ).use { cursor ->
+            assertTrue("Existing shift history must survive the attribution migration", cursor.moveToFirst())
+            assertEquals("Rafi", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+        }
+        migrated.close()
+    }
 }

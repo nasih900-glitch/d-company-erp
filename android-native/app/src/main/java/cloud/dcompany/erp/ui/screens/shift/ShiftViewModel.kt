@@ -4,13 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.ShiftAccess
-import cloud.dcompany.erp.core.auth.VIEW_ONLY_MESSAGE
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryResult
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryStatus
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
-import cloud.dcompany.erp.core.db.ShiftActor
 import cloud.dcompany.erp.core.db.ShiftCloseCaptureResult
 import cloud.dcompany.erp.core.db.ShiftCloseCaptureStatus
 import cloud.dcompany.erp.core.db.ShiftHistoryMergePolicy
@@ -57,8 +55,11 @@ data class ShiftUiState(
      * once the close syncs.
      */
     val expectedMinor: Long? = null,
+    /** The verified one-shop workspace shown in conflict and handover guidance. */
+    val workspaceLabel: String? = null,
+    /** Used only to explain whether this employee or somebody else opened the shift. */
+    val currentUserId: String? = null,
     val canClose: Boolean = false,
-    val moneyAccessMessage: String? = null,
     /**
      * A refused open/close attempt, not yet dismissed. Previously invisible:
      * a rejected row was excluded from both `open` and `history`, so the
@@ -136,7 +137,7 @@ class ShiftViewModel : ViewModel() {
 
     private val app = DCompanyApp.instance
     private val db = app.db
-    @Volatile private var access = ShiftAccess()
+    private val access = MutableStateFlow(ShiftAccess())
     private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
         .map { it?.terminalId }
         .distinctUntilChanged()
@@ -152,6 +153,7 @@ class ShiftViewModel : ViewModel() {
         val online: Boolean,
         val syncing: Boolean,
         val profile: MeResponse?,
+        val terminalName: String?,
         val historyRefreshing: Boolean,
         val historyError: String?,
     )
@@ -161,6 +163,7 @@ class ShiftViewModel : ViewModel() {
         val operationError: String?,
         val operationNotice: String?,
         val dismissedClosedId: String?,
+        val access: ShiftAccess,
     )
 
     private val terminalHistory = confirmedTerminalId
@@ -207,10 +210,21 @@ class ShiftViewModel : ViewModel() {
         combine(
             app.connectivity.online,
             app.sync.syncing,
-            app.shiftCache.profile,
+            combine(
+                app.shiftCache.profile,
+                app.terminalStore.activeValidatedTerminal,
+                ::Pair,
+            ),
             combine(app.sync.shiftHistoryRefreshing, app.sync.shiftHistoryError, ::Pair),
-        ) { online, syncing, profile, historySync ->
-            SessionState(online, syncing, profile, historySync.first, historySync.second)
+        ) { online, syncing, scope, historySync ->
+            SessionState(
+                online,
+                syncing,
+                scope.first,
+                scope.second?.terminalName,
+                historySync.first,
+                historySync.second,
+            )
         },
         latestRejected,
         combine(
@@ -218,14 +232,14 @@ class ShiftViewModel : ViewModel() {
             operationError,
             operationNotice,
             dismissedClosedId,
-        ) { isBusy, error, notice, closedId ->
-            InteractionState(isBusy, error, notice, closedId)
+            access,
+        ) { isBusy, error, notice, closedId, currentAccess ->
+            InteractionState(isBusy, error, notice, closedId, currentAccess)
         },
     ) { current, historyState, session, latestRejected, interaction ->
         val online = session.online
         val syncing = session.syncing
         val profile = session.profile
-        val actor = profile?.let { ShiftActor(it.userId, it.protectedAccess) }
         val justClosed = historyState.latestLocalClosed?.takeIf {
             shouldShowShiftResult(
                 itemId = it.localId,
@@ -255,8 +269,11 @@ class ShiftViewModel : ViewModel() {
             // needs acknowledgement instead of being hidden by `current`.
             closedResult = justClosed,
             expectedMinor = current?.expectedMinor,
-            canClose = current?.canManageMoney(actor) == true,
-            moneyAccessMessage = current?.moneyAccessMessage(actor),
+            workspaceLabel = shiftWorkspaceLabel(profile?.branchName, session.terminalName),
+            currentUserId = profile?.userId,
+            // Shift-close authority comes from the authenticated permission.
+            // The opener remains attribution, not an extra ownership lock.
+            canClose = current != null && interaction.access.canClose,
             rejectedShift = latestRejected,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShiftUiState())
@@ -271,20 +288,29 @@ class ShiftViewModel : ViewModel() {
     }
 
     fun updateAccess(next: ShiftAccess) {
-        access = next
+        access.value = next
     }
 
-    private fun requireOpenPermission(): Boolean = authorizeAction(access.canOpen) {
-        operationError.value = VIEW_ONLY_MESSAGE
+    private fun requireOpenPermission(): Boolean = authorizeAction(access.value.canOpen) {
+        operationError.value =
+            "This account cannot open shifts. Ask a staff member with Shift open access. Nothing was changed."
     }
 
-    private fun requireClosePermission(): Boolean = authorizeAction(access.canClose) {
-        operationError.value = VIEW_ONLY_MESSAGE
+    private fun requireClosePermission(): Boolean = authorizeAction(access.value.canClose) {
+        operationError.value =
+            "This account cannot close shifts. Ask a staff member with Shift close access. Nothing was changed."
     }
 
     fun openShift(floatMinor: Long) {
         if (!requireOpenPermission()) return
-        if (busy.value || state.value.open != null) return
+        if (busy.value) {
+            operationNotice.value = "Shift opening is already being saved. Wait for the current result."
+            return
+        }
+        state.value.open?.let { current ->
+            operationError.value = shiftAlreadyOpenMessage(current, state.value.workspaceLabel)
+            return
+        }
         if (state.value.rejectedShift != null) {
             operationError.value =
                 "Recover the saved rejected shift attempt before creating another shift identity."
@@ -307,7 +333,11 @@ class ShiftViewModel : ViewModel() {
                 "This account is not assigned to a branch. A shift cannot be opened safely."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = app.cacheIsolation.currentLease() ?: run {
+            operationError.value =
+                "The signed-in account is still being verified. Wait a moment, then open the shift again."
+            return
+        }
         busy.value = true
         viewModelScope.launch {
             try {
@@ -327,8 +357,17 @@ class ShiftViewModel : ViewModel() {
                             ),
                         )
                     }
-                ) return@launch
+                ) {
+                    operationError.value =
+                        "The signed-in account changed before the shift was saved. Nothing was opened; review Shift again."
+                    return@launch
+                }
                 operationError.value = null
+                operationNotice.value = if (state.value.online) {
+                    "Shift opened on this tablet. Server confirmation is in progress; billing can begin."
+                } else {
+                    "Shift opened safely on this tablet. Billing can begin, and it will sync automatically when the connection returns."
+                }
                 app.sync.requestSync()
             } catch (_: Exception) {
                 operationError.value =
@@ -341,18 +380,36 @@ class ShiftViewModel : ViewModel() {
 
     fun closeShift(countedMinor: Long) {
         if (!requireClosePermission()) return
-        val shift = state.value.open ?: return
-        if (busy.value) return
-        if (!requireMoneyAccess(shift, "close this shift")) return
+        val shift = state.value.open ?: run {
+            operationError.value = "There is no open shift to close. Refresh Shift before trying again."
+            return
+        }
+        if (busy.value) {
+            operationNotice.value = "A shift action is already being saved. Wait for the current result."
+            return
+        }
         val local = shift.local
-        if (local != null && local.state !in setOf(ShiftState.OPEN_PENDING, ShiftState.OPEN_SYNCED)) return
+        if (local != null && local.state !in setOf(ShiftState.OPEN_PENDING, ShiftState.OPEN_SYNCED)) {
+            operationError.value = when (local.state) {
+                ShiftState.CLOSE_PENDING ->
+                    "This close is already saved and waiting for server confirmation. Do not submit it again."
+                ShiftState.CLOSE_REJECTED ->
+                    "The previous close was rejected. Use Retry saved close or Continue shift so the original drawer count is handled safely."
+                else -> "This shift is no longer open. Refresh Shift before trying again."
+            }
+            return
+        }
         val terminalId = app.terminalStore.confirmedTerminalId()
         if (terminalId == null) {
             operationError.value =
                 "This tablet's workspace is not verified. Reconnect and sign in before closing the shift."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = app.cacheIsolation.currentLease() ?: run {
+            operationError.value =
+                "The signed-in account is still being verified. Wait a moment, then count the drawer again."
+            return
+        }
         busy.value = true
         viewModelScope.launch {
             try {
@@ -389,7 +446,11 @@ class ShiftViewModel : ViewModel() {
                             )
                         }
                     }
-                ) return@launch
+                ) {
+                    operationError.value =
+                        "The signed-in account changed before the drawer count was saved. Nothing was closed; review Shift again."
+                    return@launch
+                }
                 val result = captureResult ?: ShiftCloseCaptureResult(
                     ShiftCloseCaptureStatus.CHANGED,
                     "The account changed before the drawer count was saved. Sign in and review the shift again.",
@@ -411,17 +472,29 @@ class ShiftViewModel : ViewModel() {
 
     fun retryClose() {
         if (!requireClosePermission()) return
-        val resolved = state.value.open ?: return
-        val shift = resolved.local?.takeIf { it.state == ShiftState.CLOSE_REJECTED } ?: return
-        if (!requireMoneyAccess(resolved, "retry this close")) return
-        if (busy.value) return
+        val resolved = state.value.open ?: run {
+            operationError.value = "There is no open shift with a rejected close to retry. Refresh Shift."
+            return
+        }
+        val shift = resolved.local?.takeIf { it.state == ShiftState.CLOSE_REJECTED } ?: run {
+            operationError.value = "This shift has no rejected close to retry. Review its current status first."
+            return
+        }
+        if (busy.value) {
+            operationNotice.value = "The saved close is already being processed. Wait for the current result."
+            return
+        }
         val terminalId = app.terminalStore.confirmedTerminalId()
         if (terminalId == null) {
             operationError.value =
                 "This tablet's workspace is not verified. Reconnect and sign in before retrying the close."
             return
         }
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val scopeLease = app.cacheIsolation.currentLease() ?: run {
+            operationError.value =
+                "The signed-in account is still being verified. Wait a moment, then retry the saved close."
+            return
+        }
         busy.value = true
         viewModelScope.launch {
             try {
@@ -432,7 +505,11 @@ class ShiftViewModel : ViewModel() {
                             terminalId = terminalId,
                         )
                     }
-                ) return@launch
+                ) {
+                    operationError.value =
+                        "The signed-in account changed before retry was saved. Nothing was resubmitted; review Shift again."
+                    return@launch
+                }
                 val result = captureResult ?: ShiftCloseCaptureResult(
                     ShiftCloseCaptureStatus.CHANGED,
                     "The account changed before retry was saved. Sign in and review the shift again.",
@@ -454,19 +531,37 @@ class ShiftViewModel : ViewModel() {
 
     fun continueShift() {
         if (!requireClosePermission()) return
-        val resolved = state.value.open ?: return
-        val shift = resolved.local?.takeIf { it.state == ShiftState.CLOSE_REJECTED } ?: return
-        if (!requireMoneyAccess(resolved, "continue this shift")) return
-        if (busy.value) return
-        val scopeLease = app.cacheIsolation.currentLease() ?: return
+        val resolved = state.value.open ?: run {
+            operationError.value = "There is no open shift to continue. Refresh Shift."
+            return
+        }
+        val shift = resolved.local?.takeIf { it.state == ShiftState.CLOSE_REJECTED } ?: run {
+            operationError.value = "This shift has no rejected close to remove. Review its current status first."
+            return
+        }
+        if (busy.value) {
+            operationNotice.value = "A shift action is already being saved. Wait for the current result."
+            return
+        }
+        val scopeLease = app.cacheIsolation.currentLease() ?: run {
+            operationError.value =
+                "The signed-in account is still being verified. Wait a moment, then continue the shift again."
+            return
+        }
         busy.value = true
         viewModelScope.launch {
             try {
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
                         db.shiftDao().cancelRejectedClose(shift.localId)
                     }
-                ) return@launch
+                ) {
+                    operationError.value =
+                        "The signed-in account changed before the rejected close was removed. Nothing was changed; review Shift again."
+                    return@launch
+                }
                 operationError.value = null
+                operationNotice.value =
+                    "The rejected close request was removed. The shift remains open; resolve the stated blocker and count the drawer again when ready."
                 app.sync.requestSync()
             } catch (_: Exception) {
                 operationError.value =
@@ -487,11 +582,16 @@ class ShiftViewModel : ViewModel() {
 
     fun retryRejectedOpen() {
         if (!requireOpenPermission()) return
-        val shift = state.value.rejectedShift ?: return
-        if (busy.value) return
-        if (state.value.open != null) {
-            operationError.value =
-                "A current shift is already open. Resolve or close it before retrying the saved shift attempt."
+        val shift = state.value.rejectedShift ?: run {
+            operationError.value = "There is no rejected shift opening to retry. Refresh Shift."
+            return
+        }
+        if (busy.value) {
+            operationNotice.value = "A shift action is already being saved. Wait for the current result."
+            return
+        }
+        state.value.open?.let { current ->
+            operationError.value = shiftAlreadyOpenMessage(current, state.value.workspaceLabel)
             return
         }
         val terminalId = app.terminalStore.confirmedTerminalId()
@@ -516,14 +616,19 @@ class ShiftViewModel : ViewModel() {
                             branchId = branchId,
                         )
                     }
-                ) return@launch
+                ) {
+                    operationError.value =
+                        "The signed-in account changed before retry was saved. Nothing was resubmitted; review Shift again."
+                    return@launch
+                }
                 val resolved = result ?: RejectedOpenRecoveryResult(
                     RejectedOpenRecoveryStatus.CHANGED,
                     "The account changed before retry was saved. Sign in and review the shift again.",
                 )
                 if (resolved.status == RejectedOpenRecoveryStatus.APPLIED) {
                     operationError.value = null
-                    operationNotice.value = null
+                    operationNotice.value =
+                        "The original saved shift opening was queued again. Wait for server confirmation; no duplicate shift was created."
                     // pushShiftOpen reuses shift-open:<same localId>; no new
                     // shift row or idempotency identity is manufactured.
                     app.sync.requestSync()
@@ -541,8 +646,14 @@ class ShiftViewModel : ViewModel() {
 
     fun verifyAndClearRejectedOpen() {
         if (!requireOpenPermission()) return
-        val shift = state.value.rejectedShift ?: return
-        if (busy.value) return
+        val shift = state.value.rejectedShift ?: run {
+            operationError.value = "There is no rejected shift opening to verify. Refresh Shift."
+            return
+        }
+        if (busy.value) {
+            operationNotice.value = "A shift action is already being saved. Wait for the current result."
+            return
+        }
         if (!state.value.online) {
             operationError.value =
                 "A live connection is required to verify this saved shift attempt. Nothing was changed."
@@ -561,6 +672,9 @@ class ShiftViewModel : ViewModel() {
                 } else {
                     operationError.value = result.message
                 }
+            } catch (_: Exception) {
+                operationError.value =
+                    "The saved shift opening could not be verified. Nothing was deleted; check the connection and try again."
             } finally {
                 busy.value = false
             }
@@ -580,17 +694,30 @@ class ShiftViewModel : ViewModel() {
         }
     }
 
-    /** Profile can change while this Activity-scoped ViewModel survives sign-out. */
-    private fun requireMoneyAccess(shift: ResolvedOpenShift, action: String): Boolean {
-        val actor = app.shiftCache.profile.value?.let {
-            ShiftActor(it.userId, it.protectedAccess)
-        }
-        if (shift.canManageMoney(actor)) return true
-        operationError.value = shift.moneyAccessMessage(actor)
-            ?: "Only the shift opener or a protected owner can $action."
-        return false
-    }
 }
+
+internal fun shiftWorkspaceLabel(branchName: String?, terminalName: String?): String? =
+    listOfNotNull(
+        branchName?.trim()?.takeIf(String::isNotEmpty),
+        terminalName?.trim()?.takeIf(String::isNotEmpty),
+    ).distinct().takeIf { it.isNotEmpty() }?.joinToString(" · ")
+
+internal fun shiftAlreadyOpenMessage(
+    shift: ResolvedOpenShift,
+    workspaceLabel: String?,
+): String {
+    val opener = shift.openedByName?.trim()?.takeIf(String::isNotEmpty)
+        ?: shift.openedByEmail?.trim()?.takeIf(String::isNotEmpty)
+        ?: "another staff member"
+    val workspace = workspaceLabel?.let { " in $it" }.orEmpty()
+    return "A shift is already open$workspace. It was opened by $opener at " +
+        "${formatShiftFeedbackDate(shift.openedAtMillis)}. Use that shift for billing, or count the drawer " +
+        "and close it from Shift if the working day has ended. Do not open a duplicate."
+}
+
+private fun formatShiftFeedbackDate(epochMillis: Long): String =
+    java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.getDefault())
+        .format(java.util.Date(epochMillis))
 
 internal fun shouldShowShiftResult(
     itemId: String,

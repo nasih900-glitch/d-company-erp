@@ -140,7 +140,7 @@ fun ShiftScreen(
                 if (state.open == null) {
                     "Shift opening is view only for this account. Ask an authorised cashier or manager."
                 } else {
-                    "Shift closing is view only for this account. Ask the opener or a protected owner."
+                    "Shift closing is view only for this account. Ask a staff member with Shift close access."
                 },
             )
         }
@@ -196,7 +196,7 @@ fun ShiftScreen(
             shape = cloud.dcompany.erp.ui.theme.Radius.shapeLg,
             onDismissRequest = vm::dismissOperationError,
             confirmButton = { TextButton(onClick = vm::dismissOperationError) { Text("OK") } },
-            title = { Text("Shift not saved") },
+            title = { Text("Shift action needs attention") },
             text = { Text(message) },
         )
     }
@@ -209,7 +209,7 @@ fun ShiftScreen(
             confirmButton = {
                 TextButton(onClick = vm::dismissOperationNotice) { Text("OK") }
             },
-            title = { Text("Shift recovery complete") },
+            title = { Text("Shift update") },
             text = { Text(message) },
         )
     }
@@ -406,7 +406,8 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
             busy = state.busy,
             online = state.online,
             canRecover = canOpen,
-            currentShiftOpen = false,
+            currentShift = null,
+            workspaceLabel = state.workspaceLabel,
             onRetry = vm::retryRejectedOpen,
             onVerifyAndClear = vm::verifyAndClearRejectedOpen,
         )
@@ -492,12 +493,13 @@ private fun RejectedShiftCard(
     busy: Boolean,
     online: Boolean,
     canRecover: Boolean,
-    currentShiftOpen: Boolean,
+    currentShift: ResolvedOpenShift?,
+    workspaceLabel: String?,
     onRetry: () -> Unit,
     onVerifyAndClear: () -> Unit,
 ) {
     val actions = rejectedOpenRecoveryActions(
-        hasCurrentShift = currentShiftOpen,
+        hasCurrentShift = currentShift != null,
         online = online,
         canRecover = canRecover,
         busy = busy,
@@ -510,12 +512,24 @@ private fun RejectedShiftCard(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            "Couldn't open a shift",
+            if (currentShift == null) "Couldn't open a shift" else "A shift is already open",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = Brand.Danger,
         )
-        Text(rejected.lastError ?: "The server refused this.", color = Brand.Foreground)
+        if (currentShift != null) {
+            Text(
+                shiftAlreadyOpenMessage(currentShift, workspaceLabel),
+                color = Brand.Foreground,
+            )
+            Text(
+                "Saved attempt: ${rejected.lastError ?: "The server refused the duplicate open."}",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        } else {
+            Text(rejected.lastError ?: "The server refused this shift open.", color = Brand.Foreground)
+        }
         Text(
             actions.guidance,
             color = Brand.ForegroundMuted,
@@ -591,7 +605,8 @@ private fun CloseShiftCard(
                 busy = state.busy,
                 online = state.online,
                 canRecover = canOpenPermission,
-                currentShiftOpen = true,
+                currentShift = shift,
+                workspaceLabel = state.workspaceLabel,
                 onRetry = vm::retryRejectedOpen,
                 onVerifyAndClear = vm::verifyAndClearRejectedOpen,
             )
@@ -618,14 +633,12 @@ private fun CloseShiftCard(
                 },
             )
         }
-        ShiftOwnershipSummary(shift)
-        state.moneyAccessMessage?.let { message ->
-            Text(
-                message,
-                color = Brand.Warning,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
+        ShiftOwnershipSummary(
+            shift = shift,
+            currentUserId = state.currentUserId,
+            workspaceLabel = state.workspaceLabel,
+            canClose = canClosePermission && state.canClose,
+        )
         PanelDivider()
         InfoRow(label = "Opening float", value = shift.openingFloatMinor.asRupees())
         InfoRow(
@@ -1272,7 +1285,12 @@ private fun CollectionMetric(
 }
 
 @Composable
-private fun ShiftOwnershipSummary(shift: ResolvedOpenShift) {
+private fun ShiftOwnershipSummary(
+    shift: ResolvedOpenShift,
+    currentUserId: String?,
+    workspaceLabel: String?,
+    canClose: Boolean,
+) {
     val opener = shift.openedByName?.takeIf(String::isNotBlank)
         ?: shift.openedByEmail?.takeIf(String::isNotBlank)
         ?: "Opener not yet verified"
@@ -1287,6 +1305,16 @@ private fun ShiftOwnershipSummary(shift: ResolvedOpenShift) {
             Text(shift.openedByEmail, color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
         }
         Text("Opened $opened", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        workspaceLabel?.let {
+            Text("Workspace: $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+        }
+        shiftCloseHandoverMessage(shift, currentUserId, canClose)?.let { message ->
+            Text(
+                message,
+                color = Brand.Information,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
     }
 }
 
@@ -1308,6 +1336,13 @@ private fun HistoryRow(s: ShiftHistoryRow) {
             color = Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
         )
+        if (s.closedAtMillis != null) {
+            Text(
+                "Closed by ${shiftHistoryCloserLabel(s)}",
+                color = Brand.ForegroundMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
         Text(
             "counted ${s.countedMinor?.asRupees() ?: "—"} · " +
                 when {
@@ -1353,3 +1388,31 @@ private fun HistoryRow(s: ShiftHistoryRow) {
         }
     }
 }
+
+internal fun shiftCloseHandoverMessage(
+    shift: ResolvedOpenShift,
+    currentUserId: String?,
+    canClose: Boolean,
+): String? {
+    if (!canClose) return null
+    val opener = shift.openedByName?.takeIf(String::isNotBlank)
+        ?: shift.openedByEmail?.takeIf(String::isNotBlank)
+        ?: "the original staff member"
+    return when {
+        shift.openedByUserId == null ->
+            "Opener identity is still syncing. You may close this shift; your signed-in account will be recorded as the closer."
+        shift.openedByUserId == currentUserId ->
+            "You opened this shift. Your signed-in account will also be recorded when you close it."
+        else ->
+            "You may close this shift even though $opener opened it. $opener remains the opener; your signed-in account will be recorded as the closer."
+    }
+}
+
+internal fun shiftHistoryCloserLabel(shift: ShiftHistoryRow): String =
+    shift.closedByName?.takeIf(String::isNotBlank)
+        ?: shift.closedByEmail?.takeIf(String::isNotBlank)
+        ?: if (shift.source == ShiftHistorySource.LOCAL) {
+            "waiting for server confirmation"
+        } else {
+            "not provided by the server"
+        }

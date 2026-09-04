@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Loader2, Package, Plus, RefreshCw } from 'lucide-react';
 
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
+import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import { finance, type AssetDTO, type BranchReferenceDTO } from '@/lib/erp-api';
 import { inr, inrShort } from '@/lib/inr';
 import { rupeesToMinor } from '@/lib/manual-collections';
@@ -27,6 +29,7 @@ function categoryLabel(type: string): string {
 }
 
 export default function AssetsTab() {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<AssetDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,7 +172,12 @@ export default function AssetsTab() {
         <AssetForm
           branches={branches}
           onClose={() => setAddOpen(false)}
-          onSuccess={() => { setAddOpen(false); void load(); }}
+          onSuccess={() => {
+            setAddOpen(false);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.assetRecorded;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
     </div>

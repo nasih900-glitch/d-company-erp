@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { inr, inrShort } from '@/lib/inr';
+import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
@@ -620,6 +621,7 @@ function ExpenseForm({
 // PARTNERS TAB
 // ============================================================================
 function PartnersTab() {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<PartnerDTO[]>([]);
   const [split, setSplit] = useState<PartnerPLReportDTO | null>(null);
   const [distributable, setDistributable] = useState<DistributableProfitReportDTO | null>(null);
@@ -782,11 +784,25 @@ function PartnersTab() {
         {!rows.length && <div className="card text-fg-muted text-sm">No partners yet.</div>}
       </div>
 
-      {addOpen && <PartnerForm onClose={() => setAddOpen(false)}
-        onSuccess={() => { setAddOpen(false); load(); }}/>}
-      {capPartner && <CapitalForm partner={capPartner}
+      {addOpen && <PartnerForm
+        onClose={() => setAddOpen(false)}
+        onSuccess={() => {
+          setAddOpen(false);
+          void load();
+          const feedback = FINANCE_ACTION_FEEDBACK.partnerRecorded;
+          notifications.success(feedback.message, { title: feedback.title });
+        }}
+      />}
+      {capPartner && <CapitalForm
+        partner={capPartner}
         onClose={() => setCapPartner(null)}
-        onSuccess={() => { setCapPartner(null); load(); }}/>}
+        onSuccess={() => {
+          setCapPartner(null);
+          void load();
+          const feedback = FINANCE_ACTION_FEEDBACK.capitalRecorded;
+          notifications.success(feedback.message, { title: feedback.title });
+        }}
+      />}
       {ledgerPartner && <LedgerModal partner={ledgerPartner}
         onClose={() => setLedgerPartner(null)} onChanged={load}/>}
     </div>
@@ -972,6 +988,7 @@ function LedgerModal({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const notifications = useNotifications();
   const [rows, setRows] = useState<CapitalEntryDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -1052,6 +1069,8 @@ function LedgerModal({
             setVoiding(null);
             await load();
             onChanged();
+            const feedback = FINANCE_ACTION_FEEDBACK.capitalVoided;
+            notifications.success(feedback.message, { title: feedback.title });
           }}
         />
       )}

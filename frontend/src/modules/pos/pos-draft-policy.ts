@@ -71,6 +71,18 @@ export function leaveSynchronousPosFlow(gate: SynchronousPosFlowGate): void {
   gate.current = false;
 }
 
+/**
+ * A canonical server cancellation does not make a stale browser recovery copy
+ * safe to forget. Release the visible checkout only after its owned recovery
+ * draft was removed, otherwise a reload can resurrect misleading local work.
+ */
+export function mayReleaseCancelledPreparedBill(
+  hasDraftKey: boolean,
+  draftClearSucceeded: boolean,
+): boolean {
+  return !hasDraftKey || draftClearSucceeded;
+}
+
 export function isCurrentPosCustomerLookup({
   requestGeneration,
   currentGeneration,

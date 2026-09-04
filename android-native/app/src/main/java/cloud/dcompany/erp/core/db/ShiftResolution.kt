@@ -34,8 +34,11 @@ data class ShiftAccountingBreakdown(
  * One resolved shift for all native screens.
  *
  * Tables and Gaming consume [shiftId] regardless of opener: they create
- * operational work, not a cash settlement. POS collection and shift close use
- * [canManageMoney] and therefore fail closed when opener identity is unknown.
+ * operational work, not a cash settlement. POS collection/refund/void actions
+ * use [canManageMoney] and therefore fail closed when opener identity is
+ * unknown. Shift closing is authorised separately by the authenticated
+ * `pos.shift.close` permission and records the closer without changing opener
+ * attribution.
  */
 data class ResolvedOpenShift(
     val shiftId: String,
@@ -91,9 +94,11 @@ data class ResolvedOpenShift(
             ?: openedByEmail?.takeIf(String::isNotBlank)
             ?: "another staff member"
         return if (openedByUserId == null) {
-            "The shift opener has not been verified on this tablet. Reconnect before taking payment or closing the shift."
+            "The shift opener has not been verified on this tablet. Reconnect before taking payment. " +
+                "A staff member with Shift close access may still close it from Shift."
         } else {
-            "Shift opened by $who. Tables and Gaming can continue, but only that opener or a protected owner can collect POS payment or close it."
+            "Shift opened by $who. Tables and Gaming can continue, but only that opener or a protected owner " +
+                "can collect POS payment. A staff member with Shift close access may close it from Shift."
         }
     }
 }

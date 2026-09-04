@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Ban, HandCoins, Loader2, Plus, RefreshCw } from 'lucide-react';
 
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
+import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import {
   accounting,
   finance,
@@ -22,6 +24,7 @@ const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
 // ============================================================================
 export default function TipPayoutsTab() {
   const { me } = useAuth();
+  const notifications = useNotifications();
   const [rows, setRows] = useState<TipPayoutDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [tipsPayableBalance, setTipsPayableBalance] = useState<number | null>(null);
@@ -219,14 +222,24 @@ export default function TipPayoutsTab() {
           defaultBranchId={me?.branch_id ?? branches[0]?.id ?? ''}
           tipsPayableBalance={tipsPayableBalance}
           onClose={() => setAddOpen(false)}
-          onSuccess={() => { setAddOpen(false); void load(); }}
+          onSuccess={() => {
+            setAddOpen(false);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.tipPayoutRecorded;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
       {voiding && (
         <VoidTipPayoutForm
           row={voiding}
           onClose={() => setVoiding(null)}
-          onSuccess={() => { setVoiding(null); void load(); }}
+          onSuccess={() => {
+            setVoiding(null);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.tipPayoutVoided;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
     </div>

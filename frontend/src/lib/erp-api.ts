@@ -2477,6 +2477,10 @@ export interface ShiftDTO {
   opened_by: string;
   opened_by_name: string | null;
   opened_by_email: string | null;
+  /** Present on servers that retain the staff identity responsible for closure. */
+  closed_by?: string | null;
+  closed_by_name?: string | null;
+  closed_by_email?: string | null;
 }
 
 export const orders = {
@@ -2509,7 +2513,13 @@ export const shifts = {
     api.post<{ id: string; status: string }>('/pos/shifts/open', { opening_float_minor })
       .then((r) => r.data),
   close: (id: string, counted_minor: number) =>
-    api.post<{ id: string; status: string; variance_minor: number }>(`/pos/shifts/${id}/close`, { counted_minor })
+    api.post<{
+      id: string;
+      status: string;
+      variance_minor: number;
+      closed_by?: string | null;
+      closed_by_name?: string | null;
+    }>(`/pos/shifts/${id}/close`, { counted_minor })
       .then((r) => r.data),
 };
 

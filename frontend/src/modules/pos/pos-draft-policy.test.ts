@@ -7,6 +7,7 @@ import {
   isIncomingSharedPosOrder,
   isCurrentPosCustomerLookup,
   leaveSynchronousPosFlow,
+  mayReleaseCancelledPreparedBill,
   mayClaimCheckoutDuringHydration,
   posDraftNeedsReconciliation,
 } from './pos-draft-policy';
@@ -61,6 +62,12 @@ describe('POS draft safety policy', () => {
     expect(enterSynchronousPosFlow(gate)).toBe(false);
     leaveSynchronousPosFlow(gate);
     expect(enterSynchronousPosFlow(gate)).toBe(true);
+  });
+
+  it('keeps a server-cancelled checkout locked when its recovery draft was not cleared', () => {
+    expect(mayReleaseCancelledPreparedBill(true, false)).toBe(false);
+    expect(mayReleaseCancelledPreparedBill(true, true)).toBe(true);
+    expect(mayReleaseCancelledPreparedBill(false, false)).toBe(true);
   });
 
   it('stages manual discounts only with the exact backend permission', () => {

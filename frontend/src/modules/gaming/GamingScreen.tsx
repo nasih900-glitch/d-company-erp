@@ -105,6 +105,7 @@ import {
   type GamingAddonCreateLockManager,
   type GamingAddonCreateTerminalScope,
 } from './gaming-addon-create-attempt';
+import { enterGamingMutation, leaveGamingMutation } from './gaming-mutation-gate';
 
 async function loadGamingCentreAddonCatalog(): Promise<MenuItemDTO[]> {
   const [items, categories] = await Promise.all([menuApi.items(), menuApi.categories()]);
@@ -359,6 +360,7 @@ export default function GamingScreen() {
   const [pickerPlayerCount, setPickerPlayerCount] = useState<Record<string, number>>({});
   const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
+  const [startingSession, setStartingSession] = useState<string | null>(null);
   const [resolvingReconciliation, setResolvingReconciliation] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState<string | null>(null);
   const [extendingSession, setExtendingSession] = useState<string | null>(null);
@@ -410,6 +412,8 @@ export default function GamingScreen() {
   const addonCreateBusyRef = useRef(false);
   const addonVoidBusyRef = useRef(false);
   const stopBusyRef = useRef(false);
+  const startBusyRef = useRef(false);
+  const timerMutationBusyRef = useRef(false);
   const refreshGenerationRef = useRef(0);
   const hasVerifiedBoardRef = useRef(false);
 
@@ -1027,6 +1031,14 @@ export default function GamingScreen() {
     let lockedAmountMinor: number | null = null;
     let ratePerHourMinor: number | null = st.rate_per_hour_minor;
     if (LIVE_MODE) {
+      if (!enterGamingMutation(startBusyRef)) {
+        notifications.info(
+          'Another session start is already being saved. Wait for its result before starting another station.',
+          { title: 'Session start in progress' },
+        );
+        return;
+      }
+      setStartingSession(st.id);
       try {
         if (pkg && !requirePackageRecoveryStorageForStart()) return;
         const shiftId = await ensureShiftId(st);
@@ -1079,6 +1091,9 @@ export default function GamingScreen() {
       } catch (e) {
         notifications.error((e as Error).message, { title: 'Cannot start session' });
         return;
+      } finally {
+        leaveGamingMutation(startBusyRef);
+        setStartingSession(null);
       }
     }
     setSessions((s) => ({
@@ -1114,15 +1129,30 @@ export default function GamingScreen() {
     const write = requireGamingWrite('Cannot update timer');
     if (!write.allowed) return;
     const s = sessions[st.id];
-    if (!s) return;
+    if (!s) {
+      notifications.error('This station no longer has a session. Refresh Gaming and try again.', {
+        title: 'Could not update timer',
+      });
+      return;
+    }
     if (!requireCurrentShiftOwnership(s, 'change its timer')) return;
     if (!requireVerifiedActiveBillingMode(s, 'change its timer')) return;
     const timerEndsAt = minutes ? s.start_at + minutes * 60000 : null;
     if (LIVE_MODE && s.backend_session_id) {
+      if (!enterGamingMutation(timerMutationBusyRef)) {
+        notifications.info('A timer change is already being saved. Wait for its result.', {
+          title: 'Timer update in progress',
+        });
+        return;
+      }
+      setExtendingSession(st.id);
       try { await write.dispatch('setSessionTimer', s.backend_session_id, minutes); }
       catch (e) {
         notifications.error((e as Error).message, { title: 'Could not update timer' });
         return;
+      } finally {
+        leaveGamingMutation(timerMutationBusyRef);
+        setExtendingSession(null);
       }
     }
     setSessions((map) => ({
@@ -1132,6 +1162,10 @@ export default function GamingScreen() {
     // Re-arm: a changed timer should alarm fresh next time it expires, not immediately.
     delete lastAlarmAtRef.current[st.id];
     setMutedStations((m) => (m[st.id] ? { ...m, [st.id]: false } : m));
+    notifications.success(
+      minutes ? `${st.name} timer is now set to ${minutes} minutes.` : `${st.name} timer was cleared.`,
+      { title: 'Timer updated' },
+    );
   }
 
   async function extendTimer(st: StationDTO, addMinutes: number) {
@@ -1143,6 +1177,12 @@ export default function GamingScreen() {
     if (!requireVerifiedActiveBillingMode(s, 'extend it')) return;
     if (addMinutes <= 0 || addMinutes > 1440) return;
     if (LIVE_MODE && s.backend_session_id) {
+      if (!enterGamingMutation(timerMutationBusyRef)) {
+        notifications.info('A timer change is already being saved. Wait for its result.', {
+          title: 'Timer update in progress',
+        });
+        return;
+      }
       setExtendingSession(st.id);
       try {
         const r = await write.dispatch(
@@ -1173,6 +1213,7 @@ export default function GamingScreen() {
         );
         void load('background');
       } finally {
+        leaveGamingMutation(timerMutationBusyRef);
         setExtendingSession(null);
       }
       return;
@@ -3016,13 +3057,16 @@ export default function GamingScreen() {
                               extraControllers,
                               playerCount: supportsPlayerModes ? playerCount : tariff.included_players,
                             }, phone)}
-                            disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal}
+                            disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal || startingSession !== null}
                             title={packageStartRecoveryReady
                               ? canStartOnSelectedTerminal
                                 ? `Start ${tariff.name}`
                                 : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'
                               : 'Package sessions require verified paid-extension recovery storage on this device'}>
-                            <span>{tariff.duration_minutes} minutes</span>
+                            <span className="flex items-center gap-1.5">
+                              {startingSession === st.id && <Loader2 size={13} className="animate-spin"/>}
+                              {startingSession === st.id ? 'Starting…' : `${tariff.duration_minutes} minutes`}
+                            </span>
                             <span className="font-mono font-bold">
                               {inr(total)}
                             </span>
@@ -3088,11 +3132,13 @@ export default function GamingScreen() {
                       canManageSessions={canManageStations}
                       className="btn btn-primary w-full"
                       onClick={() => startSession(st, '', undefined, phone)}
-                      disabled={!st.is_active || !canStartOnSelectedTerminal}
+                      disabled={!st.is_active || !canStartOnSelectedTerminal || startingSession !== null}
                       title={canStartOnSelectedTerminal
                         ? undefined
                         : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'}>
-                      <Play size={14}/> Start session
+                      {startingSession === st.id
+                        ? <Loader2 size={14} className="animate-spin"/>
+                        : <Play size={14}/>} {startingSession === st.id ? 'Starting session…' : 'Start session'}
                       {pendingDuration[st.id] ? ` · ${pendingDuration[st.id]}m` : ''}
                     </GamingMutationButton>
                   </>

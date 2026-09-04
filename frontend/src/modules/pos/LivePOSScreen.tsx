@@ -11,7 +11,7 @@
  * Requires an already-open shift for this terminal (validated against the
  * server, not just localStorage). Never opens one itself — opening a shift
  * is a deliberate action taken from the Shifts tab, and the person who opens
- * it is liable for that shift's cash and payment closing.
+ * it remains attributed for that shift's cash and payment activity.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -27,6 +27,11 @@ import {
   saveDraftIfUnchanged,
 } from '@/lib/draft-storage';
 import { inr } from '@/lib/inr';
+import {
+  POS_CART_CLEARED_FEEDBACK,
+  POS_PREPARED_BILL_CANCELLED_FEEDBACK,
+  queuedOrderVoidedFeedback,
+} from '@/lib/action-feedback';
 import { parseRupeesToMinor } from '@/lib/money-input';
 import {
   customers,
@@ -90,6 +95,7 @@ import {
 import { useAuth } from '@/modules/auth/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { ConfirmModal, PromptModal } from '@/components/ui/ConfirmDialog';
+import { useNotifications } from '@/components/ui/Notifications';
 import { subscribeRealtime } from '@/lib/realtime';
 
 const MEMBERSHIP_UI_ENABLED = GAMING_CENTRE_FEATURES.memberships;
@@ -116,6 +122,7 @@ import {
   isIncomingSharedPosOrder,
   isCurrentPosCustomerLookup,
   leaveSynchronousPosFlow,
+  mayReleaseCancelledPreparedBill,
   mayClaimCheckoutDuringHydration,
   posDraftNeedsReconciliation,
 } from './pos-draft-policy';
@@ -208,6 +215,7 @@ function matchesConfirmedSettlement(retry: PosCheckoutRetry, order: OrderDTO): b
 
 export default function LivePOSScreen() {
   const { me, terminalId, terminalReady } = useAuth();
+  const notifications = useNotifications();
   const canManualDiscount = canStageManualPosDiscount(me?.effective_permissions);
   const draftKey = me?.company_id && me.branch_id && me.user_id && terminalId
     ? posDraftKey(me.company_id, me.branch_id, me.user_id, terminalId)
@@ -1178,10 +1186,13 @@ export default function LivePOSScreen() {
       setHeldError('Another bill is being processed. Wait for it to finish; this order was not voided.');
       return;
     }
+    setHeldError(null);
     setVoidingId(row.id);
     try {
       await pos.voidOrder(row.id, reason);
       await loadHeldOrders(true);
+      const feedback = queuedOrderVoidedFeedback(row.source_label);
+      notifications.success(feedback.message, { title: feedback.title });
     } catch (e) { setHeldError((e as Error).message); }
     finally {
       setVoidingId(null);
@@ -1212,6 +1223,9 @@ export default function LivePOSScreen() {
     setPendingCartDiscountMinor(0);
     setPendingCartPointsMinor(0);
     clearCustomer();
+    notifications.info('The selected incoming bill was released without collecting payment.', {
+      title: 'Selection cancelled',
+    });
   }
 
   useEffect(() => {
@@ -1361,6 +1375,9 @@ export default function LivePOSScreen() {
     setPendingCartDiscountMinor(0);
     setPendingCartPointsMinor(0);
     clearCustomer();
+    notifications.success(POS_CART_CLEARED_FEEDBACK.message, {
+      title: POS_CART_CLEARED_FEEDBACK.title,
+    });
   }
 
   // Cart preview math (backend does the canonical math on submit)
@@ -1941,6 +1958,17 @@ export default function LivePOSScreen() {
         }
       }
       if (order.status === 'void') {
+        const draftCleared = draftKey ? clearPosDraft(draftKey) : false;
+        if (!mayReleaseCancelledPreparedBill(Boolean(draftKey), draftCleared)) {
+          const message =
+            'This bill is already cancelled on the server, but this browser could not clear its saved recovery copy. '
+            + 'This POS tab remains locked: close any other POS tab, reload this one, and confirm the bill shows Cancelled. '
+            + 'Do not recreate or collect payment for it.';
+          setError(message);
+          notifications.error(message, { title: 'Cancelled bill needs local reconciliation' });
+          void loadHeldOrders(true);
+          return;
+        }
         setCheckoutRetry(null);
         setCart([]);
         setResumingOrder(null);
@@ -2686,6 +2714,17 @@ export default function LivePOSScreen() {
         return;
       }
       if (order.status === 'void') {
+        const draftCleared = draftKey ? clearPosDraft(draftKey) : false;
+        if (!mayReleaseCancelledPreparedBill(Boolean(draftKey), draftCleared)) {
+          const message =
+            'This bill is already cancelled on the server, but this browser could not clear its saved recovery copy. '
+            + 'This POS tab remains locked: close any other POS tab, reload this one, and confirm the bill shows Cancelled. '
+            + 'Do not recreate or collect payment for it.';
+          setError(message);
+          notifications.error(message, { title: 'Cancelled bill needs local reconciliation' });
+          void loadHeldOrders(true);
+          return;
+        }
         setCheckoutRetry(null);
         setCart([]);
         setPendingCartDiscountMinor(0);
@@ -2694,11 +2733,21 @@ export default function LivePOSScreen() {
         setResumingOrder(null);
         setUnresolvedResumingOrderId(null);
         clearCustomer();
-        if (draftKey) clearPosDraft(draftKey);
         setError('This prepared bill was already cancelled; no payment was recorded.');
         return;
       }
       if (order.status === 'refunded') {
+        const draftCleared = draftKey ? clearPosDraft(draftKey) : false;
+        if (!mayReleaseCancelledPreparedBill(Boolean(draftKey), draftCleared)) {
+          const message =
+            'This order is already refunded on the server, but this browser could not clear its saved recovery copy. '
+            + 'This POS tab remains locked: close any other POS tab, reload this one, and confirm the refund before continuing. '
+            + 'Do not recreate the bill or collect another payment.';
+          setError(message);
+          notifications.error(message, { title: 'Refunded bill needs local reconciliation' });
+          void loadHeldOrders(true);
+          return;
+        }
         setCheckoutRetry(null);
         setCart([]);
         setPendingCartDiscountMinor(0);
@@ -2708,7 +2757,6 @@ export default function LivePOSScreen() {
         setUnresolvedResumingOrderId(null);
         clearCustomer();
         setReceipt(order);
-        if (draftKey) clearPosDraft(draftKey);
         setError('This order was already refunded; no new payment or cancellation was recorded.');
         return;
       }
@@ -2746,7 +2794,11 @@ export default function LivePOSScreen() {
         setCart([]);
         setResumingOrder(order);
         setCheckoutRetry(null);
-        setError('Payment was not recorded. The prepared held order remains available in POS.');
+        setError(null);
+        notifications.info(
+          'Payment was not recorded. The prepared held order remains available in POS for another cashier.',
+          { title: 'Held bill released' },
+        );
       } else {
         // Needs a reason before it can be voided — hand off to the reason
         // modal rather than blocking here; finishAbandonWithReason() below
@@ -2786,13 +2838,26 @@ export default function LivePOSScreen() {
     try {
       const retry = checkoutRetry?.pendingOrderId === order.id ? checkoutRetry : null;
       await pos.voidOrder(order.id, reason, retry?.checkoutClaimToken ?? undefined);
+      const draftCleared = draftKey ? clearPosDraft(draftKey) : false;
+      if (!mayReleaseCancelledPreparedBill(Boolean(draftKey), draftCleared)) {
+        const message =
+          'The prepared bill was cancelled on the server, but this browser could not clear its saved recovery copy. '
+          + 'This POS tab is locked: close any other POS tab, reload this one, and confirm the bill shows Cancelled. '
+          + 'Do not recreate or collect payment for it.';
+        setError(message);
+        notifications.error(message, { title: 'Cancelled bill needs local reconciliation' });
+        void loadHeldOrders(true);
+        return;
+      }
       setCheckoutRetry(null);
-      if (draftKey) clearPosDraft(draftKey);
       setCart([]);
       setResumingOrder(null);
       setUnresolvedResumingOrderId(null);
       clearCustomer();
-      setError('Prepared bill cancelled with an audit reason; no payment was recorded.');
+      setError(null);
+      notifications.success(POS_PREPARED_BILL_CANCELLED_FEEDBACK.message, {
+        title: POS_PREPARED_BILL_CANCELLED_FEEDBACK.title,
+      });
       void loadHeldOrders(true);
     } catch (e) {
       setError(`${(e as Error).message} The prepared bill remains locked; do not start another bill.`);

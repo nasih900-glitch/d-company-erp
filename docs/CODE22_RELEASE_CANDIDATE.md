@@ -1,5 +1,9 @@
 # D Company ERP 3.1.11 (code 22) release candidate
 
+> Superseded before signing by Code 23. Preserve tag `v3.1.11` and its green
+> unsigned evidence as immutable history, but do not approve, stage or activate
+> this candidate.
+
 Code 22 is the Gaming Centre pricing and operational-reliability release. It
 uses the exact owner-supplied tariff card dated 3 September 2026 and preserves
 the server as the authority for sessions, bills, discounts, payments, shifts,
@@ -44,12 +48,10 @@ on the session so later catalog edits cannot rewrite a historical bill.
 
 ## Release boundary
 
-This source is a candidate until all local/CI gates, migration rehearsal,
-signed-artifact verification, hosted-byte verification, production deployment
-and physical-tablet acceptance pass. Only the exact signed APK and manifest
-from the green immutable `v3.1.11` workflow may be staged for server delivery.
-Code 21 must be upgraded in place; do not uninstall a tablet with pending
-offline work.
+This source was superseded before its waiting signing gate was approved. No
+Code 22 APK is authorised for staging or activation. Code 21 must instead be
+upgraded in place to a later approved release; do not uninstall a tablet with
+pending offline work.
 
 GST remains deliberately outside this release's acceptance scope. Production
 must stay explicitly `unregistered`; enabling GST requires a separate tested

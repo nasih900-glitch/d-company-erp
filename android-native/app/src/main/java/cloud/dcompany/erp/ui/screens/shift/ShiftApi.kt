@@ -44,6 +44,9 @@ data class ShiftDetail(
     @SerialName("opened_by") val openedByUserId: String? = null,
     @SerialName("opened_by_name") val openedByName: String? = null,
     @SerialName("opened_by_email") val openedByEmail: String? = null,
+    @SerialName("closed_by") val closedByUserId: String? = null,
+    @SerialName("closed_by_name") val closedByName: String? = null,
+    @SerialName("closed_by_email") val closedByEmail: String? = null,
 )
 
 @Serializable
@@ -71,6 +74,9 @@ data class ShiftCloseResult(
     val id: String,
     val status: String,
     @SerialName("variance_minor") val varianceMinor: Long = 0,
+    @SerialName("opened_by") val openedByUserId: String? = null,
+    @SerialName("closed_by") val closedByUserId: String? = null,
+    @SerialName("closed_by_was_opener") val closedByWasOpener: Boolean? = null,
 )
 
 interface ShiftApi {

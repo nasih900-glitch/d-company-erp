@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.11` |
-| Version code | `22` |
+| Version name | `3.1.12` |
+| Version code | `23` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,14 +23,17 @@ build.
 
 ## Release status
 
-Version `3.1.11` (`22`) is the Gaming Centre tariff and operational-reliability
-candidate following the signed `3.1.10` (`21`) delivery predecessor. It must
-preserve Code 17's connectivity, privacy-preserving diagnostics, offline
-outbox, recovery, authentication, remote-assistance, and operational business
-contracts while adding the owner-approved Standard, Premium, Simdrive and
-multiplayer tariff, exact extension billing, held-bill discounts, and stronger
-shift/session recovery. It still requires exactly
-one server-confirmed Hybrid Gaming + POS workspace for the active shop. A green
+Version `3.1.12` (`23`) is the shared-shift accountability and operational
+feedback candidate following the signed `3.1.10` (`21`) delivery predecessor.
+It includes Code 22's owner-approved Standard, Premium, Simdrive and multiplayer
+tariff, exact extension billing, held-bill discounts, session recovery and all
+earlier connectivity, privacy-preserving diagnostics, offline outbox,
+authentication and remote-assistance contracts. It removes opener identity as
+an extra shift-close restriction: any authenticated employee with
+`pos.shift.close` may close the one shared shift, while the immutable history
+retains both opener and closer and all unpaid-work blockers remain enforced. It
+still requires exactly one server-confirmed Hybrid Gaming + POS workspace for
+the active shop. A green
 local build does not prove authenticated workflows on a physical Redmi Pad 2
 or production deployment: those remain explicit release gates.
 
@@ -41,7 +44,8 @@ server update. Codes `16` and `17` remain immutable upgrade history. Code `18`
 has no authorised APK and its failed tag must not be reused. Code `19` also has
 no authorised APK after a hosted-runner memory failure. Code `20` also has no
 authorised APK after its isolated signer rejected an unrooted SDK-tool lookup.
-Code `21` remains immutable signed predecessor history. Code `22` is the
+Code `21` remains immutable signed predecessor history. Code `22` was superseded
+before signing and must not be approved or activated. Code `23` is the
 separately gated server-delivery candidate; source preparation alone does not
 authorise hosting, registering, staging, advertising, or activating it. Rollout
 requires a separately reviewed immutable APK,
@@ -50,8 +54,8 @@ same-lineage upgrade proof. Android will still require the employee to approve
 installation. Do not raise the compatibility minimum merely because a newer
 candidate exists.
 
-See [`CODE22_RELEASE_CANDIDATE.md`](../docs/CODE22_RELEASE_CANDIDATE.md) for the
-exact tariff, operational changes, and release boundary.
+See [`CODE23_RELEASE_CANDIDATE.md`](../docs/CODE23_RELEASE_CANDIDATE.md) for the
+exact inherited tariff, shared-shift changes, and release boundary.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in
@@ -70,8 +74,9 @@ The native app now supports the operational day rather than POS browsing only:
   protected-owner step-up, and automatic one-shop workspace selection (the
   backend still enforces its branch/terminal scope without exposing unnecessary
   terminal controls when only one workspace is active);
-- shift open and close, opening float, staff opener identity, cash-denomination
-  counting, collection/refund breakdown, variance, and shift history;
+- shift open and permission-based cross-staff close, opening float, durable
+  opener/closer identity, cash-denomination counting, collection/refund
+  breakdown, variance, and shift history;
 - direct POS sales, quantities, authoritative checkout totals, cash/UPI/card,
   cash tendered/change, receipts, held-order settlement, and retry protection;
 - table rounds with quantities and special requests, release to KDS, required

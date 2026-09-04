@@ -35,6 +35,7 @@ from pydantic import (
 )
 from sqlalchemy import func, or_, select
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import aliased
 
 from app.core.db import SessionDep
 from app.core.errors import (
@@ -4809,6 +4810,78 @@ class ShiftRead(BaseModel):
     opened_by: UUID
     opened_by_name: str | None = None
     opened_by_email: str | None = None
+    # NULL on open shifts and on historical shifts closed before migration
+    # 0066. New closes preserve the first authenticated closer permanently.
+    closed_by: UUID | None = None
+    closed_by_name: str | None = None
+    closed_by_email: str | None = None
+
+
+async def _shift_feedback_error(
+    session,
+    shift: Shift,
+    *,
+    issue: str,
+    message: str,
+    next_action: str,
+    blocker_count: int | None = None,
+    known_branch: Branch | None = None,
+    known_terminal: Terminal | None = None,
+) -> BusinessRuleError:
+    """Build a staff-readable shift error without weakening tenant scope.
+
+    Callers validate the shift against the authenticated company, branch, and
+    workspace before using this helper. Names are returned only from rows that
+    match that validated scope, so a guessed UUID cannot disclose another
+    tenant's staff or workspace details.
+
+    The prose remains complete for older clients that show only
+    ``error.message``. Structured details let current clients present the same
+    facts cleanly without parsing the message.
+    """
+    opener = await session.get(User, shift.opened_by)
+    if opener is None or opener.company_id != shift.company_id:
+        opener_name = "Unknown staff member"
+    else:
+        opener_name = opener.name.strip() or "Unknown staff member"
+
+    branch = known_branch or await session.get(Branch, shift.branch_id)
+    if branch is None or branch.company_id != shift.company_id:
+        branch_name = "this shop"
+    else:
+        branch_name = branch.name.strip() or "this shop"
+
+    terminal = known_terminal or await session.get(Terminal, shift.terminal_id)
+    if terminal is None or terminal.branch_id != shift.branch_id:
+        workspace_name = "the current workspace"
+    else:
+        workspace_name = terminal.name.strip() or "the current workspace"
+
+    opened_at = shift.opened_at
+    if opened_at.tzinfo is None:
+        opened_at = opened_at.replace(tzinfo=UTC)
+    opened_at_utc = opened_at.astimezone(UTC)
+    opened_at_display = opened_at_utc.strftime("%d %b %Y at %H:%M UTC")
+
+    details: dict[str, object] = {
+        "issue": issue,
+        "shift_id": str(shift.id),
+        "shift_status": shift.status,
+        "opened_by_name": opener_name,
+        "opened_at": opened_at_utc.isoformat(),
+        "opened_at_display": opened_at_display,
+        "branch_name": branch_name,
+        "workspace_name": workspace_name,
+        "next_action": next_action,
+    }
+    if blocker_count is not None:
+        details["blocker_count"] = blocker_count
+
+    return BusinessRuleError(
+        f"{message} Shift opened by {opener_name} on {opened_at_display} in "
+        f"{workspace_name}. {next_action}",
+        details=details,
+    )
 
 
 @router.get("/shifts", response_model=list[ShiftRead])
@@ -4873,11 +4946,15 @@ async def list_shifts(
         .correlate(Shift)
         .scalar_subquery()
     )
+    opener_user = aliased(User, name="shift_opener")
+    closer_user = aliased(User, name="shift_closer")
     stmt = (
         select(
             Shift,
-            User.name,
-            User.email,
+            opener_user.name,
+            opener_user.email,
+            closer_user.name,
+            closer_user.email,
             sales_subq.label("pos_sales"),
             membership_sales_subq.label("membership_sales"),
             cash_collections_subq.label("cash_collections"),
@@ -4886,7 +4963,8 @@ async def list_shifts(
             pos_refunds_subq.label("pos_refunds"),
             membership_refunds_subq.label("membership_refunds"),
         )
-        .outerjoin(User, User.id == Shift.opened_by)
+        .outerjoin(opener_user, opener_user.id == Shift.opened_by)
+        .outerjoin(closer_user, closer_user.id == Shift.closed_by)
         .where(Shift.company_id == tenant.company_id)
         .order_by(Shift.opened_at.desc())
         .limit(min(limit, 200))
@@ -4903,6 +4981,8 @@ async def list_shifts(
         s,
         opener_name,
         opener_email,
+        closer_name,
+        closer_email,
         pos_sales_value,
         membership_sales_value,
         cash_collections_value,
@@ -4949,6 +5029,9 @@ async def list_shifts(
                 opened_by=s.opened_by,
                 opened_by_name=opener_name,
                 opened_by_email=opener_email,
+                closed_by=s.closed_by,
+                closed_by_name=closer_name,
+                closed_by_email=closer_email,
             )
         )
     return result
@@ -8095,14 +8178,31 @@ async def open_shift(
     ).scalar_one_or_none()
     if existing:
         if existing.opened_by != tenant.user_id:
-            raise BusinessRuleError(
-                "A shift is already open on this terminal by another staff member. "
-                "Open the Shifts tab to see who is responsible for it."
+            raise await _shift_feedback_error(
+                session,
+                existing,
+                issue="shift_already_open_by_another_staff",
+                message="A shift is already open for this workspace.",
+                next_action=(
+                    "Use the existing shift. Any staff member with Shift close access "
+                    "can close it after all orders, gaming sessions and pending "
+                    "payments are resolved."
+                ),
+                known_branch=branch,
+                known_terminal=terminal,
             )
         if int(existing.opening_float_minor or 0) != payload.opening_float_minor:
-            raise BusinessRuleError(
-                "This shift is already open with a different opening float. "
-                "Use the existing shift instead of changing its accountable cash start."
+            raise await _shift_feedback_error(
+                session,
+                existing,
+                issue="shift_already_open_with_different_float",
+                message="This shift is already open with a different opening cash amount.",
+                next_action=(
+                    "Use the existing shift and its recorded opening cash amount; do not "
+                    "open a second shift or replace its accountable starting balance."
+                ),
+                known_branch=branch,
+                known_terminal=terminal,
             )
         return {"id": str(existing.id), "status": existing.status}
     shift = Shift(
@@ -8139,29 +8239,51 @@ async def close_shift(
         terminal_id=tenant.terminal_id,
         operation="closing a shift",
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="close this shift",
-    )
+    # ``pos.shift.close`` is the authority for this transition. In the active
+    # single-workspace operation, another authorised employee must be able to
+    # complete the day if the opener has left. ``opened_by`` remains unchanged,
+    # ``closed_by`` records this authenticated closer, and the automatic audit
+    # record attributes the mutation to the same current user.
     if shift.status == "closed":
         if shift.counted_minor is None:
-            raise BusinessRuleError(
-                "Shift is already closed but its saved counted amount is missing. "
-                "Ask a protected owner to reconcile the shift before retrying."
+            raise await _shift_feedback_error(
+                session,
+                shift,
+                issue="closed_shift_count_missing",
+                message="This shift is already closed, but its saved cash count is missing.",
+                next_action=(
+                    "Ask the protected owner to reconcile the saved shift record; do not "
+                    "submit another closing count."
+                ),
             )
         if int(shift.counted_minor) != payload.counted_minor:
-            raise BusinessRuleError(
-                "Shift is already closed with a different counted amount."
+            raise await _shift_feedback_error(
+                session,
+                shift,
+                issue="closed_shift_count_mismatch",
+                message="This shift was already closed using a different cash count.",
+                next_action=(
+                    "Open Shift history and use the saved closing record; do not submit "
+                    "a second cash count."
+                ),
             )
+        closed_by = getattr(shift, "closed_by", None)
         return {
             "id": str(shift.id),
             "status": shift.status,
             "variance_minor": shift.variance_minor,
+            "opened_by": str(shift.opened_by),
+            "closed_by": str(closed_by) if closed_by else None,
+            "closed_by_was_opener": closed_by == shift.opened_by if closed_by else None,
         }
     if shift.status != "open":
-        raise BusinessRuleError(f"Shift is {shift.status} and cannot be closed.")
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="shift_not_open",
+            message=f"This shift is {shift.status} and cannot be closed again.",
+            next_action="Open Shift history and use the existing shift record.",
+        )
     unfinished_orders = int(
         (
             await session.execute(
@@ -8174,8 +8296,19 @@ async def close_shift(
         or 0
     )
     if unfinished_orders:
-        raise BusinessRuleError(
-            f"cannot close shift with {unfinished_orders} unfinished order(s)"
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unfinished_orders",
+            blocker_count=unfinished_orders,
+            message=(
+                f"This shift cannot close because {unfinished_orders} order(s) are "
+                "still open or held."
+            ),
+            next_action=(
+                "Open POS, complete payment or properly void each unfinished order, "
+                "then close the shift again."
+            ),
         )
     unacknowledged_kitchen_cancellations = int(
         (
@@ -8193,11 +8326,19 @@ async def close_shift(
         or 0
     )
     if unacknowledged_kitchen_cancellations:
-        raise BusinessRuleError(
-            "cannot close shift with "
-            f"{unacknowledged_kitchen_cancellations} kitchen cancellation(s) still "
-            "waiting for acknowledgement. Open KDS, review each cancelled item, and "
-            "acknowledge it before closing the shift."
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unacknowledged_kitchen_cancellations",
+            blocker_count=unacknowledged_kitchen_cancellations,
+            message=(
+                f"This shift cannot close because {unacknowledged_kitchen_cancellations} "
+                "kitchen cancellation(s) still need acknowledgement."
+            ),
+            next_action=(
+                "Open KDS, review and acknowledge every cancelled item, then close "
+                "the shift again."
+            ),
         )
     running_sessions = int(
         (
@@ -8211,8 +8352,19 @@ async def close_shift(
         or 0
     )
     if running_sessions:
-        raise BusinessRuleError(
-            f"cannot close shift with {running_sessions} running gaming session(s)"
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="running_gaming_sessions",
+            blocker_count=running_sessions,
+            message=(
+                f"This shift cannot close because {running_sessions} gaming session(s) "
+                "are still running or paused."
+            ),
+            next_action=(
+                "Open Gaming, stop each session and finish its billing, then close the "
+                "shift again."
+            ),
         )
     unbilled_sessions = int(
         (
@@ -8227,9 +8379,19 @@ async def close_shift(
         or 0
     )
     if unbilled_sessions:
-        raise BusinessRuleError(
-            f"cannot close shift with {unbilled_sessions} stopped session(s) "
-            "not yet sent to POS"
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unbilled_gaming_sessions",
+            blocker_count=unbilled_sessions,
+            message=(
+                f"This shift cannot close because {unbilled_sessions} stopped gaming "
+                "session(s) have not been sent to POS."
+            ),
+            next_action=(
+                "Open Gaming, send every payment-due session to POS and complete or "
+                "properly void its bill, then close the shift again."
+            ),
         )
     membership_payments_due = int(
         (
@@ -8254,11 +8416,20 @@ async def close_shift(
         or 0
     )
     if membership_payments_due:
-        raise BusinessRuleError(
-            f"cannot close shift with {membership_payments_due} accepted membership "
-            "payment task(s) still unresolved. Open Memberships and either finish "
-            "the server-confirmed cash/provider collection, or have a protected "
-            "owner withdraw or resolve it after verifying that no money moved."
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unresolved_membership_payments",
+            blocker_count=membership_payments_due,
+            message=(
+                f"This shift cannot close because {membership_payments_due} accepted "
+                "membership payment task(s) are still unresolved."
+            ),
+            next_action=(
+                "Open Memberships and finish the server-confirmed cash or provider "
+                "collection, or ask the protected owner to withdraw or resolve it "
+                "after confirming that no money moved."
+            ),
         )
     unresolved_refund_recovery_ids = (
         (
@@ -8286,11 +8457,21 @@ async def close_shift(
     )
     if unresolved_refund_recovery_ids:
         first_recovery_id = unresolved_refund_recovery_ids[0]
-        raise BusinessRuleError(
-            f"cannot close shift with {len(unresolved_refund_recovery_ids)} unresolved "
-            "saved membership refund recovery task(s). Open Memberships > Refund "
-            f"Recovery and resolve task {first_recovery_id} after a protected owner "
-            "verifies whether money moved. Do not repeat the refund."
+        recovery_count = len(unresolved_refund_recovery_ids)
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unresolved_membership_refund_recovery",
+            blocker_count=recovery_count,
+            message=(
+                f"This shift cannot close because {recovery_count} saved membership "
+                "refund recovery task(s) are unresolved."
+            ),
+            next_action=(
+                "Open Memberships > Refund Recovery and ask the protected owner to "
+                f"verify whether money moved before resolving task {first_recovery_id}. "
+                "Do not repeat the refund."
+            ),
         )
     membership_refunds_due = int(
         (
@@ -8314,11 +8495,20 @@ async def close_shift(
         or 0
     )
     if membership_refunds_due:
-        raise BusinessRuleError(
-            f"cannot close shift with {membership_refunds_due} accepted membership "
-            "refund task(s) still unresolved. Open Memberships and either finish the "
-            "server-confirmed cash handover/provider payout, or have a protected owner "
-            "resolve it after verifying that no money moved."
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unresolved_membership_refunds",
+            blocker_count=membership_refunds_due,
+            message=(
+                f"This shift cannot close because {membership_refunds_due} accepted "
+                "membership refund task(s) are still unresolved."
+            ),
+            next_action=(
+                "Open Memberships and finish the server-confirmed cash handover or "
+                "provider payout, or ask the protected owner to resolve it after "
+                "confirming that no money moved."
+            ),
         )
     pos_refunds_due = int(
         (
@@ -8339,13 +8529,23 @@ async def close_shift(
         or 0
     )
     if pos_refunds_due:
-        raise BusinessRuleError(
-            f"cannot close shift with {pos_refunds_due} accepted POS refund(s) still "
-            "unresolved. Open Refunds and finish the server-confirmed cash handover or "
-            "provider payout, or ask a protected owner to resolve the task after "
-            "verifying that no money moved."
+        raise await _shift_feedback_error(
+            session,
+            shift,
+            issue="unresolved_pos_refunds",
+            blocker_count=pos_refunds_due,
+            message=(
+                f"This shift cannot close because {pos_refunds_due} accepted POS "
+                "refund(s) are still unresolved."
+            ),
+            next_action=(
+                "Open Refunds and finish the server-confirmed cash handover or provider "
+                "payout, or ask the protected owner to resolve it after confirming that "
+                "no money moved."
+            ),
         )
     shift.closed_at = datetime.now(timezone.utc)
+    shift.closed_by = tenant.user_id
     shift.counted_minor = payload.counted_minor
     shift.variance_minor = payload.counted_minor - (shift.expected_minor or 0)
     shift.status = "closed"
@@ -8353,4 +8553,7 @@ async def close_shift(
         "id": str(shift.id),
         "status": shift.status,
         "variance_minor": shift.variance_minor,
+        "opened_by": str(shift.opened_by),
+        "closed_by": str(shift.closed_by),
+        "closed_by_was_opener": shift.closed_by == shift.opened_by,
     }

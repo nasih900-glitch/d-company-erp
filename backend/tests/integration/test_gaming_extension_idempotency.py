@@ -387,6 +387,7 @@ async def test_scoped_ledger_absent_extension_refusals_are_typed_discard_proof(
     else:
         shift.status = "closed"
         shift.closed_at = datetime.now(UTC)
+        shift.closed_by = seed_owner["owner"].id
     await session.commit()
     token = await _login(client, seed_owner)
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
@@ -11,7 +12,7 @@ from pydantic import ValidationError as PydanticValidationError
 from app.api.v1.pos.router import ShiftOpenRequest, open_shift
 from app.core.errors import BusinessRuleError
 from app.core.tenant import TenantContext
-from app.models import Shift
+from app.models import Shift, User
 
 COMPANY_ID = UUID("11111111-1111-1111-1111-111111111111")
 BRANCH_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -28,8 +29,9 @@ class _Result:
 
 
 class _QueuedSession:
-    def __init__(self, results: list[_Result]) -> None:
+    def __init__(self, results: list[_Result], *, entities=None) -> None:
         self.results = list(results)
+        self.entities = {} if entities is None else entities
         self.statements = []
         self.added = []
 
@@ -40,6 +42,9 @@ class _QueuedSession:
 
     def add(self, entity) -> None:
         self.added.append(entity)
+
+    async def get(self, model, entity_id):
+        return self.entities.get((model, entity_id))
 
 
 def _tenant() -> TenantContext:
@@ -54,13 +59,19 @@ def _tenant() -> TenantContext:
 
 
 def _branch():
-    return SimpleNamespace(id=BRANCH_ID, company_id=COMPANY_ID, deleted_at=None)
+    return SimpleNamespace(
+        id=BRANCH_ID,
+        company_id=COMPANY_ID,
+        name="Main Shop",
+        deleted_at=None,
+    )
 
 
 def _terminal(*, active: bool = True, purpose: str = "hybrid"):
     return SimpleNamespace(
         id=TERMINAL_ID,
         branch_id=BRANCH_ID,
+        name="Gaming Centre",
         is_active=active,
         purpose=purpose,
     )
@@ -99,6 +110,58 @@ async def test_shift_open_locks_branch_then_terminal_and_revalidates_scope() -> 
     assert "FOR UPDATE" in sql[1]
     assert "FROM shifts" in sql[2]
     assert "FOR UPDATE" in sql[2]
+
+
+@pytest.mark.asyncio
+async def test_shift_open_conflict_names_opener_workspace_and_next_action() -> None:
+    opener_id = uuid4()
+    opened_at = datetime(2026, 9, 4, 16, 30, tzinfo=UTC)
+    existing = Shift(
+        id=uuid4(),
+        company_id=COMPANY_ID,
+        branch_id=BRANCH_ID,
+        terminal_id=TERMINAL_ID,
+        opened_by=opener_id,
+        opened_at=opened_at,
+        opening_float_minor=0,
+        expected_minor=0,
+        status="open",
+    )
+    session = _QueuedSession(
+        [_Result(_branch()), _Result(_terminal()), _Result(existing)],
+        entities={
+            (User, opener_id): SimpleNamespace(
+                company_id=COMPANY_ID,
+                name="Rafi",
+            )
+        },
+    )
+
+    with pytest.raises(
+        BusinessRuleError,
+        match=(
+            "already open.*Rafi.*Gaming Centre.*Any staff member with Shift close "
+            "access"
+        ),
+    ) as raised:
+        await open_shift(ShiftOpenRequest(), session, _tenant())
+
+    assert raised.value.details == {
+        "issue": "shift_already_open_by_another_staff",
+        "shift_id": str(existing.id),
+        "shift_status": "open",
+        "opened_by_name": "Rafi",
+        "opened_at": opened_at.isoformat(),
+        "opened_at_display": "04 Sep 2026 at 16:30 UTC",
+        "branch_name": "Main Shop",
+        "workspace_name": "Gaming Centre",
+        "next_action": (
+            "Use the existing shift. Any staff member with Shift close access can "
+            "close it after all orders, gaming sessions and pending payments are "
+            "resolved."
+        ),
+    }
+    assert session.added == []
 
 
 @pytest.mark.asyncio

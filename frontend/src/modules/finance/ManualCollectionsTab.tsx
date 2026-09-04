@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Ban, BookOpen, Loader2, Plus, RefreshCw } from 'lucide-react';
 
 import Modal from '@/components/ui/Modal';
+import { useNotifications } from '@/components/ui/Notifications';
+import { FINANCE_ACTION_FEEDBACK } from '@/lib/action-feedback';
 import {
   finance,
   pos,
@@ -27,6 +29,7 @@ import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 // ============================================================================
 export default function ManualCollectionsTab() {
   const { me } = useAuth();
+  const notifications = useNotifications();
   const [rows, setRows] = useState<ManualCollectionDTO[]>([]);
   const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
   const [companyTimezone, setCompanyTimezone] = useState(DEFAULT_BUSINESS_TIMEZONE);
@@ -226,14 +229,24 @@ export default function ManualCollectionsTab() {
           defaultBranchId={me?.branch_id ?? branches[0]?.id ?? ''}
           companyTimezone={companyTimezone}
           onClose={() => setAddOpen(false)}
-          onSuccess={() => { setAddOpen(false); void load(); }}
+          onSuccess={() => {
+            setAddOpen(false);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.manualCollectionRecorded;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
       {voiding && (
         <VoidManualCollectionForm
           row={voiding}
           onClose={() => setVoiding(null)}
-          onSuccess={() => { setVoiding(null); void load(); }}
+          onSuccess={() => {
+            setVoiding(null);
+            void load();
+            const feedback = FINANCE_ACTION_FEEDBACK.manualCollectionVoided;
+            notifications.success(feedback.message, { title: feedback.title });
+          }}
         />
       )}
     </div>

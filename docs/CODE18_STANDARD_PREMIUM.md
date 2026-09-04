@@ -1,7 +1,7 @@
 # Code 18 standard-premium Android direction
 
-Status: selected visual direction, carried unchanged into Android `3.1.11` /
-code `22` after the signed code-21 predecessor.
+Status: selected visual direction, carried unchanged into Android `3.1.12` /
+code `23` after the signed code-21 predecessor.
 
 ## Outcome
 
@@ -45,7 +45,7 @@ appear with text or icon semantics.
 - Keep minimum 48 dp operational touch targets.
 - Do not change permissions, navigation routes, API calls, financial logic,
   offline queues or remote-assistance authority.
-- Do not advertise or activate the Code 22 build through the server
+- Do not advertise or activate the Code 23 build through the server
   update channel until
   the signed artifact and upgrade proof have passed.
 
@@ -56,6 +56,6 @@ appear with text or icon semantics.
 - Focus, pressed, disabled, error, loading and offline states remain explicit.
 - Tablet landscape has no clipping, overflow or reduced tap targets.
 - Android unit, connected UI, lint and signed build gates pass.
-- A signed Code 21 to Code 22 replacement install preserves package identity and
+- A signed Code 21 to Code 23 replacement install preserves package identity and
   retained app state on the emulator.
 - Physical Redmi Pad 2 / HyperOS remains a separate final acceptance gate.

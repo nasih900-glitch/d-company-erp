@@ -56,6 +56,15 @@ class Shift(Base, TimestampMixin, TenantMixin):
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Historical rows remain NULL because the pre-0066 schema did not retain
+    # who closed them. New API closes record the authenticated operator once;
+    # the database migration makes that attribution immutable thereafter.
+    closed_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     opening_float_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     expected_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)

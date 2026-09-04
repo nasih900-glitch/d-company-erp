@@ -23,6 +23,9 @@ data class ShiftHistoryRow(
     val openedByUserId: String?,
     val openedByName: String?,
     val openedByEmail: String?,
+    val closedByUserId: String?,
+    val closedByName: String?,
+    val closedByEmail: String?,
 )
 
 /**
@@ -61,6 +64,9 @@ object ShiftHistoryMergePolicy {
                         openedByUserId = row.openedByUserId,
                         openedByName = row.openedByName,
                         openedByEmail = row.openedByEmail,
+                        closedByUserId = row.closedByUserId,
+                        closedByName = row.closedByName,
+                        closedByEmail = row.closedByEmail,
                     ),
                 )
             }
@@ -87,6 +93,9 @@ object ShiftHistoryMergePolicy {
                             openedByUserId = row.openedByUserId,
                             openedByName = row.openedByName,
                             openedByEmail = row.openedByEmail,
+                            closedByUserId = null,
+                            closedByName = null,
+                            closedByEmail = null,
                         ),
                     )
                 }

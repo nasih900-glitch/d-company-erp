@@ -70,5 +70,8 @@ internal fun ShiftDetail.toShiftHistoryCache(
     openedByUserId = openedByUserId,
     openedByName = openedByName,
     openedByEmail = openedByEmail,
+    closedByUserId = closedByUserId,
+    closedByName = closedByName,
+    closedByEmail = closedByEmail,
     fetchedAtMillis = fetchedAtMillis,
 )

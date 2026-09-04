@@ -26,7 +26,6 @@ from app.models import (
     PosRefundCashHandoffCompletion,
     PosRefundProviderPayoutStart,
     PosRefundRequest,
-    Shift,
     User,
 )
 
@@ -74,6 +73,44 @@ def _insert_legacy_terminal(
         },
     )
     return SimpleNamespace(id=terminal_id)
+
+
+def _insert_legacy_shift(
+    session: Session,
+    *,
+    company_id,
+    branch_id,
+    terminal_id,
+    opened_by,
+    opened_at: datetime,
+    expected_minor: int = 0,
+) -> SimpleNamespace:
+    """Insert the pre-0066 shift shape used by historical migration tests."""
+
+    shift_id = uuid4()
+    session.execute(
+        text(
+            """
+            INSERT INTO shifts (
+                id, company_id, branch_id, terminal_id, opened_by, opened_at,
+                opening_float_minor, expected_minor, status
+            ) VALUES (
+                :id, :company_id, :branch_id, :terminal_id, :opened_by,
+                :opened_at, 0, :expected_minor, 'open'
+            )
+            """
+        ),
+        {
+            "id": shift_id,
+            "company_id": company_id,
+            "branch_id": branch_id,
+            "terminal_id": terminal_id,
+            "opened_by": opened_by,
+            "opened_at": opened_at,
+            "expected_minor": expected_minor,
+        },
+    )
+    return SimpleNamespace(id=shift_id)
 
 
 def _insert_legacy_order(
@@ -289,19 +326,14 @@ def test_0034_downgrade_refuses_to_drop_normalized_order_customer() -> None:
                 session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
-                shift = Shift(
-                    id=uuid4(),
+                shift = _insert_legacy_shift(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     opened_by=owner.id,
                     opened_at=now,
-                    opening_float_minor=0,
-                    expected_minor=0,
-                    status="open",
                 )
-                session.add(shift)
-                session.flush()
                 _insert_legacy_order(
                     session,
                     company_id=company.id,
@@ -378,19 +410,14 @@ def test_0036_upgrade_refuses_untrusted_legacy_refund_provenance(
                 session.add(owner)
                 session.flush()
                 now = datetime.now(UTC)
-                shift = Shift(
-                    id=uuid4(),
+                shift = _insert_legacy_shift(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     opened_by=owner.id,
                     opened_at=now,
-                    opening_float_minor=0,
-                    expected_minor=0,
-                    status="open",
                 )
-                session.add(shift)
-                session.flush()
                 order = _insert_legacy_order(
                     session,
                     company_id=company.id,
@@ -493,19 +520,15 @@ def test_0036_preserves_legacy_refund_but_rejects_forward_unlinked_writes() -> N
                 session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
-                shift = Shift(
-                    id=uuid4(),
+                shift = _insert_legacy_shift(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     opened_by=owner.id,
                     opened_at=now,
-                    opening_float_minor=0,
                     expected_minor=10_000,
-                    status="open",
                 )
-                session.add(shift)
-                session.flush()
                 order = _insert_legacy_order(
                     session,
                     company_id=company.id,
@@ -688,19 +711,14 @@ def test_0036_downgrade_refuses_to_drop_forward_workflow_history(
                 session.add_all([owner, customer])
                 session.flush()
                 now = datetime.now(UTC)
-                shift = Shift(
-                    id=uuid4(),
+                shift = _insert_legacy_shift(
+                    session,
                     company_id=company.id,
                     branch_id=branch.id,
                     terminal_id=terminal.id,
                     opened_by=owner.id,
                     opened_at=now,
-                    opening_float_minor=0,
-                    expected_minor=0,
-                    status="open",
                 )
-                session.add(shift)
-                session.flush()
                 order = _insert_legacy_order(
                     session,
                     company_id=company.id,

@@ -40,6 +40,7 @@ from app.models import (
     Station,
     Table,
     Terminal,
+    User,
 )
 
 
@@ -854,6 +855,7 @@ def _shift(tenant: TenantContext, **overrides):
         "terminal_id": tenant.terminal_id,
         "opened_by": tenant.user_id,
         "opened_at": datetime.now(UTC),
+        "closed_by": None,
         "closed_at": None,
         "opening_float_minor": 0,
         "expected_minor": 5_000,
@@ -1558,13 +1560,14 @@ def test_shift_close_count_schema_rejects_negative_but_preserves_zero() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_shift_replays_only_the_same_count_and_keeps_opener_accountability() -> None:
+async def test_close_shift_replay_allows_another_authorized_staff_member() -> None:
     tenant = _tenant()
     closed = _shift(
         tenant,
         status="closed",
         counted_minor=4_900,
         variance_minor=-100,
+        closed_by=tenant.user_id,
         closed_at=datetime.now(UTC),
     )
 
@@ -1574,9 +1577,17 @@ async def test_close_shift_replays_only_the_same_count_and_keeps_opener_accounta
         _Session(_Result(scalar=closed)),
         tenant,
     )
-    assert replay == {"id": str(closed.id), "status": "closed", "variance_minor": -100}
+    expected = {
+        "id": str(closed.id),
+        "status": "closed",
+        "variance_minor": -100,
+        "opened_by": str(closed.opened_by),
+        "closed_by": str(closed.closed_by),
+        "closed_by_was_opener": True,
+    }
+    assert replay == expected
 
-    with pytest.raises(BusinessRuleError, match="different counted amount"):
+    with pytest.raises(BusinessRuleError, match="different cash count"):
         await pos_router.close_shift(
             closed.id,
             pos_router.ShiftCloseRequest(counted_minor=4_800),
@@ -1589,13 +1600,14 @@ async def test_close_shift_replays_only_the_same_count_and_keeps_opener_accounta
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
     )
-    with pytest.raises(BusinessRuleError, match="Only the staff member who opened this shift"):
-        await pos_router.close_shift(
-            closed.id,
-            pos_router.ShiftCloseRequest(counted_minor=4_900),
-            _Session(_Result(scalar=closed)),
-            other_staff,
-        )
+    replay_by_colleague = await pos_router.close_shift(
+        closed.id,
+        pos_router.ShiftCloseRequest(counted_minor=4_900),
+        _Session(_Result(scalar=closed)),
+        other_staff,
+    )
+    assert replay_by_colleague == expected
+    assert closed.closed_by == tenant.user_id
 
 
 @pytest.mark.asyncio
@@ -1610,7 +1622,7 @@ async def test_close_shift_replay_rejects_missing_saved_count_even_when_payload_
         closed_at=closed_at,
     )
 
-    with pytest.raises(BusinessRuleError, match="saved counted amount is missing"):
+    with pytest.raises(BusinessRuleError, match="saved cash count is missing"):
         await pos_router.close_shift(
             closed.id,
             pos_router.ShiftCloseRequest(counted_minor=0),
@@ -1634,15 +1646,47 @@ async def test_close_shift_blocks_stopped_sessions_not_sent_to_pos() -> None:
         _Result(scalar=0),  # no unacknowledged kitchen cancellation
         _Result(scalar=0),  # running sessions
         _Result(scalar=1),  # stopped, unbilled sessions
+        entities={
+            (User, shift.opened_by): SimpleNamespace(
+                company_id=shift.company_id,
+                name="Rafi",
+            ),
+            (Branch, shift.branch_id): SimpleNamespace(
+                company_id=shift.company_id,
+                name="Main Shop",
+            ),
+            (Terminal, shift.terminal_id): SimpleNamespace(
+                branch_id=shift.branch_id,
+                name="Gaming Centre",
+            ),
+        },
     )
 
-    with pytest.raises(BusinessRuleError, match="1 stopped session.*not yet sent to POS"):
+    with pytest.raises(
+        BusinessRuleError,
+        match="1 stopped gaming session.*not been sent to POS.*Rafi.*Gaming Centre",
+    ) as raised:
         await pos_router.close_shift(
             shift.id,
             pos_router.ShiftCloseRequest(counted_minor=5_000),
             session,
             tenant,
         )
+    assert raised.value.details == {
+        "issue": "unbilled_gaming_sessions",
+        "shift_id": str(shift.id),
+        "shift_status": "open",
+        "opened_by_name": "Rafi",
+        "opened_at": shift.opened_at.isoformat(),
+        "opened_at_display": shift.opened_at.strftime("%d %b %Y at %H:%M UTC"),
+        "branch_name": "Main Shop",
+        "workspace_name": "Gaming Centre",
+        "next_action": (
+            "Open Gaming, send every payment-due session to POS and complete or "
+            "properly void its bill, then close the shift again."
+        ),
+        "blocker_count": 1,
+    }
     assert shift.status == "open"
     assert shift.closed_at is None
 
@@ -1687,6 +1731,8 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
                     shift,
                     "QA Owner",
                     "qa-owner@example.test",
+                    None,
+                    None,
                     83_600,
                     199_900,
                     93_600,
@@ -1727,6 +1773,9 @@ async def test_shift_summary_keeps_pos_and_membership_receipts_explicit() -> Non
     assert summary.net_collections_minor == 280_500
     assert summary.expected_minor == 5_000  # UPI receipts never alter drawer cash
     assert summary.opened_by_name == "QA Owner"
+    assert summary.closed_by is None
+    assert summary.closed_by_name is None
+    assert summary.closed_by_email is None
 
     # Exercise the API serialization boundary too.  A model-level assertion
     # alone would not catch an accidentally optional/excluded response field,
@@ -1780,7 +1829,7 @@ async def test_close_shift_blocks_unresolved_membership_payment() -> None:
 
     with pytest.raises(
         BusinessRuleError,
-        match="accepted membership payment task.*cash/provider collection",
+        match="accepted membership payment task.*cash or provider collection",
     ):
         await pos_router.close_shift(
             shift.id,
@@ -1810,7 +1859,7 @@ async def test_close_shift_blocks_unresolved_membership_refund_on_any_rail() -> 
 
     with pytest.raises(
         BusinessRuleError,
-        match="accepted membership refund task.*cash handover/provider payout",
+        match="accepted membership refund task.*cash handover or provider payout",
     ):
         await pos_router.close_shift(
             shift.id,
@@ -1843,7 +1892,7 @@ async def test_close_shift_blocks_only_scoped_unresolved_membership_refund_recov
 
     with pytest.raises(
         BusinessRuleError,
-        match=rf"with 2 unresolved saved membership refund recovery.*{recovery_id}",
+        match=rf"because 2 saved membership refund recovery.*{recovery_id}",
     ):
         await pos_router.close_shift(
             shift.id,
@@ -1875,7 +1924,8 @@ async def test_close_shift_blocks_only_scoped_unresolved_membership_refund_recov
 @pytest.mark.asyncio
 async def test_close_shift_succeeds_only_after_all_financial_tasks_resolve() -> None:
     tenant = _tenant()
-    shift = _shift(tenant)
+    opener_id = uuid4()
+    shift = _shift(tenant, opened_by=opener_id)
     session = _Session(
         _Result(scalar=shift),
         _Result(scalar=0),  # unfinished POS orders
@@ -1895,8 +1945,16 @@ async def test_close_shift_succeeds_only_after_all_financial_tasks_resolve() -> 
         tenant,
     )
 
-    assert response == {"id": str(shift.id), "status": "closed", "variance_minor": -100}
+    assert response == {
+        "id": str(shift.id),
+        "status": "closed",
+        "variance_minor": -100,
+        "opened_by": str(opener_id),
+        "closed_by": str(tenant.user_id),
+        "closed_by_was_opener": False,
+    }
     assert shift.closed_at is not None
+    assert shift.closed_by == tenant.user_id
 
 
 @pytest.mark.asyncio

@@ -11,8 +11,8 @@ Current direct-channel release candidate:
 | --- | --- |
 | App name | `D Company` |
 | Package name | `cloud.dcompany.erp` |
-| Version name | `3.1.11` |
-| Version code | `22` |
+| Version name | `3.1.12` |
+| Version code | `23` |
 | Minimum compatible client code | `8` |
 | Production API | `https://dcompany.duckdns.org/api/v1/` |
 
@@ -22,8 +22,9 @@ server-registry-eligible identity; it is not the current activation target.
 Codes `16` (`3.1.5`) and `17` (`3.1.6`) are immutable predecessors. Tag
 `v3.1.7` / code `18`, `v3.1.8` / code `19`, and `v3.1.9` / code `20` failed before
 signing and must not be reused. Code `21` (`3.1.10`) is immutable signed
-predecessor history. Code `22` (`3.1.11`) is the current direct-channel
-candidate only. Do not upload it to Play
+predecessor history. Code `22` (`3.1.11`) was superseded before signing and
+must not be approved or activated. Code `23` (`3.1.12`) is the current
+direct-channel candidate only. Do not upload it to Play
 or register, stage, advertise, or activate it without the green tagged workflow
 and reviewed rollout procedure. Physical Redmi Pad 2 acceptance remains a
 separate gate.

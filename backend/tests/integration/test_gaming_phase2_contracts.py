@@ -1148,6 +1148,7 @@ async def test_delayed_offline_stop_cannot_post_after_source_shift_closed(
     shift = _shift(seed_owner, opened_at=started_at - timedelta(hours=1))
     shift.status = "closed"
     shift.closed_at = datetime.now(UTC) - timedelta(days=29)
+    shift.closed_by = seed_owner["owner"].id
     gaming_session = _running_session(
         seed_owner,
         station=station,

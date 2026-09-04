@@ -158,5 +158,8 @@ data class ShiftHistoryCacheEntity(
     val openedByUserId: String?,
     val openedByName: String?,
     val openedByEmail: String?,
+    val closedByUserId: String?,
+    val closedByName: String?,
+    val closedByEmail: String?,
     val fetchedAtMillis: Long,
 )

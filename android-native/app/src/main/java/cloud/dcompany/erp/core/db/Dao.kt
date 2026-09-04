@@ -572,7 +572,7 @@ interface SyncMetaDao {
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
     ],
-    version = 41,
+    version = 42,
     exportSchema = true,
 )
 @TypeConverters(

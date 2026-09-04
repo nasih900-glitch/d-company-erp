@@ -55,10 +55,11 @@ predecessors.
 Tags `v3.1.7` (version code `18`), `v3.1.8` (version code `19`), and `v3.1.9`
 (version code `20`) failed before signing and produced no authorised APK. The
 tags are immutable and must never be moved, rebuilt, or reused. Code `21`
-(`3.1.10`) is immutable signed predecessor history. The current
-server-delivery candidate is `3.1.11` (version code `22`). Only the exact signed
-artifact and release manifest produced together by the green `v3.1.11` GitHub
-Actions workflow may be staged. A local Gradle build or
+(`3.1.10`) is immutable signed predecessor history. Code `22` (`3.1.11`) was
+superseded before signing and its waiting signing job must not be approved. The
+current server-delivery candidate is `3.1.12` (version code `23`). Only the
+exact signed artifact and release manifest produced together by the green
+`v3.1.12` GitHub Actions workflow may be staged. A local Gradle build or
 local evidence bundle is not release authority, even when its package and
 signer are correct.
 
@@ -118,11 +119,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
-## Code 22 staging procedure
+## Code 23 staging procedure
 
 1. Confirm the code-`21` partner installation is signed by the trusted
    certificate, can check for updates, and has no pending offline work.
-2. Coordinate the application at `3.1.11` / code `22`. Run the complete
+2. Coordinate the application at `3.1.12` / code `23`. Run the complete
    release workflow and obtain its signed direct APK and
    `release-manifest.json` from the same workflow run.
 3. Download both files without renaming or modifying either one. First run a
@@ -130,10 +131,10 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.11/release-manifest.json \
-     --apk /secure/release-3.1.11/d-company-erp-v3.1.11-direct.apk \
+     --manifest /secure/release-3.1.12/release-manifest.json \
+     --apk /secure/release-3.1.12/d-company-erp-v3.1.12-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
-     --release-notes "Exact Gaming Centre tariff, multiplayer billing and shift recovery"
+     --release-notes "Gaming Centre billing and accountable shared-shift closing"
    ```
 
    This checks the manifest, byte size, SHA-256, package
@@ -144,10 +145,10 @@ responses and network uncertainty remain blocked. The APK itself must return:
 
    ```bash
    python3 ops/stage_android_release.py \
-     --manifest /secure/release-3.1.11/release-manifest.json \
-     --apk /secure/release-3.1.11/d-company-erp-v3.1.11-direct.apk \
+     --manifest /secure/release-3.1.12/release-manifest.json \
+     --apk /secure/release-3.1.12/d-company-erp-v3.1.12-direct.apk \
      --expected-signer-sha256 <trusted-release-certificate-sha256> \
-     --release-notes "Exact Gaming Centre tariff, multiplayer billing and shift recovery" \
+     --release-notes "Gaming Centre billing and accountable shared-shift closing" \
      --ssh-key ~/.ssh/dcompany_do \
      --apply
    ```
@@ -159,11 +160,11 @@ responses and network uncertainty remain blocked. The APK itself must return:
    unadvertised immutable bytes; it must never cause a release offer.
 
 5. In the owner ERP release screen, compare version, release notes, SHA-256,
-   size, signer and source evidence. Activate only the staged code-`22` row.
+   size, signer and source evidence. Activate only the staged code-`23` row.
    The backend performs a second no-redirect public byte verification before the
    atomic status transition and records the owner action in the Audit Log.
 6. On one code-`21` tablet, refresh the update check, download, install and
-   reopen code `22`. Verify sign-in, shift, Gaming, POS settlement, offline queue
+   reopen code `23`. Verify sign-in, shift, Gaming, POS settlement, offline queue
    recovery and finance reconciliation before wider partner rollout.
 
 Do not activate an intermediate held build as its own update. Do not stage from an arbitrary
