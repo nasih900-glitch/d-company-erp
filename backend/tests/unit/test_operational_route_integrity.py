@@ -20,11 +20,27 @@ from sqlalchemy.dialects import postgresql
 from app.api.v1.gaming import router as gaming_router
 from app.api.v1.memberships import router as memberships_router
 from app.api.v1.pos import router as pos_router
-from app.core.errors import BusinessRuleError, ConflictError, ForbiddenError
+from app.core.errors import (
+    BusinessRuleError,
+    CheckoutClaimConflictError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+)
 from app.core.permissions import ROLE_PERMISSIONS
 from app.core.tenant import TenantContext
 from app.events.events import OrderPaid
-from app.models import Branch, Order, OrderLine, Payment, Station, Table, Terminal
+from app.models import (
+    AuditLog,
+    Branch,
+    Order,
+    OrderCheckoutClaim,
+    OrderLine,
+    Payment,
+    Station,
+    Table,
+    Terminal,
+)
 
 
 class _Result:
@@ -55,6 +71,7 @@ class _Session:
         self.statements = []
         self.added = []
         self.flush_count = 0
+        self.refreshed = []
 
     async def execute(self, statement):
         self.statements.append(statement)
@@ -70,6 +87,11 @@ class _Session:
 
     async def flush(self) -> None:
         self.flush_count += 1
+
+    async def refresh(self, entity, attribute_names=None) -> None:
+        self.refreshed.append((entity, attribute_names))
+        if attribute_names and "checkout_version" in attribute_names:
+            entity.checkout_version = int(entity.checkout_version) + 1
 
 
 def _route_permissions(endpoint) -> tuple[str, ...]:
@@ -202,6 +224,511 @@ async def test_table_order_create_requires_tables_access_before_reserving_reques
         await pos_router.create_order(payload, _Session(), request, tenant)
 
     assert checked == ["tables.write"]
+
+
+@pytest.mark.asyncio
+async def test_protected_recovery_holds_only_safe_unpaid_direct_order(
+    monkeypatch,
+) -> None:
+    tenant = _tenant(protected_access=True)
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=uuid4(),
+        opened_by=tenant.user_id,
+        table_id=None,
+        type="takeaway",
+        status="open",
+        checkout_version=7,
+        total_minor=2_500,
+        held_at=None,
+        invoice_no=None,
+        invoice_issued_at=None,
+        closed_at=None,
+    )
+    shift = _shift(tenant, id=order.shift_id)
+    session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=shift),
+        _Result(scalar=0),
+        _Result(scalar=1),
+    )
+    stored = {}
+
+    async def _reserve(*_args, **_kwargs):
+        return None
+
+    async def _read(_session, current):
+        assert current is order
+        return SimpleNamespace(
+            model_dump=lambda **_kwargs: {
+                "id": str(order.id),
+                "status": order.status,
+                "checkout_version": order.checkout_version,
+            }
+        )
+
+    async def _store(*_args, **kwargs):
+        stored.update(kwargs)
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
+    monkeypatch.setattr(pos_router, "_build_order_read", _read)
+    monkeypatch.setattr(pos_router, "store_response", _store)
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="recover-direct-order",
+            idempotency_request_hash="request-hash",
+        )
+    )
+
+    response = await pos_router.hold_direct_order_for_checkout(
+        order.id,
+        pos_router.HoldDirectOrderForCheckoutRequest(
+            expected_checkout_version=7,
+            reason="Recovered after the first tablet crashed",
+        ),
+        session,
+        request,
+        tenant,
+    )
+
+    assert response.model_dump()["status"] == "held"
+    assert order.status == "held"
+    assert order.held_at is not None
+    assert order.checkout_version == 8
+    audit = next(entity for entity in session.added if isinstance(entity, AuditLog))
+    assert audit.action == "pos_direct_order_hold_for_checkout"
+    assert audit.actor_user_id == tenant.user_id
+    assert audit.reason == "Recovered after the first tablet crashed"
+    assert audit.before == {"status": "open", "checkout_version": 7}
+    assert audit.after["checkout_version"] == 8
+    assert stored["status_code"] == 200
+
+    # A replay with the original key is served from idempotency storage in the
+    # real route. A different key must not adopt an already-shared held bill as
+    # a fresh, unaudited recovery action.
+    with pytest.raises(BusinessRuleError, match="status=held"):
+        await pos_router.hold_direct_order_for_checkout(
+            order.id,
+            pos_router.HoldDirectOrderForCheckoutRequest(
+                expected_checkout_version=8,
+                reason="Second recovery must not be accepted",
+            ),
+            _Session(_Result(scalar=order)),
+            SimpleNamespace(
+                state=SimpleNamespace(
+                    idempotency_key="different-recovery-key",
+                    idempotency_request_hash="different-request-hash",
+                )
+            ),
+            tenant,
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_order_recovery_rejects_unprotected_actor_before_idempotency(
+    monkeypatch,
+) -> None:
+    tenant = _tenant(protected_access=False)
+    reserved = False
+
+    async def _reserve(*_args, **_kwargs):
+        nonlocal reserved
+        reserved = True
+        return None
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
+    with pytest.raises(ForbiddenError, match="protected owner"):
+        await pos_router.hold_direct_order_for_checkout(
+            uuid4(),
+            pos_router.HoldDirectOrderForCheckoutRequest(
+                expected_checkout_version=1,
+                reason="Recover abandoned direct bill",
+            ),
+            _Session(),
+            SimpleNamespace(state=SimpleNamespace()),
+            tenant,
+        )
+
+    assert reserved is False
+
+
+@pytest.mark.asyncio
+async def test_direct_order_recovery_rejects_empty_or_fully_voided_order(
+    monkeypatch,
+) -> None:
+    tenant = _tenant(protected_access=True)
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=uuid4(),
+        table_id=None,
+        type="takeaway",
+        status="open",
+        checkout_version=4,
+        total_minor=0,
+        held_at=None,
+        invoice_no=None,
+        invoice_issued_at=None,
+        closed_at=None,
+    )
+    shift = _shift(tenant, id=order.shift_id)
+
+    async def _reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _reserve)
+    with pytest.raises(BusinessRuleError, match="no active items"):
+        await pos_router.hold_direct_order_for_checkout(
+            order.id,
+            pos_router.HoldDirectOrderForCheckoutRequest(
+                expected_checkout_version=4,
+                reason="Abandoned empty legacy draft",
+            ),
+            _Session(
+                _Result(scalar=order),
+                _Result(scalar=shift),
+                _Result(scalar=0),
+                _Result(scalar=0),
+            ),
+            SimpleNamespace(
+                state=SimpleNamespace(
+                    idempotency_key="recover-empty-direct-order",
+                    idempotency_request_hash="request-hash",
+                )
+            ),
+            tenant,
+        )
+
+    assert order.status == "open"
+
+
+@pytest.mark.asyncio
+async def test_direct_publish_is_atomic_and_same_instance_retry_rotates_claim(
+    monkeypatch,
+) -> None:
+    tenant = _tenant()
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=uuid4(),
+        opened_by=tenant.user_id,
+        table_id=None,
+        type="takeaway",
+        status="open",
+        checkout_version=7,
+        total_minor=2_500,
+        held_at=None,
+        invoice_no=None,
+        invoice_issued_at=None,
+        closed_at=None,
+    )
+    shift = _shift(tenant, id=order.shift_id)
+    client_instance = uuid4()
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            idempotency_key="publish-direct-order",
+            idempotency_request_hash="request-hash",
+        )
+    )
+    first_session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=shift),
+        _Result(scalar=0),
+        _Result(scalar=1),
+        _Result(scalar=None),
+    )
+    first_http_response = SimpleNamespace(headers={})
+
+    async def _must_not_store_raw_claim(*_args, **_kwargs):
+        raise AssertionError("raw checkout claim must not enter idempotency storage")
+
+    monkeypatch.setattr(pos_router, "check_or_reserve", _must_not_store_raw_claim)
+    monkeypatch.setattr(pos_router, "store_response", _must_not_store_raw_claim)
+
+    first = await pos_router.publish_direct_order_checkout_claim(
+        order.id,
+        pos_router.PublishDirectCheckoutClaimRequest(expected_checkout_version=7),
+        first_session,
+        request,
+        first_http_response,
+        client_instance,
+        tenant,
+    )
+
+    assert order.status == "held"
+    assert order.held_at is not None
+    assert order.checkout_version == 8
+    assert first.order_version == 8
+    assert first.reused is False
+    assert first_http_response.headers["Cache-Control"] == "no-store"
+    claim = next(
+        entity
+        for entity in first_session.added
+        if isinstance(entity, OrderCheckoutClaim)
+    )
+    assert claim.client_instance_hash != str(client_instance)
+    assert len(claim.client_instance_hash) == 64
+
+    retry_session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=shift),
+        _Result(scalar=0),
+        _Result(scalar=1),
+        _Result(scalar=claim),
+    )
+    retried = await pos_router.publish_direct_order_checkout_claim(
+        order.id,
+        pos_router.PublishDirectCheckoutClaimRequest(expected_checkout_version=7),
+        retry_session,
+        request,
+        SimpleNamespace(headers={}),
+        client_instance,
+        tenant,
+    )
+
+    assert retried.reused is True
+    assert retried.claim_token != first.claim_token
+
+    competing_session = _Session(
+        _Result(scalar=order),
+        _Result(scalar=shift),
+        _Result(scalar=0),
+        _Result(scalar=1),
+        _Result(scalar=claim),
+    )
+    with pytest.raises(CheckoutClaimConflictError):
+        await pos_router.publish_direct_order_checkout_claim(
+            order.id,
+            pos_router.PublishDirectCheckoutClaimRequest(expected_checkout_version=7),
+            competing_session,
+            request,
+            SimpleNamespace(headers={}),
+            uuid4(),
+            tenant,
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_publish_rejects_empty_or_fully_voided_order() -> None:
+    tenant = _tenant()
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        shift_id=uuid4(),
+        opened_by=tenant.user_id,
+        table_id=None,
+        type="takeaway",
+        status="open",
+        checkout_version=3,
+        total_minor=0,
+        held_at=None,
+        invoice_no=None,
+        invoice_issued_at=None,
+        closed_at=None,
+    )
+    shift = _shift(tenant, id=order.shift_id)
+
+    with pytest.raises(BusinessRuleError, match="no active items"):
+        await pos_router.publish_direct_order_checkout_claim(
+            order.id,
+            pos_router.PublishDirectCheckoutClaimRequest(
+                expected_checkout_version=3,
+            ),
+            _Session(
+                _Result(scalar=order),
+                _Result(scalar=shift),
+                _Result(scalar=0),
+                _Result(scalar=0),
+            ),
+            SimpleNamespace(
+                state=SimpleNamespace(
+                    idempotency_key="publish-empty-direct-order",
+                    idempotency_request_hash="request-hash",
+                )
+            ),
+            SimpleNamespace(headers={}),
+            uuid4(),
+            tenant,
+        )
+
+    assert order.status == "open"
+
+
+@pytest.mark.asyncio
+async def test_private_direct_open_is_owner_scoped_but_protected_discoverable() -> None:
+    creator = _tenant()
+    order = SimpleNamespace(
+        id=uuid4(),
+        company_id=creator.company_id,
+        branch_id=creator.branch_id,
+        terminal_id=creator.terminal_id,
+        opened_by=creator.user_id,
+        table_id=None,
+        type="takeaway",
+        status="open",
+    )
+    other = _tenant(
+        company_id=creator.company_id,
+        branch_id=creator.branch_id,
+        terminal_id=creator.terminal_id,
+    )
+    protected = _tenant(
+        company_id=creator.company_id,
+        branch_id=creator.branch_id,
+        terminal_id=creator.terminal_id,
+        protected_access=True,
+    )
+
+    with pytest.raises(NotFoundError):
+        await pos_router.get_order(
+            order.id,
+            _Session(entities={(Order, order.id): order}),
+            other,
+        )
+
+    with pytest.raises(NotFoundError):
+        await pos_router.publish_direct_order_checkout_claim(
+            order.id,
+            pos_router.PublishDirectCheckoutClaimRequest(expected_checkout_version=1),
+            _Session(_Result(scalar=order)),
+            SimpleNamespace(
+                state=SimpleNamespace(
+                    idempotency_key="private-direct-publish",
+                    idempotency_request_hash="request-hash",
+                )
+            ),
+            SimpleNamespace(headers={}),
+            uuid4(),
+            other,
+        )
+
+    with pytest.raises(BusinessRuleError, match="Recover to POS"):
+        await pos_router.publish_direct_order_checkout_claim(
+            order.id,
+            pos_router.PublishDirectCheckoutClaimRequest(expected_checkout_version=1),
+            _Session(_Result(scalar=order)),
+            SimpleNamespace(
+                state=SimpleNamespace(
+                    idempotency_key="protected-direct-publish",
+                    idempotency_request_hash="request-hash",
+                )
+            ),
+            SimpleNamespace(headers={}),
+            uuid4(),
+            protected,
+        )
+
+    # An empty list is enough to inspect the SQL visibility boundary without
+    # invoking the response aggregation queries.
+    ordinary_list = _Session(_Result(rows=[]))
+    assert await pos_router.list_orders(
+        ordinary_list,
+        other,
+        status_filter=["open"],
+    ) == []
+    ordinary_where = str(ordinary_list.statements[0].whereclause)
+    assert "orders.opened_by" in ordinary_where
+
+    protected_list = _Session(_Result(rows=[]))
+    assert await pos_router.list_orders(
+        protected_list,
+        protected,
+        status_filter=["open"],
+    ) == []
+    protected_where = str(protected_list.statements[0].whereclause)
+    assert "orders.opened_by" not in protected_where
+
+    # Publication removes the private-draft read restriction for the shared
+    # held queue; a protected owner also retains open-draft reconciliation.
+    pos_router._require_order_read_visibility(order, creator)
+    pos_router._require_order_read_visibility(order, protected)
+    order.status = "held"
+    pos_router._require_order_read_visibility(order, other)
+
+
+def test_private_direct_draft_mutations_are_creator_only() -> None:
+    creator = _tenant()
+    ordinary_other = _tenant(
+        company_id=creator.company_id,
+        branch_id=creator.branch_id,
+        terminal_id=creator.terminal_id,
+    )
+    protected_other = _tenant(
+        company_id=creator.company_id,
+        branch_id=creator.branch_id,
+        terminal_id=creator.terminal_id,
+        protected_access=True,
+    )
+    draft = SimpleNamespace(
+        status="open",
+        table_id=None,
+        type="takeaway",
+        opened_by=creator.user_id,
+    )
+
+    pos_router._require_private_direct_draft_creator(
+        draft,
+        creator,
+        operation="changed",
+    )
+    with pytest.raises(NotFoundError):
+        pos_router._require_private_direct_draft_creator(
+            draft,
+            ordinary_other,
+            operation="changed",
+        )
+    with pytest.raises(BusinessRuleError, match="Recover to POS"):
+        pos_router._require_private_direct_draft_creator(
+            draft,
+            protected_other,
+            operation="changed",
+        )
+
+    # Once explicitly recovered, the held bill is shared and the normal claim
+    # machinery governs it. Table and session orders are collaborative too.
+    for shared in (
+        SimpleNamespace(**{**draft.__dict__, "status": "held"}),
+        SimpleNamespace(**{**draft.__dict__, "table_id": uuid4()}),
+        SimpleNamespace(**{**draft.__dict__, "type": "session"}),
+    ):
+        pos_router._require_private_direct_draft_creator(
+            shared,
+            protected_other,
+            operation="changed",
+        )
+
+    guarded_endpoints = (
+        pos_router.add_order_lines,
+        pos_router.attach_order_customer,
+        pos_router.apply_order_discount,
+        pos_router.redeem_points,
+        pos_router.redeem_reward,
+        pos_router.publish_direct_order_checkout_claim,
+        pos_router.finalize_zero_total_order,
+        pos_router.record_payment,
+    )
+    for endpoint in guarded_endpoints:
+        assert "_require_private_direct_draft_creator" in endpoint.__code__.co_names
+
+    # These are the two deliberate, reasoned escape hatches for an abandoned
+    # draft and must remain usable by protected owners.
+    assert (
+        "_require_private_direct_draft_creator"
+        not in pos_router.hold_direct_order_for_checkout.__code__.co_names
+    )
+    assert (
+        "_require_private_direct_draft_creator"
+        not in pos_router.void_held_order.__code__.co_names
+    )
 
 
 def test_create_batch_rejects_duplicate_client_line_identity() -> None:
@@ -473,6 +1000,8 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         shift_id=shift.id,
+        opened_by=tenant.user_id,
+        type="takeaway",
         status="open",
         total_minor=10_000,
         tip_minor=0,
@@ -580,6 +1109,8 @@ async def test_record_payment_schedules_order_paid_event_with_correct_shape(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         shift_id=shift.id,
+        opened_by=tenant.user_id,
+        type="takeaway",
         status="open",
         total_minor=5_000,
         tip_minor=0,
@@ -680,6 +1211,8 @@ async def test_record_payment_order_paid_publish_failure_never_raises(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         shift_id=shift.id,
+        opened_by=tenant.user_id,
+        type="takeaway",
         status="open",
         total_minor=5_000,
         tip_minor=0,

@@ -9,8 +9,8 @@ WebView.
 | Field | Value |
 | --- | --- |
 | Package / application ID | `cloud.dcompany.erp` |
-| Version name | `3.1.10` |
-| Version code | `21` |
+| Version name | `3.1.11` |
+| Version code | `22` |
 | Minimum compatible client code | `8` |
 | Minimum Android version | Android 8 (`minSdk 26`) |
 | Target Android version | Android 15 (`targetSdk 35`) |
@@ -23,13 +23,13 @@ build.
 
 ## Release status
 
-Version `3.1.10` (`21`) is the corrected standard-premium Android delivery
-candidate following the immutable `3.1.6` (`17`) remote-assistance predecessor
-and the failed pre-signing `v3.1.7` (`18`), `v3.1.8` (`19`), and `v3.1.9` (`20`)
-tags. It must
+Version `3.1.11` (`22`) is the Gaming Centre tariff and operational-reliability
+candidate following the signed `3.1.10` (`21`) delivery predecessor. It must
 preserve Code 17's connectivity, privacy-preserving diagnostics, offline
 outbox, recovery, authentication, remote-assistance, and operational business
-contracts while refining the native presentation. It still requires exactly
+contracts while adding the owner-approved Standard, Premium, Simdrive and
+multiplayer tariff, exact extension billing, held-bill discounts, and stronger
+shift/session recovery. It still requires exactly
 one server-confirmed Hybrid Gaming + POS workspace for the active shop. A green
 local build does not prove authenticated workflows on a physical Redmi Pad 2
 or production deployment: those remain explicit release gates.
@@ -41,7 +41,7 @@ server update. Codes `16` and `17` remain immutable upgrade history. Code `18`
 has no authorised APK and its failed tag must not be reused. Code `19` also has
 no authorised APK after a hosted-runner memory failure. Code `20` also has no
 authorised APK after its isolated signer rejected an unrooted SDK-tool lookup.
-Code `21` is the
+Code `21` remains immutable signed predecessor history. Code `22` is the
 separately gated server-delivery candidate; source preparation alone does not
 authorise hosting, registering, staging, advertising, or activating it. Rollout
 requires a separately reviewed immutable APK,
@@ -49,6 +49,9 @@ verified URL, SHA-256, byte size, package, version, expected signer, and
 same-lineage upgrade proof. Android will still require the employee to approve
 installation. Do not raise the compatibility minimum merely because a newer
 candidate exists.
+
+See [`CODE22_RELEASE_CANDIDATE.md`](../docs/CODE22_RELEASE_CANDIDATE.md) for the
+exact tariff, operational changes, and release boundary.
 
 Do not give a build to café staff until all automated gates are green, a signed
 artifact has been verified, and the staff workflow in

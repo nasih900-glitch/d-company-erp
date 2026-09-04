@@ -32,6 +32,7 @@ from app.models import (
     Role,
     Shift,
     Station,
+    Terminal,
     User,
     UserRole,
 )
@@ -406,10 +407,12 @@ async def test_package_start_rejects_stale_catalog_snapshot(
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
         variant="single",
+        pricing_tier="standard",
         kind="base",
         name="Single 60 min",
         duration_minutes=60,
@@ -456,6 +459,7 @@ async def test_package_start_ignores_unrelated_hourly_rate_snapshot(
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -488,6 +492,7 @@ async def test_package_start_ignores_unrelated_hourly_rate_snapshot(
     assert response.status_code == 201, response.text
     assert response.json()["billing_mode"] == "package"
     assert response.json()["amount_minor"] == package.price_minor
+    assert response.json()["package_pricing_tier_snapshot"] == "standard"
 
 
 @pytest.mark.asyncio
@@ -1081,6 +1086,7 @@ async def test_package_timer_cannot_be_edited_or_extended_for_free(
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type="ps5",
@@ -1138,6 +1144,7 @@ async def test_deleted_base_package_keeps_locked_mode_amount_and_extension_snaps
     shift = _shift(seed_owner)
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -1305,6 +1312,7 @@ async def _seed_transfer_world(session, seed_owner, *, package: bool = True):
     if package:
         package_row = GamingPackage(
             id=uuid4(),
+            code=f"test-{uuid4().hex}",
             company_id=seed_owner["company"].id,
             branch_id=seed_owner["branch"].id,
             station_type="ps5",
@@ -2091,6 +2099,7 @@ async def test_legacy_outbox_recovers_authoritative_v27_package_start_for_every_
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2334,6 +2343,7 @@ async def test_legacy_outbox_recovers_from_exact_start_audit_after_idempotency_e
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2430,6 +2440,7 @@ async def test_staff_start_is_recovered_only_by_protected_owner_with_actor_prove
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2536,10 +2547,23 @@ async def test_accepted_start_recovery_blocks_wrong_shift_and_partial_receipt_co
         name="Wrong recovery branch",
         invoice_series_code="WR",
     )
-    wrong_shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
+    wrong_terminal = Terminal(
+        id=uuid4(),
+        branch_id=wrong_branch.id,
+        name="Wrong recovery workspace",
+        purpose="hybrid",
+        is_active=True,
+        device_id=f"wrong-recovery-{uuid4()}",
+    )
+    wrong_shift = _shift(
+        seed_owner,
+        opened_at=captured_start - timedelta(hours=1),
+        terminal_id=wrong_terminal.id,
+    )
     wrong_shift.branch_id = wrong_branch.id
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2551,7 +2575,7 @@ async def test_accepted_start_recovery_blocks_wrong_shift_and_partial_receipt_co
         sort_order=0,
         is_active=True,
     )
-    session.add_all([station, shift, wrong_branch, package])
+    session.add_all([station, shift, wrong_branch, wrong_terminal, package])
     await session.flush()
     session.add(wrong_shift)
     await session.commit()
@@ -2667,6 +2691,7 @@ async def test_accepted_start_links_exact_manual_paid_order_without_second_charg
     shift = _shift(seed_owner, opened_at=captured_start - timedelta(hours=1))
     package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,
@@ -2680,6 +2705,7 @@ async def test_accepted_start_links_exact_manual_paid_order_without_second_charg
     )
     extension_package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=seed_owner["company"].id,
         branch_id=seed_owner["branch"].id,
         station_type=station.type,

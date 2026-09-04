@@ -27,7 +27,7 @@ if [ "$version_count" -ne 1 ]; then
 fi
 APP_VERSION=$(grep '^APP_VERSION=' "$VERSION_SOURCE" | cut -d= -f2-)
 if ! [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "APP_VERSION in $VERSION_SOURCE must be a release version such as 3.1.10." >&2
+  echo "APP_VERSION in $VERSION_SOURCE must be a release version such as 3.1.11." >&2
   exit 1
 fi
 if [ -e "$CANDIDATE_ENV" ]; then

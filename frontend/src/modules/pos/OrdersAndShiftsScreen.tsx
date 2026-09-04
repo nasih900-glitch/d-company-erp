@@ -30,6 +30,7 @@ import { useAuth } from '@/modules/auth/AuthContext';
 import { subscribeRealtime } from '@/lib/realtime';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
+import { StableMutationIntent } from '@/lib/stable-mutation-intent';
 import {
   exactQuantityLabel,
   orderTypeLabel,
@@ -39,6 +40,16 @@ import {
   receiptSourceLabel,
   sessionDurationLabel,
 } from './receipt-history';
+import {
+  applyDirectOrderRecovery,
+  directOrderRecoveryFailure,
+  directOrderRecoveryFingerprint,
+  directOrderRecoveryReasonError,
+  isDirectOrderRecoveryEligible,
+  normalizeDirectOrderRecoveryReason,
+  type DirectOrderRecoveryFailure,
+  type DirectOrderRecoveryPayload,
+} from './order-recovery-policy';
 
 type Tab = 'orders' | 'shifts';
 // Fallback only — real-time push (see subscribeRealtime below) is what
@@ -75,6 +86,7 @@ export default function OrdersAndShiftsScreen() {
 // Live orders and immutable receipt history
 // ============================================================================
 function OrdersTab() {
+  const { me } = useAuth();
   const [operationalRows, setOperationalRows] = useState<OrderListItemDTO[]>([]);
   const [receiptRows, setReceiptRows] = useState<ReceiptHistoryDTO[]>([]);
   const [operationalLoading, setOperationalLoading] = useState(true);
@@ -86,6 +98,10 @@ function OrdersTab() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
   const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(null);
+  const [recoveryTarget, setRecoveryTarget] = useState<OrderListItemDTO | null>(null);
+  const [recoveryIntent] = useState(() => new StableMutationIntent<DirectOrderRecoveryPayload>({
+    prefix: 'pos-direct-recovery:web',
+  }));
   const operationalSequence = useRef(0);
   const receiptSequence = useRef(0);
 
@@ -165,6 +181,48 @@ function OrdersTab() {
     }
   }, [loadingMore, nextCursor, receiptsLoading]);
 
+  const beginRecovery = useCallback((order: OrderListItemDTO) => {
+    if (!me?.protected_access || !isDirectOrderRecoveryEligible(order)) return;
+    setRecoveryTarget(order);
+  }, [me?.protected_access]);
+
+  const closeRecovery = useCallback(() => {
+    setRecoveryTarget(null);
+  }, []);
+
+  const refreshAfterRecoveryFailure = useCallback(() => {
+    recoveryIntent.invalidate();
+    closeRecovery();
+    void loadOperational(true);
+  }, [closeRecovery, loadOperational, recoveryIntent]);
+
+  const recoverDirectOrder = useCallback(async (
+    order: OrderListItemDTO,
+    reason: string,
+  ) => {
+    const normalizedReason = normalizeDirectOrderRecoveryReason(reason);
+    const validationError = directOrderRecoveryReasonError(normalizedReason);
+    if (validationError) throw new Error(validationError);
+    const payload: DirectOrderRecoveryPayload = {
+      expected_checkout_version: order.checkout_version,
+      reason: normalizedReason,
+    };
+    const attempt = recoveryIntent.resolve(
+      directOrderRecoveryFingerprint(order.id, payload),
+      () => payload,
+    );
+
+    const recovered = await orders.holdForCheckout(
+      order.id,
+      attempt.payload,
+      attempt.idempotencyKey,
+    );
+    recoveryIntent.confirmSuccess(attempt);
+    setOperationalRows((current) => applyDirectOrderRecovery(current, recovered));
+    await loadOperational(false);
+    setRecoveryTarget(null);
+  }, [loadOperational, recoveryIntent]);
+
   if (!LIVE_MODE) return <div className="card text-fg-muted text-sm">Order history is live-mode only.</div>;
 
   const refreshing = operationalLoading || receiptsLoading;
@@ -205,7 +263,12 @@ function OrdersTab() {
             <p className="font-medium">No open bills</p>
             <p className="mt-1 text-xs text-fg-muted">New POS and Gaming bills will appear here until payment.</p>
           </div>
-        ) : operationalRows.length ? <OperationalOrderList rows={operationalRows} onView={setOperationalView}/> : null}
+        ) : operationalRows.length ? <OperationalOrderList
+          rows={operationalRows}
+          protectedAccess={Boolean(me?.protected_access)}
+          onView={setOperationalView}
+          onRecover={beginRecovery}
+        /> : null}
       </section>
 
       <section className="card !p-0 overflow-hidden">
@@ -237,6 +300,13 @@ function OrdersTab() {
       </section>
 
       {operationalView && <OperationalOrderModal order={operationalView} onClose={() => setOperationalView(null)}/>}
+      {recoveryTarget && <RecoverDirectOrderModal
+        key={`${recoveryTarget.id}:${recoveryTarget.checkout_version}`}
+        order={recoveryTarget}
+        onClose={closeRecovery}
+        onRefresh={refreshAfterRecoveryFailure}
+        onSubmit={(reason) => recoverDirectOrder(recoveryTarget, reason)}
+      />}
       {receiptView && <ReceiptViewModal
         orderId={receiptView.orderId}
         invoiceNo={receiptView.invoiceNo}
@@ -246,37 +316,213 @@ function OrdersTab() {
   );
 }
 
-function OperationalOrderList({ rows, onView }: {
+export function OperationalOrderList({ rows, protectedAccess, onView, onRecover }: {
   rows: OrderListItemDTO[];
+  protectedAccess: boolean;
   onView: (order: OrderListItemDTO) => void;
+  onRecover: (order: OrderListItemDTO) => void;
 }) {
   return (
     <div className="divide-y divide-bg-border/60">
-      {rows.map((order) => (
-        <button
-          key={order.id}
-          type="button"
-          onClick={() => onView(order)}
-          className="flex min-h-14 w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-bg-raised/40 active:bg-bg-raised/70"
-        >
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold">{order.source_label || orderTypeLabel(order.type)}</span>
-              <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-accent-gold' : 'border-fg-muted/40 text-fg-muted'}`}>
-                {order.status}
-              </span>
-            </div>
-            <div className="mt-1 text-xs text-fg-muted">
-              {formatDateTime(order.held_at || order.created_at)} · {order.items_count} line{order.items_count === 1 ? '' : 's'}
-            </div>
+      {rows.map((order) => {
+        const canRecover = protectedAccess && isDirectOrderRecoveryEligible(order);
+        return (
+          <div key={order.id} className="flex min-h-14 items-center gap-2 pr-3">
+            <button
+              type="button"
+              onClick={() => onView(order)}
+              className="flex min-w-0 flex-1 items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-bg-raised/40 active:bg-bg-raised/70"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">{order.source_label || orderTypeLabel(order.type)}</span>
+                  <span className={`chip text-[10px] ${order.status === 'held' ? 'border-accent-gold/40 text-accent-gold' : 'border-fg-muted/40 text-fg-muted'}`}>
+                    {order.status}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-fg-muted">
+                  {formatDateTime(order.held_at || order.created_at)} · {order.items_count} line{order.items_count === 1 ? '' : 's'}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <span className="font-mono font-semibold">{inr(order.total_minor)}</span>
+                <Eye className="text-fg-muted" size={15}/>
+              </div>
+            </button>
+            {canRecover ? (
+              <button
+                type="button"
+                className="btn btn-ghost shrink-0 whitespace-nowrap text-xs"
+                onClick={() => onRecover(order)}
+                aria-label={`Recover order ${order.id.slice(0, 8)} to POS`}
+              >
+                <ShieldCheck size={14}/> Recover to POS
+              </button>
+            ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="font-mono font-semibold">{inr(order.total_minor)}</span>
-            <Eye className="text-fg-muted" size={15}/>
-          </div>
-        </button>
-      ))}
+        );
+      })}
     </div>
+  );
+}
+
+export function RecoverDirectOrderModal({
+  order,
+  onClose,
+  onRefresh,
+  onSubmit,
+}: {
+  order: OrderListItemDTO;
+  onClose: () => void;
+  onRefresh: () => void;
+  onSubmit: (reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState('');
+  const [abandonedConfirmed, setAbandonedConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<DirectOrderRecoveryFailure | null>(null);
+  const submissionInFlight = useRef(false);
+  const reasonError = reason.length > 0 ? directOrderRecoveryReasonError(reason) : null;
+  const canSubmit = abandonedConfirmed
+    && directOrderRecoveryReasonError(reason) === null
+    && !busy;
+
+  const close = () => {
+    if (!busy) onClose();
+  };
+
+  const submit = async () => {
+    if (submissionInFlight.current) return;
+    const validationError = directOrderRecoveryReasonError(reason);
+    if (validationError) {
+      setFailure({ message: validationError, resolution: 'retry' });
+      return;
+    }
+    if (!abandonedConfirmed) {
+      setFailure({
+        message: 'Confirm that the original checkout or device is abandoned before recovery.',
+        resolution: 'retry',
+      });
+      return;
+    }
+
+    submissionInFlight.current = true;
+    setBusy(true);
+    setFailure(null);
+    try {
+      await onSubmit(normalizeDirectOrderRecoveryReason(reason));
+    } catch (error) {
+      setFailure(directOrderRecoveryFailure(error));
+    } finally {
+      submissionInFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={close}
+      title={`Recover order ${order.id.slice(0, 8)} to POS?`}
+      size="md"
+    >
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="rounded-xl border border-accent-bad/35 bg-accent-bad/10 p-3 text-sm">
+          <p className="font-semibold text-accent-bad">Verify the original checkout is abandoned</p>
+          <p className="mt-1 text-fg-muted">
+            Use recovery only after checking that the original checkout screen or device is no
+            longer processing this order. Recovery does not collect payment; it moves the bill
+            into the shared POS queue so one cashier can claim it.
+          </p>
+        </div>
+
+        <div className="grid gap-2 rounded-xl border border-bg-border bg-bg-raised/30 p-3 text-sm sm:grid-cols-2">
+          <Row label="Order" value={order.id}/>
+          <Row label="Current total" value={inr(order.total_minor)} bold/>
+          <Row label="Status" value={order.status}/>
+          <Row label="Bill version" value={String(order.checkout_version)}/>
+        </div>
+
+        <label className="block">
+          <span className="text-sm font-medium">Recovery reason</span>
+          <textarea
+            className="input mt-1 min-h-24 resize-y"
+            value={reason}
+            onChange={(event) => {
+              setReason(event.target.value);
+              setFailure(null);
+            }}
+            minLength={3}
+            maxLength={500}
+            required
+            disabled={busy}
+            autoFocus
+            aria-describedby="direct-order-recovery-reason-help"
+            placeholder="Example: Front counter tablet closed before checkout completed"
+          />
+          <span
+            id="direct-order-recovery-reason-help"
+            className={`mt-1 flex justify-between gap-3 text-xs ${reasonError ? 'text-accent-bad' : 'text-fg-muted'}`}
+          >
+            <span>{reasonError || 'Required for the recovery audit trail.'}</span>
+            <span>{reason.length}/500</span>
+          </span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-bg-border p-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
+            checked={abandonedConfirmed}
+            onChange={(event) => {
+              setAbandonedConfirmed(event.target.checked);
+              setFailure(null);
+            }}
+            disabled={busy}
+          />
+          <span>
+            I confirmed the original checkout/device is abandoned and no one is collecting
+            payment for this order.
+          </span>
+        </label>
+
+        {failure ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm text-accent-bad"
+          >
+            {failure.message}
+          </div>
+        ) : null}
+
+        <p className="text-xs text-fg-muted">
+          If the request times out, leave these details unchanged and retry here. The app will
+          reuse the same operation key instead of creating a second recovery.
+        </p>
+
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={close} disabled={busy}>
+            Cancel
+          </button>
+          {failure?.resolution === 'refresh' ? (
+            <button type="button" className="btn btn-primary" onClick={onRefresh} disabled={busy}>
+              <RefreshCw size={14}/> Refresh orders
+            </button>
+          ) : (
+            <button type="submit" className="btn btn-danger" disabled={!canSubmit}>
+              {busy ? <Loader2 className="animate-spin" size={14}/> : <ShieldCheck size={14}/>}
+              {failure ? 'Retry same recovery' : 'Recover to POS'}
+            </button>
+          )}
+        </div>
+      </form>
+    </Modal>
   );
 }
 

@@ -42,8 +42,13 @@ data class Station(
 @Serializable
 data class GamingPackage(
     val id: String,
+    /** Stable catalogue identity. Empty only for pre-Code22 cached responses. */
+    val code: String = "",
     @SerialName("station_type") val stationType: String,
+    @SerialName("pricing_tier") val pricingTier: String = "standard",
     val variant: String,
+    @SerialName("included_players") val includedPlayers: Int = 1,
+    @SerialName("max_players") val maxPlayers: Int = 1,
     val kind: String,
     val name: String,
     @SerialName("duration_minutes") val durationMinutes: Int,
@@ -69,6 +74,7 @@ data class GameSession(
     @SerialName("package_duration_minutes_snapshot") val packageDurationMinutesSnapshot: Int? = null,
     @SerialName("package_variant_snapshot") val packageVariantSnapshot: String? = null,
     @SerialName("package_station_type_snapshot") val packageStationTypeSnapshot: String? = null,
+    @SerialName("package_pricing_tier_snapshot") val packagePricingTierSnapshot: String? = null,
     @SerialName("extra_controllers") val extraControllers: Int = 0,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
@@ -96,6 +102,8 @@ data class SessionStartBody(
     @SerialName("timer_minutes") val timerMinutes: Int? = null,
     @SerialName("package_id") val packageId: String? = null,
     @SerialName("extra_controllers") val extraControllers: Int = 0,
+    /** Code22 sends the customer's actual player count; the server derives any surcharge. */
+    @SerialName("player_count") val playerCount: Int? = null,
     /** Tap-time snapshots; the server rejects a stale catalogue/rate instead of repricing silently. */
     @SerialName("expected_rate_per_hour_minor") val expectedRatePerHourMinor: Long,
     @SerialName("expected_package_price_minor") val expectedPackagePriceMinor: Long? = null,

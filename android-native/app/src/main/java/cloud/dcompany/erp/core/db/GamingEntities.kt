@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.core.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -19,8 +20,12 @@ data class GamingStationEntity(
 @Entity(tableName = "gaming_package_cache")
 data class GamingPackageCacheEntity(
     @PrimaryKey val id: String,
+    @ColumnInfo(defaultValue = "''") val code: String = "",
     val stationType: String,
+    @ColumnInfo(defaultValue = "'standard'") val pricingTier: String = "standard",
     val variant: String,
+    @ColumnInfo(defaultValue = "1") val includedPlayers: Int = 1,
+    @ColumnInfo(defaultValue = "1") val maxPlayers: Int = 1,
     val kind: String,
     val name: String,
     val durationMinutes: Int,
@@ -58,6 +63,7 @@ data class GamingSessionCacheEntity(
     val packageDurationMinutesSnapshot: Int? = null,
     val packageVariantSnapshot: String? = null,
     val packageStationTypeSnapshot: String? = null,
+    val packagePricingTierSnapshot: String? = null,
     val extraControllers: Int = 0,
     val customerName: String? = null,
     val customerPhone: String? = null,
@@ -267,6 +273,8 @@ data class LocalGamingSessionEntity(
     /** Explicit server billing mode and locked station type survive package retirement. */
     val billingMode: String? = null,
     val packageStationTypeSnapshot: String? = null,
+    /** Standard/premium is immutable billing provenance, including while offline. */
+    val packagePricingTierSnapshot: String? = null,
     val extraControllers: Int = 0,
     val orderId: String? = null,
     val lastError: String? = null,

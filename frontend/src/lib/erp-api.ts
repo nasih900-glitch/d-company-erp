@@ -7,6 +7,7 @@
  * All methods raise a normalized Error with .code (see /lib/api.ts).
  */
 import { api } from './api';
+import { checkoutClientInstance } from './checkout-client-instance';
 import {
   buildRemoteAssistanceCommand,
   type RemoteAssistanceCommandRequest,
@@ -366,11 +367,30 @@ export const pos = {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
-  voidOrder: (orderId: string, reason: string) =>
-    api.delete(`/pos/orders/${orderId}`, { data: { reason } }).then(() => undefined),
-  claimCheckout: (orderId: string) =>
-    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/checkout-claim`)
+  voidOrder: (orderId: string, reason: string, checkoutClaimToken?: string) =>
+    api.delete(`/pos/orders/${orderId}`, {
+      data: { reason },
+      headers: checkoutClaimToken ? { 'X-Checkout-Claim': checkoutClaimToken } : undefined,
+    }).then(() => undefined),
+  claimCheckout: (orderId: string, clientInstance = checkoutClientInstance()) =>
+    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/checkout-claim`, undefined, {
+      headers: { 'X-Checkout-Client-Instance': clientInstance },
+    })
       .then((r) => r.data),
+  publishCheckout: (
+    orderId: string,
+    expectedCheckoutVersion: number,
+    idempotencyKey: string,
+    clientInstance = checkoutClientInstance(),
+  ) =>
+    api.post<CheckoutClaimDTO>(`/pos/orders/${orderId}/publish-checkout-claim`, {
+      expected_checkout_version: expectedCheckoutVersion,
+    }, {
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+        'X-Checkout-Client-Instance': clientInstance,
+      },
+    }).then((r) => r.data),
   releaseCheckout: (orderId: string, claimToken: string) =>
     api.delete(`/pos/orders/${orderId}/checkout-claim`, {
       headers: { 'X-Checkout-Claim': claimToken },
@@ -2466,6 +2486,13 @@ export const orders = {
   }) =>
     api.get<OrderListItemDTO[]>('/pos/orders', { params }).then((r) => r.data),
   get: (id: string) => api.get<OrderDTO>(`/pos/orders/${id}`).then((r) => r.data),
+  holdForCheckout: (
+    id: string,
+    body: { expected_checkout_version: number; reason: string },
+    idempotencyKey: string,
+  ) => api.patch<OrderDTO>(`/pos/orders/${id}/hold-for-checkout`, body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  }).then((r) => r.data),
 };
 
 export const receipts = {
@@ -2820,13 +2847,20 @@ export interface GameSessionDTO {
   package_duration_minutes_snapshot: number | null;
   package_variant_snapshot: string | null;
   package_station_type_snapshot: string | null;
+  /** Absent only when talking to a pre-Code22 backend during a coordinated rollout. */
+  package_pricing_tier_snapshot?: 'standard' | 'premium' | null;
   extra_controllers: number;
 }
 
 export interface GamingPackageDTO {
   id: string;
+  /** Missing only on a pre-Code22 server; unsafe rows are not offered for new tariff starts. */
+  code?: string;
   station_type: string;
+  pricing_tier: 'standard' | 'premium' | string;
   variant: string;
+  included_players: number;
+  max_players: number;
   kind: 'base' | 'extension';
   name: string;
   duration_minutes: number;
@@ -2968,7 +3002,7 @@ export const gaming = {
   ).then((r) => r.data),
   startSession: (body: {
     station_id: string; shift_id: string; customer_name?: string; customer_phone?: string;
-    timer_minutes?: number; package_id?: string; extra_controllers?: number;
+    timer_minutes?: number; package_id?: string; extra_controllers?: number; player_count?: number;
     expected_rate_per_hour_minor: number;
     expected_package_price_minor?: number;
     expected_package_duration_minutes?: number;

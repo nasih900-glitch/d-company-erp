@@ -154,6 +154,10 @@ class SessionStart(BaseModel):
     # Extra controllers/players beyond the package's base mode — only
     # meaningful together with package_id.
     extra_controllers: int = Field(default=0, ge=0, le=8)
+    # Code 22+ clients can state the customer-facing player count directly.
+    # Older clients continue to send only extra_controllers; the route derives
+    # and cross-checks both representations against the selected package.
+    player_count: int | None = Field(default=None, ge=1, le=10)
 
     @field_validator("customer_name", "customer_phone")
     @classmethod
@@ -239,6 +243,7 @@ class SessionRead(BaseModel):
     package_duration_minutes_snapshot: int | None = None
     package_variant_snapshot: str | None = None
     package_station_type_snapshot: str | None = None
+    package_pricing_tier_snapshot: Literal["standard", "premium"] | None = None
     extra_controllers: int = 0
 
     @model_validator(mode="before")
@@ -272,12 +277,16 @@ class SessionRead(BaseModel):
 
 class GamingPackageRead(BaseModel):
     id: UUID
+    code: str
     station_type: str
     variant: str
+    pricing_tier: Literal["standard", "premium"]
     kind: str
     name: str
     duration_minutes: int
     price_minor: int
+    included_players: int
+    max_players: int
 
 
 class SessionExtend(BaseModel):
@@ -604,6 +613,9 @@ def session_read(gs: GamingSession) -> SessionRead:
         package_station_type_snapshot=getattr(
             gs, "package_station_type_snapshot", None
         ),
+        package_pricing_tier_snapshot=getattr(
+            gs, "package_pricing_tier_snapshot", None
+        ),
         extra_controllers=int(gs.extra_controllers or 0),
     )
 
@@ -690,6 +702,79 @@ def extra_controller_surcharge_minor(*, extra_controllers: int, duration_minutes
         EXTRA_CONTROLLER_MIN_CHARGE_MINOR, hours * EXTRA_CONTROLLER_PRICE_PER_HOUR_MINOR
     )
     return extra_controllers * per_controller
+
+
+def extra_controller_surcharge_delta_minor(
+    *,
+    extra_controllers: int,
+    duration_before_minutes: int,
+    duration_after_minutes: int,
+) -> int:
+    """Return only the incremental controller charge at a timer boundary.
+
+    The printed rule is ₹30 per controller per started hour with a ₹30 minimum
+    across the purchased session. Charging each extension independently would
+    apply that minimum repeatedly (30m + 30m incorrectly becoming ₹60).
+    """
+    if duration_before_minutes < 0 or duration_after_minutes < duration_before_minutes:
+        raise ValueError("controller surcharge duration must be monotonic and non-negative")
+    before = extra_controller_surcharge_minor(
+        extra_controllers=extra_controllers,
+        duration_minutes=duration_before_minutes,
+    )
+    after = extra_controller_surcharge_minor(
+        extra_controllers=extra_controllers,
+        duration_minutes=duration_after_minutes,
+    )
+    return after - before
+
+
+def resolve_package_extra_controllers(
+    *,
+    station_type: str,
+    variant: str,
+    included_players: int,
+    max_players: int,
+    extra_controllers: int,
+    player_count: int | None,
+) -> int:
+    """Validate player capacity and normalize Code 21/22 request shapes."""
+    if not 1 <= included_players <= max_players <= 10:
+        raise BusinessRuleError(
+            "The selected package has invalid player limits. Ask an owner to review it."
+        )
+
+    resolved_extra = extra_controllers
+    if player_count is not None:
+        if player_count < included_players:
+            raise BusinessRuleError(
+                f"This package includes {included_players} player(s); "
+                "the selected player count is too low."
+            )
+        derived_extra = player_count - included_players
+        if extra_controllers not in {0, derived_extra}:
+            raise BusinessRuleError(
+                "player_count and extra_controllers describe different party sizes"
+            )
+        resolved_extra = derived_extra
+
+    total_players = included_players + resolved_extra
+    if total_players > max_players:
+        raise BusinessRuleError(
+            f"This package supports at most {max_players} player(s)."
+        )
+
+    supports_extra_controllers = (
+        station_type == "ps5"
+        and variant == "dual"
+        and included_players == 2
+        and max_players > included_players
+    )
+    if resolved_extra > 0 and not supports_extra_controllers:
+        raise BusinessRuleError(
+            "Additional controllers are only available with an eligible Dual Mode PS5 package."
+        )
+    return resolved_extra
 
 
 def _current_gaming_branch_id(tenant: TenantContext) -> UUID:
@@ -1793,6 +1878,8 @@ async def _cancel_untouched_recovered_no_play(
         != original_snapshot.package_variant_snapshot
         or current.package_station_type_snapshot
         != original_snapshot.package_station_type_snapshot
+        or current.package_pricing_tier_snapshot
+        != original_snapshot.package_pricing_tier_snapshot
         or current.extra_controllers != original_snapshot.extra_controllers
     ):
         raise ConflictError(
@@ -2070,12 +2157,16 @@ async def list_packages(
     return [
         GamingPackageRead(
             id=p.id,
+            code=p.code,
             station_type=p.station_type,
             variant=p.variant,
+            pricing_tier=p.pricing_tier,
             kind=p.kind,
             name=p.name,
             duration_minutes=p.duration_minutes,
             price_minor=p.price_minor,
+            included_players=p.included_players,
+            max_players=p.max_players,
         )
         for p in rows
     ]
@@ -2172,14 +2263,19 @@ async def start_session(
     # Serialise starts on the station before locking either terminal's shift so
     # distinct terminals cannot both pass the availability check and create
     # overlapping/unbilled sessions for one physical resource.
+    branch_id = _current_gaming_branch_id(tenant)
     station = (
         await session.execute(
             select(Station)
-            .where(Station.id == payload.station_id)
+            .where(
+                Station.id == payload.station_id,
+                Station.company_id == tenant.company_id,
+                Station.branch_id == branch_id,
+            )
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if not station or station.company_id != tenant.company_id:
+    if not station:
         raise NotFoundError("station not found")
     if not station.is_active:
         raise BusinessRuleError("station is not active")
@@ -2192,6 +2288,26 @@ async def start_session(
             "sessions. Select the Gaming Area terminal."
         ),
     )
+    if payload.package_id is None and station.type in {"ps5", "simulator"}:
+        fixed_tariff_available = (
+            await session.execute(
+                select(GamingPackage.id)
+                .where(
+                    GamingPackage.company_id == tenant.company_id,
+                    GamingPackage.branch_id == station.branch_id,
+                    GamingPackage.station_type == station.type,
+                    GamingPackage.kind == "base",
+                    GamingPackage.is_active.is_(True),
+                    GamingPackage.deleted_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if fixed_tariff_available is not None:
+            raise BusinessRuleError(
+                "This station requires a fixed-price tariff package. Refresh Gaming and "
+                "choose Standard or Premium, player count, and duration; no session was started."
+            )
     if (
         payload.package_id is None
         and payload.expected_rate_per_hour_minor is None
@@ -2258,6 +2374,7 @@ async def start_session(
     package: GamingPackage | None = None
     timer_minutes = payload.timer_minutes
     locked_in_amount_minor: int | None = None
+    resolved_extra_controllers = 0
     if payload.package_id is not None:
         package = (
             await session.execute(
@@ -2289,12 +2406,20 @@ async def start_session(
             expected_variant=payload.expected_package_variant,
         )
         timer_minutes = package.duration_minutes
-        locked_in_amount_minor = package.price_minor + extra_controller_surcharge_minor(
+        resolved_extra_controllers = resolve_package_extra_controllers(
+            station_type=package.station_type,
+            variant=package.variant,
+            included_players=int(package.included_players),
+            max_players=int(package.max_players),
             extra_controllers=payload.extra_controllers,
+            player_count=payload.player_count,
+        )
+        locked_in_amount_minor = package.price_minor + extra_controller_surcharge_minor(
+            extra_controllers=resolved_extra_controllers,
             duration_minutes=package.duration_minutes,
         )
-    elif payload.extra_controllers:
-        raise BusinessRuleError("extra_controllers requires a package_id")
+    elif payload.extra_controllers or payload.player_count is not None:
+        raise BusinessRuleError("player_count and extra_controllers require a package_id")
 
     gs = GamingSession(
         id=uuid4(),
@@ -2312,7 +2437,8 @@ async def start_session(
         ),
         package_variant_snapshot=(package.variant if package else None),
         package_station_type_snapshot=(package.station_type if package else None),
-        extra_controllers=payload.extra_controllers,
+        package_pricing_tier_snapshot=(package.pricing_tier if package else None),
+        extra_controllers=resolved_extra_controllers,
         amount_minor=locked_in_amount_minor,
         status="active",
         customer_name=payload.customer_name,
@@ -2822,6 +2948,15 @@ async def extend_session_with_package(
             message="The extension does not match the session's original package variant.",
         )
     if (
+        gs.package_pricing_tier_snapshot is not None
+        and extension.pricing_tier != gs.package_pricing_tier_snapshot
+    ):
+        raise _extension_not_applied(
+            gs,
+            reason_code="package_pricing_tier_incompatible",
+            message="The extension does not match the session's original pricing tier.",
+        )
+    if (
         int(extension.price_minor) != payload.expected_package_price_minor
         or int(extension.duration_minutes)
         != payload.expected_package_duration_minutes
@@ -2833,10 +2968,6 @@ async def extend_session_with_package(
             message="The selected extension package changed after it was reviewed.",
         )
 
-    extra_surcharge = extra_controller_surcharge_minor(
-        extra_controllers=gs.extra_controllers,
-        duration_minutes=extension.duration_minutes,
-    )
     timer_before = int(gs.timer_minutes or 0)
     timer_after = timer_before + int(extension.duration_minutes)
     if timer_after > 1440:
@@ -2845,6 +2976,11 @@ async def extend_session_with_package(
             reason_code="session_timer_limit",
             message="The session timer cannot exceed 1440 minutes.",
         )
+    extra_surcharge = extra_controller_surcharge_delta_minor(
+        extra_controllers=gs.extra_controllers,
+        duration_before_minutes=timer_before,
+        duration_after_minutes=timer_after,
+    )
     amount_before = int(gs.amount_minor)
     extension_total = int(extension.price_minor) + extra_surcharge
     amount_after = amount_before + extension_total

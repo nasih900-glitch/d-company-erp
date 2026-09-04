@@ -2697,6 +2697,36 @@ val MIGRATION_39_40 = object : Migration(39, 40) {
     }
 }
 
+/**
+ * Code22 keeps the server-owned tariff axes in the offline package cache.
+ * Existing rows receive conservative defaults and are replaced by the next
+ * successful Gaming reference-data pull before a new package can be chosen.
+ */
+val MIGRATION_40_41 = object : Migration(40, 41) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `gaming_package_cache` ADD COLUMN `code` TEXT NOT NULL DEFAULT ''")
+        db.execSQL(
+            "ALTER TABLE `gaming_package_cache` ADD COLUMN `pricingTier` TEXT NOT NULL DEFAULT 'standard'",
+        )
+        db.execSQL(
+            "ALTER TABLE `gaming_package_cache` ADD COLUMN `includedPlayers` INTEGER NOT NULL DEFAULT 1",
+        )
+        db.execSQL(
+            "ALTER TABLE `gaming_package_cache` ADD COLUMN `maxPlayers` INTEGER NOT NULL DEFAULT 1",
+        )
+        db.execSQL(
+            "ALTER TABLE `gaming_session_cache` ADD COLUMN `packagePricingTierSnapshot` TEXT",
+        )
+        db.execSQL(
+            "ALTER TABLE `local_gaming_sessions` ADD COLUMN `packagePricingTierSnapshot` TEXT",
+        )
+        // Code21 reference rows have no stable tariff identity or player/tier
+        // semantics. Keeping them would let an offline upgrade offer obsolete
+        // prices. The next successful pull replaces this cache atomically.
+        db.execSQL("DELETE FROM `gaming_package_cache`")
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -2705,5 +2735,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
     MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34,
     MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39,
-    MIGRATION_39_40,
+    MIGRATION_39_40, MIGRATION_40_41,
 )

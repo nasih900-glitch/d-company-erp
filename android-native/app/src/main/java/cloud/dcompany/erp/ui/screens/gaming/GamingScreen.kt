@@ -871,6 +871,7 @@ fun GamingScreen(
         TransferSessionDialog(
             sourceName = source?.name ?: "Gaming station",
             targets = targets,
+            packages = state.packages,
             onDismiss = { transferring = null },
             onSelect = { target ->
                 transferring = null
@@ -884,6 +885,7 @@ fun GamingScreen(
             PackageExtensionDialog(
                 extensions = request.extensions,
                 extraControllers = request.session.extraControllers,
+                currentDurationMinutes = request.session.timerMinutes ?: 0,
                 onDismiss = { extendingPackage = null },
                 onSelect = { extension ->
                     extendingPackage = null
@@ -1434,6 +1436,7 @@ private fun GamingCommandWorkspace(
                                 station = station,
                                 session = session,
                                 sessionAddons = session?.let(state::addonsFor).orEmpty(),
+                                packages = state.packages,
                                 wallClock = wallClock,
                                 selected = station.id == resolvedSelectedStationId,
                                 focused = station.id == focusStationId,
@@ -1760,10 +1763,11 @@ internal fun GamingSavingOverlay(stationName: String) {
 }
 
 @Composable
-private fun GamingStationTile(
+internal fun GamingStationTile(
     station: Station,
     session: GameSession?,
     sessionAddons: List<GamingSessionAddonUi>,
+    packages: List<GamingPackage>,
     wallClock: State<Long>,
     selected: Boolean,
     focused: Boolean,
@@ -1822,7 +1826,7 @@ private fun GamingStationTile(
         StationVisualState.SendRejected,
         -> "Send to POS"
         StationVisualState.CancellationRequired -> "Reason required"
-        StationVisualState.Available -> "${station.ratePerHourMinor.asRupees()}/hour"
+        StationVisualState.Available -> availableStationPricingDescription(station, packages)
         StationVisualState.Disabled -> "Disabled"
         StationVisualState.BillingMissing -> "Amount unavailable"
         StationVisualState.StartFailed -> "Evidence retained"
@@ -2136,10 +2140,19 @@ internal fun GamingStationCard(
             null
         }
 
-    val rateDescription = when {
-        session == null -> "${station.ratePerHourMinor.asRupees()} per hour"
-        session.ratePerHourMinor != null -> "${session.ratePerHourMinor.asRupees()} per hour"
-        else -> "Locked session rate unavailable"
+    val packageSelection = session?.let(::gamingPackageSelectionLabel)
+    val pricingDescription = when {
+        session?.isPackageBilling() == true -> buildString {
+            append(packageSelection ?: "Fixed package")
+            append(" · ")
+            append(session.amountMinor?.let { "${it.asRupees()} fixed total" }
+                ?: "locked total unavailable")
+        }
+        session?.ratePerHourMinor != null && requiresCanonicalGamingTariff(station.type) ->
+            "Legacy locked rate ${session.ratePerHourMinor.asRupees()} per hour"
+        session?.ratePerHourMinor != null -> "${session.ratePerHourMinor.asRupees()} per hour"
+        session != null -> "Locked session rate unavailable"
+        else -> availableStationPricingDescription(station, packages)
     }
 
     Column(
@@ -2151,7 +2164,7 @@ internal fun GamingStationCard(
             .border(if (focused) 2.dp else 1.dp, if (focused) Brand.Gold else Brand.BorderSubtle, Radius.shapeLg)
             .semantics {
                 contentDescription = "${station.name}. ${presentation.statusLabel}. " +
-                    "$rateDescription."
+                    "$pricingDescription."
             }
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -2180,13 +2193,12 @@ internal fun GamingStationCard(
         // names such as "Racing Simulator 1" remain identifiable and their
         // price never disappears behind an ellipsis on a four-column tablet.
         Text(
-            if (session != null && session.ratePerHourMinor == null) {
-                "${stationTypeLabel(station.type)} · Locked rate unavailable"
+            "${stationTypeLabel(station.type)} · $pricingDescription",
+            color = if (pricingDescription.contains("unavailable") || pricingDescription.contains("not synced")) {
+                Brand.Warning
             } else {
-                val displayedRate = session?.ratePerHourMinor ?: station.ratePerHourMinor
-                "${stationTypeLabel(station.type)} · ${displayedRate.asRupees()}/hour"
+                Brand.ForegroundMuted
             },
-            color = if (session != null && session.ratePerHourMinor == null) Brand.Warning else Brand.ForegroundMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -2671,7 +2683,11 @@ private fun StationBody(
                 when (presentation.state) {
                     StationVisualState.Starting ->
                         "Saved on this tablet and waiting to sync. Play time and the booked timer use the captured start time."
-                    StationVisualState.Overtime -> "Booked time has ended. Stop when play finishes."
+                    StationVisualState.Overtime -> if (session?.isPackageBilling() == true) {
+                        "Booked time has ended. Add the matching paid extension or stop now; the selected package remains locked."
+                    } else {
+                        "Booked time has ended. Stop when play finishes."
+                    }
                     StationVisualState.Paused -> "Paused on the server. Stop or resolve before reuse."
                     StationVisualState.Stopping -> if (
                         session?.legacyOriginalCapturedStopAt != null &&
@@ -2696,7 +2712,11 @@ private fun StationBody(
                             )
                         }
                     }
-                    else -> "Final charge is calculated by the server when stopped."
+                    else -> if (session?.isPackageBilling() == true) {
+                        "${gamingPackageSelectionLabel(session) ?: "Fixed package"}. The displayed package total was locked when the session started."
+                    } else {
+                        "Final elapsed-time charge is calculated by the server when stopped."
+                    }
                 },
                 color = if (presentation.state in setOf(StationVisualState.Overtime, StationVisualState.StopFailed)) {
                     Brand.Danger
@@ -3363,6 +3383,7 @@ internal fun CancelUnbilledSessionDialog(
 private fun TransferSessionDialog(
     sourceName: String,
     targets: List<Station>,
+    packages: List<GamingPackage>,
     onDismiss: () -> Unit,
     onSelect: (Station) -> Unit,
 ) {
@@ -3401,7 +3422,10 @@ private fun TransferSessionDialog(
                                     contentColor = Brand.Foreground,
                                 ),
                             ) {
-                                Text("${target.name} · ${target.ratePerHourMinor.asRupees()}/hour")
+                                Text(
+                                    "${target.name} · " +
+                                        availableStationPricingDescription(target, packages),
+                                )
                             }
                         }
                     }
@@ -3424,13 +3448,18 @@ private fun TransferSessionDialog(
 private fun PackageExtensionDialog(
     extensions: List<GamingPackage>,
     extraControllers: Int,
+    currentDurationMinutes: Int,
     onDismiss: () -> Unit,
     onSelect: (GamingPackage) -> Unit,
 ) {
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     val selected = extensions.firstOrNull { it.id == selectedId }
     val selectedSurcharge = selected?.let {
-        extraControllerSurchargeMinor(extraControllers, it.durationMinutes)
+        extraControllerExtensionSurchargeMinor(
+            extraControllers = extraControllers,
+            currentDurationMinutes = currentDurationMinutes,
+            extensionMinutes = it.durationMinutes,
+        )
     } ?: 0L
     val selectedTotal = selected?.let { it.priceMinor + selectedSurcharge }
     AlertDialog(
@@ -3459,9 +3488,10 @@ private fun PackageExtensionDialog(
                                 contentColor = Brand.Foreground,
                             ),
                         ) {
-                            val surcharge = extraControllerSurchargeMinor(
-                                extraControllers,
-                                extension.durationMinutes,
+                            val surcharge = extraControllerExtensionSurchargeMinor(
+                                extraControllers = extraControllers,
+                                currentDurationMinutes = currentDurationMinutes,
+                                extensionMinutes = extension.durationMinutes,
                             )
                             Text(
                                 "${extension.name} · ${extension.durationMinutes} min · " +
@@ -3474,7 +3504,8 @@ private fun PackageExtensionDialog(
                     Text(
                         "Selected extension: ${selected?.priceMinor?.asRupees() ?: "—"} base + " +
                             "${selectedSurcharge.asRupees()} controller surcharge. " +
-                            "Each extra controller costs ₹30 per started hour (₹30 minimum).",
+                            "The controller charge shown is only the increase needed for the " +
+                                "session's new total duration; already-paid time is not charged again.",
                         color = Brand.Warning,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -3933,12 +3964,57 @@ internal fun StartSessionDialog(
     )
     var phone by remember { mutableStateOf("") }
     var minutes by remember { mutableStateOf<Int?>(60) }
-    var selectedPackageId by rememberSaveable(station.id) { mutableStateOf<String?>(null) }
-    var extraControllers by rememberSaveable(station.id) { mutableIntStateOf(0) }
-    val selectedPackage = packages.firstOrNull { it.id == selectedPackageId }
-    LaunchedEffect(selectedPackageId) {
-        if (selectedPackageId == null) extraControllers = 0
+    val basePackages = remember(packages) {
+        packages.filter { it.kind == "base" && it.code.isNotBlank() }
     }
+    val pricingTiers = remember(basePackages) {
+        basePackages.map(GamingPackage::pricingTier).distinct()
+            .sortedBy { if (it == "standard") 0 else 1 }
+    }
+    var selectedPricingTier by rememberSaveable(station.id) {
+        mutableStateOf(pricingTiers.firstOrNull() ?: "standard")
+    }
+    val supportsPlayerModes = stationFilterId(station.type) == "ps5" &&
+        basePackages.any { it.variant in setOf("single", "dual") }
+    var playerCount by rememberSaveable(station.id) { mutableIntStateOf(1) }
+    val maximumPlayers = remember(basePackages, selectedPricingTier) {
+        basePackages.filter { it.pricingTier == selectedPricingTier }
+            .maxOfOrNull(GamingPackage::maxPlayers)?.coerceIn(1, 8) ?: 1
+    }
+    val requiredVariant = if (supportsPlayerModes) {
+        if (playerCount == 1) "single" else "dual"
+    } else {
+        null
+    }
+    val eligiblePackages = basePackages.filter {
+        it.pricingTier == selectedPricingTier &&
+            (requiredVariant == null || it.variant == requiredVariant)
+    }
+    var selectedPackageId by rememberSaveable(station.id) {
+        mutableStateOf<String?>(eligiblePackages.firstOrNull()?.id)
+    }
+    LaunchedEffect(selectedPricingTier, playerCount, packages) {
+        if (selectedPricingTier !in pricingTiers) {
+            selectedPricingTier = pricingTiers.firstOrNull() ?: "standard"
+        }
+        playerCount = playerCount.coerceAtMost(maximumPlayers)
+        if (eligiblePackages.none { it.id == selectedPackageId }) {
+            selectedPackageId = eligiblePackages.firstOrNull()?.id
+        }
+    }
+    val selectedPackage = eligiblePackages.firstOrNull { it.id == selectedPackageId }
+    val extraControllers = if (selectedPackage?.variant == "dual") {
+        (playerCount - selectedPackage.includedPlayers).coerceAtLeast(0)
+    } else 0
+    val selectedControllerSurchargeMinor = selectedPackage?.let {
+        extraControllerSurchargeMinor(extraControllers, it.durationMinutes)
+    } ?: 0L
+    val selectedPackageTotalMinor = selectedPackage?.let {
+        it.priceMinor + selectedControllerSurchargeMinor
+    }
+    val hasFixedTariff = basePackages.isNotEmpty()
+    val fixedTariffRequired = requiresCanonicalGamingTariff(station.type)
+    val fixedTariffUnavailable = fixedTariffRequired && !hasFixedTariff
 
     AlertDialog(
         containerColor = Brand.SurfaceOverlay,
@@ -3968,116 +4044,119 @@ internal fun StartSessionDialog(
                 ) {
                     Column {
                         Text(stationTypeLabel(station.type), color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
-                        Text("Rate", color = Brand.ForegroundFaint, style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            if (fixedTariffRequired) "Fixed-price tariff" else "Hourly rate",
+                            color = Brand.ForegroundFaint,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
                     }
                     NumericValue(
-                        value = "${station.ratePerHourMinor.asRupees()}/hour",
+                        value = when {
+                            selectedPackageTotalMinor != null -> selectedPackageTotalMinor.asRupees()
+                            fixedTariffUnavailable -> "Unavailable"
+                            fixedTariffRequired -> "Select a package"
+                            else -> "${station.ratePerHourMinor.asRupees()}/hour"
+                        },
                         style = MaterialTheme.typography.titleLarge,
                         color = Brand.Foreground,
                     )
                 }
                 Text("Billing option", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    item {
-                        FilterChip(
-                            selected = selectedPackageId == null,
-                            onClick = { selectedPackageId = null },
-                            label = { Text("Hourly / flexible") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = Brand.Surface,
-                                labelColor = Brand.ForegroundMuted,
-                                selectedContainerColor = Brand.Gold,
-                                selectedLabelColor = Brand.Background,
-                            ),
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        )
+                if (fixedTariffUnavailable) {
+                    Text(
+                        "The fixed-price tariff has not synced to this tablet. Connect to the " +
+                            "server and refresh Gaming before starting this station; the old " +
+                            "hourly fallback is intentionally disabled so the customer is not " +
+                            "charged the wrong amount.",
+                        color = Brand.Danger,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else if (hasFixedTariff) {
+                    if (pricingTiers.size > 1) {
+                        Text("Service tier", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            items(pricingTiers) { tier ->
+                                FilterChip(
+                                    selected = selectedPricingTier == tier,
+                                    onClick = { selectedPricingTier = tier },
+                                    label = { Text(tier.replaceFirstChar(Char::uppercase)) },
+                                    colors = gamingPackageChipColors(),
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                )
+                            }
+                        }
                     }
-                    items(packages, key = GamingPackage::id) { option ->
-                        FilterChip(
-                            selected = selectedPackageId == option.id,
-                            onClick = { selectedPackageId = option.id },
-                            label = { Text("${option.name} · ${option.priceMinor.asRupees()}") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = Brand.Surface,
-                                labelColor = Brand.ForegroundMuted,
-                                selectedContainerColor = Brand.Gold,
-                                selectedLabelColor = Brand.Background,
-                            ),
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        )
+                    if (supportsPlayerModes) {
+                        Text("Players", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            items((1..maximumPlayers).toList()) { count ->
+                                FilterChip(
+                                    selected = playerCount == count,
+                                    onClick = { playerCount = count },
+                                    label = {
+                                        Text(
+                                            when (count) {
+                                                1 -> "Single"
+                                                2 -> "Two players"
+                                                else -> "$count players"
+                                            },
+                                        )
+                                    },
+                                    colors = gamingPackageChipColors(),
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                )
+                            }
+                        }
                     }
-                }
-                if (selectedPackage == null) {
-                    Text("Booked time", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+                    Text("Duration", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelMedium)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        items(listOf<Int?>(30, 60, 90, 120, null)) { option ->
+                        items(eligiblePackages, key = GamingPackage::id) { option ->
+                            val optionExtraControllers = if (option.variant == "dual") {
+                                (playerCount - option.includedPlayers).coerceAtLeast(0)
+                            } else 0
+                            val optionTotalMinor = option.priceMinor + extraControllerSurchargeMinor(
+                                optionExtraControllers,
+                                option.durationMinutes,
+                            )
                             FilterChip(
-                                selected = minutes == option,
-                                onClick = { minutes = option },
-                                label = { Text(option?.let { "${it}m" } ?: "Open-ended") },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    containerColor = Brand.Surface,
-                                    labelColor = Brand.ForegroundMuted,
-                                    selectedContainerColor = Brand.Gold,
-                                    selectedLabelColor = Brand.Background,
-                                ),
+                                selected = selectedPackageId == option.id,
+                                onClick = { selectedPackageId = option.id },
+                                label = { Text("${option.durationMinutes} min · ${optionTotalMinor.asRupees()} total") },
+                                colors = gamingPackageChipColors(),
                                 modifier = Modifier.heightIn(min = 48.dp),
                             )
                         }
                     }
                 } else {
-                    val controllerSurcharge = extraControllerSurchargeMinor(
-                        extraControllers,
-                        selectedPackage.durationMinutes,
-                    )
-                    val confirmedTotal = selectedPackage.priceMinor + controllerSurcharge
+                    Text("Booked time", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        items(listOf<Int?>(30, 60, 90, 120, null)) { option ->
+                        FilterChip(
+                            selected = minutes == option,
+                            onClick = { minutes = option },
+                            label = { Text(option?.let { "${it}m" } ?: "Open-ended") },
+                            colors = gamingPackageChipColors(),
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        )
+                        }
+                    }
+                }
+                if (selectedPackage != null) {
                     SectionCard(
                         title = selectedPackage.name,
-                        subtitle = "${selectedPackage.durationMinutes} minutes · ${confirmedTotal.asRupees()} total",
+                        subtitle = "${selectedPackage.durationMinutes} minutes · ${requireNotNull(selectedPackageTotalMinor).asRupees()} total",
                     ) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Extra controllers", color = Brand.Foreground, style = MaterialTheme.typography.labelLarge)
-                                Text(
-                                    if (extraControllers == 0) {
-                                        "No controller surcharge."
-                                    } else {
-                                        "${controllerSurcharge.asRupees()} surcharge · ₹30 per controller per started hour (₹30 minimum)."
-                                    },
-                                    color = Brand.ForegroundMuted,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                            ) {
-                                OutlinedButton(
-                                    onClick = { extraControllers = (extraControllers - 1).coerceAtLeast(0) },
-                                    enabled = extraControllers > 0,
-                                    modifier = Modifier.size(48.dp).semantics {
-                                        contentDescription = "Decrease extra controllers"
-                                    },
-                                    contentPadding = PaddingValues(0.dp),
-                                ) { Text("−") }
-                                NumericValue(
-                                    value = extraControllers.toString(),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = Brand.Foreground,
-                                )
-                                OutlinedButton(
-                                    onClick = { extraControllers = (extraControllers + 1).coerceAtMost(8) },
-                                    enabled = extraControllers < 8,
-                                    modifier = Modifier.size(48.dp).semantics {
-                                        contentDescription = "Increase extra controllers"
-                                    },
-                                    contentPadding = PaddingValues(0.dp),
-                                ) { Text("+") }
-                            }
+                        if (supportsPlayerModes) {
+                            Text(
+                                if (extraControllers == 0) {
+                                    "$playerCount ${if (playerCount == 1) "player" else "players"} · controllers included."
+                                } else {
+                                    "$playerCount players · ${extraControllers.asControllerCount()} · " +
+                                        "${selectedControllerSurchargeMinor.asRupees()} surcharge."
+                                },
+                                color = Brand.ForegroundMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
                         }
                     }
                 }
@@ -4095,6 +4174,8 @@ internal fun StartSessionDialog(
                 Text(
                     if (selectedPackage != null) {
                         "Price, duration and controller surcharge are captured now and verified by the server. The timer starts at this tap."
+                    } else if (fixedTariffUnavailable) {
+                        "Starting is disabled until the exact tariff has synced. No session or charge will be created."
                     } else if (minutes == null) {
                         "The start time is saved at this tap. The server verifies it and calculates the final elapsed-time bill."
                     } else {
@@ -4106,11 +4187,8 @@ internal fun StartSessionDialog(
             }
         },
         confirmButton = {
-            val startTotal = selectedPackage?.let {
-                it.priceMinor + extraControllerSurchargeMinor(extraControllers, it.durationMinutes)
-            }
             ErpButton(
-                text = startTotal?.let { "Start · ${it.asRupees()}" } ?: "Start session",
+                text = selectedPackageTotalMinor?.let { "Start · ${it.asRupees()}" } ?: "Start session",
                 onClick = {
                     onConfirm(
                         phone.takeIf(String::isNotBlank),
@@ -4119,12 +4197,24 @@ internal fun StartSessionDialog(
                         extraControllers,
                     )
                 },
+                enabled = !fixedTariffUnavailable && (!hasFixedTariff || selectedPackage != null),
                 leadingIcon = Icons.Filled.PlayArrow,
             )
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+@Composable
+private fun gamingPackageChipColors() = FilterChipDefaults.filterChipColors(
+    containerColor = Brand.Surface,
+    labelColor = Brand.ForegroundMuted,
+    selectedContainerColor = Brand.Gold,
+    selectedLabelColor = Brand.Background,
+)
+
+private fun Int.asControllerCount(): String =
+    "$this extra ${if (this == 1) "controller" else "controllers"}"
 
 private fun stationFilters(stations: List<Station>): List<StationFilter> {
     val order = listOf("ps5", "racing", "vr", "streaming", "shisha", "other")
@@ -4141,13 +4231,60 @@ private fun stationFilters(stations: List<Station>): List<StationFilter> {
     return listOf(StationFilter("all", "All")) + order.filter { it in present }.map { StationFilter(it, labels.getValue(it)) }
 }
 
-private fun stationFilterId(type: String): String = when {
-    type.contains("ps", ignoreCase = true) || type.contains("console", ignoreCase = true) -> "ps5"
-    type.contains("sim", ignoreCase = true) || type.contains("racing", ignoreCase = true) -> "racing"
-    type.contains("vr", ignoreCase = true) -> "vr"
-    type.contains("stream", ignoreCase = true) -> "streaming"
-    type.contains("hookah", ignoreCase = true) || type.contains("shisha", ignoreCase = true) -> "shisha"
-    else -> "other"
+private fun stationFilterId(type: String): String {
+    val normalized = type.trim().lowercase(Locale.ROOT)
+        .replace('_', ' ')
+        .replace('-', ' ')
+        .replace(Regex("\\s+"), " ")
+    return when (normalized) {
+        "ps5", "ps 5", "playstation", "playstation 5", "console", "gaming console" -> "ps5"
+        "simulator", "racing", "racing simulator", "simdrive" -> "racing"
+        "vr", "virtual reality", "vr pod" -> "vr"
+        "streaming", "streaming booth" -> "streaming"
+        "hookah", "shisha", "shisha table" -> "shisha"
+        else -> "other"
+    }
+}
+
+internal fun requiresCanonicalGamingTariff(stationType: String): Boolean =
+    stationFilterId(stationType) in setOf("ps5", "racing")
+
+/**
+ * Price copy for an available station. PS5 and simulator operation is governed
+ * by Code22's fixed catalogue, so the legacy station hourly field must never be
+ * advertised as a valid customer tariff for those station types.
+ */
+internal fun availableStationPricingDescription(
+    station: Station,
+    packages: List<GamingPackage>,
+): String {
+    if (!requiresCanonicalGamingTariff(station.type)) {
+        return "${station.ratePerHourMinor.asRupees()}/hour"
+    }
+    val baseTariffs = packages.filter {
+        it.stationType == station.type && it.kind == "base" && it.code.isNotBlank()
+    }
+    return baseTariffs.minOfOrNull(GamingPackage::priceMinor)?.let {
+        "Fixed packages from ${it.asRupees()}"
+    } ?: "Fixed-price tariff not synced"
+}
+
+internal fun gamingPackageSelectionLabel(session: GameSession): String? {
+    if (!session.isPackageBilling()) return null
+    val tier = session.packagePricingTierSnapshot
+        ?.takeIf(String::isNotBlank)
+        ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    val mode = when (session.packageVariantSnapshot) {
+        "single" -> "Single"
+        "dual" -> when (val players = 2 + session.extraControllers.coerceAtLeast(0)) {
+            2 -> "Two players"
+            else -> "$players players"
+        }
+        "simdrive" -> "Simdrive"
+        else -> session.packageVariantSnapshot?.takeIf(String::isNotBlank)
+            ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    }
+    return listOfNotNull(tier, mode).takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
 private fun stationTypeLabel(type: String): String = when (stationFilterId(type)) {
@@ -4208,11 +4345,24 @@ internal fun elapsedMillis(session: GameSession, nowMillis: Long): Long = runCat
     (effectiveEnd - Instant.parse(session.startAt).toEpochMilli()).coerceAtLeast(0L)
 }.getOrDefault(0L)
 
-/** Mirrors the fixed backend package surcharge used for both starts and paid extensions. */
+/** Mirrors the fixed backend package surcharge for a session's cumulative duration. */
 internal fun extraControllerSurchargeMinor(extraControllers: Int, durationMinutes: Int): Long {
     if (extraControllers <= 0 || durationMinutes <= 0) return 0L
     val startedHours = (durationMinutes + 59L) / 60L
     return extraControllers.toLong() * startedHours * 3_000L
+}
+
+/** An extension only charges the increase across the cumulative started-hour boundary. */
+internal fun extraControllerExtensionSurchargeMinor(
+    extraControllers: Int,
+    currentDurationMinutes: Int,
+    extensionMinutes: Int,
+): Long {
+    if (currentDurationMinutes < 0 || extensionMinutes <= 0) return 0L
+    return (
+        extraControllerSurchargeMinor(extraControllers, currentDurationMinutes + extensionMinutes) -
+            extraControllerSurchargeMinor(extraControllers, currentDurationMinutes)
+        ).coerceAtLeast(0L)
 }
 
 internal fun matchingPackageExtensions(
@@ -4224,9 +4374,18 @@ internal fun matchingPackageExtensions(
         ?: return emptyList()
     val lockedStationType = session.packageStationTypeSnapshot?.takeIf(String::isNotBlank)
         ?: return emptyList()
+    val compatibleTiers = packages.filter {
+        it.kind == "extension" && it.stationType == lockedStationType &&
+            it.variant == lockedVariant
+    }.map(GamingPackage::pricingTier).distinct()
+    val lockedPricingTier = session.packagePricingTierSnapshot?.takeIf(String::isNotBlank)
+        ?: session.packageId?.let { packageId ->
+        packages.firstOrNull { it.id == packageId && it.kind == "base" }?.pricingTier
+    } ?: compatibleTiers.singleOrNull() ?: return emptyList()
     return packages.filter {
         it.kind == "extension" && it.stationType == station.type &&
-            it.stationType == lockedStationType && it.variant == lockedVariant
+            it.stationType == lockedStationType && it.variant == lockedVariant &&
+            it.pricingTier == lockedPricingTier
     }
 }
 

@@ -31,6 +31,19 @@ from app.models.base import Base, TenantMixin, TimestampMixin, _uuid_pk
 
 class Shift(Base, TimestampMixin, TenantMixin):
     __tablename__ = "shifts"
+    __table_args__ = (
+        CheckConstraint(
+            "opening_float_minor >= 0",
+            name="ck_shifts_opening_float_nonnegative",
+        ),
+        Index(
+            "uq_shifts_terminal_open",
+            "terminal_id",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+            sqlite_where=text("status = 'open'"),
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     branch_id: Mapped[UUID] = mapped_column(
@@ -194,6 +207,10 @@ class OrderCheckoutClaim(Base, TimestampMixin, TenantMixin):
             name="ck_order_checkout_claim_token_hash_length",
         ),
         CheckConstraint(
+            "client_instance_hash IS NULL OR char_length(client_instance_hash) = 64",
+            name="ck_order_checkout_claim_client_instance_hash_length",
+        ),
+        CheckConstraint(
             "order_total_minor >= 0 AND due_minor >= 0 "
             "AND due_minor <= order_total_minor",
             name="ck_order_checkout_claim_nonnegative_balance",
@@ -225,6 +242,11 @@ class OrderCheckoutClaim(Base, TimestampMixin, TenantMixin):
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    # Optional for rolling compatibility with Code 14/21. New clients bind a
+    # lease to one installation without persisting the raw installation UUID.
+    client_instance_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(

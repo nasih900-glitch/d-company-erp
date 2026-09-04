@@ -51,6 +51,7 @@ from app.core.timezone import company_timezone, local_date_bounds_utc, local_tod
 from app.events.bus import get_event_bus
 from app.events.events import OrderPaid
 from app.models import (
+    AuditLog,
     Branch,
     Company,
     Customer,
@@ -90,7 +91,9 @@ from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
 from app.services.gaming.billing_mode import is_package_billed
 from app.services.inventory.deduction import deduct_for_order
 from app.services.pos.checkout_claims import (
+    CheckoutClaimGrant,
     acquire_checkout_claim,
+    authorize_checkout_claim_for_void,
     consume_checkout_claim,
     guard_checkout_relevant_mutation,
     release_checkout_claim,
@@ -315,6 +318,23 @@ class CheckoutClaimRead(BaseModel):
     claimant_user_id: UUID
     terminal_id: UUID
     reused: bool
+
+
+def _checkout_claim_read(grant: CheckoutClaimGrant) -> CheckoutClaimRead:
+    claim = grant.claim
+    return CheckoutClaimRead(
+        claim_id=claim.id,
+        order_id=claim.order_id,
+        claim_token=grant.token,
+        expires_at=claim.expires_at,
+        order_total_minor=int(claim.order_total_minor),
+        paid_minor=grant.paid_minor,
+        due_minor=int(claim.due_minor),
+        order_version=int(claim.order_version),
+        claimant_user_id=claim.claimed_by_user_id,
+        terminal_id=claim.terminal_id,
+        reused=grant.reused,
+    )
 
 
 class PaymentCreate(BaseModel):
@@ -1275,7 +1295,7 @@ class PendingCustomerSpendReconciliationRead(BaseModel):
 
 
 class ShiftOpenRequest(BaseModel):
-    opening_float_minor: int = 0
+    opening_float_minor: int = Field(default=0, ge=0)
 
 
 def _require_idempotency(request: Request) -> tuple[str, str]:
@@ -1477,6 +1497,28 @@ async def _paid_total(session, order_id: UUID) -> int:
         ).scalar_one()
         or 0
     )
+
+
+async def _require_active_order_lines(
+    session,
+    order_id: UUID,
+    *,
+    operation: str,
+) -> None:
+    active_line_count = (
+        await session.execute(
+            select(func.count())
+            .select_from(OrderLine)
+            .where(
+                OrderLine.order_id == order_id,
+                OrderLine.voided_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    if not active_line_count:
+        raise BusinessRuleError(
+            f"This direct order has no active items and cannot be {operation}."
+        )
 
 
 async def _refunded_total(session, order_id: UUID) -> int:
@@ -2189,6 +2231,47 @@ def _require_checkout_version(order: Order, expected: int, *, operation: str) ->
                 "current_checkout_version": current,
             },
         )
+
+
+def _is_private_direct_open_order(order: Order) -> bool:
+    return (
+        order.status == "open"
+        and order.table_id is None
+        and order.type != "session"
+    )
+
+
+def _require_order_read_visibility(order: Order, tenant: TenantContext) -> None:
+    if (
+        _is_private_direct_open_order(order)
+        and order.opened_by != tenant.user_id
+        and not tenant.protected_access
+    ):
+        # Keep an unguessable order id from becoming a cross-cashier existence
+        # oracle. Protected owners retain discovery for orphan reconciliation.
+        raise NotFoundError("Order not found for this company.")
+
+
+def _require_private_direct_draft_creator(
+    order: Order,
+    tenant: TenantContext,
+    *,
+    operation: str,
+) -> None:
+    """Keep an unpublished direct draft writable only by its creator.
+
+    Protected owners may discover these rows for reconciliation, but must use
+    the explicit reasoned recovery or whole-order void workflow before acting
+    on another cashier's draft. Ordinary users receive no existence signal.
+    """
+    if not _is_private_direct_open_order(order) or order.opened_by == tenant.user_id:
+        return
+    if tenant.protected_access:
+        raise BusinessRuleError(
+            f"This private direct draft belongs to another cashier and cannot be {operation}. "
+            "Use Recover to POS with an audit reason, or void the order with a reason."
+        )
+    raise NotFoundError("Order not found for this company.")
 
 
 def _require_settlement_metadata_version(
@@ -3021,6 +3104,11 @@ async def add_order_lines(
         terminal_id=tenant.terminal_id,
         operation="adding items to an order",
     )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="edited",
+    )
     if order.status != "open":
         if order.status == "held":
             raise BusinessRuleError(
@@ -3198,6 +3286,11 @@ async def attach_order_customer(
         terminal_id=tenant.terminal_id,
         operation="attaching a customer to an order",
     )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="changed",
+    )
     if order.status not in ("open", "held"):
         raise BusinessRuleError(
             f"cannot change the customer on an order in status={order.status}"
@@ -3312,6 +3405,11 @@ async def apply_order_discount(
         terminal_id=tenant.terminal_id,
         operation="applying a discount to an order",
     )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="discounted",
+    )
     if order.status not in ("open", "held"):
         raise BusinessRuleError(
             f"cannot change the discount on an order in status={order.status}"
@@ -3422,6 +3520,11 @@ async def redeem_points(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="redeeming points on an order",
+    )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="changed",
     )
     if order.status not in ("open", "held"):
         raise BusinessRuleError(
@@ -3538,6 +3641,11 @@ async def redeem_reward(
         terminal_id=tenant.terminal_id,
         operation="redeeming a reward on an order",
     )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="changed",
+    )
     if order.status not in ("open", "held"):
         raise BusinessRuleError(
             f"cannot change a reward on an order in status={order.status}"
@@ -3610,6 +3718,23 @@ async def redeem_reward(
 
 
 class SendOrderToPosRequest(BaseModel):
+    expected_checkout_version: int = Field(ge=1)
+
+
+class HoldDirectOrderForCheckoutRequest(BaseModel):
+    expected_checkout_version: int = Field(ge=1)
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        clean = value.strip()
+        if len(clean) < 3:
+            raise ValueError("reason must contain at least 3 characters")
+        return clean
+
+
+class PublishDirectCheckoutClaimRequest(BaseModel):
     expected_checkout_version: int = Field(ge=1)
 
 
@@ -3855,6 +3980,270 @@ async def send_order_to_pos(
     return response
 
 
+@router.post(
+    "/orders/{order_id}/publish-checkout-claim",
+    response_model=CheckoutClaimRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def publish_direct_order_checkout_claim(
+    order_id: UUID,
+    payload: PublishDirectCheckoutClaimRequest,
+    session: SessionDep,
+    request: Request,
+    response: Response,
+    checkout_client_instance: Annotated[
+        UUID,
+        Header(alias="X-Checkout-Client-Instance"),
+    ],
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> CheckoutClaimRead:
+    """Atomically publish one private direct draft and lease its checkout.
+
+    The required idempotency key is validated but its response is deliberately
+    not put in the general idempotency table: that would persist the raw claim
+    bearer. A response-loss retry is instead identified by the installation-
+    bound claim plus the single database version bump from ``open`` to
+    ``held``. Any intervening bill edit changes the version and fails closed.
+    """
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("X-Terminal-Id header required for POS checkout")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("token has no branch_id")
+    _require_idempotency(request)
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="publishing a direct order for checkout",
+    )
+    if order.table_id is not None or order.type == "session":
+        raise BusinessRuleError(
+            "Only a table-less direct POS order can be published for checkout."
+        )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="published for checkout",
+    )
+    if order.status not in {"open", "held"}:
+        raise BusinessRuleError(
+            f"cannot publish an order in status={order.status} for checkout"
+        )
+
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="publishing a direct order for checkout",
+    )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=tenant.protected_access,
+        operation="publish a direct order for checkout on this shift",
+    )
+    paid_minor = await _paid_total(session, order.id)
+    if (
+        paid_minor != 0
+        or int(order.total_minor or 0) < 0
+        or order.invoice_no is not None
+        or order.invoice_issued_at is not None
+        or order.closed_at is not None
+    ):
+        raise BusinessRuleError(
+            "This direct order has payment or finalization evidence. Reconcile it "
+            "before collecting money."
+        )
+    await _require_active_order_lines(
+        session,
+        order.id,
+        operation="published for checkout",
+    )
+
+    current_version = max(1, int(order.checkout_version or 1))
+    if order.status == "open":
+        _require_checkout_version(
+            order,
+            payload.expected_checkout_version,
+            operation="publishing it for checkout",
+        )
+        order.status = "held"
+        order.held_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.refresh(order, attribute_names=["checkout_version"])
+    else:
+        if order.held_at is None:
+            raise BusinessRuleError(
+                "This held order is missing its handoff time. Reconcile it before checkout."
+            )
+        if current_version != payload.expected_checkout_version + 1:
+            raise BusinessRuleError(
+                "This bill changed after checkout publication. Reload it and review "
+                "the latest items before trying again.",
+                details={
+                    "expected_checkout_version": payload.expected_checkout_version,
+                    "current_checkout_version": current_version,
+                },
+            )
+
+    grant = await acquire_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        paid_minor=paid_minor,
+        client_instance_id=checkout_client_instance,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return _checkout_claim_read(grant)
+
+
+@router.patch(
+    "/orders/{order_id}/hold-for-checkout",
+    response_model=OrderRead,
+)
+async def hold_direct_order_for_checkout(
+    order_id: UUID,
+    payload: HoldDirectOrderForCheckoutRequest,
+    session: SessionDep,
+    request: Request,
+    tenant: TenantContext = Depends(requires("pos.write")),
+) -> OrderRead:
+    """Move a legacy direct draft into the claim-protected checkout queue.
+
+    This is a protected-owner recovery action for an ``open`` direct order
+    orphaned by an older client. New clients publish and claim atomically. The
+    Order update and semantic recovery row are append-only audited together.
+    """
+    if not tenant.protected_access:
+        raise ForbiddenError(
+            "Only a protected owner can recover a direct order into checkout."
+        )
+    if tenant.terminal_id is None:
+        raise BusinessRuleError("Select this tablet's POS terminal first.")
+    if tenant.branch_id is None:
+        raise BusinessRuleError("This account has no branch assigned.")
+
+    idempotency_key, request_hash = _require_idempotency(request)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return OrderRead.model_validate(existing_response["body"])
+
+    order = (
+        await session.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="recovering a direct order into checkout",
+    )
+    if order.table_id is not None or order.type == "session":
+        raise BusinessRuleError(
+            "Only a table-less direct POS order can use checkout recovery."
+        )
+    if order.status != "open":
+        raise BusinessRuleError(
+            f"cannot recover an order in status={order.status} into checkout"
+        )
+    _require_checkout_version(
+        order,
+        payload.expected_checkout_version,
+        operation="recovering it into checkout",
+    )
+
+    shift = (
+        await session.execute(
+            select(Shift).where(Shift.id == order.shift_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="recovering a direct order into checkout",
+    )
+    paid_minor = await _paid_total(session, order.id)
+    if (
+        paid_minor != 0
+        or int(order.total_minor or 0) < 0
+        or order.invoice_no is not None
+        or order.invoice_issued_at is not None
+        or order.closed_at is not None
+    ):
+        raise BusinessRuleError(
+            "This order has payment or finalization evidence and cannot be moved "
+            "into checkout. Reconcile it before collecting money."
+        )
+    await _require_active_order_lines(
+        session,
+        order.id,
+        operation="moved into checkout",
+    )
+
+    previous_version = max(1, int(order.checkout_version or 1))
+    held_at = datetime.now(timezone.utc)
+    order.status = "held"
+    order.held_at = held_at
+    await session.flush()
+    await session.refresh(order, attribute_names=["checkout_version"])
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="pos_direct_order_hold_for_checkout",
+            entity_type="Order",
+            entity_id=str(order.id),
+            before={
+                "status": "open",
+                "checkout_version": previous_version,
+            },
+            after={
+                "status": "held",
+                "held_at": held_at.isoformat(),
+                "checkout_version": int(order.checkout_version),
+                "idempotency_key": idempotency_key,
+            },
+            terminal_id=tenant.terminal_id,
+            reason=payload.reason,
+        )
+    )
+    await session.flush()
+
+    response = await _build_order_read(session, order)
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
 @router.get("/table-orders/active", response_model=list[OrderRead])
 async def list_active_table_orders(
     session: SessionDep,
@@ -3896,8 +4285,12 @@ async def claim_order_for_checkout(
     session: SessionDep,
     response: Response,
     tenant: TenantContext = Depends(requires("pos.write")),
+    checkout_client_instance: Annotated[
+        UUID | None,
+        Header(alias="X-Checkout-Client-Instance"),
+    ] = None,
 ) -> CheckoutClaimRead:
-    """Lease one shared held bill to the current cashier and terminal.
+    """Lease one shared held bill to the current cashier, terminal and client.
 
     The order lock is the serialization point for claim, payment, repricing,
     void, and finalization.  A second request cannot observe or overwrite a
@@ -3944,25 +4337,13 @@ async def claim_order_for_checkout(
         claimant_user_id=tenant.user_id,
         terminal_id=tenant.terminal_id,
         paid_minor=paid_minor,
+        client_instance_id=checkout_client_instance,
     )
-    claim = grant.claim
     # The body carries a short-lived bearer credential.  Browsers, reverse
     # proxies, and diagnostic caches must never retain it.
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    return CheckoutClaimRead(
-        claim_id=claim.id,
-        order_id=claim.order_id,
-        claim_token=grant.token,
-        expires_at=claim.expires_at,
-        order_total_minor=int(claim.order_total_minor),
-        paid_minor=grant.paid_minor,
-        due_minor=int(claim.due_minor),
-        order_version=int(claim.order_version),
-        claimant_user_id=claim.claimed_by_user_id,
-        terminal_id=claim.terminal_id,
-        reused=grant.reused,
-    )
+    return _checkout_claim_read(grant)
 
 
 @router.delete(
@@ -4040,6 +4421,10 @@ async def void_held_order(
     payload: VoidOrderRequest,
     session: SessionDep,
     tenant: TenantContext = Depends(requires("pos.void")),
+    checkout_claim_token: Annotated[
+        str | None,
+        Header(alias="X-Checkout-Claim"),
+    ] = None,
 ) -> None:
     """Clear a held order that shouldn't be billed (mistake, duplicate,
     customer walked out). Only the shift's opener or a protected owner may
@@ -4098,10 +4483,14 @@ async def void_held_order(
         )
     if order.status not in ("open", "held"):
         raise BusinessRuleError(f"cannot clear an order in status={order.status}")
-    await guard_checkout_relevant_mutation(
+    paid_minor = await _paid_total(session, order.id)
+    checkout_claim = await authorize_checkout_claim_for_void(
         session,
         order=order,
-        operation="void this order",
+        claimant_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        paid_minor=paid_minor,
+        token=checkout_claim_token,
     )
     shift = (
         await session.execute(
@@ -4151,6 +4540,9 @@ async def void_held_order(
     order.status = "void"
     order.notes = f"{order.notes + ' — ' if order.notes else ''}Voided: {payload.reason}"[:500]
     await _release_table_if_no_active_orders(session, order)
+    # The lease and the order transition are one transaction. A concurrent
+    # payment and void serialize on the order row, so exactly one can win.
+    await consume_checkout_claim(session, checkout_claim)
     await session.flush()
 
 
@@ -4168,6 +4560,7 @@ async def get_order(
         terminal_id=tenant.terminal_id,
         operation="viewing an order",
     )
+    _require_order_read_visibility(order, tenant)
     return await _build_order_read(session, order)
 
 
@@ -4230,6 +4623,18 @@ async def list_orders(
         Order.branch_id == tenant.branch_id,
         Order.terminal_id == tenant.terminal_id,
     )
+    if not tenant.protected_access:
+        # A direct draft is private until its owner atomically publishes and
+        # claims it. Table/session work remains collaborative, and protected
+        # owners retain visibility for the explicit orphan-recovery workflow.
+        stmt = stmt.where(
+            or_(
+                Order.status != "open",
+                Order.table_id.is_not(None),
+                Order.type == "session",
+                Order.opened_by == tenant.user_id,
+            )
+        )
     if status_filter:
         stmt = stmt.where(Order.status.in_(status_filter))
     else:
@@ -4607,6 +5012,11 @@ async def finalize_zero_total_order(
         terminal_id=tenant.terminal_id,
         operation="finalizing a zero-total order",
     )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="finalized",
+    )
     shift = (
         await session.execute(
             select(Shift).where(Shift.id == order.shift_id).with_for_update()
@@ -4790,6 +5200,11 @@ async def record_payment(
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
         operation="recording a payment",
+    )
+    _require_private_direct_draft_creator(
+        order,
+        tenant,
+        operation="paid",
     )
     if order.status in {"paid", "void", "refunded"}:
         raise BusinessRuleError(f"cannot pay an order in status={order.status}")
@@ -7665,15 +8080,17 @@ async def open_shift(
             "opening a shift."
         )
 
-    # The locked active terminal serializes simultaneous clients so they cannot
-    # create two live shifts for the same drawer.
+    # The locked active terminal serializes simultaneous opens. Lock the
+    # matching shift row as well: if a close is already updating it, PostgreSQL
+    # waits and then re-evaluates status against the committed row instead of
+    # returning a shift that became closed during this request.
     existing = (
         await session.execute(
             select(Shift).where(
                 Shift.company_id == tenant.company_id,
                 Shift.terminal_id == tenant.terminal_id,
                 Shift.status == "open",
-            )
+            ).with_for_update()
         )
     ).scalar_one_or_none()
     if existing:

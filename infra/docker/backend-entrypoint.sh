@@ -4,8 +4,9 @@
 # 1. Wait for Postgres to accept connections (compose healthcheck also enforces this,
 #    but a belt-and-braces wait inside the container survives slow disk on macOS).
 # 2. Apply Alembic migrations.
-# 3. Run scripts/seed.py + scripts/seed_india.py + scripts/ensure_roles.py —
-#    all idempotent, only inserting rows that don't already exist.
+# 3. Run scripts/seed.py + scripts/seed_india.py + scripts/ensure_roles.py.
+#    Release-specific tariff changes run once inside the guarded installer,
+#    never implicitly on an ordinary backend restart.
 # 4. Hand off to uvicorn.
 
 set -e

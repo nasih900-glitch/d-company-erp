@@ -2342,4 +2342,67 @@ class MigrationTest {
         }
         migrated.close()
     }
+
+    @Test
+    fun migrate40To41ClearsUnsafeLegacyTariffsAndAddsCode22Snapshots() {
+        helper.createDatabase(dbName, 40).apply {
+            execSQL(
+                "INSERT INTO gaming_package_cache " +
+                    "(id, stationType, variant, kind, name, durationMinutes, priceMinor) VALUES " +
+                    "('legacy-package', 'ps5', 'single', 'base', 'Old 1 hour', 60, 15000)",
+            )
+            execSQL(
+                "INSERT INTO gaming_session_cache " +
+                    "(id, stationId, status, startAtMillis, extraControllers) VALUES " +
+                    "('session-1', 'station-1', 'active', 1000, 0)",
+            )
+            execSQL(
+                "INSERT INTO local_gaming_sessions " +
+                    "(localId, stationId, startedAtMillis, state, status, extraControllers) VALUES " +
+                    "('local-session-1', 'station-1', 1000, 'start_pending', 'starting', 0)",
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 41, true, MIGRATION_40_41)
+        migrated.query("SELECT COUNT(*) FROM gaming_package_cache").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(
+                "A Code21 package without stable tariff identity must not remain selectable offline",
+                0,
+                cursor.getInt(0),
+            )
+        }
+        migrated.query(
+            "SELECT packagePricingTierSnapshot FROM gaming_session_cache WHERE id = 'session-1'",
+        ).use { cursor ->
+            assertTrue("Historical session evidence must survive the reference-cache reset", cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        migrated.query(
+            "SELECT packagePricingTierSnapshot FROM local_gaming_sessions " +
+                "WHERE localId = 'local-session-1'",
+        ).use { cursor ->
+            assertTrue("Unsynced local session evidence must survive the tariff migration", cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        migrated.execSQL(
+            "INSERT INTO gaming_package_cache " +
+                "(id, code, stationType, pricingTier, variant, includedPlayers, maxPlayers, " +
+                "kind, name, durationMinutes, priceMinor) VALUES " +
+                "('code22-package', 'standard-dual-session-60m', 'ps5', 'standard', " +
+                "'dual', 2, 4, 'base', 'Dual Mode 1 hour', 60, 15000)",
+        )
+        migrated.query(
+            "SELECT code, pricingTier, includedPlayers, maxPlayers FROM gaming_package_cache " +
+                "WHERE id = 'code22-package'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("standard-dual-session-60m", cursor.getString(0))
+            assertEquals("standard", cursor.getString(1))
+            assertEquals(2, cursor.getInt(2))
+            assertEquals(4, cursor.getInt(3))
+        }
+        migrated.close()
+    }
 }

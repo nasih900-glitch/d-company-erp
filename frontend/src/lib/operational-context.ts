@@ -38,6 +38,120 @@ export type ShiftResolution =
   | { kind: 'no_open_shift' }
   | { kind: 'ambiguous_open_shifts'; shifts: ShiftDTO[] };
 
+export type RealtimeShiftResolution = ShiftResolution
+  | { kind: 'local_work_conflict'; shift: ShiftDTO };
+
+export interface RequestGenerationRef {
+  current: number;
+}
+
+/**
+ * Starts a latest-request-wins generation. Websocket, mount and fallback poll
+ * refreshes may overlap; only the most recently started request may mutate POS
+ * shift state when its response arrives.
+ */
+export function beginRealtimeShiftRefresh(generation: RequestGenerationRef): {
+  isCurrent: () => boolean;
+} {
+  const requestGeneration = ++generation.current;
+  return {
+    isCurrent: () => generation.current === requestGeneration,
+  };
+}
+
+export function invalidateRealtimeShiftRefresh(generation: RequestGenerationRef): void {
+  generation.current += 1;
+}
+
+/**
+ * POS must finish restoring its durable cart/payment journal before realtime
+ * shift events are allowed to reconcile the screen. During that short mount
+ * window the in-memory shift id is deliberately null even though the saved
+ * recovery belongs to the server's open shift; reconciling early would
+ * misclassify that valid recovery as work from a different shift.
+ */
+export function canReconcileRealtimePosShift({
+  draftHydrated,
+  companyId,
+  branchId,
+  terminalReady,
+  terminalId,
+}: {
+  draftHydrated: boolean;
+  companyId: string | null;
+  branchId: string | null;
+  terminalReady: boolean;
+  terminalId: string | null;
+}): boolean {
+  return Boolean(
+    draftHydrated
+    && companyId
+    && branchId
+    && terminalReady
+    && terminalId,
+  );
+}
+
+/**
+ * A failed initial server fetch may still release the realtime recovery gate
+ * when there is no local draft, or when the draft contains a self-sufficient
+ * checkout journal. An ordinary cart/resumed-order draft still needs the menu
+ * and order hydration path; enabling persistence early could overwrite it.
+ */
+export function canCompletePosDraftHydrationAfterLoadFailure({
+  hasStoredDraft,
+  hasCheckoutRecovery,
+}: {
+  hasStoredDraft: boolean;
+  hasCheckoutRecovery: boolean;
+}): boolean {
+  return !hasStoredDraft || hasCheckoutRecovery;
+}
+
+/** Keep the first validated shift that owns local POS work until that work ends. */
+export function bindPosLocalWorkShift(
+  accountableShiftId: string | null,
+  validatedShiftId: string | null,
+): string | null {
+  return accountableShiftId ?? validatedShiftId;
+}
+
+/**
+ * Checkout recovery is the strongest authority, followed by the immutable
+ * local-work binding and only then the screen's currently open shift.
+ */
+export function resolvePosAccountableShiftId({
+  checkoutRecoveryShiftId,
+  localWorkShiftId,
+  currentShiftId,
+}: {
+  checkoutRecoveryShiftId: string | null;
+  localWorkShiftId: string | null;
+  currentShiftId: string | null;
+}): string | null {
+  return checkoutRecoveryShiftId ?? localWorkShiftId ?? currentShiftId;
+}
+
+/**
+ * An ordinary cart exists only in this browser until it is sent to the
+ * server. If its accountable shift is no longer the selected open shift, the
+ * cart must be preserved and locked for explicit reconciliation. It must
+ * never be silently rebound to, or deleted in favour of, another shift.
+ */
+export function hasOrdinaryPosDraftShiftConflict({
+  hasCheckoutRecovery,
+  storedShiftId,
+  resolvedShiftId,
+}: {
+  hasCheckoutRecovery: boolean;
+  storedShiftId: string | null;
+  resolvedShiftId: string | null;
+}): boolean {
+  return !hasCheckoutRecovery
+    && Boolean(storedShiftId)
+    && storedShiftId !== resolvedShiftId;
+}
+
 function storage(): Storage | null {
   try {
     return typeof window === 'undefined' ? null : window.localStorage;
@@ -198,6 +312,49 @@ export function resolveOpenShift({
   if (stored) return { kind: 'ready', shift: stored, source: 'stored' };
   if (matching.length === 1) return { kind: 'ready', shift: matching[0], source: 'single' };
   return { kind: 'no_open_shift' };
+}
+
+/**
+ * Reconcile a server-pushed shift refresh without ever moving unfinished local
+ * work onto a newly opened shift. A close event may legitimately leave no open
+ * shift; a later open event may select the sole exact-scope shift only when the
+ * POS has no cart or recovery journal tied to the previous one.
+ */
+export function resolveRealtimeOpenShift({
+  currentShiftId,
+  hasLocalShiftWork,
+  accountableLocalShiftId = null,
+  branchId,
+  terminalId,
+  openShifts,
+}: {
+  currentShiftId: string | null;
+  hasLocalShiftWork: boolean;
+  accountableLocalShiftId?: string | null;
+  branchId: string | null;
+  terminalId: string | null;
+  openShifts: ShiftDTO[];
+}): RealtimeShiftResolution {
+  // A restored payment journal already records the exact shift under which
+  // money was accepted/prepared. It is a stronger accounting identity than
+  // the initially-null screen state while hydration is completing.
+  const comparedShiftId = hasLocalShiftWork && accountableLocalShiftId
+    ? accountableLocalShiftId
+    : currentShiftId;
+  const resolution = resolveOpenShift({
+    storedShiftId: comparedShiftId,
+    branchId,
+    terminalId,
+    openShifts,
+  });
+  if (
+    resolution.kind === 'ready'
+    && resolution.shift.id !== comparedShiftId
+    && hasLocalShiftWork
+  ) {
+    return { kind: 'local_work_conflict', shift: resolution.shift };
+  }
+  return resolution;
 }
 
 export function terminalResolutionMessage(resolution: TerminalResolution): string {

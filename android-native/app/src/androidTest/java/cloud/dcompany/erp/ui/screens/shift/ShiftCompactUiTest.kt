@@ -126,6 +126,7 @@ class ShiftCompactUiTest {
             .assertIsDisplayed()
             .performClick()
 
+        compose.waitForIdle()
         compose.onNodeWithText("Close current shift").assertIsDisplayed()
     }
 

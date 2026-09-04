@@ -16,7 +16,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      // Real-time operational refreshes use /api/v1/ws. Without WebSocket
+      // upgrade proxying, local two-client QA silently falls back to the
+      // slower safety poll and can hide cross-device sync regressions.
+      '/api': { target: 'http://localhost:8000', changeOrigin: true, ws: true },
     },
   },
 });

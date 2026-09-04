@@ -693,6 +693,19 @@ done
 echo
 echo "==> Backend is ready."
 
+# Business prices must never change merely because a container restarted.
+# Apply the reviewed Code 22 tariff exactly once in the guarded maintenance
+# transaction window, after migrations and before public ingress reopens. Any
+# unexpected active legacy package aborts the installer and follows the same
+# verified rollback path as a migration or readiness failure.
+echo "==> Auditing the owner-approved Gaming Centre tariff…"
+docker compose -f docker-compose.prod.yml --env-file .env exec -T backend \
+  python -m scripts.ensure_gaming_tariff --dry-run
+echo "==> Applying the owner-approved Gaming Centre tariff…"
+docker compose -f docker-compose.prod.yml --env-file .env exec -T backend \
+  python -m scripts.ensure_gaming_tariff
+echo "==> Gaming Centre tariff accepted."
+
 if [ "$FRESH_INSTALL" = true ]; then
   OWNER_EMAIL=$(grep '^SEED_OWNER_EMAIL=' .env | cut -d= -f2-)
   OWNER_PASSWORD=$(grep '^SEED_OWNER_PASSWORD=' .env | cut -d= -f2-)

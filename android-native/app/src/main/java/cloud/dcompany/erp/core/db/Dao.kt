@@ -150,6 +150,28 @@ interface OrderDao {
         deleteOrder(localId)
     }
 
+    @Query(
+        "DELETE FROM local_orders WHERE localId = :localId AND serverOrderId = :serverOrderId " +
+            "AND checkoutClaimToken = :claimToken AND syncState = 'awaiting_payment'",
+    )
+    suspend fun deleteExactPreparedDirectOrder(
+        localId: String,
+        serverOrderId: String,
+        claimToken: String,
+    ): Int
+
+    /** Remove the collectible projection atomically before releasing its lease. */
+    @Transaction
+    suspend fun removeExactPreparedDirect(
+        localId: String,
+        serverOrderId: String,
+        claimToken: String,
+    ): Boolean {
+        val removed = deleteExactPreparedDirectOrder(localId, serverOrderId, claimToken)
+        if (removed == 1) deleteLines(localId)
+        return removed == 1
+    }
+
     @Transaction
     @Query(
         "SELECT * FROM local_orders WHERE syncState IN " +
@@ -228,6 +250,25 @@ interface OrderDao {
         updatedAtMillis: Long,
     ): Int
 
+    /**
+     * A definitive discount refusal wrote nothing. Adopt the canonical server
+     * value and keep the order in review instead of trapping an uneditable
+     * PREPARING cart in an endless retry loop.
+     */
+    @Query(
+        "UPDATE local_orders SET manualDiscountMinor = :canonicalManualDiscountMinor, " +
+            "discountRequestVersion = NULL, revision = revision + 1, lastError = NULL, " +
+            "updatedAtMillis = :updatedAtMillis " +
+            "WHERE localId = :localId AND serverOrderId = :serverOrderId " +
+            "AND syncState = 'preparing'",
+    )
+    suspend fun adoptCanonicalDiscountAfterRefusal(
+        localId: String,
+        serverOrderId: String,
+        canonicalManualDiscountMinor: Long,
+        updatedAtMillis: Long,
+    ): Int
+
     @Query(
         "UPDATE local_orders SET serverOrderId = :serverOrderId, serverTotalMinor = :totalMinor, " +
             "serverSubtotalMinor = :subtotalMinor, serverDiscountMinor = :discountMinor, " +
@@ -250,9 +291,100 @@ interface OrderDao {
         roundOffMinor: Long,
         totalMinor: Long,
         dueMinor: Long,
-        claimToken: String?,
+        claimToken: String,
         claimExpiresAtMillis: Long,
         checkoutVersion: Long,
+        updatedAtMillis: Long,
+    ): Int
+
+    /**
+     * A definitive zero-finalization refusal can release its lease and safely
+     * return to publication recovery. Store the original pre-publish version,
+     * never the stale claim version, so the same installation can replay.
+     */
+    @Query(
+        "UPDATE local_orders SET checkoutClaimToken = NULL, " +
+            "checkoutClaimExpiresAtMillis = NULL, checkoutVersion = :prePublishVersion, " +
+            "syncState = 'preparing', lastError = :error, updatedAtMillis = :updatedAtMillis " +
+            "WHERE localId = :localId AND serverOrderId = :serverOrderId " +
+            "AND syncState = 'awaiting_payment'",
+    )
+    suspend fun returnPublishedDirectToRecovery(
+        localId: String,
+        serverOrderId: String,
+        prePublishVersion: Long,
+        error: String?,
+        updatedAtMillis: Long,
+    ): Int
+
+    /**
+     * Persist the irreversible zero-total acceptance before any optional
+     * receipt hydration request. The exact bearer guard prevents a stale UI
+     * callback from completing a different local checkout projection.
+     */
+    @Query(
+        "UPDATE local_orders SET invoiceNo = :invoiceNo, syncState = 'synced', " +
+            "checkoutClaimToken = NULL, checkoutClaimExpiresAtMillis = NULL, " +
+            "lastError = NULL, updatedAtMillis = :updatedAtMillis " +
+            "WHERE localId = :localId AND serverOrderId = :serverOrderId " +
+            "AND checkoutClaimToken = :claimToken AND syncState = 'awaiting_payment'",
+    )
+    suspend fun markExactZeroDirectFinalized(
+        localId: String,
+        serverOrderId: String,
+        claimToken: String,
+        invoiceNo: String,
+        updatedAtMillis: Long,
+    ): Int
+
+    /**
+     * Persist the canonical server price before publishing an offline-captured
+     * sale. If publication's response is lost, this pre-publish version is the
+     * exact request body replayed on the next sync.
+     */
+    @Query(
+        "UPDATE local_orders SET serverOrderId = :serverOrderId, shiftId = :serverShiftId, " +
+            "serverSubtotalMinor = :subtotalMinor, serverDiscountMinor = :discountMinor, " +
+            "serverPointsRedeemedMinor = :pointsRedeemedMinor, " +
+            "serverPointsRedeemed = :pointsRedeemed, serverTaxMinor = :taxMinor, " +
+            "serverRoundOffMinor = :roundOffMinor, serverTotalMinor = :totalMinor, " +
+            "serverDueMinor = :dueMinor, checkoutVersion = :checkoutVersion, " +
+            "lastError = NULL, updatedAtMillis = :updatedAtMillis " +
+            "WHERE localId = :localId AND syncState = 'pending'",
+    )
+    suspend fun checkpointPendingServerOrder(
+        localId: String,
+        serverOrderId: String,
+        serverShiftId: String,
+        subtotalMinor: Long,
+        discountMinor: Long,
+        pointsRedeemedMinor: Long,
+        pointsRedeemed: Int,
+        taxMinor: Long,
+        roundOffMinor: Long,
+        totalMinor: Long,
+        dueMinor: Long,
+        checkoutVersion: Long,
+        updatedAtMillis: Long,
+    ): Int
+
+    /** Claim bearer and post-publication version must be durable before pay. */
+    @Query(
+        "UPDATE local_orders SET checkoutClaimToken = :claimToken, " +
+            "checkoutClaimExpiresAtMillis = :claimExpiresAtMillis, " +
+            "checkoutVersion = :claimOrderVersion, updatedAtMillis = :updatedAtMillis " +
+            "WHERE localId = :localId AND syncState = 'pending' " +
+            "AND serverOrderId = :serverOrderId AND serverTotalMinor = :expectedTotalMinor " +
+            "AND serverDueMinor = :expectedDueMinor",
+    )
+    suspend fun savePendingDirectClaim(
+        localId: String,
+        serverOrderId: String,
+        expectedTotalMinor: Long,
+        expectedDueMinor: Long,
+        claimToken: String,
+        claimExpiresAtMillis: Long,
+        claimOrderVersion: Long,
         updatedAtMillis: Long,
     ): Int
 
@@ -440,7 +572,7 @@ interface SyncMetaDao {
         LocalBugReportEntity::class,
         LocalBugReportAttachmentEntity::class,
     ],
-    version = 40,
+    version = 41,
     exportSchema = true,
 )
 @TypeConverters(

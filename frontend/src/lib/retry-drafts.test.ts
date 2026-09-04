@@ -9,7 +9,12 @@ import {
   hasLockedTableRetryOperation,
   hasBenefitCoveredZeroBalance,
   hasCollectibleCheckoutBalance,
+  hasUnappliedCartStageBenefit,
   isCheckoutClaimRejection,
+  isCartStageDiscountAlreadyApplied,
+  isCartStagePointsAlreadyApplied,
+  reconcileCartStageBenefitsAfterReload,
+  retireAppliedCartStageBenefit,
   isStaleCheckoutBalanceRejection,
   isTableDraftHydratedForKey,
   normalizePosRetryDraft,
@@ -169,12 +174,7 @@ describe('POS checkout retry drafts', () => {
     malformed.retry.checkoutClaimExpiresAt = 123;
     malformed.retry.checkoutClaimOrderVersion = 1.5;
 
-    expect(normalizePosRetryDraft(malformed)?.retry).toMatchObject({
-      checkoutClaimRequired: true,
-    });
-    expect(normalizePosRetryDraft(malformed)?.retry?.checkoutClaimToken).toBeUndefined();
-    expect(normalizePosRetryDraft(malformed)?.retry?.checkoutClaimExpiresAt).toBeUndefined();
-    expect(normalizePosRetryDraft(malformed)?.retry?.checkoutClaimOrderVersion).toBeUndefined();
+    expect(normalizePosRetryDraft(malformed)).toBeNull();
   });
 
   it('round-trips a discount and points entered before the order existed', () => {
@@ -184,6 +184,7 @@ describe('POS checkout retry drafts', () => {
       retry: undefined,
       pendingCartDiscountMinor: 5000,
       pendingCartPointsMinor: 2500,
+      pendingCartPointsCustomerPhone: '9999999999',
     };
 
     expect(normalizePosRetryDraft(JSON.parse(JSON.stringify(cartStageDraft))))
@@ -198,15 +199,117 @@ describe('POS checkout retry drafts', () => {
     expect(restored?.retry?.key).toBe('checkout-1');
   });
 
-  it('drops a corrupt cart-stage discount instead of restoring bad money', () => {
+  it('fails closed on corrupt cart-stage money instead of silently rebilling', () => {
     const corrupt = normalizePosRetryDraft({
       ...JSON.parse(JSON.stringify(retryDraft)),
       pendingCartDiscountMinor: 12.5,
       pendingCartPointsMinor: -2500,
     });
 
-    expect(corrupt?.pendingCartDiscountMinor).toBeUndefined();
-    expect(corrupt?.pendingCartPointsMinor).toBeUndefined();
+    expect(corrupt).toBeNull();
+  });
+
+  it('fails closed when pending points are not bound to the same customer', () => {
+    const changedCustomer = {
+      ...JSON.parse(JSON.stringify(retryDraft)),
+      retry: undefined,
+      pendingCartPointsMinor: 2500,
+      pendingCartPointsCustomerPhone: '8888888888',
+    };
+
+    expect(normalizePosRetryDraft(changedCustomer)).toBeNull();
+  });
+
+  it('fails closed when a retry or served cart line is malformed', () => {
+    const badRetry = JSON.parse(JSON.stringify(retryDraft));
+    delete badRetry.retry.paymentMethod;
+    const badCart = JSON.parse(JSON.stringify(retryDraft));
+    badCart.cart.push({ itemId: '', qty: 1 });
+
+    expect(normalizePosRetryDraft(badRetry)).toBeNull();
+    expect(normalizePosRetryDraft(badCart)).toBeNull();
+  });
+
+  it('never filters damaged lines from the immutable checkout snapshot', () => {
+    const corrupt = JSON.parse(JSON.stringify(retryDraft));
+    corrupt.retry.snapshot.cart.push({ itemId: '', qty: 1 });
+
+    expect(normalizePosRetryDraft(corrupt)).toBeNull();
+  });
+
+  it('rejects unsupported versions and versionless financial journals', () => {
+    const unsupported = { ...JSON.parse(JSON.stringify(retryDraft)), version: 3 };
+    const versionless = JSON.parse(JSON.stringify(retryDraft));
+    delete versionless.version;
+
+    expect(normalizePosRetryDraft(unsupported)).toBeNull();
+    expect(normalizePosRetryDraft(versionless)).toBeNull();
+    expect(normalizePosRetryDraft({
+      cart: [{ itemId: 'tea', qty: 1 }],
+      orderType: 'takeaway',
+      deliveryVia: 'inhouse',
+      deliveryStateCode: '32',
+      customerName: '',
+      customerPhone: '',
+      pendingCartDiscountMinor: 500,
+    })).toBeNull();
+  });
+
+  it.each([
+    ['invalid phase', (draft: any) => { draft.retry.phase = 'paid_maybe'; }],
+    ['blank pending order', (draft: any) => { draft.retry.pendingOrderId = '  '; }],
+    ['fractional total', (draft: any) => { draft.retry.orderTotalMinor = 1.5; }],
+    ['negative tender', (draft: any) => { draft.retry.cashTenderedMinor = -1; }],
+    ['invalid claim expiry', (draft: any) => { draft.retry.checkoutClaimExpiresAt = 'tomorrow'; }],
+    ['partial claim', (draft: any) => { delete draft.retry.checkoutClaimToken; }],
+    ['invalid claim flag', (draft: any) => { draft.retry.checkoutClaimRequired = 'yes'; }],
+  ])('fails closed on %s instead of silently dropping the field', (_label, mutate) => {
+    const corrupt = JSON.parse(JSON.stringify(retryDraft));
+    mutate(corrupt);
+
+    expect(normalizePosRetryDraft(corrupt)).toBeNull();
+  });
+
+  it('requires internally complete recording and zero-finalization journals', () => {
+    const missingAmount = JSON.parse(JSON.stringify(retryDraft));
+    missingAmount.retry.phase = 'recording_payment';
+    delete missingAmount.retry.paymentAmountMinor;
+    const impossibleZero = JSON.parse(JSON.stringify(retryDraft));
+    impossibleZero.retry.phase = 'finalizing_zero';
+    impossibleZero.retry.orderTotalMinor = 0;
+    impossibleZero.retry.paymentAmountMinor = 0;
+    impossibleZero.retry.orderDiscountMinor = 0;
+
+    expect(normalizePosRetryDraft(missingAmount)).toBeNull();
+    expect(normalizePosRetryDraft(impossibleZero)).toBeNull();
+  });
+
+  it('allows cart-stage benefits only while checkout is still preparing', () => {
+    const corrupt = JSON.parse(JSON.stringify(retryDraft));
+    corrupt.pendingCartDiscountMinor = 500;
+
+    expect(normalizePosRetryDraft(corrupt)).toBeNull();
+
+    corrupt.retry.phase = 'preparing_order';
+    expect(normalizePosRetryDraft(corrupt)?.retry?.phase).toBe('preparing_order');
+  });
+
+  it('round-trips frozen benefit versions only with their matching pending instruction', () => {
+    const replay = JSON.parse(JSON.stringify(retryDraft));
+    replay.retry.phase = 'preparing_order';
+    replay.pendingCartDiscountMinor = 500;
+    replay.pendingCartPointsMinor = 300;
+    replay.pendingCartPointsCustomerPhone = '9999999999';
+    replay.retry.cartDiscountExpectedVersion = 7;
+    replay.retry.cartPointsExpectedVersion = 8;
+
+    expect(normalizePosRetryDraft(replay)?.retry).toMatchObject({
+      cartDiscountExpectedVersion: 7,
+      cartPointsExpectedVersion: 8,
+    });
+
+    delete replay.pendingCartDiscountMinor;
+    expect(normalizePosRetryDraft(replay)).toBeNull();
   });
 
   it('treats an older interrupted one-step checkout as payment-confirmed recovery', () => {
@@ -314,6 +417,157 @@ describe('POS checkout retry drafts', () => {
       total_minor: 50000,
       due_minor: 50000,
     })).toBe(finalizingZero);
+  });
+
+  it('recognises response-loss commits for each cart-stage benefit independently', () => {
+    expect(isCartStageDiscountAlreadyApplied(2_000, 2_000)).toBe(true);
+    expect(isCartStageDiscountAlreadyApplied(0, 2_000)).toBe(false);
+    expect(isCartStageDiscountAlreadyApplied(2_000, 0)).toBe(false);
+
+    expect(isCartStagePointsAlreadyApplied(1_500, 1_500)).toBe(true);
+    expect(isCartStagePointsAlreadyApplied(0, 1_500)).toBe(false);
+    // Discount may have committed while points never left the client; these
+    // decisions deliberately remain independent so only points is sent next.
+    expect(isCartStageDiscountAlreadyApplied(2_000, 2_000)).toBe(true);
+    expect(isCartStagePointsAlreadyApplied(0, 1_500)).toBe(false);
+    expect(hasUnappliedCartStageBenefit(
+      { manual_discount_minor: 2_000, points_redeemed_minor: 0 },
+      2_000,
+      1_500,
+    )).toBe(true);
+    expect(hasUnappliedCartStageBenefit(
+      { manual_discount_minor: 2_000, points_redeemed_minor: 1_500 },
+      2_000,
+      1_500,
+    )).toBe(false);
+  });
+
+  it('settles reflected cart benefits before claiming and keeps the payment journal reloadable', () => {
+    const preparing = normalizePosRetryDraft({
+      ...retryDraft,
+      pendingCartDiscountMinor: 2_000,
+      pendingCartPointsMinor: 1_500,
+      pendingCartPointsCustomerPhone: '9999999999',
+      customerPhone: '9999999999',
+      retry: {
+        ...retryDraft.retry,
+        phase: 'preparing_order',
+        cartDiscountExpectedVersion: 7,
+        cartPointsExpectedVersion: 8,
+        snapshot: {
+          ...retryDraft.retry!.snapshot,
+          customerPhone: '9999999999',
+        },
+      },
+    });
+    expect(preparing).not.toBeNull();
+
+    const settled = reconcileCartStageBenefitsAfterReload(
+      preparing!.retry!,
+      { manual_discount_minor: 2_000, points_redeemed_minor: 1_500 },
+      preparing!.pendingCartDiscountMinor!,
+      preparing!.pendingCartPointsMinor!,
+      preparing!.pendingCartPointsCustomerPhone,
+    );
+    expect(settled).toMatchObject({
+      pendingDiscountMinor: 0,
+      pendingPointsMinor: 0,
+      hasUnappliedBenefit: false,
+      changed: true,
+    });
+    expect(settled.retry.cartDiscountExpectedVersion).toBeUndefined();
+    expect(settled.retry.cartPointsExpectedVersion).toBeUndefined();
+
+    const awaiting = applyCanonicalCheckoutBalance(settled.retry, {
+      id: 'order-1',
+      total_minor: 20_000,
+      due_minor: 16_500,
+      manual_discount_minor: 2_000,
+      points_redeemed_minor: 1_500,
+    });
+    const roundTrip = normalizePosRetryDraft({
+      ...preparing,
+      pendingCartDiscountMinor: undefined,
+      pendingCartPointsMinor: undefined,
+      pendingCartPointsCustomerPhone: undefined,
+      retry: awaiting,
+    });
+    expect(roundTrip?.retry).toMatchObject({
+      phase: 'awaiting_payment',
+      orderTotalMinor: 20_000,
+      paymentAmountMinor: 16_500,
+    });
+    expect(roundTrip?.pendingCartDiscountMinor).toBeUndefined();
+    expect(roundTrip?.pendingCartPointsMinor).toBeUndefined();
+    expect(roundTrip?.retry?.cartDiscountExpectedVersion).toBeUndefined();
+    expect(roundTrip?.retry?.cartPointsExpectedVersion).toBeUndefined();
+  });
+
+  it('checkpoints each successful cart benefit before the next operation can fail', () => {
+    const preparing = normalizePosRetryDraft({
+      ...retryDraft,
+      pendingCartDiscountMinor: 2_000,
+      pendingCartPointsMinor: 1_500,
+      pendingCartPointsCustomerPhone: '9999999999',
+      customerPhone: '9999999999',
+      retry: {
+        ...retryDraft.retry,
+        phase: 'preparing_order',
+        cartDiscountExpectedVersion: 7,
+        cartPointsExpectedVersion: 8,
+        snapshot: {
+          ...retryDraft.retry!.snapshot,
+          customerPhone: '9999999999',
+        },
+      },
+    })!;
+
+    const afterDiscount = retireAppliedCartStageBenefit(
+      preparing.retry!,
+      'discount',
+      preparing.pendingCartDiscountMinor!,
+      preparing.pendingCartPointsMinor!,
+      preparing.pendingCartPointsCustomerPhone,
+    );
+    expect(afterDiscount.retry.cartDiscountExpectedVersion).toBeUndefined();
+    expect(afterDiscount.retry.cartPointsExpectedVersion).toBe(8);
+    expect(afterDiscount).toMatchObject({
+      pendingDiscountMinor: 0,
+      pendingPointsMinor: 1_500,
+      pendingPointsCustomerPhone: '9999999999',
+      hasUnappliedBenefit: true,
+    });
+    const discountCheckpoint = normalizePosRetryDraft({
+      ...preparing,
+      pendingCartDiscountMinor: undefined,
+      pendingCartPointsMinor: afterDiscount.pendingPointsMinor,
+      pendingCartPointsCustomerPhone: afterDiscount.pendingPointsCustomerPhone,
+      retry: afterDiscount.retry,
+    });
+    expect(discountCheckpoint).not.toBeNull();
+    expect(discountCheckpoint?.pendingCartDiscountMinor).toBeUndefined();
+    expect(discountCheckpoint?.pendingCartPointsMinor).toBe(1_500);
+
+    const afterPoints = retireAppliedCartStageBenefit(
+      afterDiscount.retry,
+      'points',
+      afterDiscount.pendingDiscountMinor,
+      afterDiscount.pendingPointsMinor,
+      afterDiscount.pendingPointsCustomerPhone,
+    );
+    expect(afterPoints.retry.cartPointsExpectedVersion).toBeUndefined();
+    expect(afterPoints).toMatchObject({
+      pendingDiscountMinor: 0,
+      pendingPointsMinor: 0,
+      hasUnappliedBenefit: false,
+    });
+    expect(normalizePosRetryDraft({
+      ...preparing,
+      pendingCartDiscountMinor: undefined,
+      pendingCartPointsMinor: undefined,
+      pendingCartPointsCustomerPhone: undefined,
+      retry: afterPoints.retry,
+    })).not.toBeNull();
   });
 
   it('builds one exact full-balance payment replay and rejects incomplete journals', () => {

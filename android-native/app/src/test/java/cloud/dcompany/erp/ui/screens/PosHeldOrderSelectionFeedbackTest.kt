@@ -2,6 +2,7 @@ package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.db.SyncState
+import cloud.dcompany.erp.core.net.Order
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,5 +45,27 @@ class PosHeldOrderSelectionFeedbackTest {
                 cashier,
             ),
         )
+    }
+
+    @Test
+    fun heldBillReviewBlocksSelectingASecondOrder() {
+        val reason = heldOrderSelectionBlockReason(
+            PosUiState(
+                online = true,
+                canCollectPayment = true,
+                heldOrderReview = authoritativeHeldOrderReview(
+                    order = Order(
+                        id = "held-1",
+                        status = "held",
+                        totalMinor = 10_000L,
+                        dueMinor = 10_000L,
+                    ),
+                    shiftIdAtReview = "shift-1",
+                ),
+            ),
+            cashier,
+        )
+
+        assertTrue(reason!!.contains("open held-bill review"))
     }
 }

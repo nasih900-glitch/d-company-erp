@@ -30,7 +30,7 @@ interface GamingDao {
     }
 
     // ------------------------------------------------------------- packages
-    @Query("SELECT * FROM gaming_package_cache ORDER BY stationType, variant, durationMinutes")
+    @Query("SELECT * FROM gaming_package_cache ORDER BY stationType, pricingTier, variant, durationMinutes")
     fun observePackages(): Flow<List<GamingPackageCacheEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -385,6 +385,7 @@ interface GamingDao {
             "packagePriceMinor = :packagePriceMinor, " +
             "packageDurationMinutes = :packageDurationMinutes, packageVariant = :packageVariant, " +
             "packageStationTypeSnapshot = :packageStationTypeSnapshot, " +
+            "packagePricingTierSnapshot = :packagePricingTierSnapshot, " +
             "extraControllers = :extraControllers, orderId = :orderId, " +
             "lastError = CASE WHEN :clearLastError THEN NULL ELSE lastError END " +
             "WHERE localId = :localId",
@@ -409,6 +410,7 @@ interface GamingDao {
         packageDurationMinutes: Int?,
         packageVariant: String?,
         packageStationTypeSnapshot: String?,
+        packagePricingTierSnapshot: String?,
         extraControllers: Int,
         orderId: String?,
         clearLastError: Boolean,
@@ -478,6 +480,7 @@ interface GamingDao {
                 packageDurationMinutes = server.packageDurationMinutesSnapshot,
                 packageVariant = server.packageVariantSnapshot,
                 packageStationTypeSnapshot = server.packageStationTypeSnapshot,
+                packagePricingTierSnapshot = server.packagePricingTierSnapshot,
                 extraControllers = server.extraControllers,
                 orderId = server.orderId,
                 clearLastError = reconciliation != GamingServerReconciliation.NONE,
@@ -529,6 +532,7 @@ interface GamingDao {
             "ratePerHourMinor = :ratePerHourMinor, packageId = :packageId, billingMode = :billingMode, " +
             "packagePriceMinor = :packagePriceMinor, packageDurationMinutes = :packageDurationMinutes, " +
             "packageVariant = :packageVariant, packageStationTypeSnapshot = :packageStationTypeSnapshot, " +
+            "packagePricingTierSnapshot = :packagePricingTierSnapshot, " +
             "extraControllers = :extraControllers, " +
             "state = CASE WHEN state = 'start_pending' THEN 'start_synced' ELSE state END, " +
             "lastError = NULL WHERE localId = :localId",
@@ -549,6 +553,7 @@ interface GamingDao {
         packageDurationMinutes: Int?,
         packageVariant: String?,
         packageStationTypeSnapshot: String?,
+        packagePricingTierSnapshot: String?,
         extraControllers: Int,
     )
 
@@ -561,6 +566,7 @@ interface GamingDao {
             "billingMode = :billingMode, packagePriceMinor = :packagePriceMinor, " +
             "packageDurationMinutes = :packageDurationMinutes, packageVariant = :packageVariant, " +
             "packageStationTypeSnapshot = :packageStationTypeSnapshot, " +
+            "packagePricingTierSnapshot = :packagePricingTierSnapshot, " +
             "extraControllers = :extraControllers, lastError = NULL WHERE serverId = :serverId " +
             "AND state = 'start_synced'",
     )
@@ -579,6 +585,7 @@ interface GamingDao {
         packageDurationMinutes: Int?,
         packageVariant: String?,
         packageStationTypeSnapshot: String?,
+        packagePricingTierSnapshot: String?,
         extraControllers: Int,
     )
 
@@ -934,7 +941,7 @@ interface GamingDao {
                 extraControllers = authoritative.extraControllers,
                 orderId = authoritative.orderId,
             )
-            RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW ->
+            RecoveredLegacyServerDisposition.RETAIN_BILLING_REVIEW -> {
                 retainRecoveredLegacyBillingReview(
                     localId = localId,
                     resolution = capturedResolution,
@@ -964,15 +971,18 @@ interface GamingDao {
                     extraControllers = authoritative.extraControllers,
                     orderId = authoritative.orderId,
                 )
-            RecoveredLegacyServerDisposition.RESOLVE_LOCAL -> confirmLegacyPackageResolution(
-                localId = localId,
-                resolution = capturedResolution,
-                reason = reason,
-                referenceOrderId = referenceOrderId,
-                actorUserId = actorUserId,
-                receiptId = receiptId,
-                resolvedAtMillis = resolvedAtMillis,
-            )
+            }
+            RecoveredLegacyServerDisposition.RESOLVE_LOCAL -> {
+                confirmLegacyPackageResolution(
+                    localId = localId,
+                    resolution = capturedResolution,
+                    reason = reason,
+                    referenceOrderId = referenceOrderId,
+                    actorUserId = actorUserId,
+                    receiptId = receiptId,
+                    resolvedAtMillis = resolvedAtMillis,
+                )
+            }
         }
         if (changed != 1) return false
         upsertSessionCache(listOf(authoritative))

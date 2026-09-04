@@ -75,10 +75,12 @@ async def _running_package_session(session, seed_owner) -> tuple[GamingSession, 
     )
     base_package = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=company.id,
         branch_id=branch.id,
         station_type="ps5",
         variant="single",
+        pricing_tier="standard",
         kind="base",
         name="Single 60 min",
         duration_minutes=60,
@@ -88,10 +90,12 @@ async def _running_package_session(session, seed_owner) -> tuple[GamingSession, 
     )
     extension = GamingPackage(
         id=uuid4(),
+        code=f"test-{uuid4().hex}",
         company_id=company.id,
         branch_id=branch.id,
         station_type="ps5",
         variant="single",
+        pricing_tier="standard",
         kind="extension",
         name="Add 15 min",
         duration_minutes=15,
@@ -113,6 +117,7 @@ async def _running_package_session(session, seed_owner) -> tuple[GamingSession, 
         package_duration_minutes_snapshot=base_package.duration_minutes,
         package_variant_snapshot=base_package.variant,
         package_station_type_snapshot=base_package.station_type,
+        package_pricing_tier_snapshot="standard",
         timer_minutes=60,
         amount_minor=10_000,
         status="active",
@@ -355,6 +360,7 @@ async def test_ended_session_without_extension_receipt_returns_typed_not_applied
         ("stale_session_snapshot", "session_snapshot_stale"),
         ("retired_package", "extension_package_retired"),
         ("variant_mismatch", "package_variant_incompatible"),
+        ("tier_mismatch", "package_pricing_tier_incompatible"),
         ("closed_shift", "source_shift_closed"),
     ],
 )
@@ -376,6 +382,8 @@ async def test_scoped_ledger_absent_extension_refusals_are_typed_discard_proof(
     elif failure == "variant_mismatch":
         extension.variant = "dual"
         payload["expected_package_variant"] = "dual"
+    elif failure == "tier_mismatch":
+        extension.pricing_tier = "premium"
     else:
         shift.status = "closed"
         shift.closed_at = datetime.now(UTC)

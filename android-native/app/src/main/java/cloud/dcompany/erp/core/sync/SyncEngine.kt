@@ -12,6 +12,9 @@ import cloud.dcompany.erp.core.auth.OutboxSafetyGate
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.auth.verifyBranchScopedPayload
+import cloud.dcompany.erp.core.checkout.CheckoutClientInstancePolicy
+import cloud.dcompany.erp.core.checkout.CheckoutClientInstanceUnavailableException
+import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.db.ErpDatabase
 import cloud.dcompany.erp.core.db.AssetCacheEntity
@@ -115,6 +118,7 @@ import cloud.dcompany.erp.core.net.ModifierSelectionRequest
 import cloud.dcompany.erp.core.net.CreateOrderRequest
 import cloud.dcompany.erp.core.net.OrderLineRequest
 import cloud.dcompany.erp.core.net.PaymentRequest
+import cloud.dcompany.erp.core.net.PublishDirectCheckoutClaimRequest
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
 import cloud.dcompany.erp.ui.screens.customers.CustomerUpdateBody
@@ -772,6 +776,23 @@ private fun RejectedOpenRecoveryResult.toVerificationResult(): RejectedShiftOpen
     )
 
 /**
+ * Recovery runs after staff may already have confirmed that money moved. A
+ * missing installation identity must therefore retain the durable payment
+ * for reconciliation and must never fall back to an anonymous checkout lease.
+ */
+internal fun requireCheckoutClientInstanceForReconciliation(
+    provider: () -> String?,
+): String = try {
+    CheckoutClientInstancePolicy.requireStable(provider())
+} catch (_: CheckoutClientInstanceUnavailableException) {
+    throw ApiException(
+        "This tablet could not verify its checkout identity. Do not collect again; restart the app and retry reconciliation.",
+        status = 409,
+        code = "checkout_client_instance_unavailable",
+    )
+}
+
+/**
  * Pulls reference data down and drains captured sales up.
  *
  * Ordering matters: sales are pushed *before* the menu is refreshed, so a
@@ -783,6 +804,7 @@ class SyncEngine(
     private val scope: CoroutineScope,
     private val outboxSafety: OutboxSafetyGate,
     private val cacheIsolation: CacheIsolationCoordinator,
+    private val checkoutClientInstance: () -> String?,
     private val scheduleDurableSync: () -> Unit,
 ) {
 
@@ -2711,6 +2733,13 @@ class SyncEngine(
                     timerMinutes = row.timerMinutes,
                     packageId = row.packageId,
                     extraControllers = row.extraControllers,
+                    playerCount = row.packageId?.let {
+                        when (row.packageVariant) {
+                            "single" -> 1
+                            "dual" -> 2 + row.extraControllers
+                            else -> null
+                        }
+                    },
                     expectedRatePerHourMinor = requireNotNull(row.ratePerHourMinor) {
                         "This saved gaming start has no locked hourly-rate snapshot. Refresh Gaming and capture a new start."
                     },
@@ -2756,6 +2785,7 @@ class SyncEngine(
                 packageDurationMinutes = started.packageDurationMinutesSnapshot,
                 packageVariant = started.packageVariantSnapshot,
                 packageStationTypeSnapshot = started.packageStationTypeSnapshot,
+                packagePricingTierSnapshot = started.packagePricingTierSnapshot,
                 extraControllers = started.extraControllers,
             )
             dao.transitionSessionState(
@@ -3079,8 +3109,12 @@ class SyncEngine(
                     packages.map {
                         GamingPackageCacheEntity(
                             id = it.id,
+                            code = it.code,
                             stationType = it.stationType,
+                            pricingTier = it.pricingTier,
                             variant = it.variant,
+                            includedPlayers = it.includedPlayers,
+                            maxPlayers = it.maxPlayers,
                             kind = it.kind,
                             name = it.name,
                             durationMinutes = it.durationMinutes,
@@ -3113,6 +3147,7 @@ class SyncEngine(
                             packageDurationMinutesSnapshot = it.packageDurationMinutesSnapshot,
                             packageVariantSnapshot = it.packageVariantSnapshot,
                             packageStationTypeSnapshot = it.packageStationTypeSnapshot,
+                            packagePricingTierSnapshot = it.packagePricingTierSnapshot,
                             extraControllers = it.extraControllers,
                             customerName = it.customerName,
                             customerPhone = it.customerPhone,
@@ -3208,7 +3243,8 @@ class SyncEngine(
 
     private suspend fun pushKitchenCancellationAcks() {
         val dao = db.kitchenDao()
-        for (row in dao.pendingCancellationAcks()) {
+        val pendingAcks = dao.pendingCancellationAcks()
+        for (row in pendingAcks) {
             try {
                 val cached = dao.orderCache(row.orderId)
                 if (cached != null && cached.pendingCancellations.none { it.lineId == row.lineId }) {
@@ -3325,67 +3361,79 @@ class SyncEngine(
         for (row in dao.pushableRefundRequests()) {
             if (refundShiftCanResolve(row)) requests += row
         }
-        if (!drainOutbox(
-                rows = requests,
-                markRejected = { row, msg -> dao.markRequestRejected(row.localId, msg) },
-                push = ::pushRefundRequestOne,
-            )
-        ) return
+        val requestsDrained = drainOutbox(
+            rows = requests,
+            markRejected = { row, msg -> dao.markRequestRejected(row.localId, msg) },
+            push = ::pushRefundRequestOne,
+        )
+        if (!requestsDrained) {
+            return
+        }
 
         val settlements = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableCashSettlements()) {
             if (refundShiftCanResolve(row)) settlements += row
         }
-        if (!drainOutbox(
-                rows = settlements,
-                markRejected = { row, msg -> dao.markCashSettlementRejected(row.localId, msg) },
-                push = ::pushRefundCashSettlementOne,
-            )
-        ) return
+        val settlementsDrained = drainOutbox(
+            rows = settlements,
+            markRejected = { row, msg -> dao.markCashSettlementRejected(row.localId, msg) },
+            push = ::pushRefundCashSettlementOne,
+        )
+        if (!settlementsDrained) {
+            return
+        }
 
         val cashFinalizations = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableCashFinalizations()) {
             if (refundShiftCanResolve(row)) cashFinalizations += row
         }
-        if (!drainOutbox(
-                rows = cashFinalizations,
-                markRejected = { row, msg -> dao.markCashFinalizationRejected(row.localId, msg) },
-                push = ::pushRefundCashFinalizationOne,
-            )
-        ) return
+        val cashFinalizationsDrained = drainOutbox(
+            rows = cashFinalizations,
+            markRejected = { row, msg -> dao.markCashFinalizationRejected(row.localId, msg) },
+            push = ::pushRefundCashFinalizationOne,
+        )
+        if (!cashFinalizationsDrained) {
+            return
+        }
 
         val providerCompletions = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableProviderCompletions()) {
             if (refundShiftCanResolve(row)) providerCompletions += row
         }
-        if (!drainOutbox(
-                rows = providerCompletions,
-                markRejected = { row, msg -> dao.markProviderCompletionRejected(row.localId, msg) },
-                push = ::pushRefundProviderCompletionOne,
-            )
-        ) return
+        val providerCompletionsDrained = drainOutbox(
+            rows = providerCompletions,
+            markRejected = { row, msg -> dao.markProviderCompletionRejected(row.localId, msg) },
+            push = ::pushRefundProviderCompletionOne,
+        )
+        if (!providerCompletionsDrained) {
+            return
+        }
 
         val providerFinalizations = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableProviderFinalizations()) {
             if (refundShiftCanResolve(row)) providerFinalizations += row
         }
-        if (!drainOutbox(
-                rows = providerFinalizations,
-                markRejected = { row, msg -> dao.markProviderFinalizationRejected(row.localId, msg) },
-                push = ::pushRefundProviderFinalizationOne,
-            )
-        ) return
+        val providerFinalizationsDrained = drainOutbox(
+            rows = providerFinalizations,
+            markRejected = { row, msg -> dao.markProviderFinalizationRejected(row.localId, msg) },
+            push = ::pushRefundProviderFinalizationOne,
+        )
+        if (!providerFinalizationsDrained) {
+            return
+        }
 
         val withdrawals = mutableListOf<LocalRefundEntity>()
         for (row in dao.pushableWithdrawals()) {
             if (refundShiftCanResolve(row)) withdrawals += row
         }
-        if (!drainOutbox(
-                rows = withdrawals,
-                markRejected = { row, msg -> dao.markWithdrawalRejected(row.localId, msg) },
-                push = ::pushRefundWithdrawalOne,
-            )
-        ) return
+        val withdrawalsDrained = drainOutbox(
+            rows = withdrawals,
+            markRejected = { row, msg -> dao.markWithdrawalRejected(row.localId, msg) },
+            push = ::pushRefundWithdrawalOne,
+        )
+        if (!withdrawalsDrained) {
+            return
+        }
 
         // Recover response-loss and same-terminal tasks after reinstall before
         // considering a queued shift close. A failed pull leaves every local
@@ -3521,6 +3569,7 @@ class SyncEngine(
         val serverShiftId = requireExactRefundShift(row, includeClosingIntent = true)
         val actionId = "pos-refund-provider-finalize:${row.localId}"
         val occurredAt = row.providerSettledAtMillis ?: row.createdAtMillis
+        val provenance = outboxProvenanceHeaders(occurredAt, actionId)
         val result = refundsApi.finalizeProvider(
             id = requestId,
             body = PosRefundAccountingFinalizationBody(
@@ -3528,7 +3577,7 @@ class SyncEngine(
                 expectedAmountMinor = row.amountMinor,
             ),
             key = actionId,
-            provenance = outboxProvenanceHeaders(occurredAt, actionId),
+            provenance = provenance,
         )
         applyPosRefundServerResult(result, row, scopeLease)
     }
@@ -4163,9 +4212,10 @@ class SyncEngine(
     private suspend fun pushHeldOrderPaymentOne(row: LocalHeldOrderPaymentEntity) {
         var token = row.claimToken
         var reacquisitions = 0
+        val paymentNeedsClaim = DirectOrderPublishPolicy.paymentNeedsClaim(row)
         val sourceLabel = db.heldOrderDao().orderForAlarm(row.targetOrderId)?.sourceLabel
         while (true) {
-            if (row.requiresCheckoutClaim && token == null) {
+            if (paymentNeedsClaim && token == null) {
                 token = acquireMatchingClaimForConfirmedPayment(row)
             }
             try {
@@ -4208,7 +4258,7 @@ class SyncEngine(
                 return
             } catch (e: ApiException) {
                 if (
-                    !row.requiresCheckoutClaim ||
+                    !paymentNeedsClaim ||
                     !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(e.code) ||
                     reacquisitions >= 2
                 ) {
@@ -4229,6 +4279,9 @@ class SyncEngine(
     ): String {
         val claim = ApiClient.api.acquireCheckoutClaim(
             row.targetOrderId,
+            checkoutClientInstance = requireCheckoutClientInstanceForReconciliation(
+                checkoutClientInstance,
+            ),
             outboxProvenanceHeaders(row.createdAtMillis, "held-payment-claim:${row.localId}"),
         )
         val expiresAtMillis = HeldOrderClaimPolicy.claimExpiryMillis(claim)
@@ -6005,7 +6058,9 @@ class SyncEngine(
             passHadAmbiguousFailure = true
             return false
         }
-        if (!ordinaryTasksCommitted) return false
+        if (!ordinaryTasksCommitted) {
+            return false
+        }
 
         // The attempt register/list/resolve and evidence reconciliation API is
         // deliberately admin.system-only. Do not make an ordinary co-owner's
@@ -6200,7 +6255,10 @@ class SyncEngine(
     private suspend fun pushMembershipRefundActionOne(action: LocalMembershipRefundActionEntity) {
         val lease = cacheIsolation.currentLease()
             ?: error("The active account scope changed before membership refund sync.")
-        val shiftId = resolveMembershipShift(action.shiftId) ?: return
+        val shiftId = resolveMembershipShift(action.shiftId)
+        if (shiftId == null) {
+            return
+        }
         val occurredAt = action.occurredAtMillis ?: action.createdAtMillis
         val provenance = outboxProvenanceHeaders(occurredAt, action.actionId)
         when (action.kind) {
@@ -7048,6 +7106,9 @@ class SyncEngine(
             idempotencyKey = "order:${order.localId}",
             provenance = outboxProvenanceHeaders(order.createdAtMillis, "order:${order.localId}"),
         )
+        check(created.id.isNotBlank() && created.status in setOf("open", "held")) {
+            "The server did not return a publishable direct bill for this saved sale."
+        }
 
         // The server has now priced it, and that price may differ from the
         // offline estimate the customer actually paid against — a membership
@@ -7070,31 +7131,137 @@ class SyncEngine(
             return
         }
 
-        val paid = ApiClient.api.recordPayment(
-            created.id,
-            PaymentRequest(
-                method = order.paymentMethod,
-                amountMinor = capturedAmountMinor,
-                tenderedMinor = order.tenderedMinor.takeIf { order.paymentMethod == "cash" },
+        // Persist the canonical bill and pre-publication version before the
+        // private draft becomes shared. A killed process or dropped publish
+        // response can then replay exactly the same request.
+        if (order.checkoutClaimToken == null) {
+            val checkpointed = dao.checkpointPendingServerOrder(
+                localId = order.localId,
+                serverOrderId = created.id,
+                serverShiftId = resolvedShiftId,
+                subtotalMinor = created.subtotalMinor,
+                discountMinor = created.discountMinor,
+                pointsRedeemedMinor = created.pointsRedeemedMinor,
+                pointsRedeemed = created.pointsRedeemed,
+                taxMinor = created.taxMinor,
+                roundOffMinor = created.roundOffMinor,
+                totalMinor = created.totalMinor,
+                dueMinor = created.dueMinor,
+                checkoutVersion = created.checkoutVersion,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+            check(checkpointed == 1) {
+                "The canonical offline bill could not be saved before checkout publication."
+            }
+        }
+
+        var durable = dao.withLines(order.localId)?.order
+            ?: error("The saved offline sale disappeared before checkout publication.")
+        var claimToken = durable.checkoutClaimToken
+        var reacquisitions = 0
+
+        suspend fun publishAndPersistClaim(): String {
+            val storedVersion = durable.checkoutVersion
+                ?: throw ApiException(
+                    "The saved bill version is unavailable. Do not collect again; manager review is required.",
+                    status = 409,
+                    code = "direct_publish_version_unavailable",
+                )
+            val expectedVersion = DirectOrderPublishPolicy.expectedVersionForReplay(
+                syncState = SyncState.PENDING,
+                storedCheckoutVersion = storedVersion,
+                hasDurableClaim = durable.checkoutClaimToken != null,
+            )
+            val publishKey = DirectOrderPublishPolicy.idempotencyKey(order.localId)
+            val claim = ApiClient.api.publishDirectCheckoutClaim(
+                id = created.id,
+                body = PublishDirectCheckoutClaimRequest(expectedVersion),
+                idempotencyKey = publishKey,
+                checkoutClientInstance = requireCheckoutClientInstanceForReconciliation(
+                    checkoutClientInstance,
+                ),
+                provenance = outboxProvenanceHeaders(order.createdAtMillis, publishKey),
+            )
+            if (!DirectOrderPublishPolicy.matchesPricedOrder(created, expectedVersion, claim)) {
+                throw ApiException(
+                    "The published bill no longer matches the amount collected offline. " +
+                        "Do not collect again; manager review is required.",
+                    status = 409,
+                    code = "direct_publish_settlement_changed",
+                )
+            }
+            val expiresAtMillis = HeldOrderClaimPolicy.claimExpiryMillis(claim)
+                ?: throw ApiException(
+                    "The server returned an invalid checkout expiry. Do not collect again.",
+                    status = 409,
+                    code = "direct_publish_claim_invalid",
+                )
+            val saved = dao.savePendingDirectClaim(
+                localId = order.localId,
+                serverOrderId = created.id,
                 expectedTotalMinor = created.totalMinor,
                 expectedDueMinor = created.dueMinor,
-                tipMinor = order.tipMinor,
-            ),
-            idempotencyKey = "payment:${order.localId}",
-            provenance = outboxProvenanceHeaders(order.createdAtMillis, "payment:${order.localId}"),
-        )
+                claimToken = claim.claimToken,
+                claimExpiresAtMillis = expiresAtMillis,
+                claimOrderVersion = claim.orderVersion,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+            check(saved == 1) {
+                "The checkout claim could not be saved before payment reconciliation."
+            }
+            durable = dao.withLines(order.localId)?.order
+                ?: error("The saved offline sale disappeared after checkout publication.")
+            return claim.claimToken
+        }
+
+        if (claimToken == null) claimToken = publishAndPersistClaim()
+
+        var paid: cloud.dcompany.erp.core.net.PaymentResult? = null
+        while (paid == null) {
+            try {
+                paid = ApiClient.api.recordPayment(
+                    created.id,
+                    PaymentRequest(
+                        method = order.paymentMethod,
+                        amountMinor = capturedAmountMinor,
+                        tenderedMinor = order.tenderedMinor.takeIf { order.paymentMethod == "cash" },
+                        expectedTotalMinor = created.totalMinor,
+                        expectedDueMinor = created.dueMinor,
+                        tipMinor = order.tipMinor,
+                    ),
+                    idempotencyKey = "payment:${order.localId}",
+                    checkoutClaimToken = claimToken,
+                    provenance = outboxProvenanceHeaders(
+                        order.createdAtMillis,
+                        "payment:${order.localId}",
+                    ),
+                )
+            } catch (failure: ApiException) {
+                if (
+                    !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(failure.code) ||
+                    reacquisitions >= 2
+                ) {
+                    throw failure
+                }
+                // A committed idempotent payment replay wins before claim
+                // validation. Only a definitive lease rejection reaches here.
+                claimToken = publishAndPersistClaim()
+                reacquisitions += 1
+            }
+        }
+        val confirmedPayment = requireNotNull(paid)
 
         val finalOrder = ApiClient.api.order(created.id)
         db.posReceiptDao().storeAndMarkLocalSaleSynced(
             receipt = paymentReceipt(
                 order = finalOrder,
-                payment = paid,
+                payment = confirmedPayment,
                 sourceKind = PosReceiptSource.OFFLINE_DIRECT,
             ),
             localOrderId = order.localId,
             // The order id, not the payment id — paid.id identifies the Payment.
             serverOrderId = created.id,
-            invoiceNo = paid.invoiceNo,
+            invoiceNo = confirmedPayment.invoiceNo,
             totalMinor = created.totalMinor,
         )
     }

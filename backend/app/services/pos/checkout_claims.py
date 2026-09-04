@@ -1,10 +1,10 @@
 """Concurrency-safe checkout leases for shared POS orders.
 
 Tables and Gaming can hand a bill to a queue visible on more than one device.
-The order row remains the serialization point: callers lock it first, then
-acquire or validate the one claim row for that order in the same transaction.
-Direct POS orders never enter the held queue and intentionally do not require
-a claim, preserving the existing single-device checkout path.
+New clients atomically publish direct bills into that same queue before
+checkout; legacy direct bills stay open for rolling compatibility. The order
+row remains the serialization point: callers lock it first, then acquire or
+validate the one claim row for that order in the same transaction.
 """
 
 from __future__ import annotations
@@ -76,6 +76,12 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _client_instance_hash(client_instance_id: UUID | None) -> str | None:
+    if client_instance_id is None:
+        return None
+    return hashlib.sha256(str(client_instance_id).encode("ascii")).hexdigest()
+
+
 def _new_token() -> str:
     # 32 random bytes (256 bits), URL/header safe.  Only its digest is stored.
     return secrets.token_urlsafe(32)
@@ -130,6 +136,7 @@ def _set_claim_snapshot(
     terminal_id: UUID,
     paid_minor: int,
     token_hash: str,
+    client_instance_hash: str | None,
     expires_at: datetime,
 ) -> None:
     claim.company_id = order.company_id
@@ -137,6 +144,7 @@ def _set_claim_snapshot(
     claim.terminal_id = terminal_id
     claim.claimed_by_user_id = claimant_user_id
     claim.token_hash = token_hash
+    claim.client_instance_hash = client_instance_hash
     claim.expires_at = expires_at
     claim.order_total_minor = int(order.total_minor or 0)
     claim.due_minor = _due(order=order, paid_minor=paid_minor)
@@ -184,6 +192,7 @@ async def acquire_checkout_claim(
     claimant_user_id: UUID,
     terminal_id: UUID,
     paid_minor: int,
+    client_instance_id: UUID | None = None,
     now: datetime | None = None,
     ttl_seconds: int | None = None,
 ) -> CheckoutClaimGrant:
@@ -218,17 +227,39 @@ async def acquire_checkout_claim(
         and claim.claimed_by_user_id == claimant_user_id
         and claim.terminal_id == terminal_id
     )
-    if active_and_current and not same_claimant:
+    supplied_client_instance_hash = _client_instance_hash(client_instance_id)
+    stored_client_instance_hash = (
+        getattr(claim, "client_instance_hash", None) if claim is not None else None
+    )
+    same_client_instance = bool(
+        claim
+        and (
+            (
+                stored_client_instance_hash is None
+                and supplied_client_instance_hash is None
+            )
+            or (
+                stored_client_instance_hash is not None
+                and supplied_client_instance_hash is not None
+                and hmac.compare_digest(
+                    stored_client_instance_hash,
+                    supplied_client_instance_hash,
+                )
+            )
+        )
+    )
+    same_lease_holder = same_claimant and same_client_instance
+    if active_and_current and not same_lease_holder:
         assert claim is not None  # narrowed by active_and_current
         raise CheckoutClaimConflictError(
-            "Another cashier is already billing this order. Wait for their checkout "
-            "or try again after the claim expires.",
+            "Another cashier or POS client is already billing this order. Wait for "
+            "their checkout or try again after the claim expires.",
             details={"expires_at": claim.expires_at.isoformat()},
         )
 
     token = _new_token()
     token_hash = _token_hash(token)
-    reused = bool(active_and_current and same_claimant)
+    reused = bool(active_and_current and same_lease_holder)
     if claim is None:
         claim = OrderCheckoutClaim(
             id=uuid4(),
@@ -237,6 +268,7 @@ async def acquire_checkout_claim(
             branch_id=order.branch_id,
             terminal_id=terminal_id,
             claimed_by_user_id=claimant_user_id,
+            client_instance_hash=supplied_client_instance_hash,
             token_hash=token_hash,
             expires_at=expires_at,
             order_total_minor=int(order.total_minor or 0),
@@ -255,6 +287,7 @@ async def acquire_checkout_claim(
             terminal_id=terminal_id,
             paid_minor=paid_minor,
             token_hash=token_hash,
+            client_instance_hash=supplied_client_instance_hash,
             expires_at=expires_at,
         )
     await session.flush()
@@ -368,6 +401,91 @@ async def validate_checkout_claim(
     if not _claim_matches_snapshot(claim, order=order, paid_minor=paid_minor):
         raise CheckoutClaimStaleError(
             "The bill changed after checkout began. Reload and claim the exact bill again.",
+            details={
+                "order_total_minor": int(order.total_minor or 0),
+                "due_minor": _due(order=order, paid_minor=paid_minor),
+                "order_version": checkout_version(order),
+                "reacquire": True,
+            },
+        )
+    return claim
+
+
+async def authorize_checkout_claim_for_void(
+    session: AsyncSession,
+    *,
+    order: Order,
+    claimant_user_id: UUID,
+    terminal_id: UUID,
+    paid_minor: int,
+    token: str | None,
+    now: datetime | None = None,
+) -> OrderCheckoutClaim | None:
+    """Authorize a reasoned whole-order void without breaking old clients.
+
+    Historically a held bill could be voided without first taking a checkout
+    lease.  Preserve that path only when no current lease protects the bill.
+    Once a live lease exists, the same cashier/terminal and bearer must
+    authorize the void, and the caller must consume the returned row in the
+    successful void transaction.
+
+    An active but stale lease deliberately fails closed.  Silently deleting it
+    here would let a legacy request void a bill while a cashier is looking at a
+    different checkout snapshot; the cashier must release/reacquire first.
+    """
+    if not requires_checkout_claim(order):
+        return None
+
+    claim = (
+        await session.execute(
+            select(OrderCheckoutClaim)
+            .where(OrderCheckoutClaim.order_id == order.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if claim is None:
+        if token:
+            raise CheckoutClaimInvalidError(
+                "This bill no longer has that checkout claim. Reload it before voiding."
+            )
+        return None
+
+    now = now or datetime.now(UTC)
+    if claim.expires_at <= now:
+        if token:
+            raise CheckoutClaimExpiredError(
+                "Checkout claim expired before the void. Reload the bill before continuing.",
+                details={"expired_at": claim.expires_at.isoformat(), "reacquire": True},
+            )
+        # A headerless legacy client may use the historical void workflow once
+        # exclusivity has genuinely ended. Remove the dead row transactionally
+        # so it cannot obstruct later recovery.
+        await session.delete(claim)
+        await session.flush()
+        return None
+
+    if not token:
+        raise CheckoutClaimRequiredError(
+            "Checkout is active for this bill. Void it from the client that claimed it.",
+            details={"reacquire": True},
+        )
+
+    supplied_hash = _token_hash(token)
+    claimant_matches = (
+        claim.company_id == order.company_id
+        and claim.branch_id == order.branch_id
+        and claim.terminal_id == terminal_id
+        and claim.claimed_by_user_id == claimant_user_id
+    )
+    if not claimant_matches or not hmac.compare_digest(claim.token_hash, supplied_hash):
+        raise CheckoutClaimInvalidError(
+            "Checkout claim does not belong to this cashier and terminal. "
+            "Reload the bill before voiding.",
+            details={"reacquire": True},
+        )
+    if not _claim_matches_snapshot(claim, order=order, paid_minor=paid_minor):
+        raise CheckoutClaimStaleError(
+            "The bill changed after checkout began. Reload and claim the exact bill before voiding.",
             details={
                 "order_total_minor": int(order.total_minor or 0),
                 "due_minor": _due(order=order, paid_minor=paid_minor),

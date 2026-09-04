@@ -73,6 +73,56 @@ class GamingDialogUiTest {
     }
 
     @Test
+    fun availablePs5TileShowsFixedTariffInsteadOfLegacyHourlyRate() {
+        val station = Station(
+            id = "station-fixed-price",
+            code = "PS5-FIXED",
+            name = "PS5 Station Fixed",
+            type = "ps5",
+            ratePerHourMinor = 20_000,
+        )
+        val packages = listOf(
+            GamingPackage(
+                id = "standard-single-30",
+                code = "standard-single-session-30m",
+                stationType = "ps5",
+                pricingTier = "standard",
+                variant = "single",
+                kind = "base",
+                name = "Single Mode 30 minutes",
+                durationMinutes = 30,
+                priceMinor = 8_000,
+            ),
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(270.dp)) {
+                    GamingStationTile(
+                        station = station,
+                        session = null,
+                        sessionAddons = emptyList(),
+                        packages = packages,
+                        wallClock = rememberedWallClock(
+                            Instant.parse("2026-08-26T18:00:00Z").toEpochMilli(),
+                        ),
+                        selected = false,
+                        focused = false,
+                        combinedBillSnapshotMinor = null,
+                        onSelect = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("Fixed packages from ₹80.00").assertIsDisplayed()
+        compose.onAllNodesWithText("₹200.00/hour").assertCountEquals(0)
+        compose.onNodeWithContentDescription(
+            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00",
+        ).assertIsDisplayed()
+    }
+
+    @Test
     fun busyStationKeepsProgressOnItsOwnAction() {
         val station = Station(
             id = "station-busy",
@@ -1042,7 +1092,15 @@ class GamingDialogUiTest {
         compose.setContent {
             DCompanyTheme {
                 StartSessionDialog(
-                    station = testStation(),
+                    // VR remains an hourly station in Code22. PS5 and racing
+                    // deliberately fail closed until the canonical fixed
+                    // tariff has synced, so they cannot exercise this generic
+                    // phone-and-duration path without a package catalogue.
+                    station = testStation().copy(
+                        code = "VR-1",
+                        name = "VR Pod 1",
+                        type = "vr",
+                    ),
                     onDismiss = {},
                     onConfirm = { phone, minutes, _, _ ->
                         submittedPhone = phone
@@ -1082,11 +1140,28 @@ class GamingDialogUiTest {
                     station = testStation(),
                     packages = listOf(
                         GamingPackage(
-                            id = "package-60",
+                            id = "standard-single-60",
+                            code = "standard-single-session-60m",
                             stationType = "ps5",
-                            variant = "solo",
+                            pricingTier = "standard",
+                            variant = "single",
+                            includedPlayers = 1,
+                            maxPlayers = 1,
                             kind = "base",
-                            name = "Solo 60 min",
+                            name = "Single Mode 1 hour",
+                            durationMinutes = 60,
+                            priceMinor = 12_000,
+                        ),
+                        GamingPackage(
+                            id = "standard-dual-60",
+                            code = "standard-dual-session-60m",
+                            stationType = "ps5",
+                            pricingTier = "standard",
+                            variant = "dual",
+                            includedPlayers = 2,
+                            maxPlayers = 4,
+                            kind = "base",
+                            name = "Dual Mode 1 hour",
                             durationMinutes = 60,
                             priceMinor = 15_000,
                         ),
@@ -1101,9 +1176,12 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("Solo 60 min · ₹150.00").performClick()
-        compose.onNodeWithContentDescription("Increase extra controllers")
+        compose.onNodeWithText("3 players")
             .bringIntoViewIfNeeded()
+            .performClick()
+        compose.onNodeWithText("60 min · ₹180.00 total")
+            .bringIntoViewIfNeeded()
+            .assertIsDisplayed()
             .performClick()
         compose.onNodeWithText("Start · ₹180.00")
             .bringIntoViewIfNeeded()
@@ -1113,7 +1191,7 @@ class GamingDialogUiTest {
 
         compose.runOnIdle {
             assertEquals(null, submittedMinutes)
-            assertEquals("package-60", submittedPackage)
+            assertEquals("standard-dual-60", submittedPackage)
             assertEquals(1, submittedControllers)
         }
     }

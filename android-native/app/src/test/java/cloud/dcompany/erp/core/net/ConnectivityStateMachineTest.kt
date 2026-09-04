@@ -25,16 +25,16 @@ class ConnectivityStateMachineTest {
     }
 
     @Test
-    fun `transport failure verifies before showing an outage while network loss is immediate`() {
+    fun `transport failure verifies without changing proven online chrome while network loss is immediate`() {
         val machine = onlineMachine(generation = 4L)
 
         val serverFailure = machine.reduce(ConnectivityEvent.BackendTransportFailure)
 
-        assertEquals(ConnectivityPhase.VERIFYING, serverFailure.state.phase)
+        assertEquals(ConnectivityPhase.ONLINE, serverFailure.state.phase)
         assertEquals(5L, serverFailure.state.generation)
         assertTrue(serverFailure.state.probeInFlight)
-        assertFalse(serverFailure.state.presentation.online)
-        assertEquals(BackendReachability.UNKNOWN, serverFailure.state.presentation.backendReachability)
+        assertTrue(serverFailure.state.presentation.online)
+        assertEquals(BackendReachability.REACHABLE, serverFailure.state.presentation.backendReachability)
         assertEquals(listOf(ConnectivityEffect.StartProbe(5L)), serverFailure.effects)
 
         val networkFailure = machine.reduce(
@@ -65,31 +65,37 @@ class ConnectivityStateMachineTest {
     }
 
     @Test
-    fun `transient transport blip never flashes server unreachable when readiness succeeds`() {
+    fun `transient transport blip leaves the complete online presentation stable`() {
         val machine = onlineMachine(generation = 7L)
         val phases = mutableListOf<ConnectivityPhase>()
 
         machine.reduce(ConnectivityEvent.BackendTransportFailure).also {
             phases += it.state.phase
-            assertEquals(ConnectivityPhase.VERIFYING, it.state.phase)
-            assertFalse(it.state.presentation.online)
+            assertEquals(ConnectivityPhase.ONLINE, it.state.phase)
+            assertTrue(it.state.presentation.online)
         }
         machine.reduce(ConnectivityEvent.BackendTransportFailure).also {
             phases += it.state.phase
             assertEquals(8L, it.state.generation)
+            assertEquals(ConnectivityPhase.ONLINE, it.state.phase)
             assertTrue(it.state.probeInFlight)
             assertTrue(it.effects.isEmpty())
         }
         machine.reduce(ConnectivityEvent.ProbeCompleted(8L, successful = true)).also {
             phases += it.state.phase
-            assertEquals(ConnectivityPhase.RECOVERING, it.state.phase)
-        }
-        machine.reduce(ConnectivityEvent.RecoverySettled(8L)).also {
-            phases += it.state.phase
             assertEquals(ConnectivityPhase.ONLINE, it.state.phase)
+            assertFalse(it.state.probeInFlight)
+            assertTrue(it.effects.isEmpty())
         }
 
-        assertFalse(phases.contains(ConnectivityPhase.SERVER_UNREACHABLE))
+        assertEquals(
+            listOf(
+                ConnectivityPhase.ONLINE,
+                ConnectivityPhase.ONLINE,
+                ConnectivityPhase.ONLINE,
+            ),
+            phases,
+        )
     }
 
     @Test
@@ -97,7 +103,8 @@ class ConnectivityStateMachineTest {
         val machine = onlineMachine(generation = 11L)
 
         val checking = machine.reduce(ConnectivityEvent.BackendTransportFailure)
-        assertEquals(ConnectivityPhase.VERIFYING, checking.state.phase)
+        assertEquals(ConnectivityPhase.ONLINE, checking.state.phase)
+        assertTrue(checking.state.probeInFlight)
 
         val failedProof = machine.reduce(
             ConnectivityEvent.ProbeCompleted(generation = 12L, successful = false),

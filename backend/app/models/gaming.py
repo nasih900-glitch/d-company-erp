@@ -53,6 +53,13 @@ class Station(Base, TimestampMixin, TenantMixin):
 
 class GamingSession(Base, TimestampMixin, TenantMixin):
     __tablename__ = "gaming_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "package_pricing_tier_snapshot IS NULL OR "
+            "package_pricing_tier_snapshot IN ('standard', 'premium')",
+            name="ck_gaming_sessions_package_pricing_tier_snapshot",
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     station_id: Mapped[UUID] = mapped_column(
@@ -103,6 +110,10 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     package_duration_minutes_snapshot: Mapped[int | None] = mapped_column(Integer)
     package_variant_snapshot: Mapped[str | None] = mapped_column(String(20))
     package_station_type_snapshot: Mapped[str | None] = mapped_column(String(20))
+    # Supplemental catalog discriminator for Code 22+ sessions. It stays
+    # nullable so sessions created before the tariff migration remain
+    # extendable under the legacy station-type + variant compatibility rule.
+    package_pricing_tier_snapshot: Mapped[str | None] = mapped_column(String(20))
     # Planned duration in minutes from start_at (e.g. a 60-minute PS5 slot).
     # NULL = open-ended, billed by actual elapsed time as before.
     timer_minutes: Mapped[int | None] = mapped_column(Integer)
@@ -450,20 +461,63 @@ class GamingPackage(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):
     """
 
     __tablename__ = "gaming_packages"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(code)) > 0",
+            name="ck_gaming_packages_code_present",
+        ),
+        CheckConstraint(
+            "pricing_tier IN ('standard', 'premium')",
+            name="ck_gaming_packages_pricing_tier",
+        ),
+        CheckConstraint(
+            "included_players BETWEEN 1 AND 10 "
+            "AND max_players BETWEEN included_players AND 10",
+            name="ck_gaming_packages_player_limits",
+        ),
+        CheckConstraint(
+            "max_players = included_players OR "
+            "(station_type = 'ps5' AND variant = 'dual' AND included_players = 2)",
+            name="ck_gaming_packages_multiplayer_eligibility",
+        ),
+        Index(
+            "uq_gaming_packages_company_branch_code_active",
+            "company_id",
+            "branch_id",
+            "code",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     branch_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    # Immutable external/catalog identity. Display names and prices may change;
+    # clients and idempotent catalog maintenance must never key on either.
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     station_type: Mapped[str] = mapped_column(String(20), nullable=False)  # ps5|simulator|vr|...
     # Names the specific product line within a station type — e.g. "single"
     # vs "dual" for ps5, "games" vs "racing" for vr. Stations of the same
     # type share one variant unless the mode changes what's on screen.
     variant: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Pricing tier is independent from the play mode. Keeping it separate
+    # prevents premium-single from masquerading as a new compatibility variant.
+    pricing_tier: Mapped[str] = mapped_column(
+        String(20), default="standard", server_default="standard", nullable=False
+    )
     kind: Mapped[str] = mapped_column(String(20), nullable=False)  # base|extension
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     price_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    included_players: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    max_players: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

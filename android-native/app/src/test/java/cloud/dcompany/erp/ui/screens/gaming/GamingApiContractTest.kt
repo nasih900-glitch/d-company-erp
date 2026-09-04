@@ -83,6 +83,7 @@ class GamingApiContractTest {
                 startedAt = "2026-08-27T12:34:56Z",
                 packageId = "package-1",
                 extraControllers = 2,
+                playerCount = 4,
                 expectedRatePerHourMinor = 15_000,
                 expectedPackagePriceMinor = 20_000,
                 expectedPackageDurationMinutes = 60,
@@ -96,6 +97,7 @@ class GamingApiContractTest {
         assertEquals(JsonPrimitive(20_000), body["expected_package_price_minor"])
         assertEquals(JsonPrimitive(60), body["expected_package_duration_minutes"])
         assertEquals(JsonPrimitive("dual"), body["expected_package_variant"])
+        assertEquals(JsonPrimitive(4), body["player_count"])
     }
 
     @Test
@@ -231,7 +233,8 @@ class GamingApiContractTest {
               "timer_minutes":60,"amount_minor":18000,"package_id":null,
               "billing_mode":"package","package_price_minor_snapshot":15000,
               "package_duration_minutes_snapshot":60,"package_variant_snapshot":"dual",
-              "package_station_type_snapshot":"ps5","extra_controllers":1
+              "package_station_type_snapshot":"ps5","package_pricing_tier_snapshot":"premium",
+              "extra_controllers":1
             }""".trimIndent(),
         )
 
@@ -240,6 +243,7 @@ class GamingApiContractTest {
         assertEquals(null, session.packageId)
         assertEquals("dual", session.packageVariantSnapshot)
         assertEquals("ps5", session.packageStationTypeSnapshot)
+        assertEquals("premium", session.packagePricingTierSnapshot)
     }
 
     @Test

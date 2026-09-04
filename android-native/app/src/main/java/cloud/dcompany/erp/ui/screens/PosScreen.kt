@@ -99,6 +99,7 @@ import cloud.dcompany.erp.core.db.decodedLines
 import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.checkout.OneShotHeldPaymentConfirmation
 import cloud.dcompany.erp.core.auth.PosAccess
+import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.CanonicalReceipt
@@ -157,6 +158,7 @@ fun PosScreen(
     onUpdateDraftDetails: (String?, String?, String?, Long) -> Unit,
     onRefresh: () -> Unit,
     onPrepareDirectCheckout: () -> Unit,
+    onContinueDirectCheckout: () -> Unit,
     onDismissDirectCheckout: () -> Unit,
     onConfirmDirectZero: () -> Unit,
     onRedeemDirectPoints: (Int) -> Unit,
@@ -164,9 +166,12 @@ fun PosScreen(
     onRetryRejectedSale: (String) -> Unit,
     onRetryHeldPayment: (String) -> Unit,
     onPrepareHeldOrder: (HeldOrderCacheEntity) -> Unit,
+    onUpdateHeldOrderDiscount: (String, Long) -> Unit,
+    onContinueHeldOrder: (String) -> Unit,
     onConfirmHeldOrder: (String, String, Long) -> Unit,
     onConfirmHeldOrderZero: (String) -> Unit,
     onVoidOrder: (String, String) -> Unit,
+    onDismissHeldOrderReview: () -> Unit,
     onDismissHeldOrder: () -> Unit,
     onDismissNotice: () -> Unit,
     onAcknowledgeReceipt: (String) -> Unit,
@@ -189,6 +194,7 @@ fun PosScreen(
     var hiddenAutomaticReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var showReceiptHistory by rememberSaveable { mutableStateOf(false) }
     var menuQuery by rememberSaveable { mutableStateOf("") }
+    val latestDismissHeldOrderReview by rememberUpdatedState(onDismissHeldOrderReview)
     val latestDismissHeldOrder by rememberUpdatedState(onDismissHeldOrder)
     val categoryItems = remember(state.operationalItems, state.selectedCategoryId) {
         state.selectedCategoryId?.let { selected ->
@@ -222,9 +228,14 @@ fun PosScreen(
 
     LaunchedEffect(access) { onAccessChanged(access) }
 
-    LaunchedEffect(access.canCreateAndCollect, state.preparedHeldCheckout?.orderId) {
+    LaunchedEffect(
+        access.canCreateAndCollect,
+        state.heldOrderReview?.orderId,
+        state.preparedHeldCheckout?.orderId,
+    ) {
         if (!access.canCreateAndCollect) {
             offlinePaymentConfirmation = null
+            if (state.heldOrderReview != null) onDismissHeldOrderReview()
             if (state.preparedHeldCheckout != null) onDismissHeldOrder()
         }
     }
@@ -282,7 +293,10 @@ fun PosScreen(
     // without the dialog's Cancel button running. Release the short-lived
     // lease in that case so another cashier is not blocked for its full TTL.
     DisposableEffect(Unit) {
-        onDispose { latestDismissHeldOrder() }
+        onDispose {
+            latestDismissHeldOrderReview()
+            latestDismissHeldOrder()
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -300,26 +314,23 @@ fun PosScreen(
             onOpenReceipts = { showReceiptHistory = true },
         )
 
-        if (state.menuEmpty) {
-            EmptyMenuPanel(
-                everSynced = state.everSynced,
-                onRefresh = onRefresh,
-                modifier = Modifier.weight(1f).padding(Spacing.md),
-            )
-            return@Column
-        }
-
         BoxWithConstraints(
             Modifier.weight(1f).fillMaxWidth().padding(Spacing.md),
         ) {
             val workspace = remember(maxWidth) {
                 posWorkspaceMetrics(maxWidth = maxWidth, horizontalGap = Spacing.md)
             }
-            if (workspace.sideBySide) {
-                Row(
-                    Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
+            val cataloguePane: @Composable (Modifier) -> Unit = { modifier ->
+                if (state.menuEmpty) {
+                    // An empty product catalogue must never replace the money
+                    // pane. Gaming and table bills are valid POS work even in
+                    // a gaming-only setup with no drinks configured yet.
+                    EmptyMenuPanel(
+                        everSynced = state.everSynced,
+                        onRefresh = onRefresh,
+                        modifier = modifier,
+                    )
+                } else {
                     ProductCatalogPanel(
                         categories = state.operationalCategories,
                         items = state.operationalItems,
@@ -331,8 +342,16 @@ fun PosScreen(
                         onClearSearch = { menuQuery = "" },
                         onSelectCategory = onSelectCategory,
                         onAdd = addOrConfigure,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        modifier = modifier,
                     )
+                }
+            }
+            if (workspace.sideBySide) {
+                Row(
+                    Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    cataloguePane(Modifier.weight(1f).fillMaxHeight())
                     CartPanel(
                         state = state,
                         canWrite = access.canCreateAndCollect,
@@ -349,19 +368,7 @@ fun PosScreen(
                     Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
-                    ProductCatalogPanel(
-                        categories = state.operationalCategories,
-                        items = state.operationalItems,
-                        selectedCategoryId = state.selectedCategoryId,
-                        visibleItems = searchedItems,
-                        query = menuQuery,
-                        canWrite = access.canCreateAndCollect,
-                        onQueryChange = { menuQuery = it },
-                        onClearSearch = { menuQuery = "" },
-                        onSelectCategory = onSelectCategory,
-                        onAdd = addOrConfigure,
-                        modifier = Modifier.weight(1.05f).fillMaxWidth(),
-                    )
+                    cataloguePane(Modifier.weight(1.05f).fillMaxWidth())
                     CartPanel(
                         state = state,
                         canWrite = access.canCreateAndCollect,
@@ -492,6 +499,26 @@ fun PosScreen(
         )
     }
 
+    state.heldOrderReview
+        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.let { review ->
+            key(review.orderId, review.checkoutVersion) {
+                HeldOrderReviewDialog(
+                    review = review,
+                    online = state.online,
+                    busy = state.checkoutBusy,
+                    canCollectPayment = state.canCollectPayment,
+                    canApplyDiscount = access.canApplyDiscount,
+                    showCustomerBenefits = presentation.showsCustomers,
+                    onUpdateDiscount = { amount ->
+                        onUpdateHeldOrderDiscount(review.orderId, amount)
+                    },
+                    onContinue = { onContinueHeldOrder(review.orderId) },
+                    onDismiss = onDismissHeldOrderReview,
+                )
+            }
+        }
+
     offlinePaymentConfirmation?.takeIf { access.canCreateAndCollect && !state.online }?.let { quote ->
         PayDialog(
             dueMinor = quote.dueMinor,
@@ -507,6 +534,23 @@ fun PosScreen(
             },
         )
     }
+
+    state.directCheckoutReview
+        ?.takeIf { access.canCreateAndCollect && voidTarget == null }
+        ?.let { review ->
+            key(review.orderId, review.checkoutVersion) {
+                DirectCheckoutReviewDialog(
+                    review = review,
+                    online = state.online,
+                    busy = state.checkoutBusy,
+                    loyaltyPointsBalance = state.customerLoyaltyPoints,
+                    showCustomerBenefits = presentation.showsCustomers,
+                    onApplyPoints = onRedeemDirectPoints,
+                    onDismiss = onDismissDirectCheckout,
+                    onContinue = onContinueDirectCheckout,
+                )
+            }
+        }
 
     state.preparedDirectCheckout
         ?.takeIf { access.canCreateAndCollect && voidTarget == null }
@@ -543,13 +587,9 @@ fun PosScreen(
                     taxMinor = checkout.taxMinor,
                     roundOffMinor = checkout.roundOffMinor,
                     totalMinor = checkout.totalMinor,
-                    loyaltyPointsBalance = state.customerLoyaltyPoints,
                     pointsRedeemed = checkout.pointsRedeemed,
                     pointsRedeemedMinor = checkout.pointsRedeemedMinor,
                     showCustomerBenefits = presentation.showsCustomers,
-                    onApplyPoints = onRedeemDirectPoints.takeIf {
-                        presentation.showsCustomers && !state.customerPhone.isNullOrBlank()
-                    },
                     onDismiss = onDismissDirectCheckout,
                     onVoid = if (access.canVoid) {
                         {
@@ -578,10 +618,10 @@ fun PosScreen(
     state.preparedHeldCheckout
         ?.takeIf { access.canCreateAndCollect && voidTarget == null }
         ?.let { checkout ->
-        // This key resets every remembered dialog field only when the actual
-        // immutable order id changes. A list reorder/removal can never reuse
-        // T1's UPI selection or callback for the next held order.
-        key(checkout.orderId) {
+        // Version is part of the immutable confirmation identity. A changed
+        // bill can never inherit tender or payment method state from an older
+        // checkout of the same order.
+        key(checkout.orderId, checkout.claimOrderVersion) {
             if (
                 HeldOrderClaimPolicy.isExactZeroTotal(
                     totalMinor = checkout.totalMinor,
@@ -612,7 +652,16 @@ fun PosScreen(
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     verifiedSharedOrder = true,
                     paymentSubject = checkout.sourceLabel,
-                    confirmationIdentity = checkout.orderId,
+                    confirmationIdentity = "${checkout.orderId}:${checkout.claimOrderVersion}:${checkout.dueMinor}",
+                    subtotalMinor = checkout.subtotalMinor,
+                    discountMinor = checkout.discountMinor,
+                    manualDiscountMinor = checkout.manualDiscountMinor,
+                    taxMinor = checkout.taxMinor,
+                    roundOffMinor = checkout.roundOffMinor,
+                    tipMinor = checkout.tipMinor,
+                    totalMinor = checkout.totalMinor,
+                    pointsRedeemed = checkout.pointsRedeemed,
+                    pointsRedeemedMinor = checkout.pointsRedeemedMinor,
                     showCustomerBenefits = presentation.showsCustomers,
                     onDismiss = onDismissHeldOrder,
                     onVoid = if (access.canVoid) {
@@ -1689,6 +1738,8 @@ internal fun heldOrderSelectionBlockReason(state: PosUiState, access: PosAccess)
         "A bill is already being verified or saved. Wait for that action to finish before selecting another."
     state.heldSelectionBlocked ->
         "The previous held payment is being secured against duplicate taps. Wait for its status update."
+    state.heldOrderReview != null ->
+        "Finish or cancel the open held-bill review before selecting another order."
     state.preparedHeldCheckout != null ->
         "Finish or cancel the open held bill before selecting another order."
     state.draftState in setOf(SyncState.PREPARING, SyncState.AWAITING_PAYMENT) ->
@@ -2510,6 +2561,7 @@ private fun CartPanel(
                 text = when {
                     state.checkoutBusy && state.preparingHeldOrderId != null -> "Verifying held bill"
                     state.checkoutBusy -> "Recording payment once"
+                    state.heldOrderReview != null -> "Finish the held-bill review first"
                     state.preparedHeldCheckout != null -> "Finish the held bill first"
                     state.heldSelectionBlocked -> "Finishing previous payment"
                     !canWrite -> "View-only POS"
@@ -2524,7 +2576,8 @@ private fun CartPanel(
                 },
                 onClick = onPay,
                 enabled = canWrite && state.cart.isNotEmpty() && state.canCollectPayment &&
-                    !state.checkoutBusy && state.preparedHeldCheckout == null &&
+                    !state.checkoutBusy && state.heldOrderReview == null &&
+                    state.preparedHeldCheckout == null &&
                     !state.heldSelectionBlocked &&
                     (state.online || state.draftState == SyncState.DRAFT),
                 busy = state.checkoutBusy,
@@ -2593,6 +2646,462 @@ internal fun pointsEntryError(pointsText: String, lastSyncedBalance: Int?): Stri
     return null
 }
 
+internal fun heldDiscountEntryError(discountText: String, maxMinor: Long): String? {
+    require(maxMinor >= 0L)
+    val parsed = if (discountText.isBlank()) 0L else parseRupeesToMinor(discountText)
+        ?: return "Enter a valid rupee amount with no more than two decimal places."
+    if (parsed > maxMinor) {
+        return "Discount cannot exceed the reviewed bill limit of ${maxMinor.asRupees()}."
+    }
+    return null
+}
+
+private fun heldDiscountMinor(discountText: String): Long? =
+    if (discountText.isBlank()) 0L else parseRupeesToMinor(discountText)
+
+@Composable
+private fun HeldOrderReviewDialog(
+    review: HeldOrderReview,
+    online: Boolean,
+    busy: Boolean,
+    canCollectPayment: Boolean,
+    canApplyDiscount: Boolean,
+    showCustomerBenefits: Boolean,
+    onUpdateDiscount: (Long) -> Unit,
+    onContinue: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var discountText by rememberSaveable(review.orderId, review.checkoutVersion) {
+        mutableStateOf(minorToRupeesInput(review.manualDiscountMinor))
+    }
+    val discountMinor = heldDiscountMinor(discountText)
+    val discountError = heldDiscountEntryError(discountText, review.maxManualDiscountMinor)
+    val hasUnsavedDiscount = canApplyDiscount &&
+        discountMinor != null && discountMinor != review.manualDiscountMinor
+    val canMutateDiscount = canApplyDiscount && review.paidMinor == 0L &&
+        online && canCollectPayment && !busy
+    val canContinue = online && canCollectPayment && !busy &&
+        discountError == null && !hasUnsavedDiscount
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = {
+            Text(
+                review.sourceLabel?.let { "Review $it" }
+                    ?: "Review held bill",
+            )
+        },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 540.dp)
+                    .verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Text(
+                    "Live server bill · no checkout claim or payment has started yet.",
+                    color = Brand.Information,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                review.invoiceNo?.let {
+                    Text("Invoice $it", color = Brand.ForegroundMuted)
+                }
+
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .background(Brand.SurfaceRaised)
+                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .padding(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    Text(
+                        "Items",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (review.lines.isEmpty()) {
+                        Text(
+                            "The server supplied totals without item-level rows.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    review.lines.forEachIndexed { index, line ->
+                        if (index > 0) HorizontalDivider(color = Brand.BorderSubtle)
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    line.name,
+                                    color = Brand.Foreground,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    "${heldQuantityLabel(line.quantity)} × ${line.unitPriceMinor.asRupees()}",
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                                line.variantName?.let {
+                                    Text("Variant: $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                                }
+                                line.modifiers.forEach {
+                                    Text("+ $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                                }
+                                line.note?.let {
+                                    Text("Note: $it", color = Brand.ForegroundMuted, style = MaterialTheme.typography.labelSmall)
+                                }
+                                if (line.discountMinor > 0L) {
+                                    Text(
+                                        "Line discount ${line.discountMinor.asRupees()}",
+                                        color = Brand.Good,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                            NumericValue(
+                                value = line.lineTotalMinor.asRupees(),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .background(Brand.SurfaceRaised)
+                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .padding(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    PaymentAmountRow("Subtotal", review.subtotalMinor)
+                    review.lineOrMembershipDiscountMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Line / membership discounts", -it, Brand.Good)
+                    }
+                    review.manualDiscountMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Manual discount", -it, Brand.Good)
+                    }
+                    review.pointsRedeemedMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow(
+                            if (showCustomerBenefits) {
+                                "Loyalty points (${review.pointsRedeemed})"
+                            } else {
+                                "Legacy customer credit"
+                            },
+                            -it,
+                            Brand.Good,
+                        )
+                    }
+                    review.taxMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
+                    review.roundOffMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
+                    review.tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
+                    HorizontalDivider(color = Brand.BorderSubtle)
+                    PaymentAmountRow("Total", review.totalMinor, emphasized = true)
+                    review.paidMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Already paid", -it, Brand.Good)
+                    }
+                    PaymentAmountRow("Amount due", review.dueMinor, emphasized = true)
+                }
+
+                if (canApplyDiscount) {
+                    Text(
+                        "Manual discount",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    TouchMoneyEntry(
+                        value = discountText,
+                        onValueChange = { discountText = it },
+                        label = "Manual discount (₹)",
+                        enabled = canMutateDiscount,
+                        maxMinor = review.maxManualDiscountMinor,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (review.paidMinor > 0L) {
+                        Text(
+                            "This bill already has a recorded payment, so its manual discount is locked.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    discountError?.let {
+                        Text(it, color = Brand.Danger, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        ErpButton(
+                            text = if (busy) "Updating" else "Apply discount",
+                            onClick = { discountMinor?.let(onUpdateDiscount) },
+                            enabled = canMutateDiscount && discountError == null && hasUnsavedDiscount,
+                            busy = busy,
+                            intent = ActionIntent.Secondary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (review.manualDiscountMinor > 0L) {
+                            ErpButton(
+                                text = "Clear discount",
+                                onClick = { onUpdateDiscount(0L) },
+                                enabled = canMutateDiscount,
+                                intent = ActionIntent.Quiet,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                    if (hasUnsavedDiscount) {
+                        Text(
+                            "Apply this edited amount or restore ${review.manualDiscountMinor.asRupees()} before continuing.",
+                            color = Brand.Warning,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                } else {
+                    Text(
+                        "Manual discount changes, including clearing an existing discount, require manager discount permission.",
+                        color = Brand.ForegroundMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+
+                if (!online) {
+                    Text(
+                        "Reconnect before changing the discount or reserving this bill for payment.",
+                        color = Brand.Warning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                enabled = canContinue,
+                onClick = onContinue,
+            ) {
+                Text(
+                    if (busy) "VERIFYING LATEST BILL"
+                    else "CONTINUE TO PAYMENT · ${review.dueMinor.asRupees()}",
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+        },
+    )
+}
+
+private fun heldQuantityLabel(quantity: Double): String =
+    if (quantity == quantity.toLong().toDouble()) {
+        quantity.toLong().toString()
+    } else {
+        String.format(Locale.US, "%.2f", quantity).trimEnd('0').trimEnd('.')
+    }
+
+/**
+ * Canonical pricing review for a direct cart. It deliberately contains no
+ * payment method or tender controls: customer benefits remain editable only
+ * while the server order is private/open. Continue atomically publishes and
+ * claims the bill; the separate payment dialog appears only after Room has
+ * durably stored that claim.
+ */
+@Composable
+private fun DirectCheckoutReviewDialog(
+    review: DirectCheckoutReview,
+    online: Boolean,
+    busy: Boolean,
+    loyaltyPointsBalance: Int?,
+    showCustomerBenefits: Boolean,
+    onApplyPoints: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    onContinue: () -> Unit,
+) {
+    var editingPoints by rememberSaveable(review.orderId, review.checkoutVersion) {
+        mutableStateOf(false)
+    }
+    var pointsText by rememberSaveable(review.orderId, review.checkoutVersion) {
+        mutableStateOf(review.pointsRedeemed.takeIf { it > 0 }?.toString().orEmpty())
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = Brand.SurfaceOverlay,
+        shape = Radius.shapeLg,
+        title = { Text("Review live bill · ${review.totalMinor.asRupees()}") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Text(
+                    "The server has priced this editable bill. Apply any customer benefit now; " +
+                        "payment methods appear only after you continue.",
+                    color = Brand.Information,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .background(Brand.SurfaceRaised)
+                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .padding(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    PaymentAmountRow("Subtotal", review.subtotalMinor)
+                    review.discountMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Discounts and benefits", -it, Brand.Good)
+                    }
+                    review.taxMinor.takeIf { it != 0L }?.let {
+                        PaymentAmountRow("Tax", it)
+                    }
+                    review.roundOffMinor.takeIf { it != 0L }?.let {
+                        PaymentAmountRow("Round-off", it)
+                    }
+                    HorizontalDivider(color = Brand.BorderSubtle)
+                    PaymentAmountRow("Total", review.totalMinor, emphasized = true)
+                }
+
+                if (showCustomerBenefits) {
+                    Column(
+                        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                            .background(Brand.SurfaceRaised)
+                            .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                            .padding(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Loyalty points",
+                                    color = Brand.Foreground,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    loyaltyPointsBalance?.let {
+                                        "$it last synced · worth " +
+                                            (it.toLong() * MINOR_PER_POINT).asRupees()
+                                    } ?: "The server verifies the live balance",
+                                    color = Brand.ForegroundMuted,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            if (review.pointsRedeemed > 0) {
+                                OperationalStatusBadge(
+                                    "${review.pointsRedeemed} applied",
+                                    UiTone.Success,
+                                )
+                            }
+                        }
+                        if (editingPoints) {
+                            val pointsError = pointsEntryError(pointsText, loyaltyPointsBalance)
+                            val applyPoints = {
+                                if (pointsError == null) {
+                                    editingPoints = false
+                                    onApplyPoints(requireNotNull(pointsText.toIntOrNull()))
+                                }
+                            }
+                            OutlinedTextField(
+                                value = pointsText,
+                                onValueChange = { pointsText = it.filter(Char::isDigit).take(7) },
+                                label = { Text("Points to use") },
+                                supportingText = {
+                                    Text(pointsError ?: "10 points = ₹1 · verified by the server")
+                                },
+                                isError = pointsError != null,
+                                enabled = online && !busy,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
+                                    imeAction = ImeAction.Done,
+                                ),
+                                keyboardActions = KeyboardActions(onDone = { applyPoints() }),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
+                                loyaltyPointsBalance?.takeIf { it > 0 }?.let { balance ->
+                                    ErpButton(
+                                        text = "Use all $balance",
+                                        onClick = { pointsText = balance.toString() },
+                                        intent = ActionIntent.Quiet,
+                                        enabled = online && !busy,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                ErpButton(
+                                    text = "Apply points",
+                                    onClick = applyPoints,
+                                    intent = ActionIntent.Secondary,
+                                    enabled = pointsError == null && online && !busy,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        } else {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
+                                ErpButton(
+                                    text = if (review.pointsRedeemed > 0) {
+                                        "Adjust points"
+                                    } else {
+                                        "Use points"
+                                    },
+                                    onClick = {
+                                        pointsText = review.pointsRedeemed.takeIf { it > 0 }
+                                            ?.toString()
+                                            ?: loyaltyPointsBalance?.takeIf { it > 0 }
+                                                ?.toString().orEmpty()
+                                        editingPoints = true
+                                    },
+                                    intent = ActionIntent.Secondary,
+                                    enabled = online && !busy &&
+                                        ((loyaltyPointsBalance ?: 0) > 0 || review.pointsRedeemed > 0),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (review.pointsRedeemed > 0) {
+                                    ErpButton(
+                                        text = "Remove",
+                                        onClick = { onApplyPoints(0) },
+                                        intent = ActionIntent.Quiet,
+                                        enabled = online && !busy,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!online) {
+                    Text(
+                        "Reconnect to publish and reserve this exact bill before payment.",
+                        color = Brand.Warning,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            PrimaryButton(enabled = online && !busy, onClick = onContinue) {
+                Text(if (busy) "RESERVING…" else "CONTINUE TO PAYMENT")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+        },
+    )
+}
+
 @Composable
 private fun PayDialog(
     dueMinor: Long,
@@ -2604,8 +3113,10 @@ private fun PayDialog(
     confirmationIdentity: String? = null,
     subtotalMinor: Long? = null,
     discountMinor: Long? = null,
+    manualDiscountMinor: Long = 0L,
     taxMinor: Long? = null,
     roundOffMinor: Long? = null,
+    tipMinor: Long = 0L,
     totalMinor: Long? = null,
     loyaltyPointsBalance: Int? = null,
     pointsRedeemed: Int = 0,
@@ -2676,10 +3187,15 @@ private fun PayDialog(
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
                         subtotalMinor?.let { PaymentAmountRow("Subtotal", it) }
-                        val nonPointsDiscount = ((discountMinor ?: 0L) - pointsRedeemedMinor)
+                        val nonPointsDiscount = (
+                            (discountMinor ?: 0L) - pointsRedeemedMinor - manualDiscountMinor
+                        )
                             .coerceAtLeast(0L)
                         nonPointsDiscount.takeIf { it > 0L }?.let {
-                            PaymentAmountRow("Other discounts", -it, Brand.Good)
+                            PaymentAmountRow("Line / membership discounts", -it, Brand.Good)
+                        }
+                        manualDiscountMinor.takeIf { it > 0L }?.let {
+                            PaymentAmountRow("Manual discount", -it, Brand.Good)
                         }
                         pointsRedeemedMinor.takeIf { it > 0L }?.let {
                             PaymentAmountRow(
@@ -2694,6 +3210,7 @@ private fun PayDialog(
                         }
                         taxMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
                         roundOffMinor?.takeIf { it != 0L }?.let { PaymentAmountRow("Round-off", it) }
+                        tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
                         HorizontalDivider(color = Brand.BorderSubtle)
                         PaymentAmountRow("Total", totalMinor, Brand.Foreground, emphasized = true)
                     }
@@ -3064,7 +3581,10 @@ private fun ZeroTotalCompletionDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            Column(
+                Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
                 Text(
                     "Live member-benefit total verified and reserved for this checkout.",
                     style = MaterialTheme.typography.labelSmall,
@@ -3075,6 +3595,35 @@ private fun ZeroTotalCompletionDialog(
                     fontWeight = FontWeight.Bold,
                     color = Brand.Foreground,
                 )
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .background(Brand.SurfaceRaised)
+                        .border(1.dp, Brand.BorderSubtle, Radius.shapeMd)
+                        .padding(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    PaymentAmountRow("Subtotal", checkout.subtotalMinor)
+                    val otherDiscount = (
+                        checkout.discountMinor - checkout.manualDiscountMinor -
+                            checkout.pointsRedeemedMinor
+                    ).coerceAtLeast(0L)
+                    otherDiscount.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Line / membership discounts", -it, Brand.Good)
+                    }
+                    checkout.manualDiscountMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Manual discount", -it, Brand.Good)
+                    }
+                    checkout.pointsRedeemedMinor.takeIf { it > 0L }?.let {
+                        PaymentAmountRow("Customer benefit", -it, Brand.Good)
+                    }
+                    checkout.taxMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tax", it) }
+                    checkout.roundOffMinor.takeIf { it != 0L }?.let {
+                        PaymentAmountRow("Round-off", it)
+                    }
+                    checkout.tipMinor.takeIf { it != 0L }?.let { PaymentAmountRow("Tip", it) }
+                    HorizontalDivider(color = Brand.BorderSubtle)
+                    PaymentAmountRow("Total", checkout.totalMinor, emphasized = true)
+                }
                 Text(
                     "Complete this exact bill to consume the reserved benefit and issue its " +
                         "final invoice. This action does not create a cash, UPI, or card payment.",

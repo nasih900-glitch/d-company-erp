@@ -48,7 +48,7 @@ if [ -z "$EXPECTED_APP_VERSION" ]; then
   EXPECTED_APP_VERSION=$(grep '^APP_VERSION=' "$version_source" | cut -d= -f2-)
 fi
 if ! [[ "$EXPECTED_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Expected APP_VERSION must be a release version such as 3.1.10." >&2
+  echo "Expected APP_VERSION must be a release version such as 3.1.11." >&2
   exit 1
 fi
 app_version=$(value_for APP_VERSION)

@@ -330,6 +330,7 @@ class DCompanyApp : Application() {
             scope = appScope,
             outboxSafety = outboxSafety,
             cacheIsolation = cacheIsolation,
+            checkoutClientInstance = updateTelemetry.installation::installationId,
             scheduleDurableSync = { BackgroundSyncScheduler.enqueue(this) },
         )
         realtime = RealtimeClient(tokens, appScope)

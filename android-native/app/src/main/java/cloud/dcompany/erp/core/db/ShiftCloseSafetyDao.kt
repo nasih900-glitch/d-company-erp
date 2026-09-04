@@ -12,27 +12,72 @@ data class ShiftCloseBlockerCounts(
     val pendingLocalCount: Int,
     val attentionLocalCount: Int,
     val serverWorkflowCount: Int,
+    val serverGamingSessionCount: Int,
+    val serverHeldOrderCount: Int,
     val unscopedAttentionCount: Int,
 ) {
+    val serverConfirmedBlockerCount: Int
+        get() = serverWorkflowCount + serverGamingSessionCount + serverHeldOrderCount
+
+    val otherStaffResolutionCount: Int
+        get() = serverWorkflowCount + attentionLocalCount + unscopedAttentionCount
+
     val captureBlockerCount: Int
-        get() = attentionLocalCount + serverWorkflowCount + unscopedAttentionCount
+        get() = attentionLocalCount + serverConfirmedBlockerCount + unscopedAttentionCount
 
     val serverPostBlockerCount: Int
         get() = pendingLocalCount + captureBlockerCount
 
     fun captureMessage(): String? {
         if (captureBlockerCount == 0) return null
-        return "Shift close blocked: $attentionLocalCount saved action(s) need recovery, " +
-            "$serverWorkflowCount server-confirmed task(s) still need completion, and " +
-            "$unscopedAttentionCount older money record(s) lack exact shift provenance. " +
-            "Resolve the warnings in POS, Gaming, Refunds, or Memberships, then count the drawer again."
+        val blockers = buildList {
+            if (serverGamingSessionCount > 0) {
+                add("$serverGamingSessionCount active or stopped-but-unbilled Gaming session(s)")
+            }
+            if (serverHeldOrderCount > 0) add("$serverHeldOrderCount held POS order(s)")
+            if (serverWorkflowCount > 0) {
+                add("$serverWorkflowCount other server-confirmed money task(s)")
+            }
+            if (attentionLocalCount > 0) {
+                add("$attentionLocalCount saved action(s) need recovery")
+            }
+            if (unscopedAttentionCount > 0) {
+                add("$unscopedAttentionCount older money record(s) lack exact shift provenance")
+            }
+        }.joinToString(separator = "; ")
+        val guidance = buildList {
+            if (serverGamingSessionCount > 0) {
+                add("End active Gaming sessions and send stopped sessions to POS")
+            }
+            if (serverHeldOrderCount > 0) {
+                add("settle held orders or void them with an audit reason")
+            }
+            if (serverWorkflowCount > 0) add("finish the server-confirmed money tasks")
+            if (attentionLocalCount > 0 || unscopedAttentionCount > 0) {
+                add("resolve the saved recovery warnings")
+            }
+        }.joinToString(separator = "; ")
+        return "Shift close blocked: $blockers. $guidance, then count the drawer again."
     }
 
     fun serverPostMessage(): String? {
         if (serverPostBlockerCount == 0) return null
-        return "Shift close was paused before contacting the server: $pendingLocalCount saved " +
-            "action(s) still need server confirmation and $captureBlockerCount action(s) need " +
-            "staff recovery. Continue the shift, resolve them, then review and retry the drawer count."
+        val blockers = buildList {
+            if (pendingLocalCount > 0) {
+                add("$pendingLocalCount saved action(s) still need server confirmation")
+            }
+            if (serverGamingSessionCount > 0) {
+                add("$serverGamingSessionCount Gaming session(s) still need completion")
+            }
+            if (serverHeldOrderCount > 0) {
+                add("$serverHeldOrderCount held POS order(s) still need completion")
+            }
+            if (otherStaffResolutionCount > 0) {
+                add("$otherStaffResolutionCount other action(s) still need staff resolution")
+            }
+        }.joinToString(separator = "; ")
+        return "Shift close was paused before contacting the server: $blockers. Continue the shift, " +
+            "resolve them, then review and retry the drawer count."
     }
 }
 
@@ -56,6 +101,12 @@ data class ShiftCloseCaptureResult(
 @Dao
 interface ShiftCloseSafetyDao {
 
+    /*
+     * `held_order_cache` is replaced only from the authenticated terminal's
+     * GET /pos/orders?status=held response. Because the server permits one
+     * open shift per terminal, every unmatched row is work for this terminal's
+     * current shift even though the older cache schema has no shiftId column.
+     */
     @Query(
         """
         SELECT
@@ -159,6 +210,27 @@ interface ShiftCloseSafetyDao {
                 (sourceShiftId = :localShiftId OR
                  (:serverShiftId IS NOT NULL AND sourceShiftId = :serverShiftId)))
           ) AS serverWorkflowCount,
+          (
+            (SELECT COUNT(*) FROM gaming_session_cache AS cached_session
+              WHERE
+                (cached_session.shiftId = :localShiftId OR
+                 (:serverShiftId IS NOT NULL AND cached_session.shiftId = :serverShiftId)) AND
+                (cached_session.status IN ('active', 'paused') OR
+                 (cached_session.status = 'ended' AND
+                  (cached_session.orderId IS NULL OR trim(cached_session.orderId) = ''))) AND
+                NOT EXISTS (
+                  SELECT 1 FROM local_gaming_sessions AS local_session
+                   WHERE local_session.serverId = cached_session.id AND
+                     local_session.state NOT IN ('sent', 'cancelled', 'legacy_resolved')
+                ))
+          ) AS serverGamingSessionCount,
+          (
+            (SELECT COUNT(*) FROM held_order_cache AS cached_order
+              WHERE NOT EXISTS (
+                SELECT 1 FROM local_held_order_payments AS local_payment
+                 WHERE local_payment.targetOrderId = cached_order.id
+              ))
+          ) AS serverHeldOrderCount,
           (
             (SELECT COUNT(*) FROM local_refunds WHERE state = 'legacy_reconciliation_required') +
             (SELECT COUNT(*) FROM local_membership_payment_actions

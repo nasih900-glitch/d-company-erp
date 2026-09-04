@@ -34,16 +34,17 @@ and must not be hosted, registered, or advertised through the server.
 Code `15` (`3.1.4`) is the first identity eligible for this server-hosted
 registry, but it remains a held audit build. Codes `16` and `17` are immutable
 upgrade-proof predecessors. Tags `v3.1.7` (code `18`), `v3.1.8` (code `19`),
-and `v3.1.9` (code `20`) failed before signing and must not be reused. The
-approved server-delivery candidate is the distinct, tagged CI artifact
-`3.1.10` (code `21`). Before
+and `v3.1.9` (code `20`) failed before signing and must not be reused. Code
+`21` (`3.1.10`) is immutable signed predecessor history. The current
+server-delivery candidate is the distinct, tagged CI artifact
+`3.1.11` (code `22`). Before
 activation, verify the
 immutable HTTPS bytes, SHA-256, byte size, package, version, expected signer and
-an in-place upgrade from the manually installed code-`14` baseline. Android
+an in-place upgrade from the signed code-`21` predecessor. Android
 still requires the employee to approve installation.
 
 Do not direct a tablet to the obsolete `3.1.0` APK as a current bootstrap. Use
-the verified, same-signer code-`14` direct baseline, or install the current code
+the verified, same-signer code-`21` direct predecessor, or install the current code
 manually in place when the installed build cannot prove update capability.
 Never uninstall while offline work is pending. After a verified direct build is
 installed, future server offers can be downloaded, verified, and handed to

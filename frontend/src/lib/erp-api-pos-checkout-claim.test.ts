@@ -29,9 +29,27 @@ describe('POS checkout-claim API contract', () => {
 
   it('acquires the claim from the held-order endpoint', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: claim });
+    const clientInstance = '123e4567-e89b-42d3-a456-426614174000';
 
-    await expect(pos.claimCheckout('order-1')).resolves.toEqual(claim);
-    expect(api.post).toHaveBeenCalledWith('/pos/orders/order-1/checkout-claim');
+    await expect(pos.claimCheckout('order-1', clientInstance)).resolves.toEqual(claim);
+    expect(api.post).toHaveBeenCalledWith('/pos/orders/order-1/checkout-claim', undefined, {
+      headers: { 'X-Checkout-Client-Instance': clientInstance },
+    });
+  });
+
+  it('atomically publishes a private direct bill and acquires its claim', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: claim });
+    const clientInstance = '123e4567-e89b-42d3-a456-426614174000';
+
+    await expect(pos.publishCheckout('order-1', 7, 'publish:checkout-1', clientInstance)).resolves.toEqual(claim);
+    expect(api.post).toHaveBeenCalledWith('/pos/orders/order-1/publish-checkout-claim', {
+      expected_checkout_version: 7,
+    }, {
+      headers: {
+        'Idempotency-Key': 'publish:checkout-1',
+        'X-Checkout-Client-Instance': clientInstance,
+      },
+    });
   });
 
   it('releases only the claim identified by its bearer token', async () => {
@@ -39,6 +57,16 @@ describe('POS checkout-claim API contract', () => {
 
     await expect(pos.releaseCheckout('order-1', claim.claim_token)).resolves.toBeUndefined();
     expect(api.delete).toHaveBeenCalledWith('/pos/orders/order-1/checkout-claim', {
+      headers: { 'X-Checkout-Claim': claim.claim_token },
+    });
+  });
+
+  it('voids a claimed bill atomically with its bearer token', async () => {
+    vi.mocked(api.delete).mockResolvedValue({ data: undefined });
+
+    await expect(pos.voidOrder('order-1', 'Customer cancelled', claim.claim_token)).resolves.toBeUndefined();
+    expect(api.delete).toHaveBeenCalledWith('/pos/orders/order-1', {
+      data: { reason: 'Customer cancelled' },
       headers: { 'X-Checkout-Claim': claim.claim_token },
     });
   });

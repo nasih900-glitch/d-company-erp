@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from app.api.v1.pos.router import ShiftOpenRequest, open_shift
 from app.core.errors import BusinessRuleError
@@ -65,6 +66,13 @@ def _terminal(*, active: bool = True, purpose: str = "hybrid"):
     )
 
 
+def test_shift_open_schema_rejects_negative_but_preserves_zero() -> None:
+    with pytest.raises(PydanticValidationError):
+        ShiftOpenRequest(opening_float_minor=-1)
+
+    assert ShiftOpenRequest(opening_float_minor=0).opening_float_minor == 0
+
+
 @pytest.mark.asyncio
 async def test_shift_open_locks_branch_then_terminal_and_revalidates_scope() -> None:
     session = _QueuedSession(
@@ -90,6 +98,7 @@ async def test_shift_open_locks_branch_then_terminal_and_revalidates_scope() -> 
     assert "terminals.branch_id" in sql[1]
     assert "FOR UPDATE" in sql[1]
     assert "FROM shifts" in sql[2]
+    assert "FOR UPDATE" in sql[2]
 
 
 @pytest.mark.asyncio

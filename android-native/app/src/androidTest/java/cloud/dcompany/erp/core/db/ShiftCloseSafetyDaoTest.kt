@@ -57,6 +57,111 @@ class ShiftCloseSafetyDaoTest {
     }
 
     @Test
+    fun cacheOnlyCrossDeviceGamingWorkBlocksExactShiftCloseCapture() = runBlocking {
+        db.shiftDao().insert(openShift("shift-cache-gaming"))
+        db.gamingDao().upsertSessionCache(
+            listOf(
+                gamingCache("remote-active", SERVER_SHIFT, "active"),
+                gamingCache("remote-paused", SERVER_SHIFT, "paused"),
+                gamingCache("remote-unbilled", SERVER_SHIFT, "ended"),
+                gamingCache("remote-billed", SERVER_SHIFT, "ended", orderId = "order-billed"),
+                gamingCache("another-shift", "server-other", "active"),
+            ),
+        )
+
+        val blockers = safety.blockersForExactShift(
+            "shift-cache-gaming",
+            SERVER_SHIFT,
+            TERMINAL,
+        )
+
+        assertEquals(3, blockers.serverGamingSessionCount)
+        assertEquals(0, blockers.serverHeldOrderCount)
+        assertEquals(3, blockers.captureBlockerCount)
+        assertTrue(blockers.captureMessage().orEmpty().contains("stopped-but-unbilled Gaming"))
+        val result = safety.captureExistingClose(
+            "shift-cache-gaming",
+            TERMINAL,
+            countedMinor = 0,
+            closedAtMillis = 2_000,
+        )
+        assertEquals(ShiftCloseCaptureStatus.BLOCKED, result.status)
+        assertEquals(ShiftState.OPEN_SYNCED, safety.localShift("shift-cache-gaming")?.state)
+    }
+
+    @Test
+    fun cachedGamingRowWithCapturedLocalStopUsesPendingDrainPath() = runBlocking {
+        db.shiftDao().insert(openShift("shift-captured-stop"))
+        db.gamingDao().upsertSessionCache(
+            listOf(gamingCache("server-captured-stop", SERVER_SHIFT, "active")),
+        )
+        db.gamingDao().insertLocalSession(
+            LocalGamingSessionEntity(
+                localId = "local-captured-stop",
+                serverId = "server-captured-stop",
+                stationId = "station-captured-stop",
+                shiftId = "shift-captured-stop",
+                startedAtMillis = 1_000,
+                state = GamingSessionState.STOP_PENDING,
+                endAtMillis = 1_500,
+            ),
+        )
+
+        val blockers = safety.blockersForExactShift(
+            "shift-captured-stop",
+            SERVER_SHIFT,
+            TERMINAL,
+        )
+
+        assertEquals(1, blockers.pendingLocalCount)
+        assertEquals(0, blockers.serverGamingSessionCount)
+        assertNull(blockers.captureMessage())
+        assertEquals(
+            ShiftCloseCaptureStatus.CAPTURED,
+            safety.captureExistingClose("shift-captured-stop", TERMINAL, 0, 2_000).status,
+        )
+    }
+
+    @Test
+    fun terminalHeldCacheBlocksCloseButItsCapturedPaymentUsesPendingDrainPath() = runBlocking {
+        db.shiftDao().insert(openShift("shift-cache-held"))
+        db.heldOrderDao().upsertAll(
+            listOf(
+                heldOrder("order-unclaimed"),
+                heldOrder("order-payment-captured"),
+            ),
+        )
+        db.heldOrderDao().insertPayment(
+            heldPayment("payment-captured", "shift-cache-held", TERMINAL).copy(
+                targetOrderId = "order-payment-captured",
+            ),
+        )
+
+        val blocked = safety.blockersForExactShift(
+            "shift-cache-held",
+            SERVER_SHIFT,
+            TERMINAL,
+        )
+        assertEquals(1, blocked.pendingLocalCount)
+        assertEquals(1, blocked.serverHeldOrderCount)
+        assertTrue(blocked.captureMessage().orEmpty().contains("1 held POS order(s)"))
+
+        db.heldOrderDao().replace(listOf(heldOrder("order-payment-captured")))
+        val capturedPaymentOnly = safety.blockersForExactShift(
+            "shift-cache-held",
+            SERVER_SHIFT,
+            TERMINAL,
+        )
+        assertEquals(1, capturedPaymentOnly.pendingLocalCount)
+        assertEquals(0, capturedPaymentOnly.serverHeldOrderCount)
+        assertNull(capturedPaymentOnly.captureMessage())
+        assertEquals(
+            ShiftCloseCaptureStatus.CAPTURED,
+            safety.captureExistingClose("shift-cache-held", TERMINAL, 0, 2_000).status,
+        )
+    }
+
+    @Test
     fun negativeDrawerCountIsRejectedBeforeCloseCapture() = runBlocking {
         db.shiftDao().insert(openShift("shift-negative-capture"))
 
@@ -423,6 +528,34 @@ class ShiftCloseSafetyDaoTest {
             terminalId = terminalId,
             createdAtMillis = 1_500,
         )
+
+    private fun gamingCache(
+        id: String,
+        shiftId: String,
+        status: String,
+        orderId: String? = null,
+    ) = GamingSessionCacheEntity(
+        id = id,
+        stationId = "station-$id",
+        shiftId = shiftId,
+        status = status,
+        startAtMillis = 1_000,
+        endAtMillis = if (status == "ended") 1_500 else null,
+        orderId = orderId,
+    )
+
+    private fun heldOrder(id: String) = HeldOrderCacheEntity(
+        id = id,
+        invoiceNo = null,
+        type = "dine_in",
+        sourceLabel = "Gaming station",
+        totalMinor = 1_000,
+        paidMinor = 0,
+        itemsCount = 1,
+        customerName = null,
+        createdAt = "2026-09-03T10:00:00Z",
+        heldAt = "2026-09-03T10:30:00Z",
+    )
 
     private fun cafeBill(localId: String, tableId: String, shiftId: String) =
         LocalCafeBillEntity(

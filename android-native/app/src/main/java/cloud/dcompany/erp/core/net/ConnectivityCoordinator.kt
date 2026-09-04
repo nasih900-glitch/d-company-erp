@@ -153,23 +153,36 @@ internal class ConnectivityStateMachine(
         if (state.probeInFlight) {
             return ConnectivityTransition(
                 state.copy(
-                    // A normal API call can lose a response for many transient
-                    // reasons. Keep writes offline-safe immediately, but wait
-                    // for the isolated readiness probe before showing a red
-                    // server-outage state to the operator.
-                    phase = ConnectivityPhase.VERIFYING,
-                    requiresRecoveryStability = true,
+                    // Do not replace a previously proven ONLINE presentation
+                    // while its one authoritative readiness check is running.
+                    // A second failed call is not a second proof of a global
+                    // outage, and exposing VERIFYING/RECOVERING here made the
+                    // tablet header visibly pulse on otherwise healthy links.
+                    phase = if (state.phase == ConnectivityPhase.ONLINE) {
+                        ConnectivityPhase.ONLINE
+                    } else {
+                        ConnectivityPhase.VERIFYING
+                    },
+                    requiresRecoveryStability = state.phase != ConnectivityPhase.ONLINE,
                 ),
             )
         }
 
         val generation = state.generation + 1L
+        val wasConfirmedOnline = state.phase == ConnectivityPhase.ONLINE
         return ConnectivityTransition(
             state.copy(
-                phase = ConnectivityPhase.VERIFYING,
+                // The failed request itself retains its own ambiguity/outbox
+                // handling. Keep the last confirmed global presentation until
+                // /readyz decides whether this is a real ERP outage.
+                phase = if (wasConfirmedOnline) {
+                    ConnectivityPhase.ONLINE
+                } else {
+                    ConnectivityPhase.VERIFYING
+                },
                 generation = generation,
                 probeInFlight = true,
-                requiresRecoveryStability = true,
+                requiresRecoveryStability = !wasConfirmedOnline,
             ),
             listOf(ConnectivityEffect.StartProbe(generation)),
         )
@@ -270,11 +283,20 @@ internal class ConnectivityStateMachine(
         )
     }
 
-    private fun onlineEffects(previous: ConnectivityMachineState): List<ConnectivityEffect> = buildList {
-        if (previous.notifyValidatedReconnectWhenOnline) {
-            add(ConnectivityEffect.NotifyValidatedReconnect)
+    private fun onlineEffects(previous: ConnectivityMachineState): List<ConnectivityEffect> {
+        // A transient request failure can ask /readyz for proof while the last
+        // authoritative presentation remains ONLINE. Successful proof in that
+        // case is not a reconnect: firing onBackOnline would unnecessarily
+        // drain every outbox, reconnect the websocket and send a heartbeat,
+        // which can churn otherwise stable operational screens.
+        if (previous.phase == ConnectivityPhase.ONLINE) return emptyList()
+
+        return buildList {
+            if (previous.notifyValidatedReconnectWhenOnline) {
+                add(ConnectivityEffect.NotifyValidatedReconnect)
+            }
+            add(ConnectivityEffect.NotifyBackOnline)
         }
-        add(ConnectivityEffect.NotifyBackOnline)
     }
 }
 

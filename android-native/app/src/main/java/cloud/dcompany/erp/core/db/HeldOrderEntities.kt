@@ -70,7 +70,11 @@ data class LocalHeldOrderPaymentEntity(
     val claimExpiresAtMillis: Long? = null,
     /** Server checkout version represented by [claimToken]. */
     val claimOrderVersion: Long? = null,
-    /** Held/table/gaming bills require a lease; a direct open POS bill does not. */
+    /**
+     * Historical discriminator retained for receipt/source compatibility.
+     * New direct bills also carry a claimToken after atomic publication; sync
+     * therefore treats either this flag or a durable token as claim-required.
+     */
     @ColumnInfo(defaultValue = "1") val requiresCheckoutClaim: Boolean = true,
     /** Exact drawer shift accepted at claim time. Null only for pre-v23 rows. */
     val shiftId: String? = null,

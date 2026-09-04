@@ -103,16 +103,33 @@ interface ErpApi {
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): Order
 
+    /**
+     * Atomically moves a private direct cart from `open` to `held` and leases
+     * that exact immutable bill to this installed client. The same body,
+     * idempotency key and installation identity must be replayed after an
+     * interrupted response.
+     */
+    @POST("pos/orders/{id}/publish-checkout-claim")
+    suspend fun publishDirectCheckoutClaim(
+        @Path("id") id: String,
+        @Body body: PublishDirectCheckoutClaimRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Header("X-Checkout-Client-Instance") checkoutClientInstance: String,
+        @HeaderMap provenance: Map<String, String> = emptyMap(),
+    ): CheckoutClaimResult
+
     @HTTP(method = "DELETE", path = "pos/orders/{id}", hasBody = true)
     suspend fun voidOrder(
         @Path("id") id: String,
         @Body body: VoidOrderRequest,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String? = null,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     )
 
     @POST("pos/orders/{id}/checkout-claim")
     suspend fun acquireCheckoutClaim(
         @Path("id") id: String,
+        @Header("X-Checkout-Client-Instance") checkoutClientInstance: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): CheckoutClaimResult
 

@@ -244,6 +244,7 @@ class GamingDaoRecoveryTest {
             packageDurationMinutes = 60,
             packageVariant = "solo",
             packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard",
             extraControllers = 0,
         )
 
@@ -324,6 +325,7 @@ class GamingDaoRecoveryTest {
             packageDurationMinutes = null,
             packageVariant = null,
             packageStationTypeSnapshot = null,
+            packagePricingTierSnapshot = null,
             extraControllers = 0,
         )
         val startConfirmed = dao.localSessionById(row.localId)!!

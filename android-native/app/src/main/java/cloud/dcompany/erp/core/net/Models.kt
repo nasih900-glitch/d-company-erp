@@ -153,6 +153,11 @@ data class OrderPointsRedemptionUpdateRequest(
 )
 
 @Serializable
+data class PublishDirectCheckoutClaimRequest(
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+)
+
+@Serializable
 data class VoidOrderRequest(val reason: String)
 
 @Serializable

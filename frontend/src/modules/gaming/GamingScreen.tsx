@@ -83,6 +83,7 @@ import {
   SessionAddonsPanel,
   SessionAddonVoidModal,
 } from './GamingAddonControls';
+import { GamingStopConfirmation } from './GamingStopConfirmation';
 import {
   availableGamingAddonItems,
   createClientLineId,
@@ -148,6 +149,7 @@ type LocalSession = {
   package_id?: string | null;
   package_variant_snapshot?: string | null;
   package_station_type_snapshot?: string | null;
+  package_pricing_tier_snapshot?: 'standard' | 'premium' | null;
   extra_controllers?: number;
   // Fixed, locked-in price for a package session — never recomputed from
   // elapsed time (see gaming/router.py stop_session). Undefined/null for an
@@ -168,6 +170,39 @@ const DURATION_PRESETS = [
 // still ticking as "overtime") until someone happened to reload the page.
 // Fallback only — real-time push is the primary mechanism.
 const GAMING_SESSIONS_POLL_MS = 120_000;
+
+export type GamingRefreshMode = 'foreground' | 'background';
+
+export interface GamingRefreshGenerationRef {
+  current: number;
+}
+
+/**
+ * Gaming can receive a websocket event while a mount, manual refresh, or poll
+ * is still in flight. Only the most recently started request may publish a
+ * snapshot. Background refreshes retain the verified board and never replace
+ * it with the initial skeleton.
+ */
+export function beginGamingRefresh(
+  generation: GamingRefreshGenerationRef,
+  mode: GamingRefreshMode,
+  hasVerifiedBoard: boolean,
+): {
+  isCurrent: () => boolean;
+  showSkeleton: boolean;
+  surfaceFailure: boolean;
+} {
+  const requestGeneration = ++generation.current;
+  return {
+    isCurrent: () => generation.current === requestGeneration,
+    showSkeleton: !hasVerifiedBoard,
+    surfaceFailure: mode === 'foreground' || !hasVerifiedBoard,
+  };
+}
+
+export function invalidateGamingRefresh(generation: GamingRefreshGenerationRef): void {
+  generation.current += 1;
+}
 
 type PendingExtension = {
   station: StationDTO;
@@ -207,9 +242,59 @@ type CurrentShiftContext =
   | { shiftId: string; error: null }
   | { shiftId: null; error: string };
 
-function extraControllerSurchargeMinor(extraControllers: number, durationMinutes: number): number {
+export function extraControllerSurchargeMinor(extraControllers: number, durationMinutes: number): number {
   if (extraControllers <= 0 || durationMinutes <= 0) return 0;
   return extraControllers * Math.max(3_000, Math.ceil(durationMinutes / 60) * 3_000);
+}
+
+export function extraControllerExtensionSurchargeMinor(
+  extraControllers: number,
+  currentDurationMinutes: number,
+  extensionMinutes: number,
+): number {
+  if (currentDurationMinutes < 0 || extensionMinutes <= 0) return 0;
+  return Math.max(
+    0,
+    extraControllerSurchargeMinor(extraControllers, currentDurationMinutes + extensionMinutes)
+      - extraControllerSurchargeMinor(extraControllers, currentDurationMinutes),
+  );
+}
+
+export function resolvePricingTier(
+  availableTiers: string[],
+  requestedTier: string | undefined,
+): string | undefined {
+  if (requestedTier && availableTiers.includes(requestedTier)) return requestedTier;
+  return availableTiers.includes('standard') ? 'standard' : availableTiers[0];
+}
+
+export function gamingPackageSelectionLabel(session: LocalSession): string | null {
+  if (session.billing_mode !== 'package' && session.billing_mode !== 'legacy_ambiguous') return null;
+  const tier = session.package_pricing_tier_snapshot
+    ? session.package_pricing_tier_snapshot[0].toUpperCase() + session.package_pricing_tier_snapshot.slice(1)
+    : null;
+  let mode: string | null = null;
+  if (session.package_variant_snapshot === 'single') mode = 'Single';
+  else if (session.package_variant_snapshot === 'dual') {
+    const players = 2 + Math.max(0, session.extra_controllers ?? 0);
+    mode = players === 2 ? 'Two players' : `${players} players`;
+  } else if (session.package_variant_snapshot === 'simdrive') mode = 'Simdrive';
+  else if (session.package_variant_snapshot) {
+    mode = session.package_variant_snapshot[0].toUpperCase() + session.package_variant_snapshot.slice(1);
+  }
+  const parts = [tier, mode].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function normalizeGamingPackage(row: GamingPackageDTO): GamingPackageDTO {
+  const includedPlayers = row.included_players || (row.variant === 'dual' ? 2 : 1);
+  return {
+    ...row,
+    code: row.code ?? '',
+    pricing_tier: row.pricing_tier || 'standard',
+    included_players: includedPlayers,
+    max_players: row.max_players || (row.station_type === 'ps5' && row.variant === 'dual' ? 4 : includedPlayers),
+  };
 }
 
 function notifyTimerExpired(stationName: string) {
@@ -251,6 +336,7 @@ export default function GamingScreen() {
   }
   const [stations, setStations] = useState<StationDTO[]>([]);
   const [loading, setLoading] = useState(true);
+  const [foregroundRefreshing, setForegroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, LocalSession>>({});
   const [addonCatalog, setAddonCatalog] = useState<MenuItemDTO[]>([]);
@@ -269,8 +355,8 @@ export default function GamingScreen() {
   // created at send-to-pos so the cashier does not re-enter it at checkout.
   const [sessionPhone, setSessionPhone] = useState<Record<string, string>>({});
   const [packages, setPackages] = useState<GamingPackageDTO[]>([]);
-  const [pickerVariant, setPickerVariant] = useState<Record<string, string>>({});
-  const [pickerControllers, setPickerControllers] = useState<Record<string, number>>({});
+  const [pickerTier, setPickerTier] = useState<Record<string, string>>({});
+  const [pickerPlayerCount, setPickerPlayerCount] = useState<Record<string, number>>({});
   const [mutedStations, setMutedStations] = useState<Record<string, boolean>>({});
   const [sendingToPos, setSendingToPos] = useState<string | null>(null);
   const [resolvingReconciliation, setResolvingReconciliation] = useState<string | null>(null);
@@ -302,6 +388,8 @@ export default function GamingScreen() {
   const [pendingExtension, setPendingExtension] = useState<PendingExtension | null>(null);
   const [pendingReconciliation, setPendingReconciliation] = useState<PendingReconciliation | null>(null);
   const [pendingPosHandoff, setPendingPosHandoff] = useState<PendingPosHandoff | null>(null);
+  const [pendingStopTarget, setPendingStopTarget] = useState<StationDTO | null>(null);
+  const [stoppingSession, setStoppingSession] = useState<string | null>(null);
   const [cancelStationTarget, setCancelStationTarget] = useState<StationDTO | null>(null);
   const [repairStationTarget, setRepairStationTarget] = useState<StationDTO | null>(null);
   const [repairingBilling, setRepairingBilling] = useState<string | null>(null);
@@ -321,6 +409,9 @@ export default function GamingScreen() {
   const [voidingAddon, setVoidingAddon] = useState<string | null>(null);
   const addonCreateBusyRef = useRef(false);
   const addonVoidBusyRef = useRef(false);
+  const stopBusyRef = useRef(false);
+  const refreshGenerationRef = useRef(0);
+  const hasVerifiedBoardRef = useRef(false);
 
   const addonCreateTerminalScope = useMemo<GamingAddonCreateTerminalScope | null>(() => {
     if (
@@ -535,8 +626,17 @@ export default function GamingScreen() {
     );
   }, [paidExtensionInventory.attempts, paidExtensionRecoveryBySession]);
 
-  async function load() {
-    setLoading(true); setError(null);
+  async function load(mode: GamingRefreshMode = 'foreground') {
+    const refresh = beginGamingRefresh(
+      refreshGenerationRef,
+      mode,
+      hasVerifiedBoardRef.current,
+    );
+    if (refresh.showSkeleton) setLoading(true);
+    if (mode === 'foreground') {
+      setForegroundRefreshing(true);
+      setError(null);
+    }
     try {
       if (LIVE_MODE) {
         const shiftContextPromise: Promise<CurrentShiftContext> = findRequiredShiftId()
@@ -572,12 +672,9 @@ export default function GamingScreen() {
                 : 'The drinks and snacks catalogue could not be loaded.',
             })),
         ]);
-        setCurrentShiftId(shiftContext.shiftId);
-        setShiftContextError(shiftContext.error);
-        setStations(stationRows.filter((station) => isAppStoreAllowedType(station.type)));
-        setPackages(packageRows);
-        setAddonCatalog(catalogResult.items);
-        setAddonCatalogError(catalogResult.error);
+        if (!refresh.isCurrent()) return;
+        const nextStations = stationRows.filter((station) => isAppStoreAllowedType(station.type));
+        const nextPackages = packageRows.map(normalizeGamingPackage);
         const visibleSessions = gridVisibleGamingSessions(
           activeSessions,
           pausedSessions,
@@ -587,6 +684,7 @@ export default function GamingScreen() {
         const addonResults = await Promise.allSettled(
           visibleSessions.map((sessionRow) => gaming.listSessionAddons(sessionRow.id)),
         );
+        if (!refresh.isCurrent()) return;
         const loadedAddons: Record<string, GamingSessionAddonDTO[]> = {};
         const loadErrors: Record<string, string> = {};
         addonResults.forEach((result, index) => {
@@ -599,6 +697,12 @@ export default function GamingScreen() {
               : 'Saved drinks and snacks could not be loaded.';
           }
         });
+        setCurrentShiftId(shiftContext.shiftId);
+        setShiftContextError(shiftContext.error);
+        setStations(nextStations);
+        setPackages(nextPackages);
+        setAddonCatalog(catalogResult.items);
+        setAddonCatalogError(catalogResult.error);
         setAddonsBySession((previous) => {
           const next: Record<string, GamingSessionAddonDTO[]> = {};
           for (const sessionRow of visibleSessions) {
@@ -641,6 +745,7 @@ export default function GamingScreen() {
               package_id: gs.package_id,
               package_variant_snapshot: gs.package_variant_snapshot,
               package_station_type_snapshot: gs.package_station_type_snapshot,
+              package_pricing_tier_snapshot: gs.package_pricing_tier_snapshot,
               extra_controllers: gs.extra_controllers,
               locked_amount_minor: gs.billing_mode === 'hourly' ? null : gs.amount_minor,
             };
@@ -656,21 +761,41 @@ export default function GamingScreen() {
               backend_session_id: gs.id,
               billing_mode: gs.billing_mode,
               rate_per_hour_minor: gs.rate_per_hour_minor,
+              package_id: gs.package_id,
+              package_variant_snapshot: gs.package_variant_snapshot,
+              package_station_type_snapshot: gs.package_station_type_snapshot,
+              package_pricing_tier_snapshot: gs.package_pricing_tier_snapshot,
+              extra_controllers: gs.extra_controllers,
+              locked_amount_minor: gs.billing_mode === 'hourly' ? null : gs.amount_minor,
               ended_minutes: gs.billable_minutes ?? 0,
               ended_amount_minor: gs.amount_minor,
             };
           }
           return next;
         });
+        hasVerifiedBoardRef.current = true;
+        setError(null);
       } else {
+        if (!refresh.isCurrent()) return;
         setStations(STATIONS.map(demoToDTO).filter((station) => isAppStoreAllowedType(station.type)));
+        hasVerifiedBoardRef.current = true;
+        setError(null);
       }
-    } catch (e) { setError((e as Error).message); }
-    finally { setLoading(false); }
+    } catch (e) {
+      if (refresh.isCurrent() && refresh.surfaceFailure) setError((e as Error).message);
+    } finally {
+      if (refresh.isCurrent()) {
+        setLoading(false);
+        setForegroundRefreshing(false);
+      }
+    }
   }
   const loadRef = useRef(load);
   useEffect(() => { loadRef.current = load; });
-  useEffect(() => { void loadRef.current(); }, []);
+  useEffect(() => {
+    void loadRef.current('foreground');
+    return () => invalidateGamingRefresh(refreshGenerationRef);
+  }, []);
 
   // Real-time push re-syncs with the server the moment another device's
   // stop/start/extend happens, instead of waiting for a timer. load()'s
@@ -679,8 +804,8 @@ export default function GamingScreen() {
   // disrupt the locally ticking countdown for sessions nothing happened to.
   useEffect(() => {
     if (!LIVE_MODE) return;
-    const unsubscribe = subscribeRealtime('gaming', () => { void loadRef.current(); });
-    const id = setInterval(() => { void loadRef.current(); }, GAMING_SESSIONS_POLL_MS);
+    const unsubscribe = subscribeRealtime('gaming', () => { void loadRef.current('background'); });
+    const id = setInterval(() => { void loadRef.current('background'); }, GAMING_SESSIONS_POLL_MS);
     return () => { unsubscribe(); clearInterval(id); };
   }, []);
 
@@ -880,7 +1005,7 @@ export default function GamingScreen() {
   async function startSession(
     st: StationDTO,
     customer = '',
-    pkg?: { packageId: string; extraControllers: number },
+    pkg?: { packageId: string; extraControllers: number; playerCount: number },
     phone = '',
   ) {
     const write = requireGamingWrite('Cannot start session');
@@ -897,6 +1022,7 @@ export default function GamingScreen() {
     let billingMode: 'hourly' | 'package' | 'legacy_ambiguous' = pkg ? 'package' : 'hourly';
     let packageVariantSnapshot: string | null = null;
     let packageStationTypeSnapshot: string | null = null;
+    let packagePricingTierSnapshot: 'standard' | 'premium' | null = null;
     let extraControllers = 0;
     let lockedAmountMinor: number | null = null;
     let ratePerHourMinor: number | null = st.rate_per_hour_minor;
@@ -919,6 +1045,7 @@ export default function GamingScreen() {
           timer_minutes: timerMinutes ?? undefined,
           package_id: pkg?.packageId,
           extra_controllers: pkg?.extraControllers,
+          player_count: pkg?.playerCount,
           expected_rate_per_hour_minor: st.rate_per_hour_minor,
           expected_package_price_minor: selectedPackage?.price_minor,
           expected_package_duration_minutes: selectedPackage?.duration_minutes,
@@ -945,6 +1072,7 @@ export default function GamingScreen() {
         billingMode = r.billing_mode;
         packageVariantSnapshot = r.package_variant_snapshot;
         packageStationTypeSnapshot = r.package_station_type_snapshot;
+        packagePricingTierSnapshot = r.package_pricing_tier_snapshot ?? null;
         extraControllers = r.extra_controllers;
         lockedAmountMinor = billingMode === 'hourly' ? null : r.amount_minor ?? null;
         ratePerHourMinor = authoritativeClockValid ? r.rate_per_hour_minor : null;
@@ -969,12 +1097,14 @@ export default function GamingScreen() {
         package_id: packageId,
         package_variant_snapshot: packageVariantSnapshot,
         package_station_type_snapshot: packageStationTypeSnapshot,
+        package_pricing_tier_snapshot: packagePricingTierSnapshot,
         extra_controllers: extraControllers,
         locked_amount_minor: lockedAmountMinor,
       },
     }));
     setPendingDuration((p) => ({ ...p, [st.id]: null }));
-    setPickerControllers((p) => ({ ...p, [st.id]: 0 }));
+    setPickerTier((p) => ({ ...p, [st.id]: 'standard' }));
+    setPickerPlayerCount((p) => ({ ...p, [st.id]: 1 }));
     setSessionPhone((p) => ({ ...p, [st.id]: '' }));
     setCustomDurationFor(null);
     notifications.success(`${st.name} session started.`, { title: 'Session running' });
@@ -1041,7 +1171,7 @@ export default function GamingScreen() {
           `${(e as Error).message} Refresh Gaming before trying again.`,
           { title: 'Could not extend timer' },
         );
-        void load();
+        void load('background');
       } finally {
         setExtendingSession(null);
       }
@@ -1141,7 +1271,7 @@ export default function GamingScreen() {
             `${subject} ${isReplay ? 'extension was confirmed' : 'was extended'} by ${attempt.packageDurationMinutes} minutes.`,
             { title: isReplay ? 'Saved extension confirmed' : 'Paid extension added' },
           );
-          if (!station) void load();
+          if (!station) void load('background');
         } catch {
           notifications.error(
             `${subject} was extended and charged, but this device could not clear its saved recovery receipt. Replaying the saved receipt is safe; do not create a replacement attempt.`,
@@ -1157,7 +1287,7 @@ export default function GamingScreen() {
             error.code === 'replay_receipt_missing'
             || error.code === 'replay_receipt_changed'
           ) {
-            void load();
+            void load('background');
           }
         } else if (isAmbiguousApiError(error)) {
           notifications.error(
@@ -1184,13 +1314,13 @@ export default function GamingScreen() {
               : `${(error as Error).message} The server proved this attempt was not charged, but its saved recovery receipt could not be cleared. Fix site/device storage and ask a protected owner to verify it before trying again.`,
             { title: 'Extension not added' },
           );
-          void load();
+          void load('background');
         } else {
           notifications.error(
             `${(error as Error).message}. The server did not prove this saved attempt is uncharged. Do not create a new extension; retry the exact receipt or ask a protected owner to verify the session.`,
             { title: 'Extension result needs verification' },
           );
-          void load();
+          void load('background');
         }
       }
     };
@@ -1345,11 +1475,14 @@ export default function GamingScreen() {
   }
 
   function packagesFor(stationType: string, kind: 'base' | 'extension') {
-    return packages.filter((p) => p.station_type === stationType && p.kind === kind);
+    return packages.filter((p) => p.station_type === stationType && p.kind === kind && (
+      !['ps5', 'simulator'].includes(stationType) || Boolean(p.code)
+    ));
   }
 
-  function variantsFor(stationType: string) {
-    return Array.from(new Set(packagesFor(stationType, 'base').map((p) => p.variant)));
+  function pricingTiersFor(stationType: string) {
+    return Array.from(new Set(packagesFor(stationType, 'base').map((p) => p.pricing_tier)))
+      .sort((left, right) => (left === 'standard' ? -1 : right === 'standard' ? 1 : left.localeCompare(right)));
   }
 
   function pauseSession(st: StationDTO) {
@@ -1419,6 +1552,9 @@ export default function GamingScreen() {
       elapsedMs,
     });
     if (LIVE_MODE && s.backend_session_id) {
+      if (stopBusyRef.current) return;
+      stopBusyRef.current = true;
+      setStoppingSession(st.id);
       try {
         const ended = await write.dispatch(
           'stopSession',
@@ -1452,10 +1588,13 @@ export default function GamingScreen() {
             : `${st.name} ended after ${elapsedMin} min. Send ${inr(authoritativeAmount)} to POS when ready to bill.`,
           { title: 'Session stopped' },
         );
+        setPendingStopTarget(null);
       }
       catch (e) {
         notifications.error((e as Error).message, { title: 'Could not stop session' });
-        return;
+      } finally {
+        stopBusyRef.current = false;
+        setStoppingSession(null);
       }
       return;
     }
@@ -1471,6 +1610,7 @@ export default function GamingScreen() {
     });
     delete lastAlarmAtRef.current[st.id];
     setMutedStations((m) => (st.id in m ? { ...m, [st.id]: false } : m));
+    setPendingStopTarget(null);
   }
 
   async function sendToPos(st: StationDTO) {
@@ -1799,7 +1939,7 @@ export default function GamingScreen() {
       await write.dispatch('deleteStation', deleteStationTarget.id);
       const stationCode = deleteStationTarget.code;
       setDeleteStationTarget(null);
-      await load();
+      await load('background');
       notifications.success(`${stationCode} was deleted.`, { title: 'Station deleted' });
     } catch (e) {
       notifications.error((e as Error).message, { title: 'Could not delete station' });
@@ -1861,7 +2001,7 @@ export default function GamingScreen() {
         repairKeyRef.current = null;
         notifications.error((e as Error).message, { title: 'Billing repair refused' });
       }
-      await load();
+      await load('background');
     } finally {
       setRepairingBilling(null);
     }
@@ -2168,7 +2308,16 @@ export default function GamingScreen() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => { void load('foreground'); }}
+            disabled={foregroundRefreshing}
+            aria-label="Refresh Gaming"
+          >
+            {foregroundRefreshing
+              ? <Loader2 size={14} className="animate-spin"/>
+              : <RefreshCw size={14}/>}
+          </button>
           <GamingWriteOnly allowed={canManageStations}>
             <button className={`btn ${manageMode ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setManageMode(!manageMode)}>
@@ -2398,6 +2547,17 @@ export default function GamingScreen() {
               && !addonCreatePersistenceError
               && !addonLoadError,
             );
+            const packageSelection = session ? gamingPackageSelectionLabel(session) : null;
+            const stationBaseTariffs = packagesFor(st.type, 'base');
+            const stationPricingDescription = session && session.billing_mode !== 'hourly'
+              ? `${packageSelection ?? (session.billing_mode === 'legacy_ambiguous' ? 'Billing mode review' : 'Fixed package')} · ${session.locked_amount_minor == null
+                ? 'locked total unavailable'
+                : `${inr(session.locked_amount_minor)} fixed total`}`
+              : !session && ['ps5', 'simulator'].includes(st.type)
+                ? stationBaseTariffs.length > 0
+                  ? `Fixed sessions from ${inr(Math.min(...stationBaseTariffs.map((item) => item.price_minor)))}`
+                  : 'Fixed-price tariff not synced'
+                : `${inr(session?.rate_per_hour_minor ?? st.rate_per_hour_minor)}/hr`;
             const sessionScopeMessage = !canManageStations
               ? 'Gaming is view-only for this account. An owner can enable the Gaming module for this role.'
               : session && !session.shift_id && resolvedStopShiftId
@@ -2413,7 +2573,7 @@ export default function GamingScreen() {
                   <div className="flex-1 min-w-0">
                     <div className="font-bold truncate">{st.name}</div>
                     <div className="text-xs text-fg-muted truncate">
-                      {st.code} · {TYPE_LABEL[st.type]} · {inr(st.rate_per_hour_minor)}/hr
+                      {st.code} · {TYPE_LABEL[st.type]} · {stationPricingDescription}
                     </div>
                     {!st.is_active && (
                       <span className="chip text-[10px] border-accent-bad/40 text-accent-bad mt-1">
@@ -2599,7 +2759,9 @@ export default function GamingScreen() {
                         </div>
                         <div className="text-right">
                           <div className="text-xs text-fg-muted">
-                            {session?.locked_amount_minor != null ? 'Package price' : 'Running bill'}
+                            {session?.locked_amount_minor != null
+                              ? packageSelection ?? 'Fixed package total'
+                              : 'Running bill'}
                           </div>
                           <div className={`font-mono ${activeBillingUnavailable
                             ? 'text-sm font-semibold text-accent-gold'
@@ -2625,8 +2787,19 @@ export default function GamingScreen() {
                           ?? (session.package_id
                             ? packages.find((item) => item.id === session.package_id && item.kind === 'base')?.variant
                             : undefined);
-                        const extensionOptions = baseVariant
-                          ? packagesFor(st.type, 'extension').filter((item) => item.variant === baseVariant)
+                        const compatibleTiers = baseVariant
+                          ? Array.from(new Set(packagesFor(st.type, 'extension')
+                            .filter((item) => item.variant === baseVariant)
+                            .map((item) => item.pricing_tier)))
+                          : [];
+                        const basePricingTier = session.package_pricing_tier_snapshot
+                          ?? (session.package_id
+                          ? packages.find((item) => item.id === session.package_id && item.kind === 'base')?.pricing_tier
+                          : compatibleTiers.length === 1 ? compatibleTiers[0] : undefined);
+                        const extensionOptions = baseVariant && basePricingTier
+                          ? packagesFor(st.type, 'extension').filter((item) => (
+                            item.variant === baseVariant && item.pricing_tier === basePricingTier
+                          ))
                           : [];
                         return (
                           <div className={`mt-2 pt-2 border-t border-bg-border flex items-center justify-between gap-2 flex-wrap ${
@@ -2674,7 +2847,13 @@ export default function GamingScreen() {
                                       <Loader2 size={11} className="animate-spin" />
                                     ) : savedPaidExtension?.packageId === ext.id
                                       ? `Retry +${ext.duration_minutes}m`
-                                      : `+${ext.duration_minutes}m · ${inr(ext.price_minor)}`}
+                                      : `+${ext.duration_minutes}m · ${inr(
+                                        ext.price_minor + extraControllerExtensionSurchargeMinor(
+                                          session.extra_controllers ?? 0,
+                                          session.timer_minutes ?? 0,
+                                          ext.duration_minutes,
+                                        ),
+                                      )}`}
                                   </GamingMutationButton>
                                 )) : (
                                   <span className="text-[10px] text-fg-muted">No extension for this package</span>
@@ -2743,18 +2922,32 @@ export default function GamingScreen() {
                       <GamingMutationButton
                         canManageSessions={canManageStations}
                         className="btn btn-primary flex-1 !bg-accent-bad hover:!bg-accent-bad/80"
-                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || paidExtensionLifecycleBlocked || addonMutationPending}
-                        onClick={() => stopSession(st)}>
-                        <Square size={14}/> End session
+                        disabled={!resolvedStopShiftId || legacyBillingAmbiguous || paidExtensionLifecycleBlocked || addonMutationPending || stoppingSession !== null}
+                        onClick={() => setPendingStopTarget(st)}>
+                        {stoppingSession === st.id
+                          ? <Loader2 size={14} className="animate-spin"/>
+                          : <Square size={14}/>} End session
                       </GamingMutationButton>
                     </div>
                   </>
-                ) : variantsFor(st.type).length > 0 ? (() => {
-                  const variants = variantsFor(st.type);
-                  const variant = pickerVariant[st.id] ?? variants[0];
-                  const tiers = packagesFor(st.type, 'base').filter((p) => p.variant === variant);
-                  const controllers = pickerControllers[st.id] ?? 0;
-                  const showControllerStepper = st.type === 'ps5' && variant === 'dual';
+                ) : packagesFor(st.type, 'base').length > 0 ? (() => {
+                  const allBasePackages = packagesFor(st.type, 'base');
+                  const pricingTiers = pricingTiersFor(st.type);
+                  const pricingTier = resolvePricingTier(pricingTiers, pickerTier[st.id]);
+                  const tierPackages = allBasePackages.filter((item) => item.pricing_tier === pricingTier);
+                  const supportsPlayerModes = st.type === 'ps5'
+                    && tierPackages.some((item) => item.variant === 'single' || item.variant === 'dual');
+                  const maximumPlayers = Math.max(1, ...tierPackages.map((item) => item.max_players));
+                  const playerCount = Math.min(
+                    Math.max(1, pickerPlayerCount[st.id] ?? 1),
+                    maximumPlayers,
+                  );
+                  const requiredVariant = supportsPlayerModes
+                    ? playerCount === 1 ? 'single' : 'dual'
+                    : null;
+                  const tariffs = tierPackages.filter((item) => (
+                    requiredVariant === null || item.variant === requiredVariant
+                  ));
                   return (
                     <>
                       <input type="tel" placeholder="Customer phone (optional)"
@@ -2762,74 +2955,101 @@ export default function GamingScreen() {
                         disabled={!canManageStations || !canStartOnSelectedTerminal}
                         value={phone}
                         onChange={(e) => setSessionPhone((s) => ({ ...s, [st.id]: e.target.value }))}/>
-                      {variants.length > 1 && (
-                        <div className="flex items-center gap-1.5 mb-2">
-                          {variants.map((v) => (
-                            <button key={v}
+                      {pricingTiers.length > 1 && (
+                        <div
+                          className="flex items-center gap-1.5 mb-2"
+                          role="radiogroup"
+                          aria-label={`${st.name} service tier`}>
+                          {pricingTiers.map((tierName) => (
+                            <button key={tierName}
+                              type="button"
+                              role="radio"
+                              aria-checked={pricingTier === tierName}
                               disabled={!canManageStations || !canStartOnSelectedTerminal}
-                              className={`chip text-[11px] capitalize ${variant === v ? '!border-accent !text-accent' : 'hover:border-accent'}`}
+                              className={`chip min-h-11 px-3 text-xs capitalize touch-manipulation ${pricingTier === tierName ? '!border-accent !text-accent' : 'hover:border-accent'}`}
                               onClick={() => {
-                                setPickerVariant((s) => ({ ...s, [st.id]: v }));
-                                // Extra-controller count only makes sense for
-                                // the dual variant's stepper — stop it from
-                                // silently surviving a switch to single.
-                                setPickerControllers((s) => ({ ...s, [st.id]: 0 }));
+                                setPickerTier((current) => ({ ...current, [st.id]: tierName }));
+                                setPickerPlayerCount((current) => ({ ...current, [st.id]: 1 }));
                               }}>
-                              {v}
+                              {tierName}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {supportsPlayerModes && (
+                        <div
+                          className="flex items-center gap-1.5 mb-2 flex-wrap"
+                          role="radiogroup"
+                          aria-label={`${st.name} player count`}>
+                          {Array.from({ length: maximumPlayers }, (_, index) => index + 1).map((count) => (
+                            <button key={count}
+                              type="button"
+                              role="radio"
+                              aria-checked={playerCount === count}
+                              disabled={!canManageStations || !canStartOnSelectedTerminal}
+                              className={`chip min-h-11 px-3 text-xs touch-manipulation ${playerCount === count ? '!border-accent !text-accent' : 'hover:border-accent'}`}
+                              onClick={() => setPickerPlayerCount((current) => ({
+                                ...current,
+                                [st.id]: count,
+                              }))}>
+                              {count === 1 ? 'Single' : count === 2 ? 'Two players' : `${count} players`}
                             </button>
                           ))}
                         </div>
                       )}
                       <div className="grid grid-cols-1 gap-1.5 mb-2">
-                        {tiers.map((tier) => (
+                        {tariffs.map((tariff) => {
+                          const extraControllers = tariff.variant === 'dual'
+                            ? Math.max(0, playerCount - tariff.included_players)
+                            : 0;
+                          const total = tariff.price_minor + extraControllerSurchargeMinor(
+                            extraControllers,
+                            tariff.duration_minutes,
+                          );
+                          return (
                           <GamingMutationButton
                             canManageSessions={canManageStations}
-                            key={tier.id}
+                            key={tariff.id}
                             className="btn btn-ghost !justify-between !py-1.5 text-xs"
-                            onClick={() => startSession(st, '', { packageId: tier.id, extraControllers: showControllerStepper ? controllers : 0 }, phone)}
+                            onClick={() => startSession(st, '', {
+                              packageId: tariff.id,
+                              extraControllers,
+                              playerCount: supportsPlayerModes ? playerCount : tariff.included_players,
+                            }, phone)}
                             disabled={!st.is_active || !packageStartRecoveryReady || !canStartOnSelectedTerminal}
                             title={packageStartRecoveryReady
                               ? canStartOnSelectedTerminal
-                                ? `Start ${tier.name}`
+                                ? `Start ${tariff.name}`
                                 : 'This device is configured for counter sales. Ask an owner to enable Gaming or Combined mode.'
                               : 'Package sessions require verified paid-extension recovery storage on this device'}>
-                            <span>{tier.name}</span>
+                            <span>{tariff.duration_minutes} minutes</span>
                             <span className="font-mono font-bold">
-                              {inr(tier.price_minor + extraControllerSurchargeMinor(
-                                showControllerStepper ? controllers : 0,
-                                tier.duration_minutes,
-                              ))}
+                              {inr(total)}
                             </span>
                           </GamingMutationButton>
-                        ))}
+                          );
+                        })}
                       </div>
                       {!packageStartRecoveryReady && (
                         <div className="mb-2 rounded-lg border border-accent-bad/30 bg-accent-bad/10 p-2 text-xs text-accent-bad flex items-start gap-1.5">
                           <AlertCircle size={12} className="mt-0.5 shrink-0"/>
-                          Package start is unavailable until this device context and its recovery storage are verified. Hourly sessions remain available.
+                          Package start is unavailable until this device context and its recovery storage are verified. Refresh after recovery storage is available.
                         </div>
                       )}
-                      {showControllerStepper && (
-                        <div className="flex items-center justify-between gap-2 mb-2 text-xs text-fg-muted">
-                          <span>Extra controllers (₹30/hr, min ₹30)</span>
-                          <div className="flex items-center gap-2">
-                            <button className="chip !px-2 text-[11px]"
-                              disabled={!canManageStations || !canStartOnSelectedTerminal}
-                              onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.max(0, controllers - 1) }))}>
-                              −
-                            </button>
-                            <span className="w-4 text-center font-mono">{controllers}</span>
-                            <button className="chip !px-2 text-[11px]"
-                              disabled={!canManageStations || !canStartOnSelectedTerminal}
-                              onClick={() => setPickerControllers((s) => ({ ...s, [st.id]: Math.min(6, controllers + 1) }))}>
-                              +
-                            </button>
-                          </div>
+                      {supportsPlayerModes && playerCount > 2 && (
+                        <div className="mb-2 rounded-lg border border-bg-border bg-bg-raised p-2 text-xs text-fg-muted">
+                          {playerCount - 2} additional {playerCount - 2 === 1 ? 'controller' : 'controllers'} · ₹30 each per started hour, ₹30 minimum
                         </div>
                       )}
                     </>
                   );
-                })() : (
+                })() : ['ps5', 'simulator'].includes(st.type) ? (
+                  <div className="rounded-lg border border-accent-bad/30 bg-accent-bad/10 p-3 text-xs text-accent-bad">
+                    Fixed-price tariff is unavailable. Refresh Gaming after the server finishes
+                    synchronising; hourly fallback is disabled for this station so the customer is
+                    not charged the wrong amount.
+                  </div>
+                ) : (
                   <>
                     <input type="tel" placeholder="Customer phone (optional)"
                       className="input !py-1.5 text-xs w-full mb-2"
@@ -2927,7 +3147,7 @@ export default function GamingScreen() {
             onClose={() => setAddOpen(false)}
             onSuccess={() => {
               setAddOpen(false);
-              void load();
+              void load('background');
               notifications.success('The gaming station was added.', { title: 'Station saved' });
             }}
           />
@@ -2939,7 +3159,7 @@ export default function GamingScreen() {
             onClose={() => setEdit(null)}
             onSuccess={() => {
               setEdit(null);
-              void load();
+              void load('background');
               notifications.success('The gaming station was updated.', { title: 'Changes saved' });
             }}
           />
@@ -2949,8 +3169,9 @@ export default function GamingScreen() {
             title="Add paid extension"
             message={(() => {
               const session = sessions[pendingExtension.station.id];
-              const surcharge = extraControllerSurchargeMinor(
+              const surcharge = extraControllerExtensionSurchargeMinor(
                 session?.extra_controllers ?? 0,
+                session?.timer_minutes ?? 0,
                 pendingExtension.extension.duration_minutes,
               );
               const total = pendingExtension.extension.price_minor + surcharge;
@@ -2966,6 +3187,30 @@ export default function GamingScreen() {
             onCancel={() => { if (!extendingSession) setPendingExtension(null); }}
           />
         )}
+        {pendingStopTarget && (() => {
+          const session = sessions[pendingStopTarget.id];
+          if (!session || session.status === 'ended') return null;
+          const elapsedMs = session.status === 'paused' && session.pause_started_at
+            ? session.pause_started_at - session.start_at - session.pausedMs
+            : Date.now() - session.start_at - session.pausedMs;
+          const estimatedAmountMinor = runningBillMinor({
+            billingMode: session.billing_mode,
+            lockedAmountMinor: session.locked_amount_minor,
+            ratePerHourMinor: session.rate_per_hour_minor,
+            elapsedMs,
+          });
+          return (
+            <GamingStopConfirmation
+              stationName={pendingStopTarget.name}
+              elapsedMinutes={Math.max(1, Math.ceil(elapsedMs / 60_000))}
+              estimatedAmountMinor={estimatedAmountMinor}
+              fixedPrice={session.billing_mode === 'package'}
+              busy={stoppingSession === pendingStopTarget.id}
+              onConfirm={() => { void stopSession(pendingStopTarget); }}
+              onCancel={() => { if (!stoppingSession) setPendingStopTarget(null); }}
+            />
+          );
+        })()}
         {cancelStationTarget && (
           <PromptModal
             title={`Cancel ${cancelStationTarget.name}`}
